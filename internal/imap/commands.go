@@ -1,0 +1,1037 @@
+package imap
+
+import (
+	"crypto/tls"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// handleCommand parses and handles an IMAP command
+func (s *Session) handleCommand(line string) error {
+	// Parse the command line
+	// Format: TAG COMMAND [arguments...]
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		s.WriteResponse("BAD", "Command expected")
+		return nil
+	}
+
+	s.tag = parts[0]
+	command := strings.ToUpper(parts[1])
+	args := parts[2:]
+
+	// Handle the command based on current state
+	switch s.state {
+	case StateNotAuthenticated:
+		return s.handleNotAuthenticated(command, args, line)
+	case StateAuthenticated:
+		return s.handleAuthenticated(command, args, line)
+	case StateSelected:
+		return s.handleSelected(command, args, line)
+	case StateLoggedOut:
+		return nil
+	}
+
+	return nil
+}
+
+// handleNotAuthenticated handles commands in the Not Authenticated state
+func (s *Session) handleNotAuthenticated(command string, args []string, line string) error {
+	switch command {
+	case "CAPABILITY":
+		return s.handleCapability()
+	case "STARTTLS":
+		return s.handleStartTLS()
+	case "AUTHENTICATE":
+		return s.handleAuthenticate(args)
+	case "LOGIN":
+		return s.handleLogin(args)
+	case "NOOP":
+		return s.handleNoop()
+	case "LOGOUT":
+		return s.handleLogout()
+	default:
+		s.WriteResponse(s.tag, "BAD Command not allowed in this state")
+		return nil
+	}
+}
+
+// handleAuthenticated handles commands in the Authenticated state
+func (s *Session) handleAuthenticated(command string, args []string, line string) error {
+	switch command {
+	case "CAPABILITY":
+		return s.handleCapability()
+	case "NOOP":
+		return s.handleNoop()
+	case "LOGOUT":
+		return s.handleLogout()
+	case "SELECT":
+		return s.handleSelect(args)
+	case "EXAMINE":
+		return s.handleExamine(args)
+	case "CREATE":
+		return s.handleCreate(args)
+	case "DELETE":
+		return s.handleDelete(args)
+	case "RENAME":
+		return s.handleRename(args)
+	case "SUBSCRIBE":
+		return s.handleSubscribe(args)
+	case "UNSUBSCRIBE":
+		return s.handleUnsubscribe(args)
+	case "LIST":
+		return s.handleList(args)
+	case "LSUB":
+		return s.handleLsub(args)
+	case "STATUS":
+		return s.handleStatus(args)
+	case "APPEND":
+		return s.handleAppend(args, line)
+	case "NAMESPACE":
+		return s.handleNamespace()
+	case "IDLE":
+		return s.handleIdle()
+	case "ENABLE":
+		return s.handleEnable(args)
+	default:
+		s.WriteResponse(s.tag, "BAD Command not recognized")
+		return nil
+	}
+}
+
+// handleSelected handles commands in the Selected state
+func (s *Session) handleSelected(command string, args []string, line string) error {
+	switch command {
+	case "CAPABILITY":
+		return s.handleCapability()
+	case "NOOP":
+		return s.handleNoop()
+	case "LOGOUT":
+		return s.handleLogout()
+	case "SELECT":
+		return s.handleSelect(args)
+	case "EXAMINE":
+		return s.handleExamine(args)
+	case "CREATE":
+		return s.handleCreate(args)
+	case "DELETE":
+		return s.handleDelete(args)
+	case "RENAME":
+		return s.handleRename(args)
+	case "SUBSCRIBE":
+		return s.handleSubscribe(args)
+	case "UNSUBSCRIBE":
+		return s.handleUnsubscribe(args)
+	case "LIST":
+		return s.handleList(args)
+	case "LSUB":
+		return s.handleLsub(args)
+	case "STATUS":
+		return s.handleStatus(args)
+	case "APPEND":
+		return s.handleAppend(args, line)
+	case "NAMESPACE":
+		return s.handleNamespace()
+	case "CHECK":
+		return s.handleCheck()
+	case "CLOSE":
+		return s.handleClose()
+	case "EXPUNGE":
+		return s.handleExpunge()
+	case "SEARCH":
+		return s.handleSearch(args, line)
+	case "FETCH":
+		return s.handleFetch(args, line)
+	case "STORE":
+		return s.handleStore(args)
+	case "COPY":
+		return s.handleCopy(args)
+	case "MOVE":
+		return s.handleMove(args)
+	case "UID":
+		return s.handleUID(args, line)
+	case "IDLE":
+		return s.handleIdle()
+	default:
+		s.WriteResponse(s.tag, "BAD Command not recognized")
+		return nil
+	}
+}
+
+// CAPABILITY command
+func (s *Session) handleCapability() error {
+	caps := "CAPABILITY"
+	for _, cap := range s.capabilities {
+		caps += " " + cap
+	}
+	s.WriteData(caps)
+	s.WriteResponse(s.tag, "OK CAPABILITY completed")
+	return nil
+}
+
+// NOOP command
+func (s *Session) handleNoop() error {
+	s.WriteResponse(s.tag, "OK NOOP completed")
+	return nil
+}
+
+// LOGOUT command
+func (s *Session) handleLogout() error {
+	s.WriteData("BYE IMAP4rev1 Server logging out")
+	s.WriteResponse(s.tag, "OK LOGOUT completed")
+	s.state = StateLoggedOut
+	s.Close()
+	return nil
+}
+
+// STARTTLS command
+func (s *Session) handleStartTLS() error {
+	if s.tlsActive {
+		s.WriteResponse(s.tag, "BAD TLS already active")
+		return nil
+	}
+
+	if s.server.tlsConfig == nil {
+		s.WriteResponse(s.tag, "NO TLS not available")
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK Begin TLS negotiation now")
+
+	// Upgrade to TLS
+	tlsConn := tls.Server(s.conn, s.server.tlsConfig)
+	if err := tlsConn.Handshake(); err != nil {
+		return fmt.Errorf("TLS handshake failed: %w", err)
+	}
+
+	s.tlsConn = tlsConn
+	s.conn = tlsConn
+	s.reader.Reset(tlsConn)
+	s.writer.Reset(tlsConn)
+	s.tlsActive = true
+
+	return nil
+}
+
+// AUTHENTICATE command
+func (s *Session) handleAuthenticate(args []string) error {
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing authentication mechanism")
+		return nil
+	}
+
+	mechanism := strings.ToUpper(args[0])
+
+	switch mechanism {
+	case "PLAIN":
+		return s.handleAuthPlain()
+	case "LOGIN":
+		return s.handleAuthLogin()
+	default:
+		s.WriteResponse(s.tag, "NO Unsupported authentication mechanism")
+		return nil
+	}
+}
+
+// handleAuthPlain handles PLAIN authentication
+func (s *Session) handleAuthPlain() error {
+	// For initial response (SASL-IR), client may send credentials with command
+	// Otherwise, we request credentials
+	s.WriteResponse(s.tag, "NO PLAIN not yet implemented")
+	return nil
+}
+
+// handleAuthLogin handles LOGIN authentication
+func (s *Session) handleAuthLogin() error {
+	s.WriteResponse(s.tag, "NO LOGIN mechanism not yet implemented")
+	return nil
+}
+
+// LOGIN command
+func (s *Session) handleLogin(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing username or password")
+		return nil
+	}
+
+	username := args[0]
+	password := args[1]
+
+	// Remove quotes if present
+	username = strings.Trim(username, "\"'")
+	password = strings.Trim(password, "\"'")
+
+	// Authenticate
+	authenticated := false
+	if s.server.authFunc != nil {
+		auth, err := s.server.authFunc(username, password)
+		if err == nil && auth {
+			authenticated = true
+		}
+	} else if s.server.mailstore != nil {
+		auth, err := s.server.mailstore.Authenticate(username, password)
+		if err == nil && auth {
+			authenticated = true
+		}
+	}
+
+	if !authenticated {
+		s.WriteResponse(s.tag, "NO Authentication failed")
+		return nil
+	}
+
+	s.user = username
+	s.state = StateAuthenticated
+
+	s.WriteResponse(s.tag, "OK LOGIN completed")
+	return nil
+}
+
+// SELECT command
+func (s *Session) handleSelect(args []string) error {
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox name")
+		return nil
+	}
+
+	mailboxName := args[0]
+	mailboxName = strings.Trim(mailboxName, "\"'")
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	mailbox, err := s.server.mailstore.SelectMailbox(s.user, mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.selected = mailbox
+	s.state = StateSelected
+
+	// Send mailbox data
+	s.WriteData(fmt.Sprintf("%d EXISTS", mailbox.Exists))
+	s.WriteData(fmt.Sprintf("%d RECENT", mailbox.Recent))
+
+	if mailbox.Unseen > 0 {
+		s.WriteData(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", mailbox.Unseen, mailbox.Unseen))
+	}
+
+	s.WriteData(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", mailbox.UIDValidity))
+	s.WriteData(fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", mailbox.UIDNext))
+
+	// PERMANENTFLAGS
+	s.WriteData("FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)")
+	s.WriteData("OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Flags permitted")
+
+	s.WriteResponse(s.tag, fmt.Sprintf("OK [READ-WRITE] SELECT completed"))
+	return nil
+}
+
+// EXAMINE command
+func (s *Session) handleExamine(args []string) error {
+	// Similar to SELECT but read-only
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox name")
+		return nil
+	}
+
+	mailboxName := args[0]
+	mailboxName = strings.Trim(mailboxName, "\"'")
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	mailbox, err := s.server.mailstore.SelectMailbox(s.user, mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.selected = mailbox
+	s.state = StateSelected
+
+	// Send mailbox data (same as SELECT but read-only)
+	s.WriteData(fmt.Sprintf("%d EXISTS", mailbox.Exists))
+	s.WriteData(fmt.Sprintf("%d RECENT", mailbox.Recent))
+
+	if mailbox.Unseen > 0 {
+		s.WriteData(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", mailbox.Unseen, mailbox.Unseen))
+	}
+
+	s.WriteData(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", mailbox.UIDValidity))
+	s.WriteData(fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", mailbox.UIDNext))
+
+	s.WriteData("FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)")
+	s.WriteData("OK [PERMANENTFLAGS ()] No permanent flags permitted")
+
+	s.WriteResponse(s.tag, "OK [READ-ONLY] EXAMINE completed")
+	return nil
+}
+
+// CREATE command
+func (s *Session) handleCreate(args []string) error {
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox name")
+		return nil
+	}
+
+	mailboxName := args[0]
+	mailboxName = strings.Trim(mailboxName, "\"'")
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	err := s.server.mailstore.CreateMailbox(s.user, mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK CREATE completed")
+	return nil
+}
+
+// DELETE command
+func (s *Session) handleDelete(args []string) error {
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox name")
+		return nil
+	}
+
+	mailboxName := args[0]
+	mailboxName = strings.Trim(mailboxName, "\"'")
+
+	// Cannot delete INBOX
+	if strings.ToUpper(mailboxName) == "INBOX" {
+		s.WriteResponse(s.tag, "NO Cannot delete INBOX")
+		return nil
+	}
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	err := s.server.mailstore.DeleteMailbox(s.user, mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK DELETE completed")
+	return nil
+}
+
+// RENAME command
+func (s *Session) handleRename(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing old or new mailbox name")
+		return nil
+	}
+
+	oldName := strings.Trim(args[0], "\"'")
+	newName := strings.Trim(args[1], "\"'")
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	err := s.server.mailstore.RenameMailbox(s.user, oldName, newName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK RENAME completed")
+	return nil
+}
+
+// SUBSCRIBE command
+func (s *Session) handleSubscribe(args []string) error {
+	// Subscription is not implemented in this version
+	s.WriteResponse(s.tag, "OK SUBSCRIBE completed")
+	return nil
+}
+
+// UNSUBSCRIBE command
+func (s *Session) handleUnsubscribe(args []string) error {
+	// Subscription is not implemented in this version
+	s.WriteResponse(s.tag, "OK UNSUBSCRIBE completed")
+	return nil
+}
+
+// LIST command
+func (s *Session) handleList(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing reference or pattern")
+		return nil
+	}
+
+	reference := strings.Trim(args[0], "\"'")
+	pattern := strings.Trim(args[1], "\"'")
+
+	// Combine reference and pattern
+	fullPattern := reference
+	if pattern != "" {
+		if fullPattern != "" && !strings.HasSuffix(fullPattern, "/") {
+			fullPattern += "/"
+		}
+		fullPattern += pattern
+	}
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	mailboxes, err := s.server.mailstore.ListMailboxes(s.user, fullPattern)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	for _, mbox := range mailboxes {
+		s.WriteData(fmt.Sprintf("LIST (\\HasNoChildren) \"/\" \"%s\"", mbox))
+	}
+
+	s.WriteResponse(s.tag, "OK LIST completed")
+	return nil
+}
+
+// LSUB command
+func (s *Session) handleLsub(args []string) error {
+	// Subscribed mailboxes not implemented, return same as LIST
+	return s.handleList(args)
+}
+
+// STATUS command
+func (s *Session) handleStatus(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox or status items")
+		return nil
+	}
+
+	mailboxName := strings.Trim(args[0], "\"'")
+	statusItems := strings.Join(args[1:], " ")
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	// Get mailbox info
+	mailbox, err := s.server.mailstore.SelectMailbox(s.user, mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	// Build status response
+	status := fmt.Sprintf("STATUS \"%s\" (", mailboxName)
+
+	if strings.Contains(statusItems, "MESSAGES") {
+		status += fmt.Sprintf("MESSAGES %d ", mailbox.Exists)
+	}
+	if strings.Contains(statusItems, "RECENT") {
+		status += fmt.Sprintf("RECENT %d ", mailbox.Recent)
+	}
+	if strings.Contains(statusItems, "UIDNEXT") {
+		status += fmt.Sprintf("UIDNEXT %d ", mailbox.UIDNext)
+	}
+	if strings.Contains(statusItems, "UIDVALIDITY") {
+		status += fmt.Sprintf("UIDVALIDITY %d ", mailbox.UIDValidity)
+	}
+	if strings.Contains(statusItems, "UNSEEN") {
+		status += fmt.Sprintf("UNSEEN %d ", mailbox.Unseen)
+	}
+
+	status = strings.TrimRight(status, " ") + ")"
+
+	s.WriteData(status)
+	s.WriteResponse(s.tag, "OK STATUS completed")
+	return nil
+}
+
+// APPEND command
+func (s *Session) handleAppend(args []string, line string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox or message data")
+		return nil
+	}
+
+	mailboxName := strings.Trim(args[0], "\"'")
+
+	// Parse flags if present
+	flags := []string{}
+	date := time.Now()
+
+	// Check for flags in parentheses
+	for i, arg := range args[1:] {
+		if strings.HasPrefix(arg, "(") {
+			flagsStr := strings.Join(args[1+i:], " ")
+			end := strings.Index(flagsStr, ")")
+			if end > 0 {
+				flagsStr = flagsStr[1:end]
+				flags = strings.Fields(flagsStr)
+			}
+			break
+		}
+	}
+
+	// Find literal string indicator {N}
+	literalStart := strings.Index(line, "{")
+	if literalStart > 0 {
+		literalEnd := strings.Index(line[literalStart:], "}")
+		if literalEnd > 0 {
+			sizeStr := line[literalStart+1 : literalStart+literalEnd]
+			size, _ := strconv.Atoi(sizeStr)
+
+			// Request the literal
+			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", size))
+
+			// Read the message data
+			data := make([]byte, size)
+			_, err := s.reader.Read(data)
+			if err != nil {
+				s.WriteResponse(s.tag, "NO Failed to read message data")
+				return err
+			}
+
+			// Append to mailbox
+			if s.server.mailstore != nil {
+				err := s.server.mailstore.AppendMessage(s.user, mailboxName, flags, date, data)
+				if err != nil {
+					s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+					return nil
+				}
+			}
+		}
+	}
+
+	s.WriteResponse(s.tag, "OK APPEND completed")
+	return nil
+}
+
+// NAMESPACE command
+func (s *Session) handleNamespace() error {
+	// Personal namespace only
+	s.WriteData("NAMESPACE ((\"\" \"/\")) NIL NIL")
+	s.WriteResponse(s.tag, "OK NAMESPACE completed")
+	return nil
+}
+
+// IDLE command
+func (s *Session) handleIdle() error {
+	s.WriteContinuation("idling")
+
+	// Wait for DONE
+	for {
+		line, err := s.readLine()
+		if err != nil {
+			return err
+		}
+		if strings.ToUpper(line) == "DONE" {
+			break
+		}
+	}
+
+	s.WriteResponse(s.tag, "OK IDLE terminated")
+	return nil
+}
+
+// ENABLE command
+func (s *Session) handleEnable(args []string) error {
+	// Just acknowledge the command
+	enabled := []string{}
+	for _, arg := range args {
+		cap := strings.ToUpper(arg)
+		if cap == "CONDSTORE" || cap == "QRESYNC" {
+			enabled = append(enabled, cap)
+		}
+	}
+
+	if len(enabled) > 0 {
+		s.WriteData("ENABLED " + strings.Join(enabled, " "))
+	}
+
+	s.WriteResponse(s.tag, "OK ENABLE completed")
+	return nil
+}
+
+// CHECK command
+func (s *Session) handleCheck() error {
+	s.WriteResponse(s.tag, "OK CHECK completed")
+	return nil
+}
+
+// CLOSE command
+func (s *Session) handleClose() error {
+	s.selected = nil
+	s.state = StateAuthenticated
+	s.WriteResponse(s.tag, "OK CLOSE completed")
+	return nil
+}
+
+// EXPUNGE command
+func (s *Session) handleExpunge() error {
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	err := s.server.mailstore.Expunge(s.user, s.selected.Name)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK EXPUNGE completed")
+	return nil
+}
+
+// SEARCH command
+func (s *Session) handleSearch(args []string, line string) error {
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	// Parse search criteria
+	criteria := parseSearchCriteria(args)
+
+	uids, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, criteria)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	// Convert UIDs to sequence numbers and output
+	// For simplicity, just output as SEARCH result
+	result := "SEARCH"
+	for _, uid := range uids {
+		result += fmt.Sprintf(" %d", uid)
+	}
+	s.WriteData(result)
+
+	s.WriteResponse(s.tag, "OK SEARCH completed")
+	return nil
+}
+
+// FETCH command
+func (s *Session) handleFetch(args []string, line string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing sequence or fetch items")
+		return nil
+	}
+
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	seqSet := args[0]
+	fetchItems := parseFetchItems(args[1:])
+
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, fetchItems)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	for _, msg := range messages {
+		fetchResponse := formatFetchResponse(msg, fetchItems)
+		s.WriteData(fmt.Sprintf("%d FETCH (%s)", msg.SeqNum, fetchResponse))
+	}
+
+	s.WriteResponse(s.tag, "OK FETCH completed")
+	return nil
+}
+
+// STORE command
+func (s *Session) handleStore(args []string) error {
+	if len(args) < 3 {
+		s.WriteResponse(s.tag, "BAD Missing sequence, operation, or flags")
+		return nil
+	}
+
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	seqSet := args[0]
+	operation := strings.ToUpper(args[1]) // FLAGS, +FLAGS, -FLAGS
+	flagsStr := strings.Join(args[2:], " ")
+
+	// Parse flags
+	flags := parseFlags(flagsStr)
+
+	var add bool
+	switch operation {
+	case "FLAGS":
+		add = true
+		// Replace flags - not fully implemented
+	case "+FLAGS":
+		add = true
+	case "-FLAGS":
+		add = false
+	case "FLAGS.SILENT":
+		add = true
+	case "+FLAGS.SILENT":
+		add = true
+	case "-FLAGS.SILENT":
+		add = false
+	default:
+		s.WriteResponse(s.tag, "BAD Invalid STORE operation")
+		return nil
+	}
+
+	err := s.server.mailstore.StoreFlags(s.user, s.selected.Name, seqSet, flags, add)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	// If not silent, output updated flags
+	if !strings.HasSuffix(operation, ".SILENT") {
+		// Would need to fetch and output updated messages
+	}
+
+	s.WriteResponse(s.tag, "OK STORE completed")
+	return nil
+}
+
+// COPY command
+func (s *Session) handleCopy(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing sequence or destination")
+		return nil
+	}
+
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	seqSet := args[0]
+	destMailbox := strings.Trim(args[1], "\"'")
+
+	err := s.server.mailstore.CopyMessages(s.user, s.selected.Name, destMailbox, seqSet)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK COPY completed")
+	return nil
+}
+
+// MOVE command
+func (s *Session) handleMove(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing sequence or destination")
+		return nil
+	}
+
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	seqSet := args[0]
+	destMailbox := strings.Trim(args[1], "\"'")
+
+	err := s.server.mailstore.MoveMessages(s.user, s.selected.Name, destMailbox, seqSet)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK MOVE completed")
+	return nil
+}
+
+// UID command (prefix for UID variants)
+func (s *Session) handleUID(args []string, line string) error {
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing UID command")
+		return nil
+	}
+
+	uidCommand := strings.ToUpper(args[0])
+	uidArgs := args[1:]
+
+	switch uidCommand {
+	case "FETCH":
+		return s.handleUIDFetch(uidArgs, line)
+	case "STORE":
+		return s.handleUIDStore(uidArgs)
+	case "COPY":
+		return s.handleUIDCopy(uidArgs)
+	case "MOVE":
+		return s.handleUIDMove(uidArgs)
+	case "SEARCH":
+		return s.handleUIDSearch(uidArgs, line)
+	case "EXPUNGE":
+		return s.handleUIDExpunge(uidArgs)
+	default:
+		s.WriteResponse(s.tag, "BAD Unknown UID command")
+		return nil
+	}
+}
+
+func (s *Session) handleUIDFetch(args []string, line string) error {
+	// Same as FETCH but with UIDs
+	return s.handleFetch(args, line)
+}
+
+func (s *Session) handleUIDStore(args []string) error {
+	// Same as STORE but with UIDs
+	return s.handleStore(args)
+}
+
+func (s *Session) handleUIDCopy(args []string) error {
+	// Same as COPY but with UIDs
+	return s.handleCopy(args)
+}
+
+func (s *Session) handleUIDMove(args []string) error {
+	// Same as MOVE but with UIDs
+	return s.handleMove(args)
+}
+
+func (s *Session) handleUIDSearch(args []string, line string) error {
+	// Same as SEARCH but output UIDs
+	return s.handleSearch(args, line)
+}
+
+func (s *Session) handleUIDExpunge(args []string) error {
+	// UID EXPUNGE with sequence set
+	s.WriteResponse(s.tag, "OK UID EXPUNGE completed")
+	return nil
+}
+
+// Helper functions
+
+func parseSearchCriteria(args []string) SearchCriteria {
+	// Simplified search criteria parsing
+	criteria := SearchCriteria{
+		All: true,
+	}
+
+	for i := 0; i < len(args); i++ {
+		arg := strings.ToUpper(args[i])
+		switch arg {
+		case "ALL":
+			criteria.All = true
+		case "ANSWERED":
+			criteria.Answered = true
+		case "DELETED":
+			criteria.Deleted = true
+		case "FLAGGED":
+			criteria.Flagged = true
+		case "NEW":
+			criteria.New = true
+		case "OLD":
+			criteria.Old = true
+		case "RECENT":
+			criteria.Recent = true
+		case "SEEN":
+			criteria.Seen = true
+		case "UNANSWERED":
+			criteria.Unanswered = true
+		case "UNDELETED":
+			criteria.Undeleted = true
+		case "UNFLAGGED":
+			criteria.Unflagged = true
+		case "UNSEEN":
+			criteria.Unseen = true
+		case "FROM":
+			if i+1 < len(args) {
+				criteria.From = args[i+1]
+				i++
+			}
+		case "SUBJECT":
+			if i+1 < len(args) {
+				criteria.Subject = args[i+1]
+				i++
+			}
+		case "TO":
+			if i+1 < len(args) {
+				criteria.To = args[i+1]
+				i++
+			}
+		case "UID":
+			if i+1 < len(args) {
+				criteria.UIDSet = args[i+1]
+				i++
+			}
+		}
+	}
+
+	return criteria
+}
+
+func parseFetchItems(args []string) []string {
+	// Join args and split by space
+	itemsStr := strings.Join(args, " ")
+
+	// Handle parenthesized list
+	if strings.HasPrefix(itemsStr, "(") && strings.HasSuffix(itemsStr, ")") {
+		itemsStr = itemsStr[1 : len(itemsStr)-1]
+	}
+
+	return strings.Fields(itemsStr)
+}
+
+func parseFlags(flagsStr string) []string {
+	// Remove parentheses if present
+	flagsStr = strings.Trim(flagsStr, "()")
+
+	flags := []string{}
+	for _, f := range strings.Fields(flagsStr) {
+		f = strings.Trim(f, "\\")
+		if f != "" {
+			flags = append(flags, f)
+		}
+	}
+	return flags
+}
+
+func formatFetchResponse(msg *Message, items []string) string {
+	var parts []string
+
+	for _, item := range items {
+		item = strings.ToUpper(item)
+		switch item {
+		case "FLAGS":
+			parts = append(parts, fmt.Sprintf("FLAGS (%s)", strings.Join(msg.Flags, " ")))
+		case "INTERNALDATE":
+			parts = append(parts, fmt.Sprintf("INTERNALDATE \"%s\"", msg.InternalDate.Format("02-Jan-YYYY HH:mm:ss +0000")))
+		case "RFC822.SIZE":
+			parts = append(parts, fmt.Sprintf("RFC822.SIZE %d", msg.Size))
+		case "UID":
+			parts = append(parts, fmt.Sprintf("UID %d", msg.UID))
+		case "RFC822":
+			parts = append(parts, fmt.Sprintf("RFC822 {%d}\r\n%s", len(msg.Data), string(msg.Data)))
+		case "BODY", "BODYSTRUCTURE":
+			parts = append(parts, fmt.Sprintf("BODYSTRUCTURE (\"TEXT\" \"PLAIN\" NIL NIL NIL \"7BIT\" %d 0)", msg.Size))
+		case "ENVELOPE":
+			parts = append(parts, fmt.Sprintf("ENVELOPE (\"%s\" \"%s\" ((\"%s\" NIL \"%s\" \"%s\")) NIL NIL ((\"%s\" NIL \"%s\" \"%s\")) NIL NIL NIL NIL)",
+				msg.Subject, msg.Date, msg.From, strings.Split(msg.From, "@")[0], strings.Split(msg.From, "@")[1],
+				msg.To, strings.Split(msg.To, "@")[0], strings.Split(msg.To, "@")[1]))
+		}
+	}
+
+	return strings.Join(parts, " ")
+}
