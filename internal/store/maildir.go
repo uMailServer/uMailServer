@@ -1,0 +1,454 @@
+package store
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+// MaildirStore implements Maildir++ format storage
+type MaildirStore struct {
+	baseDir string
+}
+
+// MessageInfo holds metadata about a message
+type MessageInfo struct {
+	Filename     string
+	Size         int64
+	ModTime      time.Time
+	Flags        string
+	UID          uint32
+}
+
+// NewMaildirStore creates a new Maildir store
+func NewMaildirStore(baseDir string) *MaildirStore {
+	return &MaildirStore{
+		baseDir: baseDir,
+	}
+}
+
+// userMaildirPath returns the path to a user's Maildir
+func (s *MaildirStore) userMaildirPath(domain, user string) string {
+	return filepath.Join(s.baseDir, "domains", domain, "users", user, "Maildir")
+}
+
+// folderPath returns the path to a specific folder within a user's Maildir
+func (s *MaildirStore) folderPath(domain, user, folder string) string {
+	maildir := s.userMaildirPath(domain, user)
+	if folder == "" || folder == "INBOX" {
+		return maildir
+	}
+	// Maildir++ folder naming: .Folder.Subfolder
+	return filepath.Join(maildir, "."+folder)
+}
+
+// ensureFolder creates the Maildir structure for a folder if it doesn't exist
+func (s *MaildirStore) ensureFolder(domain, user, folder string) error {
+	basePath := s.folderPath(domain, user, folder)
+
+	subdirs := []string{"tmp", "new", "cur"}
+	for _, subdir := range subdirs {
+		path := filepath.Join(basePath, subdir)
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", path, err)
+		}
+	}
+
+	return nil
+}
+
+// generateUniqueName generates a unique Maildir filename
+// Format: {timestamp}.{pid}.{hostname}:2,{flags}
+func (s *MaildirStore) generateUniqueName() string {
+	timestamp := time.Now().Unix()
+	pid := os.Getpid()
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "localhost"
+	}
+	// Add microseconds and random component for uniqueness
+	micros := time.Now().UnixMicro() % 1000000
+	return fmt.Sprintf("%d.%d%d.%s", timestamp, pid, micros, hostname)
+}
+
+// Deliver stores a message in the specified folder
+// Uses atomic delivery: write to tmp/, then rename to new/
+func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string, error) {
+	if err := s.ensureFolder(domain, user, folder); err != nil {
+		return "", err
+	}
+
+	basePath := s.folderPath(domain, user, folder)
+	uniqueName := s.generateUniqueName()
+
+	// Write to tmp directory first
+	tmpPath := filepath.Join(basePath, "tmp", uniqueName)
+	newPath := filepath.Join(basePath, "new", uniqueName)
+
+	// Write file
+	if err := os.WriteFile(tmpPath, msg, 0644); err != nil {
+		return "", fmt.Errorf("failed to write message: %w", err)
+	}
+
+	// Sync to disk for durability
+	file, err := os.Open(tmpPath)
+	if err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to open temp file: %w", err)
+	}
+	file.Sync()
+	file.Close()
+
+	// Atomic rename to new/
+	if err := os.Rename(tmpPath, newPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to move message to new/: %w", err)
+	}
+
+	return uniqueName, nil
+}
+
+// DeliverWithFlags stores a message directly to cur/ with specified flags
+func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte, flags string) (string, error) {
+	if err := s.ensureFolder(domain, user, folder); err != nil {
+		return "", err
+	}
+
+	basePath := s.folderPath(domain, user, folder)
+	uniqueName := s.generateUniqueName()
+
+	// Add flags to filename
+	if flags != "" {
+		uniqueName = uniqueName + ":2," + flags
+	}
+
+	// Write to tmp directory first
+	tmpPath := filepath.Join(basePath, "tmp", uniqueName)
+	curPath := filepath.Join(basePath, "cur", uniqueName)
+
+	// Write file
+	if err := os.WriteFile(tmpPath, msg, 0644); err != nil {
+		return "", fmt.Errorf("failed to write message: %w", err)
+	}
+
+	// Atomic rename to cur/
+	if err := os.Rename(tmpPath, curPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to move message to cur/: %w", err)
+	}
+
+	return uniqueName, nil
+}
+
+// Fetch reads a message by its filename
+func (s *MaildirStore) Fetch(domain, user, folder, filename string) ([]byte, error) {
+	basePath := s.folderPath(domain, user, folder)
+
+	// Try cur/ first, then new/
+	paths := []string{
+		filepath.Join(basePath, "cur", filename),
+		filepath.Join(basePath, "new", filename),
+	}
+
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to read message: %w", err)
+		}
+	}
+
+	return nil, fmt.Errorf("message not found: %s", filename)
+}
+
+// FetchReader returns a reader for a message
+func (s *MaildirStore) FetchReader(domain, user, folder, filename string) (io.ReadCloser, error) {
+	basePath := s.folderPath(domain, user, folder)
+
+	// Try cur/ first, then new/
+	paths := []string{
+		filepath.Join(basePath, "cur", filename),
+		filepath.Join(basePath, "new", filename),
+	}
+
+	for _, path := range paths {
+		file, err := os.Open(path)
+		if err == nil {
+			return file, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to open message: %w", err)
+		}
+	}
+
+	return nil, fmt.Errorf("message not found: %s", filename)
+}
+
+// Move moves a message from one folder to another
+func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string) error {
+	// Ensure destination folder exists
+	if err := s.ensureFolder(domain, user, toFolder); err != nil {
+		return err
+	}
+
+	fromBase := s.folderPath(domain, user, fromFolder)
+	toBase := s.folderPath(domain, user, toFolder)
+
+	// Find source file (strip any flags)
+	baseName := strings.Split(filename, ":2,")[0]
+
+	var fromPath string
+	for _, subdir := range []string{"cur", "new"} {
+		path := filepath.Join(fromBase, subdir, filename)
+		if _, err := os.Stat(path); err == nil {
+			fromPath = path
+			break
+		}
+		// Try without flags
+		path = filepath.Join(fromBase, subdir, baseName)
+		if _, err := os.Stat(path); err == nil {
+			fromPath = path
+			break
+		}
+	}
+
+	if fromPath == "" {
+		return fmt.Errorf("source message not found: %s", filename)
+	}
+
+	// Generate new unique name for destination to avoid collisions
+	uniqueName := s.generateUniqueName()
+	toPath := filepath.Join(toBase, "new", uniqueName)
+
+	// Move file
+	if err := os.Rename(fromPath, toPath); err != nil {
+		return fmt.Errorf("failed to move message: %w", err)
+	}
+
+	return nil
+}
+
+// SetFlags updates the flags on a message (moves between cur/ filenames)
+func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags string) error {
+	basePath := s.folderPath(domain, user, folder)
+
+	// Find current file
+	var oldPath, subdir string
+	for _, sd := range []string{"cur", "new"} {
+		path := filepath.Join(basePath, sd, filename)
+		if _, err := os.Stat(path); err == nil {
+			oldPath = path
+			subdir = sd
+			break
+		}
+	}
+
+	if oldPath == "" {
+		return fmt.Errorf("message not found: %s", filename)
+	}
+
+	// Extract base name (without flags)
+	baseName := filename
+	if idx := strings.Index(filename, ":2,"); idx != -1 {
+		baseName = filename[:idx]
+	}
+
+	// Build new filename with flags
+	var newName string
+	if flags == "" {
+		newName = baseName
+	} else {
+		newName = baseName + ":2," + flags
+	}
+
+	// If filename hasn't changed, nothing to do
+	if newName == filename {
+		return nil
+	}
+
+	// Move to cur/ with new flags
+	newPath := filepath.Join(basePath, "cur", newName)
+
+	// If currently in new/, move to cur/
+	if subdir == "new" {
+		// Ensure cur/ exists
+		if err := os.MkdirAll(filepath.Join(basePath, "cur"), 0755); err != nil {
+			return fmt.Errorf("failed to create cur directory: %w", err)
+		}
+	}
+
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("failed to update flags: %w", err)
+	}
+
+	return nil
+}
+
+// List returns all messages in a folder
+func (s *MaildirStore) List(domain, user, folder string) ([]MessageInfo, error) {
+	basePath := s.folderPath(domain, user, folder)
+
+	var messages []MessageInfo
+
+	// List files from both new/ and cur/
+	subdirs := []string{"new", "cur"}
+
+	for _, subdir := range subdirs {
+		dirPath := filepath.Join(basePath, subdir)
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read directory %s: %w", dirPath, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+
+			filename := entry.Name()
+
+			// Extract flags from filename
+			flags := ""
+			if idx := strings.Index(filename, ":2,"); idx != -1 {
+				flags = filename[idx+3:]
+			}
+
+			messages = append(messages, MessageInfo{
+				Filename: filename,
+				Size:     info.Size(),
+				ModTime:  info.ModTime(),
+				Flags:    flags,
+			})
+		}
+	}
+
+	return messages, nil
+}
+
+// Delete removes a message permanently
+func (s *MaildirStore) Delete(domain, user, folder, filename string) error {
+	basePath := s.folderPath(domain, user, folder)
+
+	// Try to find and delete from cur/ or new/
+	for _, subdir := range []string{"cur", "new"} {
+		path := filepath.Join(basePath, subdir, filename)
+		if err := os.Remove(path); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("message not found: %s", filename)
+}
+
+// CreateFolder creates a new folder
+func (s *MaildirStore) CreateFolder(domain, user, folder string) error {
+	return s.ensureFolder(domain, user, folder)
+}
+
+// DeleteFolder removes a folder and all its messages
+func (s *MaildirStore) DeleteFolder(domain, user, folder string) error {
+	if folder == "INBOX" || folder == "" {
+		return fmt.Errorf("cannot delete INBOX folder")
+	}
+
+	basePath := s.folderPath(domain, user, folder)
+	if err := os.RemoveAll(basePath); err != nil {
+		return fmt.Errorf("failed to delete folder: %w", err)
+	}
+
+	return nil
+}
+
+// RenameFolder renames a folder
+func (s *MaildirStore) RenameFolder(domain, user, oldName, newName string) error {
+	if oldName == "INBOX" || oldName == "" {
+		return fmt.Errorf("cannot rename INBOX folder")
+	}
+
+	oldPath := s.folderPath(domain, user, oldName)
+	newPath := s.folderPath(domain, user, newName)
+
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("failed to rename folder: %w", err)
+	}
+
+	return nil
+}
+
+// ListFolders returns all folders for a user
+func (s *MaildirStore) ListFolders(domain, user string) ([]string, error) {
+	maildir := s.userMaildirPath(domain, user)
+
+	var folders []string
+
+	// Always include INBOX (the main Maildir)
+	folders = append(folders, "INBOX")
+
+	// List subdirectories starting with "."
+	entries, err := os.ReadDir(maildir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return folders, nil
+		}
+		return nil, fmt.Errorf("failed to read maildir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if strings.HasPrefix(name, ".") {
+			// Remove leading dot for folder name
+			folder := name[1:]
+			folders = append(folders, folder)
+		}
+	}
+
+	return folders, nil
+}
+
+// Quota returns current usage and limit for a user
+func (s *MaildirStore) Quota(domain, user string) (used int64, limit int64, err error) {
+	maildir := s.userMaildirPath(domain, user)
+
+	// Walk the directory tree and sum file sizes
+	err = filepath.Walk(maildir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip files we can't access
+		}
+		if !info.IsDir() {
+			used += info.Size()
+		}
+		return nil
+	})
+
+	if err != nil && !os.IsNotExist(err) {
+		return 0, 0, fmt.Errorf("failed to calculate quota: %w", err)
+	}
+
+	return used, 0, nil // Limit is managed elsewhere (in domain config)
+}
+
+// MessageCount returns the number of messages in a folder
+func (s *MaildirStore) MessageCount(domain, user, folder string) (int, error) {
+	messages, err := s.List(domain, user, folder)
+	if err != nil {
+		return 0, err
+	}
+	return len(messages), nil
+}

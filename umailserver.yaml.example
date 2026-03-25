@@ -1,0 +1,146 @@
+# uMailServer Configuration Example
+# Copy this file to umailserver.yaml and customize for your deployment
+
+# Server identity
+server:
+  hostname: mail.example.com          # FQDN for this mail server
+  data_dir: /var/lib/umailserver      # Where mail and data are stored
+
+# TLS and Certificate Configuration
+tls:
+  # Automatic certificates via Let's Encrypt (recommended)
+  acme:
+    enabled: true
+    email: admin@example.com          # Let's Encrypt account email
+    provider: letsencrypt             # or letsencrypt-staging for testing
+    challenge: http-01                # or dns-01 for wildcard certs
+
+  # Manual certificates (alternative to ACME)
+  # cert_file: /etc/ssl/mail.pem
+  # key_file: /etc/ssl/mail.key
+
+# SMTP Configuration
+smtp:
+  inbound:
+    enabled: true
+    port: 25                          # Standard SMTP port (requires root)
+    bind: 0.0.0.0
+    max_message_size: 50MB
+    max_recipients: 100
+    read_timeout: 5m
+    write_timeout: 5m
+
+  submission:
+    enabled: true
+    port: 587                         # STARTTLS submission
+    bind: 0.0.0.0
+    require_auth: true
+    require_tls: true                 # Require STARTTLS before AUTH
+
+  submission_tls:
+    enabled: true
+    port: 465                         # Implicit TLS submission
+    bind: 0.0.0.0
+    require_auth: true
+
+# IMAP Configuration
+imap:
+  enabled: true
+  port: 993                           # Implicit TLS (IMAPS)
+  bind: 0.0.0.0
+  starttls_port: 143                  # STARTTLS (optional, usually disabled)
+  idle_timeout: 30m
+  max_connections: 10000
+
+# POP3 Configuration (optional, disabled by default)
+pop3:
+  enabled: false
+  port: 995
+  bind: 0.0.0.0
+
+# HTTP Configuration (webmail and API)
+http:
+  enabled: true
+  port: 443                           # HTTPS
+  http_port: 80                       # HTTP (redirects to HTTPS)
+  bind: 0.0.0.0
+
+# Admin Panel Configuration
+admin:
+  enabled: true
+  port: 8443
+  bind: 127.0.0.1                     # Admin panel on localhost only by default
+  # bind: 0.0.0.0                     # Uncomment to allow external access
+
+# Spam Filtering Configuration
+spam:
+  enabled: true
+  reject_threshold: 9.0               # Reject at SMTP level
+  junk_threshold: 3.0                 # Deliver to Junk folder
+  quarantine_threshold: 6.0           # Hold for admin review
+
+  bayesian:
+    enabled: true
+    auto_train: true                  # Auto-train from user actions
+
+  greylisting:
+    enabled: true
+    delay: 5m                         # Initial delay for unknown senders
+
+  rbl_servers:                        # DNS blocklists to check
+    - zen.spamhaus.org
+    - b.barracudacentral.org
+    - bl.spamcop.net
+
+# Security Configuration
+security:
+  max_login_attempts: 5
+  lockout_duration: 15m               # Lockout after failed attempts
+
+  rate_limit:
+    smtp_per_minute: 30               # Messages per account per minute
+    smtp_per_hour: 500
+    imap_connections: 50              # Max concurrent per account
+    http_requests_per_minute: 120
+
+# MCP (Model Context Protocol) Server
+mcp:
+  enabled: true
+  port: 3000
+  auth_token: ""                      # Auto-generated on first run
+  bind: 127.0.0.1
+
+# Domain Configuration
+domains:
+  - name: example.com
+    max_accounts: 100
+    max_mailbox_size: 5GB
+
+    dkim:
+      selector: default
+      # Keys are auto-generated on domain creation
+      # Use 'umailserver domain dns example.com' to get DNS records
+
+# Logging Configuration
+logging:
+  level: info                         # debug, info, warn, error
+  format: json                        # json or text
+  output: stdout                      # stdout, stderr, or path
+
+# Metrics and Monitoring
+metrics:
+  enabled: true
+  port: 8080                          # Prometheus metrics endpoint
+  bind: 127.0.0.1
+  path: /metrics
+
+# Database Configuration
+database:
+  # Embedded database (bbolt)
+  path: /var/lib/umailserver/db
+
+# Storage Configuration
+storage:
+  # Maildir++ format settings
+  sync: true                          # fsync after writes
+  shared_folders: false               # Enable shared folders
