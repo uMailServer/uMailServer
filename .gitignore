@@ -1,0 +1,67 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# Binary output
+/bin/
+/dist/
+/umailserver
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+/coverage/
+*.cover
+*.cov
+
+# Database files
+*.db
+*.db.lock
+
+# Data directories (for local development)
+/data/
+/var/
+/tmp/
+
+# UI build outputs (if built locally)
+/web/webmail/dist/
+/web/admin/dist/
+/web/account/dist/
+
+# Node modules (if building UI locally)
+node_modules/
+
+# TLS certificates (for local development)
+*.pem
+*.key
+*.crt
+
+# OS files
+Thumbs.db
