@@ -21,4 +21,4 @@ EXPOSE 25 587 110 995 143 993 8080
 VOLUME ["/data"]
 
 ENTRYPOINT ["./umailserver"]
-CMD ["-config", "/data/config.yaml"]
+CMD ["serve", "--config", "/data/config.yaml"]
