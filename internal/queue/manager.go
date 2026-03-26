@@ -3,13 +3,17 @@ package queue
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/smtp"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/store"
 )
 
@@ -21,6 +25,20 @@ type Manager struct {
 	resolver    *Resolver
 	running     bool
 	shutdown    chan struct{}
+	mu          sync.RWMutex
+	metrics     *metrics.SimpleMetrics
+	maxRetries  int
+	maxQueueSize int
+}
+
+// QueueStats holds queue statistics
+type QueueStats struct {
+	Pending   int
+	Sending   int
+	Failed    int
+	Delivered int
+	Bounced   int
+	Total     int
 }
 
 // Resolver handles DNS resolution for MX records
@@ -29,11 +47,14 @@ type Resolver struct{}
 // NewManager creates a new queue manager
 func NewManager(db *db.DB, store *store.MaildirStore, dataDir string) *Manager {
 	return &Manager{
-		db:       db,
-		store:    store,
-		dataDir:  dataDir,
-		resolver: &Resolver{},
-		shutdown: make(chan struct{}),
+		db:           db,
+		store:        store,
+		dataDir:      dataDir,
+		resolver:     &Resolver{},
+		shutdown:     make(chan struct{}),
+		metrics:      metrics.Get(),
+		maxRetries:   len(retryDelays),
+		maxQueueSize: 10000,
 	}
 }
 
@@ -59,20 +80,43 @@ func (m *Manager) Stop() {
 
 // Enqueue adds a message to the outbound queue
 func (m *Manager) Enqueue(from string, to []string, message []byte) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check queue size limit
+	stats, err := m.getStats()
+	if err != nil {
+		return "", fmt.Errorf("failed to get queue stats: %w", err)
+	}
+	if stats.Total >= m.maxQueueSize {
+		return "", fmt.Errorf("queue is full (max %d entries)", m.maxQueueSize)
+	}
+
 	// Generate unique message ID
-	id := fmt.Sprintf("%d-%s", time.Now().UnixNano(), generateID())
+	id := generateID()
+
+	// Create queue directory if not exists
+	queueDir := filepath.Join(m.dataDir, "queue")
+	if err := os.MkdirAll(queueDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create queue directory: %w", err)
+	}
 
 	// Store message on disk
-	messagePath := filepath.Join(m.dataDir, "queue", id+".msg")
+	messagePath := filepath.Join(queueDir, id+".msg")
 	if err := writeFile(messagePath, message); err != nil {
 		return "", fmt.Errorf("failed to store message: %w", err)
 	}
 
 	// Create queue entries for each recipient
 	now := time.Now()
-	for _, recipient := range to {
+	baseID := id
+
+	for i, recipient := range to {
+		// Unique ID per recipient
+		entryID := fmt.Sprintf("%s-%d", baseID, i)
+
 		entry := &db.QueueEntry{
-			ID:          id + "-" + recipient,
+			ID:          entryID,
 			From:        from,
 			To:          []string{recipient},
 			MessagePath: messagePath,
@@ -83,11 +127,18 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 		}
 
 		if err := m.db.Enqueue(entry); err != nil {
+			// Clean up message file on failure
+			deleteFile(messagePath)
 			return "", fmt.Errorf("failed to enqueue: %w", err)
 		}
 	}
 
-	return id, nil
+	// Track metric
+	if m.metrics != nil {
+		// Queue enqueue metric would go here
+	}
+
+	return baseID, nil
 }
 
 // GetQueueEntry retrieves a queue entry by ID
@@ -272,24 +323,30 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 	deleteFile(entry.MessagePath)
 }
 
-// handleDeliveryFailure handles delivery failure
+// handleDeliveryFailure handles delivery failure with exponential backoff and jitter
 func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 	entry.LastError = errorMsg
 	entry.RetryCount++
 
 	// Check if max retries reached
-	if entry.RetryCount >= len(retryDelays) {
+	if entry.RetryCount >= m.maxRetries {
 		// Generate bounce
 		entry.Status = "bounced"
 		m.generateBounce(entry)
 	} else {
-		// Schedule retry
-		delay := retryDelays[entry.RetryCount-1]
-		entry.NextRetry = time.Now().Add(delay)
+		// Calculate retry delay with jitter (±20%)
+		baseDelay := retryDelays[entry.RetryCount-1]
+		jitter := time.Duration(float64(baseDelay) * (0.8 + 0.4*rand.Float64()))
+		entry.NextRetry = time.Now().Add(jitter)
 		entry.Status = "pending"
 	}
 
 	m.db.UpdateQueueEntry(entry)
+
+	// Track metric
+	if m.metrics != nil {
+		m.metrics.DeliveryFailed()
+	}
 }
 
 // generateBounce generates a bounce message
@@ -349,10 +406,36 @@ var retryDelays = []time.Duration{
 	48 * time.Hour,
 }
 
-// Helper functions
+// GetStats returns queue statistics
+func (m *Manager) GetStats() (*QueueStats, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.getStats()
+}
+
+// getStats is the internal version without locking
+func (m *Manager) getStats() (*QueueStats, error) {
+	// In a real implementation, this would query the database
+	// For now, return empty stats
+	return &QueueStats{}, nil
+}
+
+// SetMaxRetries sets the maximum number of retry attempts
+func (m *Manager) SetMaxRetries(max int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxRetries = max
+}
+
+// SetMaxQueueSize sets the maximum queue size
+func (m *Manager) SetMaxQueueSize(max int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxQueueSize = max
+}
 
 func generateID() string {
-	return fmt.Sprintf("%d", time.Now().Unix())
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(10000))
 }
 
 func extractDomain(email string) string {
@@ -364,17 +447,26 @@ func extractDomain(email string) string {
 }
 
 func writeFile(path string, data []byte) error {
-	// Simplified - in production use proper file operations
-	return nil
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	// Write to temp file first, then rename for atomicity
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, path)
 }
 
 func readFile(path string) ([]byte, error) {
-	// Simplified - in production use proper file operations
-	return []byte("test message"), nil
+	return os.ReadFile(path)
 }
 
 func deleteFile(path string) {
-	// Simplified
+	os.Remove(path)
 }
 
 // LookupMX looks up MX records for a domain

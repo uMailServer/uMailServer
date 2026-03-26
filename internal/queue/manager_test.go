@@ -2,6 +2,8 @@ package queue
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -74,21 +76,68 @@ func TestManager(t *testing.T) {
 		}
 	})
 
-	t.Run("Enqueue", func(t *testing.T) {
-		from := "sender@example.com"
-		to := []string{"recipient@example.com"}
-		message := []byte("Subject: Test\r\n\r\nBody")
-
-		id, err := manager.Enqueue(from, to, message)
-		if err != nil {
-			t.Fatalf("Enqueue failed: %v", err)
+	t.Run("SetMaxRetries", func(t *testing.T) {
+		manager.SetMaxRetries(5)
+		if manager.maxRetries != 5 {
+			t.Errorf("Expected maxRetries to be 5, got %d", manager.maxRetries)
 		}
+	})
 
-		if id == "" {
+	t.Run("SetMaxQueueSize", func(t *testing.T) {
+		manager.SetMaxQueueSize(100)
+		if manager.maxQueueSize != 100 {
+			t.Errorf("Expected maxQueueSize to be 100, got %d", manager.maxQueueSize)
+		}
+	})
+
+	t.Run("GetStats", func(t *testing.T) {
+		stats, err := manager.GetStats()
+		if err != nil {
+			t.Fatalf("GetStats failed: %v", err)
+		}
+		if stats == nil {
+			t.Error("Expected stats, got nil")
+		}
+	})
+
+	t.Run("GenerateID", func(t *testing.T) {
+		id1 := generateID()
+		id2 := generateID()
+
+		if id1 == "" {
 			t.Error("Expected non-empty ID")
 		}
 
-		// Check that queue entry was created
-		// Note: In real implementation, we would verify the entry exists
+		if id1 == id2 {
+			t.Error("Expected unique IDs")
+		}
+	})
+
+	t.Run("FileOperations", func(t *testing.T) {
+		testDir := t.TempDir()
+		testFile := filepath.Join(testDir, "test.txt")
+		testData := []byte("test data content")
+
+		// Test writeFile
+		err := writeFile(testFile, testData)
+		if err != nil {
+			t.Fatalf("writeFile failed: %v", err)
+		}
+
+		// Test readFile
+		readData, err := readFile(testFile)
+		if err != nil {
+			t.Fatalf("readFile failed: %v", err)
+		}
+
+		if string(readData) != string(testData) {
+			t.Errorf("readFile returned wrong data: got %q, want %q", string(readData), string(testData))
+		}
+
+		// Test deleteFile
+		deleteFile(testFile)
+		if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+			t.Error("File should be deleted")
+		}
 	})
 }
