@@ -1,0 +1,37 @@
+[Unit]
+Description=uMailServer - Unified Mail Server
+Documentation=https://github.com/uMailServer/uMailServer
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=umail
+Group=umail
+WorkingDirectory=/var/lib/umailserver
+ExecStart=/usr/local/bin/umailserver serve --config /etc/umailserver/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/umailserver /var/spool/umailserver
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target
