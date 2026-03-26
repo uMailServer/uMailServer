@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -95,6 +96,19 @@ func (s *Server) Start() error {
 		"data_dir", s.config.Server.DataDir,
 	)
 
+	// Create PID file
+	pidFile := NewPIDFile(s.config.Server.DataDir)
+	if err := pidFile.Create(); err != nil {
+		return fmt.Errorf("failed to create PID file: %w", err)
+	}
+	s.logger.Debug("PID file created")
+
+	// Initialize queue manager
+	queueDir := filepath.Join(s.config.Server.DataDir, "queue")
+	s.queue = queue.NewManager(s.database, nil, queueDir)
+	s.queue.Start(s.ctx)
+	s.logger.Info("Queue manager started")
+
 	// Create mailstore for IMAP
 	mailstore, err := imap.NewBboltMailstore(s.config.Server.DataDir + "/mail")
 	if err != nil {
@@ -146,6 +160,12 @@ func (s *Server) Start() error {
 // Stop gracefully stops all server components
 func (s *Server) Stop() error {
 	s.logger.Info("Stopping uMailServer...")
+
+	// Remove PID file
+	pidFile := NewPIDFile(s.config.Server.DataDir)
+	if err := pidFile.Remove(); err != nil {
+		s.logger.Debug("Failed to remove PID file", "error", err)
+	}
 
 	// Signal cancellation
 	s.cancel()
