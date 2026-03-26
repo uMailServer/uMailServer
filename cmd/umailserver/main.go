@@ -51,6 +51,12 @@ func main() {
 		cmdRestore(os.Args[2:])
 	case "migrate":
 		cmdMigrate(os.Args[2:])
+	case "status":
+		cmdStatus(os.Args[2:])
+	case "stop":
+		cmdStop(os.Args[2:])
+	case "restart":
+		cmdRestart(os.Args[2:])
 	case "version":
 		fmt.Printf("uMailServer %s (%s) built %s\n", Version, GitCommit, BuildDate)
 	default:
@@ -67,6 +73,9 @@ Usage: umailserver <command> [flags]
 
 Commands:
   serve        Start the mail server
+  stop         Stop the running server
+  restart      Restart the server
+  status       Show server status
   quickstart   Generate config and create first account
   domain       Domain management (add, list, dns)
   account      Account management (add, password, list, delete)
@@ -81,6 +90,8 @@ Commands:
 Examples:
   umailserver quickstart you@example.com
   umailserver serve --config /etc/umailserver.yaml
+  umailserver status
+  umailserver stop
   umailserver domain add example.com
   umailserver account add john@example.com
   umailserver check dns example.com`)
@@ -827,4 +838,77 @@ func cmdMigrate(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("Migrate command (not yet implemented)")
+}
+
+func cmdStatus(args []string) {
+	dataDir := config.GetDefaultDataDir()
+	if len(args) > 0 {
+		dataDir = args[0]
+	}
+
+	pidFile := server.NewPIDFile(dataDir)
+	pid, err := pidFile.Read()
+	if err != nil {
+		fmt.Println("Status: not running")
+		os.Exit(0)
+	}
+
+	fmt.Printf("Status: running\n")
+	fmt.Printf("PID: %d\n", pid)
+
+	// Try to get more info from health endpoint
+	// This would require the admin API to be accessible
+	// For now, just show basic info
+}
+
+func cmdStop(args []string) {
+	dataDir := config.GetDefaultDataDir()
+	if len(args) > 0 {
+		dataDir = args[0]
+	}
+
+	pidFile := server.NewPIDFile(dataDir)
+	pid, err := pidFile.Read()
+	if err != nil {
+		fmt.Println("Server is not running")
+		os.Exit(0)
+	}
+
+	fmt.Printf("Stopping server (PID: %d)...\n", pid)
+
+	// Send SIGTERM
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to find process: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := proc.Signal(os.Interrupt); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to signal process: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✓ Stop signal sent")
+}
+
+func cmdRestart(args []string) {
+	dataDir := config.GetDefaultDataDir()
+	if len(args) > 0 {
+		dataDir = args[0]
+	}
+
+	// Stop if running
+	pidFile := server.NewPIDFile(dataDir)
+	if pid, err := pidFile.Read(); err == nil && pid > 0 {
+		fmt.Printf("Stopping server (PID: %d)...\n", pid)
+		if proc, err := os.FindProcess(pid); err == nil {
+			proc.Signal(os.Interrupt)
+			// Wait a bit for shutdown
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	// Start again
+	fmt.Println("Starting server...")
+	cmdServe([]string{"--data-dir", dataDir})
 }
