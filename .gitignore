@@ -1,32 +1,21 @@
-# Binaries for programs and plugins
+# Binaries
+umailserver
 *.exe
-*.exe~
 *.dll
 *.so
 *.dylib
 
-# Test binary, built with `go test -c`
+# Test binary
 *.test
 
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-
-# Binary output
-/bin/
-/dist/
-/umailserver
+# Output
+coverage.out
+coverage.html
 *.log
 
-# Environment files
-.env
-.env.local
-.env.*.local
+# Data directories
+data/
+maildir/
 
 # IDE
 .idea/
@@ -34,34 +23,18 @@ go.work
 *.swp
 *.swo
 *~
+
+# OS
 .DS_Store
-
-# Testing
-/coverage/
-*.cover
-*.cov
-
-# Database files
-*.db
-*.db.lock
-
-# Data directories (for local development)
-/data/
-/var/
-/tmp/
-
-# UI build outputs (if built locally)
-/web/webmail/dist/
-/web/admin/dist/
-/web/account/dist/
-
-# Node modules (if building UI locally)
-node_modules/
-
-# TLS certificates (for local development)
-*.pem
-*.key
-*.crt
-
-# OS files
 Thumbs.db
+
+# Dependencies (vendor)
+vendor/
+
+# Build artifacts
+dist/
+build/
+
+# Config with secrets
+config.local.yaml
+config.prod.yaml

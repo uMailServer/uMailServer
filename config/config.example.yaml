@@ -1,0 +1,80 @@
+# uMailServer Configuration Example
+
+server:
+  hostname: mail.example.com
+  data_dir: ./data
+
+# SMTP Configuration
+smtp:
+  addr: ":25"              # SMTP port (25 for standard, use 2525 for non-root)
+  tls_addr: ":587"         # Submission port (STARTTLS)
+  max_size: 52428800       # 50MB max message size
+  max_recipients: 100      # Max recipients per message
+  read_timeout: 30s
+  write_timeout: 30s
+
+# IMAP Configuration
+imap:
+  addr: ":143"             # IMAP port
+  tls_addr: ":993"         # IMAPS port
+  max_connections: 1000
+
+# POP3 Configuration
+pop3:
+  addr: ":110"             # POP3 port
+  tls_addr: ":995"         # POP3S port
+
+# API Configuration
+api:
+  addr: ":8080"            # REST API port
+  jwt_secret: "change-me-to-a-random-string"
+  token_expiry: 24h
+
+# TLS Configuration
+tls:
+  enabled: true
+  auto_tls: true           # Use Let's Encrypt
+  cert_dir: ./data/certs
+  email: admin@example.com # For Let's Encrypt notifications
+  
+  # For manual certificates (if auto_tls is false):
+  # cert_file: /path/to/cert.pem
+  # key_file: /path/to/key.pem
+
+# DKIM Configuration
+dkim:
+  enabled: true
+  selector: "default"
+  domain: "example.com"
+  key_file: ./data/dkim.key
+
+# DMARC Configuration
+dmarc:
+  enabled: true
+  policy: "quarantine"     # none, quarantine, reject
+
+# SPF Configuration
+spf:
+  enabled: true
+
+# Greylisting Configuration
+greylisting:
+  enabled: true
+  delay: 5m                # Initial delay
+  expiry: 24h              # Record expiry
+  whitelist:
+    - "127.0.0.0/8"
+    - "10.0.0.0/8"
+
+# RBL Configuration
+rbl:
+  enabled: true
+  servers:
+    - "zen.spamhaus.org"
+    - "bl.spamcop.net"
+
+# Logging
+logging:
+  level: "info"            # debug, info, warn, error
+  format: "json"           # json, text
+  output: "stdout"         # stdout, stderr, or file path
