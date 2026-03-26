@@ -11,7 +11,7 @@ import {
   DraftingCompass
 } from 'lucide-react'
 
-const folderIcons: Record<string, React.ReactNode> = {
+const folderIcons = {
   'Inbox': <Inbox className="h-4 w-4" />,
   'Sent': <Send className="h-4 w-4" />,
   'Drafts': <DraftingCompass className="h-4 w-4" />,

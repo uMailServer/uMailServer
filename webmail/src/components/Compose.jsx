@@ -14,7 +14,7 @@ function Compose({ onClose }) {
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setSending(true)
     const success = await sendEmail(to, subject, body)

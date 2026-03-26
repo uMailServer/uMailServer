@@ -7,7 +7,7 @@ import { PenSquare, LogOut, Settings, User } from 'lucide-react'
 function Header({ onCompose }) {
   const { user, logout } = useAuth()
 
-  const getInitials = (email: string) => {
+  const getInitials = (email) => {
     return email?.split('@')[0]?.slice(0, 2).toUpperCase() || 'U'
   }
 

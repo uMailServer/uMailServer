@@ -12,7 +12,7 @@ function Login() {
   const [password, setPassword] = useState('')
   const [localError, setLocalError] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
     setLocalError('')
 
