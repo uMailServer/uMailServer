@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewServer(t *testing.T) {
@@ -45,12 +46,21 @@ func TestPOP3Session(t *testing.T) {
 		Data:  []byte("Subject: Test\r\n\r\nTest body"),
 	})
 
-	// Create session and handle it in background
+	// Create session
 	session := NewSession(serverConn, server)
-	go session.Handle()
+
+	// Create reader BEFORE starting goroutine to avoid pipe deadlock
+	reader := bufio.NewReader(clientConn)
+
+	// Start handling in background - greeting will be sent first
+	go func() {
+		// Send greeting (normally done by handleConnection before Handle())
+		session.WriteResponse("+OK uMailServer POP3 ready")
+		// Then handle commands
+		session.Handle()
+	}()
 
 	// Test greeting
-	reader := bufio.NewReader(clientConn)
 	greeting, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(greeting, "+OK") {
 		t.Errorf("Expected +OK greeting, got %s", greeting)
@@ -102,6 +112,13 @@ func TestPOP3Session(t *testing.T) {
 	if !strings.HasPrefix(resp, "+OK") {
 		t.Errorf("Expected +OK after QUIT, got %s", resp)
 	}
+
+	// Close both connections to stop the session goroutine
+	clientConn.Close()
+	serverConn.Close()
+
+	// Give the goroutine time to exit
+	time.Sleep(10 * time.Millisecond)
 }
 
 func TestNewSession(t *testing.T) {
@@ -136,12 +153,14 @@ func TestWriteResponse(t *testing.T) {
 	server := NewServer(":0", store, nil)
 	session := NewSession(serverConn, server)
 
-	session.WriteResponse("+OK Test")
-
+	// Create reader first to avoid deadlock
 	reader := bufio.NewReader(clientConn)
+
+	// Write in background
+	go session.WriteResponse("+OK Test")
+
 	resp, _ := reader.ReadString('\n')
 	if resp != "+OK Test\r\n" {
 		t.Errorf("Expected '+OK Test\\r\\n', got %q", resp)
 	}
 }
-
