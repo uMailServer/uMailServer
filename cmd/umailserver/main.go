@@ -95,6 +95,39 @@ func cmdServe(args []string) {
 	fs.StringVar(&dataDir, "data-dir", "", "Override data directory")
 	fs.Parse(args)
 
+	// Determine data directory
+	if dataDir == "" {
+		dataDir = config.GetDefaultDataDir()
+	}
+
+	// Check if this is first run (no config exists)
+	if configPath == "" && config.CheckFirstRun(dataDir) {
+		fmt.Println()
+		fmt.Println("Welcome to uMailServer!")
+		fmt.Println("It looks like this is your first time running the server.")
+		fmt.Println()
+
+		// Run interactive setup
+		wizard := config.NewSetupWizard()
+		wizard.Config.Server.DataDir = dataDir
+
+		cfg, err := wizard.Run()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Setup failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Use the newly created config
+		configPath = filepath.Join(dataDir, "config.yaml")
+
+		fmt.Println()
+		fmt.Println("Setup complete! Starting server...")
+		fmt.Println()
+
+		// Update cfg variable for use below
+		cfg.EnsureDataDir()
+	}
+
 	// Load configuration
 	cfg, err := config.Load(configPath)
 	if err != nil {
