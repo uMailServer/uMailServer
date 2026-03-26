@@ -440,10 +440,7 @@ See [LICENSE](LICENSE) for details.
 ## Links
 
 - Website: https://umailserver.com
-- Docs: https://docs.umailserver.com
 - GitHub: https://github.com/umailserver/umailserver
-- Docker Hub: https://hub.docker.com/r/umailserver/umailserver
-
 ---
 
 ## Acknowledgments
