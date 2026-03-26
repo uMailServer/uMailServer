@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/mcp"
 )
 
 //go:embed static/index.html
@@ -19,9 +20,10 @@ var webmailHTML []byte
 
 // Server represents the admin API server
 type Server struct {
-	db     *db.DB
-	logger *slog.Logger
-	config Config
+	db        *db.DB
+	logger    *slog.Logger
+	config    Config
+	mcpServer *mcp.Server
 }
 
 // Config holds API server configuration
@@ -38,9 +40,10 @@ func NewServer(db *db.DB, logger *slog.Logger, config Config) *Server {
 	}
 
 	return &Server{
-		db:     db,
-		logger: logger,
-		config: config,
+		db:        db,
+		logger:    logger,
+		config:    config,
+		mcpServer: mcp.NewServer(db),
 	}
 }
 
@@ -59,6 +62,9 @@ func (s *Server) router() http.Handler {
 
 	// Health check
 	mux.HandleFunc("/health", s.handleHealth)
+
+	// MCP endpoint
+	mux.HandleFunc("/mcp", s.mcpServer.HandleHTTP)
 
 	// Authentication
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
