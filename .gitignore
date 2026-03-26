@@ -38,3 +38,6 @@ build/
 # Config with secrets
 config.local.yaml
 config.prod.yaml
+
+
+node_modules/

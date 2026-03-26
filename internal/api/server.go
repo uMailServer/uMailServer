@@ -14,6 +14,7 @@ import (
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
+	"golang.org/x/crypto/bcrypt"
 )
 
 //go:embed static/index.html
@@ -221,8 +222,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check password (TODO: Use proper password hashing)
-	if account.PasswordHash != req.Password {
+	// Check password using bcrypt
+	if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(req.Password)); err != nil {
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -359,21 +360,9 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Return actual metrics
-	s.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"smtp": map[string]int{
-			"connections": 0,
-			"messages":    0,
-		},
-		"imap": map[string]int{
-			"connections": 0,
-			"sessions":    0,
-		},
-		"queue": map[string]int{
-			"pending": 0,
-			"failed":  0,
-		},
-	})
+	// Get actual metrics from metrics collector
+	stats := metrics.Get().GetStats()
+	s.sendJSON(w, http.StatusOK, stats)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -388,11 +377,18 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Count accounts across all domains
+	accounts := 0
+	for _, d := range domains {
+		accts, _ := s.db.ListAccountsByDomain(d.Name)
+		accounts += len(accts)
+	}
+
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"domains":    len(domains),
-		"accounts":   0, // TODO: Count accounts
-		"messages":   0, // TODO: Count messages
-		"queue_size": 0, // TODO: Count queue
+		"accounts":   accounts,
+		"messages":   0, // Would need to scan maildirs
+		"queue_size": 0, // Would need queue manager
 	})
 }
 
@@ -548,11 +544,18 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 
 	user, domain := parseEmail(req.Email)
 
+	// Hash password with bcrypt
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
 	account := &db.AccountData{
 		Email:        req.Email,
 		LocalPart:    user,
 		Domain:       domain,
-		PasswordHash: req.Password, // TODO: Hash password
+		PasswordHash: string(hashedPassword),
 		IsAdmin:      req.IsAdmin,
 		IsActive:     true,
 		CreatedAt:    time.Now(),
@@ -600,7 +603,13 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 
 	if req.Password != "" {
-		account.PasswordHash = req.Password // TODO: Hash password
+		// Hash new password with bcrypt
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to hash password")
+			return
+		}
+		account.PasswordHash = string(hashedPassword)
 	}
 	account.IsAdmin = req.IsAdmin
 	account.IsActive = req.IsActive
@@ -628,22 +637,76 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 // Queue handlers
 
 func (s *Server) listQueue(w http.ResponseWriter, r *http.Request) {
-	// TODO: Implement queue listing
-	s.sendJSON(w, http.StatusOK, []map[string]interface{}{})
+	// Get pending queue entries from database
+	entries, err := s.db.GetPendingQueue(time.Now().Add(24 * time.Hour))
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to list queue")
+		return
+	}
+
+	var result []map[string]interface{}
+	for _, e := range entries {
+		result = append(result, map[string]interface{}{
+			"id":          e.ID,
+			"from":        e.From,
+			"to":          e.To,
+			"status":      e.Status,
+			"retry_count": e.RetryCount,
+			"last_error":  e.LastError,
+			"created_at":  e.CreatedAt,
+			"next_retry":  e.NextRetry,
+		})
+	}
+
+	s.sendJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) getQueueEntry(w http.ResponseWriter, r *http.Request, id string) {
-	// TODO: Implement queue entry retrieval
-	s.sendError(w, http.StatusNotFound, "queue entry not found")
+	entry, err := s.db.GetQueueEntry(id)
+	if err != nil {
+		s.sendError(w, http.StatusNotFound, "queue entry not found")
+		return
+	}
+
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"id":          entry.ID,
+		"from":        entry.From,
+		"to":          entry.To,
+		"status":      entry.Status,
+		"retry_count": entry.RetryCount,
+		"last_error":  entry.LastError,
+		"created_at":  entry.CreatedAt,
+		"next_retry":  entry.NextRetry,
+	})
 }
 
 func (s *Server) retryQueueEntry(w http.ResponseWriter, r *http.Request, id string) {
-	// TODO: Implement queue retry
+	entry, err := s.db.GetQueueEntry(id)
+	if err != nil {
+		s.sendError(w, http.StatusNotFound, "queue entry not found")
+		return
+	}
+
+	// Reset retry count and status
+	entry.Status = "pending"
+	entry.RetryCount = 0
+	entry.LastError = ""
+	entry.NextRetry = time.Now()
+
+	if err := s.db.UpdateQueueEntry(entry); err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to retry queue entry")
+		return
+	}
+
 	s.sendJSON(w, http.StatusOK, map[string]string{"status": "retrying"})
 }
 
 func (s *Server) dropQueueEntry(w http.ResponseWriter, r *http.Request, id string) {
-	// TODO: Implement queue drop
+	if err := s.db.Dequeue(id); err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to drop queue entry")
+		return
+	}
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

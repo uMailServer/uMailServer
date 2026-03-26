@@ -15,6 +15,7 @@ import (
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/smtp"
 	"github.com/umailserver/umailserver/internal/storage"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Server is the main uMailServer instance
@@ -204,8 +205,8 @@ func (s *Server) authenticate(username, password string) (bool, error) {
 		return false, err
 	}
 
-	// Check password (TODO: Implement proper password hashing)
-	if account.PasswordHash != password {
+	// Check password using bcrypt
+	if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(password)); err != nil {
 		return false, nil
 	}
 
@@ -257,8 +258,16 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 
 // relayMessage relays a message to a remote server
 func (s *Server) relayMessage(from, to string, data []byte) error {
-	// TODO: Implement queue for remote delivery
-	s.logger.Debug("Relaying message", "from", from, "to", to)
+	if s.queue != nil {
+		_, err := s.queue.Enqueue(from, []string{to}, data)
+		if err != nil {
+			s.logger.Error("Failed to enqueue relay message", "error", err)
+			return fmt.Errorf("failed to queue message: %w", err)
+		}
+		s.logger.Debug("Message queued for relay", "from", from, "to", to)
+		return nil
+	}
+	s.logger.Debug("Relaying message (queue not available)", "from", from, "to", to)
 	return nil
 }
 
