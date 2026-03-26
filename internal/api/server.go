@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/mcp"
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 //go:embed static/index.html
@@ -62,6 +63,9 @@ func (s *Server) router() http.Handler {
 
 	// Health check
 	mux.HandleFunc("/health", s.handleHealth)
+
+	// Metrics endpoint
+	mux.HandleFunc("/metrics", metrics.Get().HTTPHandler)
 
 	// MCP endpoint
 	mux.HandleFunc("/mcp", s.mcpServer.HandleHTTP)
