@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          # Linux AMD64
+          GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o dist/umailserver-linux-amd64 ./cmd/umailserver
+          # Linux ARM64
+          GOOS=linux GOARCH=arm64 go build -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o dist/umailserver-linux-arm64 ./cmd/umailserver
+          # macOS AMD64
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o dist/umailserver-darwin-amd64 ./cmd/umailserver
+          # macOS ARM64 (Apple Silicon)
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o dist/umailserver-darwin-arm64 ./cmd/umailserver
+          # Windows AMD64
+          GOOS=windows GOARCH=amd64 go build -ldflags="-w -s -X main.Version=${{ github.ref_name }}" -o dist/umailserver-windows-amd64.exe ./cmd/umailserver
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## uMailServer ${{ github.ref_name }}
+
+            ### Quick Start
+            ```bash
+            # Download for Linux AMD64
+            curl -L -o umailserver https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/umailserver-linux-amd64
+            chmod +x umailserver
+            ./umailserver quickstart admin@example.com
+            ```
+
+            ### Docker
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
+
+            ### Available Assets
+            - Linux AMD64
+            - Linux ARM64
+            - macOS AMD64
+            - macOS ARM64 (Apple Silicon)
+            - Windows AMD64
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for full details.
