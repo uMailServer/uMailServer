@@ -6,7 +6,7 @@ import Compose from '../components/Compose'
 import { useEmail } from '../contexts/EmailContext'
 
 function Inbox() {
-  const { loadEmails, composeOpen, setComposeOpen } = useEmail()
+  const { loadEmails } = useEmail()
   const [isComposeOpen, setIsComposeOpen] = useState(false)
 
   useEffect(() => {
@@ -14,11 +14,11 @@ function Inbox() {
   }, [loadEmails])
 
   return (
-    <div className="app">
+    <div className="min-h-screen flex flex-col bg-background">
       <Header onCompose={() => setIsComposeOpen(true)} />
-      <div className="main-container">
+      <div className="flex-1 flex overflow-hidden">
         <Sidebar />
-        <main className="content">
+        <main className="flex-1 flex flex-col overflow-hidden">
           <EmailList />
         </main>
       </div>
