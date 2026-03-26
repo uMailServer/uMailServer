@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/search"
+	"github.com/umailserver/umailserver/internal/storage"
+	"github.com/umailserver/umailserver/internal/websocket"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -22,10 +26,13 @@ var webmailHTML []byte
 
 // Server represents the admin API server
 type Server struct {
-	db        *db.DB
-	logger    *slog.Logger
-	config    Config
-	mcpServer *mcp.Server
+	db          *db.DB
+	logger      *slog.Logger
+	config      Config
+	mcpServer   *mcp.Server
+	sseServer   *websocket.SSEServer
+	searchSvc   *search.Service
+	msgStore    *storage.MessageStore
 }
 
 // Config holds API server configuration
@@ -36,16 +43,19 @@ type Config struct {
 }
 
 // NewServer creates a new admin API server
-func NewServer(db *db.DB, logger *slog.Logger, config Config) *Server {
+func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	if config.TokenExpiry == 0 {
 		config.TokenExpiry = 24 * time.Hour
 	}
 
+	sseServer := websocket.NewSSEServer(logger)
+
 	return &Server{
-		db:        db,
+		db:        database,
 		logger:    logger,
 		config:    config,
-		mcpServer: mcp.NewServer(db),
+		mcpServer: mcp.NewServer(database),
+		sseServer: sseServer,
 	}
 }
 
@@ -67,6 +77,9 @@ func (s *Server) router() http.Handler {
 
 	// Metrics endpoint
 	mux.HandleFunc("/metrics", metrics.Get().HTTPHandler)
+
+	// SSE endpoint for real-time updates
+	mux.HandleFunc("/api/v1/events", s.sseServer.Handler())
 
 	// MCP endpoint
 	mux.HandleFunc("/mcp", s.mcpServer.HandleHTTP)
@@ -95,6 +108,9 @@ func (s *Server) router() http.Handler {
 
 	// Stats
 	api.HandleFunc("/api/v1/stats", s.handleStats)
+
+	// Search
+	api.HandleFunc("/api/v1/search", s.handleSearch)
 
 	// Wrap with middleware
 	return s.corsMiddleware(s.authMiddleware(api))
@@ -751,4 +767,57 @@ func parseEmail(email string) (user, domain string) {
 		return email, ""
 	}
 	return email[:at], email[at+1:]
+}
+
+// Search handlers
+
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Get user from context
+	user := r.Context().Value("user")
+	if user == nil {
+		s.sendError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	// Parse query parameters
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		s.sendError(w, http.StatusBadRequest, "missing query parameter 'q'")
+		return
+	}
+
+	folder := r.URL.Query().Get("folder")
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
+
+	limit := 20
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	offset := 0
+	if offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	// Perform search
+	// Note: search service needs to be initialized with storage
+	// For now, return a placeholder response
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"query":   query,
+		"folder":  folder,
+		"results": []interface{}{},
+		"total":   0,
+		"limit":   limit,
+		"offset":  offset,
+	})
 }

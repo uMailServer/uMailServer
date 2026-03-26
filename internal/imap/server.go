@@ -204,6 +204,11 @@ type Session struct {
 
 	// Command tag
 	tag string
+
+	// IDLE state
+	idleActive     bool
+	idleStop       chan struct{}
+	idleNotifyChan chan MailboxNotification
 }
 
 // State represents the IMAP session state

@@ -287,6 +287,9 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 
 		// Save updated metadata
 		m.db.UpdateMessageMetadata(user, mailbox, uid, meta)
+
+		// Notify about flag changes
+		GetNotificationHub().NotifyFlagsChanged(user, mailbox, uid, uint32(seqNum), meta.Flags)
 	}
 
 	return nil
@@ -358,7 +361,19 @@ func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, dat
 		To:           to,
 	}
 
-	return m.db.StoreMessageMetadata(user, mailbox, uid, meta)
+	if err := m.db.StoreMessageMetadata(user, mailbox, uid, meta); err != nil {
+		return err
+	}
+
+	// Get the sequence number for the new message
+	uids, err := m.db.GetMessageUIDs(user, mailbox)
+	if err == nil {
+		seqNum := uint32(len(uids))
+		// Notify subscribers about the new message
+		GetNotificationHub().NotifyNewMessage(user, mailbox, uid, seqNum)
+	}
+
+	return nil
 }
 
 // parseMessageHeaders extracts basic headers from message data

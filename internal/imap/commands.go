@@ -630,23 +630,113 @@ func (s *Session) handleNamespace() error {
 	return nil
 }
 
-// IDLE command
+// IDLE command (RFC 2177)
 func (s *Session) handleIdle() error {
-	s.WriteContinuation("idling")
-
-	// Wait for DONE
-	for {
-		line, err := s.readLine()
-		if err != nil {
-			return err
-		}
-		if strings.ToUpper(line) == "DONE" {
-			break
-		}
+	// IDLE is only valid in Authenticated or Selected state
+	if s.state != StateAuthenticated && s.state != StateSelected {
+		s.WriteResponse(s.tag, "BAD Command not allowed in this state")
+		return nil
 	}
 
-	s.WriteResponse(s.tag, "OK IDLE terminated")
-	return nil
+	// Subscribe to notifications for this user
+	s.idleActive = true
+	s.idleStop = make(chan struct{})
+	s.idleNotifyChan = GetNotificationHub().Subscribe(s.user)
+
+	defer func() {
+		s.idleActive = false
+		if s.idleNotifyChan != nil {
+			GetNotificationHub().Unsubscribe(s.user, s.idleNotifyChan)
+			s.idleNotifyChan = nil
+		}
+		close(s.idleStop)
+	}()
+
+	// Send continuation response
+	s.WriteContinuation("idling")
+
+	// Channel for DONE command
+	doneChan := make(chan bool, 1)
+
+	// Start goroutine to wait for DONE
+	go func() {
+		for {
+			line, err := s.readLine()
+			if err != nil {
+				doneChan <- true
+				return
+			}
+			if strings.ToUpper(strings.TrimSpace(line)) == "DONE" {
+				doneChan <- true
+				return
+			}
+		}
+	}()
+
+	// Wait for either DONE or notifications
+	for {
+		select {
+		case <-doneChan:
+			s.WriteResponse(s.tag, "OK IDLE terminated")
+			return nil
+
+		case notification, ok := <-s.idleNotifyChan:
+			if !ok {
+				s.WriteResponse(s.tag, "OK IDLE terminated")
+				return nil
+			}
+
+			// Only send notifications if a mailbox is selected
+			if s.selected == nil {
+				continue
+			}
+
+			// Only notify about changes to the selected mailbox
+			if notification.Mailbox != s.selected.Name {
+				continue
+			}
+
+			// Send appropriate untagged response based on notification type
+			switch notification.Type {
+			case NotificationNewMessage:
+				// Send EXISTS and RECENT updates
+				s.selected.Exists++
+				s.selected.Recent++
+				s.WriteData(fmt.Sprintf("%d EXISTS", s.selected.Exists))
+				s.WriteData(fmt.Sprintf("%d RECENT", s.selected.Recent))
+
+			case NotificationExpunge:
+				// Send EXPUNGE update
+				s.selected.Exists--
+				if s.selected.Recent > 0 {
+					s.selected.Recent--
+				}
+				s.WriteData(fmt.Sprintf("%d EXPUNGE", notification.SeqNum))
+
+			case NotificationFlagsChanged:
+				// Send FETCH response with updated flags
+				flagsStr := ""
+				if len(notification.Flags) > 0 {
+					flagsStr = "(" + strings.Join(notification.Flags, " ") + ")"
+				} else {
+					flagsStr = "()"
+				}
+				s.WriteData(fmt.Sprintf("%d FETCH (FLAGS %s)", notification.SeqNum, flagsStr))
+
+			case NotificationMailboxUpdate:
+				// Re-fetch mailbox status and send updates
+				if mailbox, err := s.server.mailstore.SelectMailbox(s.user, s.selected.Name); err == nil {
+					if mailbox.Exists != s.selected.Exists {
+						s.WriteData(fmt.Sprintf("%d EXISTS", mailbox.Exists))
+					}
+					if mailbox.Recent != s.selected.Recent {
+						s.WriteData(fmt.Sprintf("%d RECENT", mailbox.Recent))
+					}
+					*s.selected = *mailbox
+				}
+			}
+		}
+	}
 }
 
 // ENABLE command
