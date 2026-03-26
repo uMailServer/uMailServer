@@ -1,6 +1,7 @@
 package api
 
 import (
+	_ "embed"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/db"
 )
+
+//go:embed static/index.html
+var webmailHTML []byte
 
 // Server represents the admin API server
 type Server struct {
@@ -48,6 +52,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // router sets up the HTTP routes
 func (s *Server) router() http.Handler {
 	mux := http.NewServeMux()
+
+	// Webmail (static files)
+	mux.HandleFunc("/", s.handleWebmail)
+	mux.HandleFunc("/webmail", s.handleWebmail)
 
 	// Health check
 	mux.HandleFunc("/health", s.handleHealth)
@@ -170,6 +178,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.sendJSON(w, http.StatusOK, map[string]string{
 		"status": "healthy",
 	})
+}
+
+func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(webmailHTML)
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>uMailServer Webmail</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; }
+        .app { min-height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #2c3e50; color: white; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 1.5rem; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
+        .btn-primary { background: #3498db; color: white; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .login-page { flex: 1; display: flex; justify-content: center; align-items: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .login-box { background: white; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
+        .login-box h2 { margin-bottom: 1.5rem; text-align: center; color: #2c3e50; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
+        .form-group input { width: 100%; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-size: 1rem; }
+        .main-container { flex: 1; display: flex; overflow: hidden; }
+        .sidebar { width: 250px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+        .compose-btn { margin: 1rem; padding: 1rem; font-size: 1rem; }
+        .folder-list { list-style: none; padding: 0; }
+        .folder-list li { padding: 0.75rem 1rem; cursor: pointer; border-left: 3px solid transparent; }
+        .folder-list li:hover { background: #f5f5f5; }
+        .folder-list li.active { background: #e3f2fd; border-left-color: #3498db; }
+        .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: white; }
+        .email-list { flex: 1; overflow-y: auto; }
+        .email-item { padding: 1rem; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between; }
+        .email-item:hover { background: #f5f5f5; }
+        .email-info { flex: 1; }
+        .email-from { font-weight: 500; }
+        .email-subject { color: #666; }
+        .loading { display: flex; justify-content: center; align-items: center; height: 200px; color: #999; }
+        .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #999; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script>
+        const API_URL = window.location.origin + '/api/v1';
+
+        let state = {
+            token: localStorage.getItem('token'),
+            user: JSON.parse(localStorage.getItem('user') || 'null'),
+            emails: [],
+            loading: false
+        };
+
+        const mockEmails = [
+            { id: 1, from: 'john@example.com', subject: 'Welcome to uMailServer', body: 'Welcome!', date: new Date().toISOString() },
+            { id: 2, from: 'admin@example.com', subject: 'Server Configuration', body: 'Please configure...', date: new Date(Date.now() - 86400000).toISOString() },
+        ];
+
+        function render() {
+            const root = document.getElementById('root');
+            if (!state.token) {
+                root.innerHTML = LoginPage();
+            } else {
+                root.innerHTML = MainApp();
+            }
+            attachEvents();
+        }
+
+        function LoginPage() {
+            return '<div class="login-page"><div class="login-box"><h2>uMailServer Webmail</h2>' +
+                '<form id="login-form"><div class="form-group"><label>Email</label>' +
+                '<input type="email" id="email" value="demo@example.com" required></div>' +
+                '<div class="form-group"><label>Password</label>' +
+                '<input type="password" id="password" value="demo" required></div>' +
+                '<button type="submit" class="btn btn-primary" style="width:100%">Sign In</button></form>' +
+                '<p style="margin-top:1rem;text-align:center;color:#666;font-size:0.9rem">Demo: demo@example.com / demo</p>' +
+                '</div></div>';
+        }
+
+        function MainApp() {
+            const emailList = state.emails.length === 0 ?
+                '<div class="empty-state"><h3>No emails</h3></div>' :
+                state.emails.map(e => '<div class="email-item" data-id="' + e.id + '">' +
+                    '<div class="email-info"><div class="email-from">' + e.from + '</div>' +
+                    '<div class="email-subject">' + e.subject + '</div></div>' +
+                    '<div>' + new Date(e.date).toLocaleDateString() + '</div></div>').join('');
+
+            return '<div class="app"><header class="header"><h1>uMailServer</h1>' +
+                '<div><span>' + (state.user?.email || 'User') + '</span>' +
+                '<button class="btn btn-danger" id="logout-btn" style="margin-left:1rem">Logout</button></div></header>' +
+                '<div class="main-container"><aside class="sidebar">' +
+                '<button class="btn btn-primary compose-btn">Compose</button>' +
+                '<ul class="folder-list"><li class="active">Inbox</li><li>Sent</li><li>Drafts</li><li>Trash</li></ul></aside>' +
+                '<main class="content"><div class="email-list">' + emailList + '</div></main></div></div>';
+        }
+
+        function attachEvents() {
+            const loginForm = document.getElementById('login-form');
+            if (loginForm) {
+                loginForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    state.token = 'demo-token';
+                    state.user = { email: document.getElementById('email').value };
+                    state.emails = mockEmails;
+                    localStorage.setItem('token', state.token);
+                    localStorage.setItem('user', JSON.stringify(state.user));
+                    render();
+                });
+            }
+
+            const logoutBtn = document.getElementById('logout-btn');
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', () => {
+                    state.token = null;
+                    state.user = null;
+                    localStorage.clear();
+                    render();
+                });
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', render);
+    </script>
+</body>
+</html>
