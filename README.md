@@ -1,6 +1,6 @@
 # uMailServer
 
-[![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/go-1.24+-blue.svg)](https://golang.org)
 [![CI](https://github.com/uMailServer/uMailServer/actions/workflows/ci.yml/badge.svg)](https://github.com/uMailServer/uMailServer/actions)
 [![License](https://img.shields.io/badge/license-AGPL%203.0%2FCommercial-green.svg)](LICENSE)
 
@@ -112,12 +112,36 @@ Modern React 19 SPA with Tailwind CSS v4 and shadcn/ui components.
 
 ### Installation
 
-```bash
-# Download pre-built binary
-curl -L https://github.com/umailserver/umailserver/releases/latest/download/umailserver-linux-amd64 -o umailserver
-chmod +x umailserver
+#### Option 1: Automated Install (Recommended)
 
-# Or build from source
+```bash
+curl -fsSL https://raw.githubusercontent.com/umailserver/umailserver/main/scripts/install.sh | sudo bash
+```
+
+This will:
+- Download the latest release for your architecture
+- Create `umail` user and required directories
+- Install systemd service
+- Generate default configuration
+
+#### Option 2: Manual Binary Download
+
+```bash
+# Download pre-built binary (Linux AMD64)
+curl -L -o umailserver https://github.com/umailserver/umailserver/releases/latest/download/umailserver-linux-amd64
+chmod +x umailserver
+sudo mv umailserver /usr/local/bin/
+
+# Or download for your platform:
+# umailserver-linux-arm64
+# umailserver-darwin-amd64
+# umailserver-darwin-arm64
+# umailserver-windows-amd64.exe
+```
+
+#### Option 3: Build from Source
+
+```bash
 git clone https://github.com/umailserver/umailserver.git
 cd umailserver
 go build -o umailserver ./cmd/umailserver
@@ -152,24 +176,23 @@ go build -o umailserver ./cmd/umailserver
 ### Docker
 
 ```bash
-# Run with Docker
+# Using Docker Hub
 docker run -d \
   --name umailserver \
-  -p 25:25 \
-  -p 587:587 \
-  -p 465:465 \
-  -p 110:110 \
-  -p 995:995 \
-  -p 143:143 \
-  -p 993:993 \
-  -p 80:80 \
-  -p 443:443 \
-  -p 8443:8443 \
+  --restart unless-stopped \
+  -p 25:25 -p 587:587 -p 465:465 \
+  -p 110:110 -p 995:995 \
+  -p 143:143 -p 993:993 \
+  -p 8080:8080 \
   -v $(pwd)/data:/data \
-  umailserver/umailserver:latest
+  ghcr.io/umailserver/umailserver:latest
 
-# Or use docker-compose
+# Using Docker Compose (recommended)
+curl -fsSL https://raw.githubusercontent.com/umailserver/umailserver/main/docker-compose.yml -o docker-compose.yml
 docker-compose up -d
+
+# View logs
+docker-compose logs -f
 ```
 
 ---
