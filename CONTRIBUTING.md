@@ -1,57 +1,54 @@
 # Contributing to uMailServer
 
-Thank you for your interest in contributing!
+Thank you for your interest in contributing to uMailServer! We welcome contributions from the community.
 
-## License Notice
+## Getting Started
 
-By contributing to this project, you agree that your contributions will be
-dual-licensed under AGPL-3.0 and Commercial license terms.
+1. Fork the repository
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/umailserver.git`
+3. Create a branch: `git checkout -b feature/your-feature`
+4. Make your changes
+5. Run tests: `make test`
+6. Commit with clear messages: `git commit -m "feat: add new feature"`
+7. Push and submit a PR
 
 ## Development Setup
 
 ```bash
+# Clone and setup
 git clone https://github.com/umailserver/umailserver.git
 cd umailserver
-go mod download
-```
+make setup
 
-## Running Tests
-
-```bash
-make test
+# Run in development mode
+make dev
 ```
 
 ## Code Style
 
-- Follow standard Go conventions (`go fmt`)
-- Run linter: `make lint`
-- All tests must pass
-- Maintain or improve test coverage
+- Go: Follow standard Go conventions (`gofmt`, `go vet`)
+- TypeScript/React: Use ESLint and Prettier configurations in the project
+- Commit messages: Use Conventional Commits format
+
+## Testing
+
+- Write tests for new features
+- Ensure all tests pass: `make test`
+- Run with race detection: `make test-race`
+- Check coverage: `make coverage`
 
 ## Pull Request Process
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Ensure all tests pass
-6. Update documentation if needed
-7. Submit PR with clear description
+1. Update documentation if needed
+2. Add tests for new functionality
+3. Ensure CI passes
+4. Request review from maintainers
+5. Address review feedback
 
-## Commit Messages
+## Code of Conduct
 
-Use Conventional Commits format:
-
-```
-type(scope): description
-
-[optional body]
-
-[optional footer]
-```
-
-Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
+Be respectful and constructive in all interactions.
 
 ## Questions?
 
-Open an issue or contact: dev@umailserver.com
+Open an issue or join our discussions.

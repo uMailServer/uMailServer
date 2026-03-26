@@ -1,146 +1,114 @@
 # uMailServer Configuration Example
-# Copy this file to umailserver.yaml and customize for your deployment
+# Full documentation: https://docs.umailserver.com/configuration
 
-# Server identity
+# Server settings
 server:
-  hostname: mail.example.com          # FQDN for this mail server
-  data_dir: /var/lib/umailserver      # Where mail and data are stored
+  hostname: mail.example.com
+  data_dir: /var/lib/umailserver
+  max_message_size: 50MB
 
-# TLS and Certificate Configuration
+# TLS Configuration
 tls:
-  # Automatic certificates via Let's Encrypt (recommended)
+  cert_dir: certs
+  min_version: "1.2"
   acme:
     enabled: true
-    email: admin@example.com          # Let's Encrypt account email
-    provider: letsencrypt             # or letsencrypt-staging for testing
-    challenge: http-01                # or dns-01 for wildcard certs
+    email: admin@example.com
+    directory: https://acme-v02.api.letsencrypt.org/directory
+    accept_tos: true
 
-  # Manual certificates (alternative to ACME)
-  # cert_file: /etc/ssl/mail.pem
-  # key_file: /etc/ssl/mail.key
-
-# SMTP Configuration
+# SMTP Server Configuration
 smtp:
   inbound:
     enabled: true
-    port: 25                          # Standard SMTP port (requires root)
-    bind: 0.0.0.0
-    max_message_size: 50MB
+    bind: "0.0.0.0"
+    port: 25
+    max_connections: 100
     max_recipients: 100
-    read_timeout: 5m
-    write_timeout: 5m
-
   submission:
     enabled: true
-    port: 587                         # STARTTLS submission
-    bind: 0.0.0.0
+    bind: "0.0.0.0"
+    port: 587
     require_auth: true
-    require_tls: true                 # Require STARTTLS before AUTH
-
+    require_tls: true
+    max_connections: 100
   submission_tls:
     enabled: true
-    port: 465                         # Implicit TLS submission
-    bind: 0.0.0.0
+    bind: "0.0.0.0"
+    port: 465
     require_auth: true
+    max_connections: 100
 
-# IMAP Configuration
+# IMAP Server Configuration
 imap:
   enabled: true
-  port: 993                           # Implicit TLS (IMAPS)
-  bind: 0.0.0.0
-  starttls_port: 143                  # STARTTLS (optional, usually disabled)
-  idle_timeout: 30m
-  max_connections: 10000
+  bind: "0.0.0.0"
+  port: 993
+  tls: true
+  max_connections_per_user: 10
+  session_timeout: 30
 
-# POP3 Configuration (optional, disabled by default)
-pop3:
-  enabled: false
-  port: 995
-  bind: 0.0.0.0
-
-# HTTP Configuration (webmail and API)
+# HTTP API and Web UI
 http:
   enabled: true
-  port: 443                           # HTTPS
-  http_port: 80                       # HTTP (redirects to HTTPS)
-  bind: 0.0.0.0
+  bind: "0.0.0.0"
+  port: 8443
+  tls: true
 
-# Admin Panel Configuration
+# Admin Panel
 admin:
   enabled: true
+  bind: "127.0.0.1"
   port: 8443
-  bind: 127.0.0.1                     # Admin panel on localhost only by default
-  # bind: 0.0.0.0                     # Uncomment to allow external access
 
-# Spam Filtering Configuration
+# Spam Filter
 spam:
   enabled: true
-  reject_threshold: 9.0               # Reject at SMTP level
-  junk_threshold: 3.0                 # Deliver to Junk folder
-  quarantine_threshold: 6.0           # Hold for admin review
-
+  threshold: 5.0
   bayesian:
     enabled: true
-    auto_train: true                  # Auto-train from user actions
-
+    auto_learn: true
   greylisting:
     enabled: true
-    delay: 5m                         # Initial delay for unknown senders
+    delay: 5m
+  rbl:
+    enabled: true
+    servers:
+      - zen.spamhaus.org
 
-  rbl_servers:                        # DNS blocklists to check
-    - zen.spamhaus.org
-    - b.barracudacentral.org
-    - bl.spamcop.net
-
-# Security Configuration
+# Security
 security:
-  max_login_attempts: 5
-  lockout_duration: 15m               # Lockout after failed attempts
-
   rate_limit:
-    smtp_per_minute: 30               # Messages per account per minute
-    smtp_per_hour: 500
-    imap_connections: 50              # Max concurrent per account
-    http_requests_per_minute: 120
+    enabled: true
+    requests_per_minute: 60
+  jwt:
+    access_token_ttl: 15m
+    refresh_token_ttl: 168h
 
-# MCP (Model Context Protocol) Server
-mcp:
+# Queue
+queue:
+  max_retries: 10
+  retry_delay: 5m
+
+# Logging
+log:
+  level: info
+  format: json
+
+# Metrics
+metrics:
   enabled: true
-  port: 3000
-  auth_token: ""                      # Auto-generated on first run
-  bind: 127.0.0.1
+  path: /metrics
 
-# Domain Configuration
+# Domains
 domains:
   - name: example.com
     max_accounts: 100
     max_mailbox_size: 5GB
-
     dkim:
       selector: default
-      # Keys are auto-generated on domain creation
-      # Use 'umailserver domain dns example.com' to get DNS records
 
-# Logging Configuration
-logging:
-  level: info                         # debug, info, warn, error
-  format: json                        # json or text
-  output: stdout                      # stdout, stderr, or path
-
-# Metrics and Monitoring
-metrics:
+# MCP Server
+mcp:
   enabled: true
-  port: 8080                          # Prometheus metrics endpoint
-  bind: 127.0.0.1
-  path: /metrics
-
-# Database Configuration
-database:
-  # Embedded database (bbolt)
-  path: /var/lib/umailserver/db
-
-# Storage Configuration
-storage:
-  # Maildir++ format settings
-  sync: true                          # fsync after writes
-  shared_folders: false               # Enable shared folders
+  require_auth: true

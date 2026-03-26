@@ -1,0 +1,92 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "uMailServer Overview",
+    "tags": ["umailserver", "email"],
+    "timezone": "browser",
+    "schemaVersion": 36,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "SMTP Connections",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "umailserver_smtp_connections_active",
+            "legendFormat": "Active"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "IMAP Connections",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "umailserver_imap_connections_active",
+            "legendFormat": "Active"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Queue Size",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "umailserver_queue_messages_pending",
+            "legendFormat": "Pending"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0}
+      },
+      {
+        "id": 4,
+        "title": "Storage Usage",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "umailserver_storage_bytes_total",
+            "legendFormat": "Total"
+          }
+        ],
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0}
+      },
+      {
+        "id": 5,
+        "title": "Mail Volume (24h)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(umailserver_mail_received_total[5m])",
+            "legendFormat": "Received"
+          },
+          {
+            "expr": "rate(umailserver_mail_sent_total[5m])",
+            "legendFormat": "Sent"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4}
+      },
+      {
+        "id": 6,
+        "title": "Spam Ratio",
+        "type": "piechart",
+        "targets": [
+          {
+            "expr": "umailserver_mail_classified_total{category=\"ham\"}",
+            "legendFormat": "Ham"
+          },
+          {
+            "expr": "umailserver_mail_classified_total{category=\"spam\"}",
+            "legendFormat": "Spam"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4}
+      }
+    ]
+  }
+}

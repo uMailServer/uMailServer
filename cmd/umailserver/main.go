@@ -12,9 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/cli"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/server"
+	"github.com/umailserver/umailserver/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -765,7 +767,22 @@ func cmdCheck(args []string) {
 	}
 
 	checkType := args[0]
-	fmt.Printf("Check command: %s\n", checkType)
+
+	// Load config
+	dataDir := "./data"
+	configPath := "./umailserver.yaml"
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		// Try loading from default data dir
+		cfg = &config.Config{
+			Server: config.ServerConfig{
+				Hostname: "localhost",
+				DataDir:  dataDir,
+			},
+		}
+	}
+
+	diagnostics := cli.NewDiagnostics(cfg)
 
 	switch checkType {
 	case "dns":
@@ -773,19 +790,39 @@ func cmdCheck(args []string) {
 			fmt.Println("Usage: umailserver check dns <domain>")
 			os.Exit(1)
 		}
-		fmt.Printf("Checking DNS for: %s\n", args[1])
-	case "tls":
-		if len(args) < 2 {
-			fmt.Println("Usage: umailserver check tls <domain>")
+		results, err := diagnostics.CheckDNS(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "DNS check failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Checking TLS for: %s\n", args[1])
+		cli.PrintDNSResults(results)
+
+	case "tls":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver check tls <hostname>")
+			os.Exit(1)
+		}
+		result, err := diagnostics.CheckTLS(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "TLS check failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("TLS Check: %s\n", result.Message)
+		if result.Valid {
+			fmt.Printf("  Protocol: %s\n", result.Protocol)
+			fmt.Printf("  Version:  %s\n", result.Version)
+			fmt.Printf("  Cipher:   %s\n", result.Cipher)
+		}
+
 	case "deliverability":
 		if len(args) < 2 {
 			fmt.Println("Usage: umailserver check deliverability <domain>")
 			os.Exit(1)
 		}
 		fmt.Printf("Checking deliverability for: %s\n", args[1])
+		// TODO: Implement deliverability check
+		fmt.Println("Deliverability check not yet implemented")
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown check type: %s\n", checkType)
 		os.Exit(1)
@@ -820,24 +857,124 @@ func cmdBackup(args []string) {
 		fmt.Println("Usage: umailserver backup <path>")
 		os.Exit(1)
 	}
-	fmt.Printf("Backup to: %s\n", args[0])
+
+	backupPath := args[0]
+
+	// Load config
+	configPath := "./umailserver.yaml"
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	bm := cli.NewBackupManager(cfg)
+	if err := bm.Backup(backupPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Backup failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func cmdRestore(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: umailserver restore <path>")
+		fmt.Println("Usage: umailserver restore <backup-file>")
 		os.Exit(1)
 	}
-	fmt.Printf("Restore from: %s\n", args[0])
+
+	backupFile := args[0]
+
+	// Load config
+	configPath := "./umailserver.yaml"
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	bm := cli.NewBackupManager(cfg)
+	if err := bm.Restore(backupFile); err != nil {
+		fmt.Fprintf(os.Stderr, "Restore failed: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func cmdMigrate(args []string) {
-	if len(args) < 2 {
-		fmt.Println("Usage: umailserver migrate --source <type>")
-		fmt.Println("Source types: postfix, dovecot, maildir")
+	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
+	sourceType := fs.String("type", "", "Source type (imap, dovecot, mbox)")
+	source := fs.String("source", "", "Source path or URL")
+	username := fs.String("username", "", "Source username (for IMAP)")
+	password := fs.String("password", "", "Source password (for IMAP)")
+	targetUser := fs.String("target", "", "Target user email")
+	dryRun := fs.Bool("dry-run", false, "Dry run mode")
+	passwdFile := fs.String("passwd-file", "", "Password file (for Dovecot)")
+
+	fs.Parse(args)
+
+	if *sourceType == "" || *source == "" {
+		fmt.Println("Usage: umailserver migrate --type <type> --source <source>")
+		fmt.Println("Types: imap, dovecot, mbox")
+		fmt.Println("\nExamples:")
+		fmt.Println("  umailserver migrate --type imap --source imaps://oldserver.com --username user@old.com --target user@new.com")
+		fmt.Println("  umailserver migrate --type dovecot --source /var/mail --passwd-file /etc/dovecot/users")
+		fmt.Println("  umailserver migrate --type mbox --source /path/to/mail/*.mbox")
 		os.Exit(1)
 	}
-	fmt.Println("Migrate command (not yet implemented)")
+
+	// Load config and database
+	dataDir := "./data"
+	configPath := "./umailserver.yaml"
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	dbPath := filepath.Join(dataDir, "umailserver.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	msgStore, err := storage.NewMessageStore(cfg.Server.DataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open message store: %v\n", err)
+		os.Exit(1)
+	}
+
+	mm := cli.NewMigrationManager(database, msgStore, nil)
+
+	opts := cli.MigrateOptions{
+		SourceType: *sourceType,
+		SourceURL:  *source,
+		SourcePath: *source,
+		Username:   *username,
+		Password:   *password,
+		TargetUser: *targetUser,
+		DryRun:     *dryRun,
+	}
+
+	switch *sourceType {
+	case "imap":
+		if err := mm.MigrateFromIMAP(opts); err != nil {
+			fmt.Fprintf(os.Stderr, "IMAP migration failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "dovecot":
+		if err := mm.MigrateFromDovecot(*source, *passwdFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Dovecot migration failed: %v\n", err)
+			os.Exit(1)
+		}
+	case "mbox":
+		if err := mm.MigrateFromMBOX(*source); err != nil {
+			fmt.Fprintf(os.Stderr, "MBOX migration failed: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown source type: %s\n", *sourceType)
+		os.Exit(1)
+	}
 }
 
 func cmdStatus(args []string) {

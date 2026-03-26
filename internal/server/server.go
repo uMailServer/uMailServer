@@ -10,24 +10,32 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/imap"
 	"github.com/umailserver/umailserver/internal/queue"
+	"github.com/umailserver/umailserver/internal/search"
 	"github.com/umailserver/umailserver/internal/smtp"
 	"github.com/umailserver/umailserver/internal/storage"
+	"github.com/umailserver/umailserver/internal/tls"
+	"github.com/umailserver/umailserver/internal/webhook"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // Server is the main uMailServer instance
 type Server struct {
-	config     *config.Config
-	logger     *slog.Logger
-	database   *db.DB
-	queue      *queue.Manager
-	msgStore   *storage.MessageStore
-	smtpServer *smtp.Server
-	imapServer *imap.Server
+	config        *config.Config
+	logger        *slog.Logger
+	database      *db.DB
+	queue         *queue.Manager
+	msgStore      *storage.MessageStore
+	smtpServer    *smtp.Server
+	imapServer    *imap.Server
+	apiServer     *api.Server
+	tlsManager    *tls.Manager
+	webhookMgr    *webhook.Manager
+	searchSvc     *search.Service
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -69,6 +77,41 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to create message store: %w", err)
 	}
 	s.msgStore = msgStore
+
+	// Initialize TLS manager
+	tlsConfig := tls.Config{
+		AutoTLS:     cfg.TLS.ACME.Enabled,
+		Email:       cfg.TLS.ACME.Email,
+		Domains:     []string{cfg.Server.Hostname},
+		UseStaging:  cfg.TLS.ACME.Provider == "letsencrypt-staging",
+		CertFile:    cfg.TLS.CertFile,
+		KeyFile:     cfg.TLS.KeyFile,
+	}
+
+	tlsManager, err := tls.NewManager(tlsConfig, logger)
+	if err != nil {
+		msgStore.Close()
+		database.Close()
+		return nil, fmt.Errorf("failed to create TLS manager: %w", err)
+	}
+	s.tlsManager = tlsManager
+
+	// Initialize webhook manager
+	webhookMgr := webhook.NewManager(database, cfg.Security.JWTSecret)
+	s.webhookMgr = webhookMgr
+
+	// Initialize storage database for search
+	storageDB, err := storage.OpenDatabase(dbPath)
+	if err != nil {
+		tlsManager.Close()
+		msgStore.Close()
+		database.Close()
+		return nil, fmt.Errorf("failed to open storage database: %w", err)
+	}
+
+	// Initialize search service
+	searchSvc := search.NewService(storageDB, msgStore, logger)
+	s.searchSvc = searchSvc
 
 	return s, nil
 }
@@ -123,6 +166,7 @@ func (s *Server) Start() error {
 		MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
 		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+		TLSConfig:      s.tlsManager.GetTLSConfig(),
 	}
 
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
@@ -141,8 +185,9 @@ func (s *Server) Start() error {
 	// Start IMAP server
 	imapAddr := fmt.Sprintf("%s:%d", s.config.IMAP.Bind, s.config.IMAP.Port)
 	imapCfg := &imap.Config{
-		Addr:   imapAddr,
-		Logger: s.logger,
+		Addr:      imapAddr,
+		TLSConfig: s.tlsManager.GetTLSConfig(),
+		Logger:    s.logger,
 	}
 
 	imapServer := imap.NewServer(imapCfg, mailstore)
@@ -153,6 +198,20 @@ func (s *Server) Start() error {
 	}
 	s.imapServer = imapServer
 	s.logger.Info("IMAP server started", "addr", imapAddr)
+
+	// Start HTTP API server
+	apiCfg := api.Config{
+		Addr:      fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
+		JWTSecret: s.config.Security.JWTSecret,
+	}
+	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
+
+	go func() {
+		if err := s.apiServer.Start(apiCfg.Addr); err != nil {
+			s.logger.Error("API server error", "error", err)
+		}
+	}()
+	s.logger.Info("API server started", "addr", apiCfg.Addr)
 
 	return nil
 }
@@ -181,6 +240,13 @@ func (s *Server) Stop() error {
 	if s.imapServer != nil {
 		if err := s.imapServer.Stop(); err != nil {
 			s.logger.Error("Failed to stop IMAP server", "error", err)
+		}
+	}
+
+	// Stop API server
+	if s.apiServer != nil {
+		if err := s.apiServer.Stop(); err != nil {
+			s.logger.Error("Failed to stop API server", "error", err)
 		}
 	}
 
@@ -325,6 +391,16 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 		"from", from,
 		"message_id", messageID,
 	)
+
+	// Trigger webhook for mail received
+	if s.webhookMgr != nil {
+		s.webhookMgr.Trigger(webhook.EventMailReceived, map[string]interface{}{
+			"message_id": messageID,
+			"to":         email,
+			"from":       from,
+			"size":       len(data),
+		})
+	}
 
 	return nil
 }

@@ -2,30 +2,34 @@ version: '3.8'
 
 services:
   umailserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: ghcr.io/umailserver/umailserver:latest
     container_name: umailserver
     restart: unless-stopped
     ports:
-      # SMTP
+      # SMTP (inbound mail)
       - "25:25"
+      # SMTP Submission (STARTTLS)
       - "587:587"
-      # POP3
-      - "110:110"
-      - "995:995"
-      # IMAP
-      - "143:143"
+      # SMTP Submission (Implicit TLS)
+      - "465:465"
+      # IMAPS
       - "993:993"
-      # Web/API
-      - "8080:8080"
+      # Admin API
+      - "8443:8443"
     volumes:
-      - ./data:/data
-      - ./certs:/data/certs:ro
+      - umail_data:/data
+      - ./config:/etc/umailserver:ro
     environment:
       - TZ=UTC
+      - UMAILSERVER_SERVER_DATA_DIR=/data
+      - UMAILSERVER_SERVER_HOSTNAME=${HOSTNAME:-mail.example.com}
     networks:
       - mailnet
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8443/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -39,15 +43,34 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     networks:
       - mailnet
     profiles:
       - monitoring
 
+  # Optional: Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: umail-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    networks:
+      - mailnet
+    profiles:
+      - monitoring
+
 volumes:
+  umail_data:
   prometheus_data:
+  grafana_data:
 
 networks:
   mailnet:

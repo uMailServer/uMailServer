@@ -21,8 +21,21 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-//go:embed static/index.html
-var webmailHTML []byte
+// Simple placeholder HTML for webmail - in production this would be the built React app
+var webmailHTML = []byte(`<!DOCTYPE html>
+<html>
+<head>
+    <title>uMailServer Webmail</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+        h1 { color: #2563eb; }
+    </style>
+</head>
+<body>
+    <h1>uMailServer Webmail</h1>
+    <p>Webmail is loading...</p>
+</body>
+</html>`)
 
 // Server represents the admin API server
 type Server struct {
@@ -33,6 +46,7 @@ type Server struct {
 	sseServer   *websocket.SSEServer
 	searchSvc   *search.Service
 	msgStore    *storage.MessageStore
+	httpServer  *http.Server
 }
 
 // Config holds API server configuration
@@ -120,7 +134,7 @@ func (s *Server) router() http.Handler {
 func (s *Server) Start(addr string) error {
 	s.config.Addr = addr
 
-	server := &http.Server{
+	s.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      s,
 		ReadTimeout:  30 * time.Second,
@@ -128,7 +142,17 @@ func (s *Server) Start(addr string) error {
 	}
 
 	s.logger.Info("Admin API server starting", "addr", addr)
-	return server.ListenAndServe()
+	return s.httpServer.ListenAndServe()
+}
+
+// Stop gracefully stops the API server
+func (s *Server) Stop() error {
+	if s.httpServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return s.httpServer.Shutdown(ctx)
+	}
+	return nil
 }
 
 // Middleware

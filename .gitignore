@@ -1,9 +1,12 @@
 # Binaries
 umailserver
+umailserver.exe
 *.exe
 *.dll
 *.so
 *.dylib
+bin/
+dist/
 
 # Test binary
 *.test
@@ -11,11 +14,27 @@ umailserver
 # Output
 coverage.out
 coverage.html
-*.log
+*.out
 
-# Data directories
-data/
-maildir/
+# Go
+vendor/
+go.sum.orig
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# Build outputs
+webmail/dist/
+web/admin/dist/
+web/account/dist/
+*.tgz
+*.tar.gz
+*.zip
 
 # IDE
 .idea/
@@ -23,21 +42,33 @@ maildir/
 *.swp
 *.swo
 *~
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Data directories (for local dev)
+data/
+/var/
+*.db
+*.bolt
+
+# Certificates (for local dev)
+*.pem
+*.key
+*.crt
+*.csr
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
 
 # OS
-.DS_Store
 Thumbs.db
-
-# Dependencies (vendor)
-vendor/
-
-# Build artifacts
-dist/
-build/
-
-# Config with secrets
-config.local.yaml
-config.prod.yaml
-
-
-node_modules/

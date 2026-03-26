@@ -1,20 +1,50 @@
 #!/bin/bash
-set -e
-
 # uMailServer Installation Script
-# Supports: Linux AMD64/ARM64
+# Usage: curl -fsSL https://get.umailserver.com | sudo bash
 
-REPO="uMailServer/uMailServer"
-INSTALL_DIR="/usr/local/bin"
-CONFIG_DIR="/etc/umailserver"
-DATA_DIR="/var/lib/umailserver"
-SERVICE_USER="umail"
+set -e
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Variables
+VERSION="${VERSION:-latest}"
+INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+DATA_DIR="${DATA_DIR:-/var/lib/umailserver}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/umailserver}"
+USER="${USER:-umail}"
+
+# Architecture detection
+ARCH=$(uname -m)
+case $ARCH in
+    x86_64)
+        ARCH="amd64"
+        ;;
+    aarch64|arm64)
+        ARCH="arm64"
+        ;;
+    *)
+        echo -e "${RED}Unsupported architecture: $ARCH${NC}"
+        exit 1
+        ;;
+esac
+
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+# Functions
+print_banner() {
+    echo -e "${BLUE}"
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║                                                           ║"
+    echo "║   uMailServer - One binary. Complete email.              ║"
+    echo "║                                                           ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -28,179 +58,202 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Detect architecture
-detect_arch() {
-    local arch=$(uname -m)
-    case $arch in
-        x86_64)
-            echo "linux-amd64"
-            ;;
-        aarch64|arm64)
-            echo "linux-arm64"
-            ;;
-        *)
-            log_error "Unsupported architecture: $arch"
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "This script must be run as root (use sudo)"
+        exit 1
+    fi
+}
+
+check_dependencies() {
+    local deps=("curl" "systemctl")
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            log_error "Required dependency not found: $dep"
             exit 1
-            ;;
-    esac
+        fi
+    done
 }
 
-# Get latest release version
-get_latest_version() {
-    curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
+create_user() {
+    if ! id "$USER" &>/dev/null; then
+        log_info "Creating user: $USER"
+        useradd -r -s /bin/false -d "$DATA_DIR" "$USER"
+    else
+        log_warn "User $USER already exists"
+    fi
 }
 
-# Download binary
+create_directories() {
+    log_info "Creating directories..."
+    mkdir -p "$DATA_DIR" "$CONFIG_DIR"
+    chown "$USER:$USER" "$DATA_DIR"
+    chmod 750 "$DATA_DIR"
+}
+
 download_binary() {
-    local version=$1
-    local arch=$2
-    local url="https://github.com/$REPO/releases/download/$version/umailserver-$arch"
+    log_info "Downloading uMailServer..."
 
-    log_info "Downloading uMailServer $version for $arch..."
+    local download_url
+    if [[ "$VERSION" == "latest" ]]; then
+        download_url="https://github.com/umailserver/umailserver/releases/latest/download/umailserver-${OS}-${ARCH}"
+    else
+        download_url="https://github.com/umailserver/umailserver/releases/download/${VERSION}/umailserver-${OS}-${ARCH}"
+    fi
 
-    if ! curl -sL "$url" -o /tmp/umailserver; then
-        log_error "Failed to download binary"
+    log_info "Downloading from: $download_url"
+
+    if ! curl -fsSL -o "${INSTALL_DIR}/umailserver" "$download_url"; then
+        log_error "Failed to download uMailServer"
         exit 1
     fi
 
-    chmod +x /tmp/umailserver
+    chmod +x "${INSTALL_DIR}/umailserver"
+    log_info "Binary installed to: ${INSTALL_DIR}/umailserver"
 }
 
-# Create user and directories
-setup_directories() {
-    log_info "Setting up directories..."
-
-    # Create service user
-    if ! id "$SERVICE_USER" &>/dev/null; then
-        useradd -r -s /bin/false -d "$DATA_DIR" "$SERVICE_USER"
-        log_info "Created user: $SERVICE_USER"
-    fi
-
-    # Create directories
-    mkdir -p "$CONFIG_DIR" "$DATA_DIR" "/var/spool/umailserver"
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR" "/var/spool/umailserver"
-
-    log_info "Directories created"
-}
-
-# Install systemd service
-install_service() {
-    log_info "Installing systemd service..."
+create_systemd_service() {
+    log_info "Creating systemd service..."
 
     cat > /etc/systemd/system/umailserver.service << 'EOF'
 [Unit]
-Description=uMailServer - Unified Mail Server
+Description=uMailServer - One binary. Complete email.
+Documentation=https://umailserver.com/docs
 After=network.target
 
 [Service]
 Type=simple
 User=umail
 Group=umail
-ExecStart=/usr/local/bin/umailserver serve --config /etc/umailserver/config.yaml
-Restart=on-failure
-RestartSec=5s
+ExecStart=/usr/local/bin/umailserver serve --config /etc/umailserver/umailserver.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=umailserver
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/umailserver
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    log_info "Systemd service installed"
+    log_info "Systemd service created"
 }
 
-# Create default config
-create_config() {
-    if [[ ! -f "$CONFIG_DIR/config.yaml" ]]; then
-        log_info "Creating default configuration..."
+generate_config() {
+    if [[ ! -f "${CONFIG_DIR}/umailserver.yaml" ]]; then
+        log_info "Generating default configuration..."
 
-        cat > "$CONFIG_DIR/config.yaml" << EOF
+        cat > "${CONFIG_DIR}/umailserver.yaml" << EOF
 server:
-  hostname: $(hostname -f 2>/dev/null || echo "mail.example.com")
-  data_dir: $DATA_DIR
-  tls:
-    cert: $CONFIG_DIR/certs/cert.pem
-    key: $CONFIG_DIR/certs/key.pem
+  hostname: mail.$(hostname -d 2>/dev/null || echo "example.com")
+  data_dir: ${DATA_DIR}
+
+tls:
+  acme:
+    enabled: true
+    email: admin@$(hostname -d 2>/dev/null || echo "example.com")
 
 smtp:
   inbound:
-    bind: 0.0.0.0
     port: 25
-    max_message_size: 52428800  # 50MB
-    max_recipients: 100
-  outbound:
-    bind: 0.0.0.0
+  submission:
     port: 587
+  submission_tls:
+    port: 465
 
 imap:
-  bind: 0.0.0.0
-  port: 143
-  tls_port: 993
+  port: 993
 
-api:
-  bind: 0.0.0.0
-  port: 8080
-  jwt_secret: $(openssl rand -hex 32)
-
-logging:
-  level: info
-  format: json
+admin:
+  port: 8443
+  bind: 127.0.0.1
 EOF
 
-        log_info "Default config created at $CONFIG_DIR/config.yaml"
-        log_warn "Please edit the configuration file before starting the service"
+        chmod 600 "${CONFIG_DIR}/umailserver.yaml"
+        log_info "Configuration file created: ${CONFIG_DIR}/umailserver.yaml"
+    else
+        log_warn "Configuration file already exists"
     fi
 }
 
-# Main installation
+open_ports() {
+    log_info "Configuring firewall..."
+
+    if command -v ufw &> /dev/null; then
+        ufw allow 25/tcp
+        ufw allow 587/tcp
+        ufw allow 465/tcp
+        ufw allow 993/tcp
+        ufw allow 8443/tcp
+        log_info "UFW rules added"
+    elif command -v firewall-cmd &> /dev/null; then
+        firewall-cmd --permanent --add-port=25/tcp
+        firewall-cmd --permanent --add-port=587/tcp
+        firewall-cmd --permanent --add-port=465/tcp
+        firewall-cmd --permanent --add-port=993/tcp
+        firewall-cmd --permanent --add-port=8443/tcp
+        firewall-cmd --reload
+        log_info "FirewallD rules added"
+    else
+        log_warn "No supported firewall found (ufw or firewalld)"
+    fi
+}
+
+print_next_steps() {
+    echo -e "${GREEN}"
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║                                                           ║"
+    echo "║   uMailServer installed successfully!                    ║"
+    echo "║                                                           ║"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+    echo "Next steps:"
+    echo ""
+    echo "  1. Edit configuration:"
+    echo "     sudo nano ${CONFIG_DIR}/umailserver.yaml"
+    echo ""
+    echo "  2. Run quickstart to create your first account:"
+    echo "     sudo umailserver quickstart admin@yourdomain.com"
+    echo ""
+    echo "  3. Start the server:"
+    echo "     sudo systemctl enable --now umailserver"
+    echo ""
+    echo "  4. Check status:"
+    echo "     sudo systemctl status umailserver"
+    echo ""
+    echo "  5. View logs:"
+    echo "     sudo journalctl -u umailserver -f"
+    echo ""
+    echo "Documentation: https://docs.umailserver.com"
+    echo "Support: https://github.com/umailserver/umailserver/issues"
+    echo ""
+}
+
+# Main
 main() {
-    log_info "uMailServer Installer"
-    log_info "====================="
+    print_banner
+    check_root
+    check_dependencies
 
-    # Check if running as root
-    if [[ $EUID -ne 0 ]]; then
-        log_error "This script must be run as root"
-        exit 1
-    fi
+    log_info "Installing uMailServer ${VERSION} for ${OS}/${ARCH}..."
 
-    # Detect architecture
-    ARCH=$(detect_arch)
-    log_info "Detected architecture: $ARCH"
+    create_user
+    create_directories
+    download_binary
+    create_systemd_service
+    generate_config
+    open_ports
 
-    # Get latest version
-    VERSION=$(get_latest_version)
-    if [[ -z "$VERSION" ]]; then
-        log_error "Could not determine latest version"
-        exit 1
-    fi
-    log_info "Latest version: $VERSION"
-
-    # Download binary
-    download_binary "$VERSION" "$ARCH"
-
-    # Setup directories
-    setup_directories
-
-    # Install binary
-    mv /tmp/umailserver "$INSTALL_DIR/umailserver"
-    log_info "Binary installed to $INSTALL_DIR/umailserver"
-
-    # Create config
-    create_config
-
-    # Install service
-    install_service
-
-    log_info ""
-    log_info "Installation complete!"
-    log_info ""
-    log_info "Next steps:"
-    log_info "  1. Edit configuration: sudo nano $CONFIG_DIR/config.yaml"
-    log_info "  2. Setup TLS certificates in $CONFIG_DIR/certs/"
-    log_info "  3. Create admin account: sudo umailserver account create admin@yourdomain.com"
-    log_info "  4. Start service: sudo systemctl start umailserver"
-    log_info "  5. Enable service: sudo systemctl enable umailserver"
-    log_info ""
-    log_info "Web interface will be available at: http://your-server:8080"
+    print_next_steps
 }
 
 main "$@"

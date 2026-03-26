@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers: []
+
+rule_files: []
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'umailserver'
+    static_configs:
+      - targets: ['umailserver:8443']
+    metrics_path: /metrics
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true

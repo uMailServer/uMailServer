@@ -149,6 +149,7 @@ type SecurityConfig struct {
 	MaxLoginAttempts int              `yaml:"max_login_attempts"`
 	LockoutDuration  Duration         `yaml:"lockout_duration"`
 	RateLimit        RateLimitConfig  `yaml:"rate_limit"`
+	JWTSecret        string           `yaml:"jwt_secret"`
 }
 
 // RateLimitConfig holds rate limiting settings
