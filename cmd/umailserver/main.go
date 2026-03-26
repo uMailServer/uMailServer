@@ -1,8 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
+
+	"github.com/umailserver/umailserver/internal/config"
+	"github.com/umailserver/umailserver/internal/server"
 )
 
 var (
@@ -73,10 +77,45 @@ Examples:
   umailserver check dns example.com`)
 }
 
-// Placeholder command implementations
 func cmdServe(args []string) {
-	fmt.Println("Starting uMailServer...")
-	fmt.Println("(not yet implemented - will start SMTP, IMAP, and HTTP servers)")
+	var configPath string
+	var dataDir string
+
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	fs.StringVar(&configPath, "config", "", "Path to config file")
+	fs.StringVar(&dataDir, "data-dir", "", "Override data directory")
+	fs.Parse(args)
+
+	// Load configuration
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Override data directory if specified
+	if dataDir != "" {
+		cfg.Server.DataDir = dataDir
+	}
+
+	// Create server
+	srv, err := server.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create server: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Start server
+	if err := srv.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start server: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Wait for shutdown signal
+	if err := srv.Wait(); err != nil {
+		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func cmdQuickstart(args []string) {
@@ -84,8 +123,10 @@ func cmdQuickstart(args []string) {
 		fmt.Println("Usage: umailserver quickstart <email>")
 		os.Exit(1)
 	}
-	fmt.Printf("Quickstart for %s\n", args[0])
-	fmt.Println("(not yet implemented)")
+
+	email := args[0]
+	fmt.Printf("Quickstart for %s\n", email)
+	fmt.Println("(not yet implemented - will generate config and create account)")
 }
 
 func cmdDomain(args []string) {
@@ -94,7 +135,35 @@ func cmdDomain(args []string) {
 		fmt.Println("Subcommands: add, list, dns, delete")
 		os.Exit(1)
 	}
-	fmt.Printf("Domain command: %s\n", args[0])
+
+	subcmd := args[0]
+	fmt.Printf("Domain command: %s\n", subcmd)
+
+	switch subcmd {
+	case "add":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver domain add <domain>")
+			os.Exit(1)
+		}
+		fmt.Printf("Adding domain: %s\n", args[1])
+	case "list":
+		fmt.Println("Listing domains...")
+	case "dns":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver domain dns <domain>")
+			os.Exit(1)
+		}
+		fmt.Printf("DNS records for: %s\n", args[1])
+	case "delete":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver domain delete <domain>")
+			os.Exit(1)
+		}
+		fmt.Printf("Deleting domain: %s\n", args[1])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown domain subcommand: %s\n", subcmd)
+		os.Exit(1)
+	}
 }
 
 func cmdAccount(args []string) {
@@ -103,7 +172,35 @@ func cmdAccount(args []string) {
 		fmt.Println("Subcommands: add, password, list, delete")
 		os.Exit(1)
 	}
-	fmt.Printf("Account command: %s\n", args[0])
+
+	subcmd := args[0]
+	fmt.Printf("Account command: %s\n", subcmd)
+
+	switch subcmd {
+	case "add":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver account add <email> [flags]")
+			os.Exit(1)
+		}
+		fmt.Printf("Adding account: %s\n", args[1])
+	case "list":
+		fmt.Println("Listing accounts...")
+	case "password":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver account password <email>")
+			os.Exit(1)
+		}
+		fmt.Printf("Changing password for: %s\n", args[1])
+	case "delete":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver account delete <email>")
+			os.Exit(1)
+		}
+		fmt.Printf("Deleting account: %s\n", args[1])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown account subcommand: %s\n", subcmd)
+		os.Exit(1)
+	}
 }
 
 func cmdQueue(args []string) {
@@ -112,7 +209,31 @@ func cmdQueue(args []string) {
 		fmt.Println("Subcommands: list, retry, flush, drop")
 		os.Exit(1)
 	}
-	fmt.Printf("Queue command: %s\n", args[0])
+
+	subcmd := args[0]
+	fmt.Printf("Queue command: %s\n", subcmd)
+
+	switch subcmd {
+	case "list":
+		fmt.Println("Listing queue entries...")
+	case "retry":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver queue retry <id>")
+			os.Exit(1)
+		}
+		fmt.Printf("Retrying queue entry: %s\n", args[1])
+	case "flush":
+		fmt.Println("Flushing queue...")
+	case "drop":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver queue drop <id>")
+			os.Exit(1)
+		}
+		fmt.Printf("Dropping queue entry: %s\n", args[1])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown queue subcommand: %s\n", subcmd)
+		os.Exit(1)
+	}
 }
 
 func cmdCheck(args []string) {
@@ -121,7 +242,33 @@ func cmdCheck(args []string) {
 		fmt.Println("Types: dns, tls, deliverability")
 		os.Exit(1)
 	}
-	fmt.Printf("Check command: %s\n", args[0])
+
+	checkType := args[0]
+	fmt.Printf("Check command: %s\n", checkType)
+
+	switch checkType {
+	case "dns":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver check dns <domain>")
+			os.Exit(1)
+		}
+		fmt.Printf("Checking DNS for: %s\n", args[1])
+	case "tls":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver check tls <domain>")
+			os.Exit(1)
+		}
+		fmt.Printf("Checking TLS for: %s\n", args[1])
+	case "deliverability":
+		if len(args) < 2 {
+			fmt.Println("Usage: umailserver check deliverability <domain>")
+			os.Exit(1)
+		}
+		fmt.Printf("Checking deliverability for: %s\n", args[1])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown check type: %s\n", checkType)
+		os.Exit(1)
+	}
 }
 
 func cmdTest(args []string) {
@@ -130,7 +277,21 @@ func cmdTest(args []string) {
 		fmt.Println("Types: send")
 		os.Exit(1)
 	}
-	fmt.Printf("Test command: %s\n", args[0])
+
+	testType := args[0]
+	fmt.Printf("Test command: %s\n", testType)
+
+	switch testType {
+	case "send":
+		if len(args) < 4 {
+			fmt.Println("Usage: umailserver test send <from> <to> <subject>")
+			os.Exit(1)
+		}
+		fmt.Printf("Sending test email from %s to %s\n", args[1], args[2])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown test type: %s\n", testType)
+		os.Exit(1)
+	}
 }
 
 func cmdBackup(args []string) {
@@ -150,9 +311,10 @@ func cmdRestore(args []string) {
 }
 
 func cmdMigrate(args []string) {
-	if len(args) < 1 {
+	if len(args) < 2 {
 		fmt.Println("Usage: umailserver migrate --source <type>")
+		fmt.Println("Source types: postfix, dovecot, maildir")
 		os.Exit(1)
 	}
-	fmt.Println("Migrate command")
+	fmt.Println("Migrate command (not yet implemented)")
 }
