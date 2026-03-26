@@ -1,0 +1,245 @@
+package tls
+
+import (
+	"crypto/tls"
+	"log/slog"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestNewManager(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		AutoTLS: false,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, err := NewManager(config, logger)
+
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	if manager == nil {
+		t.Fatal("Manager should not be nil")
+	}
+
+	if manager.config.Enabled != true {
+		t.Error("Enabled should be true")
+	}
+
+	if manager.certCache == nil {
+		t.Error("certCache should be initialized")
+	}
+
+	defer manager.Close()
+}
+
+func TestManagerGetTLSConfig(t *testing.T) {
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	tlsConfig := manager.GetTLSConfig()
+
+	if tlsConfig == nil {
+		t.Fatal("TLS config should not be nil")
+	}
+
+	if tlsConfig.MinVersion != tls.VersionTLS12 {
+		t.Errorf("Expected MinVersion TLS 1.2, got %d", tlsConfig.MinVersion)
+	}
+
+	if tlsConfig.GetCertificate == nil {
+		t.Error("GetCertificate should not be nil")
+	}
+}
+
+func TestManagerIsEnabled(t *testing.T) {
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	if !manager.IsEnabled() {
+		t.Error("IsEnabled should return true")
+	}
+}
+
+func TestManagerIsAutoTLS(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		AutoTLS: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	if !manager.IsAutoTLS() {
+		t.Error("IsAutoTLS should return true")
+	}
+}
+
+func TestConfigDefaults(t *testing.T) {
+	config := Config{
+		Enabled:     true,
+		AutoTLS:     true,
+		Email:       "admin@example.com",
+		Domains:     []string{"example.com", "mail.example.com"},
+		UseStaging:  true,
+	}
+
+	if config.Email != "admin@example.com" {
+		t.Errorf("Expected email admin@example.com, got %s", config.Email)
+	}
+
+	if len(config.Domains) != 2 {
+		t.Errorf("Expected 2 domains, got %d", len(config.Domains))
+	}
+}
+
+func TestCertificateStatus(t *testing.T) {
+	status := CertificateStatus{
+		Domain:    "example.com",
+		Valid:     true,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		Issuer:    "Let's Encrypt",
+	}
+
+	if status.Domain != "example.com" {
+		t.Errorf("Expected domain example.com, got %s", status.Domain)
+	}
+
+	if !status.Valid {
+		t.Error("Expected Valid to be true")
+	}
+
+	if status.Issuer != "Let's Encrypt" {
+		t.Errorf("Expected issuer Let's Encrypt, got %s", status.Issuer)
+	}
+}
+
+func TestGetCertificateStatusEmptyDomains(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		Domains: []string{},
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	statuses := manager.GetCertificateStatus()
+
+	if len(statuses) != 0 {
+		t.Errorf("Expected 0 statuses, got %d", len(statuses))
+	}
+}
+
+func TestGenerateSelfSigned(t *testing.T) {
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	domains := []string{"test.example.com"}
+	certPath, keyPath, err := manager.GenerateSelfSigned(domains)
+
+	// This currently just returns paths as the implementation is incomplete
+	if err != nil {
+		t.Errorf("GenerateSelfSigned returned error: %v", err)
+	}
+
+	if certPath == "" {
+		t.Error("certPath should not be empty")
+	}
+
+	if keyPath == "" {
+		t.Error("keyPath should not be empty")
+	}
+}
+
+func TestHTTPChallengeHandlerNoAutocert(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		AutoTLS: false,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	handler := manager.HTTPChallengeHandler()
+
+	if handler != nil {
+		t.Error("Handler should be nil when autocert is not configured")
+	}
+}
+
+func TestParseCertificateInvalidPEM(t *testing.T) {
+	data := []byte("invalid PEM data")
+	cert, err := parseCertificate(data)
+
+	if err == nil {
+		t.Error("Expected error for invalid PEM")
+	}
+
+	if cert != nil {
+		t.Error("Certificate should be nil on error")
+	}
+}
+
+func TestGetManualCertificateNoConfig(t *testing.T) {
+	config := Config{
+		Enabled:  true,
+		CertFile: "",
+		KeyFile:  "",
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	// Clear cache
+	manager.certCache = make(map[string]*tls.Certificate)
+
+	// This should fail since no cert is configured
+	cert, err := manager.getManualCertificate("test.example.com")
+
+	if err == nil {
+		t.Error("Expected error when no certificate is configured")
+	}
+
+	if cert != nil {
+		t.Error("Certificate should be nil on error")
+	}
+}
+
+func TestRenewCertificatesNoAutocert(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		AutoTLS: false,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	err := manager.RenewCertificates(nil)
+
+	if err == nil {
+		t.Error("Expected error when autocert is not configured")
+	}
+}
