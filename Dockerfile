@@ -1,5 +1,5 @@
 # Build stage for Go backend
-FROM golang:1.23-alpine AS go-builder
+FROM golang:1.26-alpine AS go-builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -9,7 +9,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o umailserver ./cmd/umailserver
 
 # Build stage for React webmail
-FROM node:20-alpine AS web-builder
+FROM node:22-alpine AS web-builder
 
 WORKDIR /webmail
 COPY webmail/package*.json ./
