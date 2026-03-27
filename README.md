@@ -1,7 +1,7 @@
 # uMailServer
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/umailserver/umailserver/main/assets/logo.png" alt="uMailServer" width="200">
+  <img src="assets/umailserver.jpeg" alt="uMailServer" width="100%">
 </p>
 
 <p align="center">

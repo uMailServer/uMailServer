@@ -102,7 +102,10 @@ func (d *Diagnostics) checkMX(domain string) ([]DNSCheckResult, error) {
 
 	// Check the primary MX record
 	primaryMX := mxRecords[0]
-	expectedHost := d.config.Server.Hostname
+	expectedHost := ""
+	if d.config != nil {
+		expectedHost = d.config.Server.Hostname
+	}
 
 	if strings.EqualFold(primaryMX.Host, expectedHost) {
 		results = append(results, DNSCheckResult{
@@ -142,7 +145,10 @@ func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
 	for _, txt := range txtRecords {
 		if strings.HasPrefix(txt, "v=spf1") {
 			// Check if it includes our server
-			hostname := d.config.Server.Hostname
+			hostname := ""
+			if d.config != nil {
+				hostname = d.config.Server.Hostname
+			}
 			expected := fmt.Sprintf("v=spf1 mx a:%s -all", hostname)
 
 			if strings.Contains(txt, hostname) || strings.Contains(txt, "mx") {
@@ -235,6 +241,16 @@ func (d *Diagnostics) checkDMARC(domain string) DNSCheckResult {
 
 // checkPTR checks reverse DNS (PTR) record
 func (d *Diagnostics) checkPTR(domain string) DNSCheckResult {
+	// Check if config is nil
+	if d.config == nil {
+		return DNSCheckResult{
+			RecordType: "PTR",
+			RecordName: domain,
+			Status:     "warning",
+			Message:    "Cannot check PTR: no configuration available",
+		}
+	}
+
 	// Get our IP address
 	hostname := d.config.Server.Hostname
 	ips, err := net.LookupIP(hostname)

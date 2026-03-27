@@ -258,3 +258,273 @@ func TestParseStatusItems(t *testing.T) {
 		})
 	}
 }
+
+func TestNewParser(t *testing.T) {
+	parser := NewParser("test input")
+	if parser == nil {
+		t.Fatal("expected non-nil parser")
+	}
+	if parser.input != "test input" {
+		t.Errorf("expected input 'test input', got %s", parser.input)
+	}
+	if parser.pos != 0 {
+		t.Errorf("expected pos 0, got %d", parser.pos)
+	}
+}
+
+func TestParseSequenceSetInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "invalid range",
+			input: "1:2:3",
+		},
+		{
+			name:  "invalid number",
+			input: "abc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseSequenceSet(tt.input)
+			if err == nil {
+				t.Error("expected error for invalid sequence set")
+			}
+		})
+	}
+}
+
+func TestParseSequenceSetEmpty(t *testing.T) {
+	ranges, err := ParseSequenceSet("")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if len(ranges) != 0 {
+		t.Errorf("expected 0 ranges, got %d", len(ranges))
+	}
+}
+
+func TestParseFetchItemsBody(t *testing.T) {
+	items, err := ParseFetchItems("BODY[]")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Errorf("expected 1 item, got %d", len(items))
+	}
+}
+
+func TestParseSearchCriteria(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		check func(*SearchCriteria) bool
+	}{
+		{
+			name:  "ALL",
+			input: "ALL",
+			check: func(c *SearchCriteria) bool { return c.All },
+		},
+		{
+			name:  "SEEN",
+			input: "SEEN",
+			check: func(c *SearchCriteria) bool { return c.Seen },
+		},
+		{
+			name:  "UNSEEN",
+			input: "UNSEEN",
+			check: func(c *SearchCriteria) bool { return c.Unseen },
+		},
+		{
+			name:  "FLAGGED",
+			input: "FLAGGED",
+			check: func(c *SearchCriteria) bool { return c.Flagged },
+		},
+		{
+			name:  "DELETED",
+			input: "DELETED",
+			check: func(c *SearchCriteria) bool { return c.Deleted },
+		},
+		{
+			name:  "ANSWERED",
+			input: "ANSWERED",
+			check: func(c *SearchCriteria) bool { return c.Answered },
+		},
+		{
+			name:  "FROM",
+			input: "FROM test@example.com",
+			check: func(c *SearchCriteria) bool { return c.From == "test@example.com" },
+		},
+		{
+			name:  "TO",
+			input: "TO recipient@example.com",
+			check: func(c *SearchCriteria) bool { return c.To == "recipient@example.com" },
+		},
+		{
+			name:  "SUBJECT",
+			input: "SUBJECT test",
+			check: func(c *SearchCriteria) bool { return c.Subject == "test" },
+		},
+		{
+			name:  "BODY",
+			input: "BODY content",
+			check: func(c *SearchCriteria) bool { return c.Body == "content" },
+		},
+		{
+			name:  "TEXT",
+			input: "TEXT search",
+			check: func(c *SearchCriteria) bool { return c.Text == "search" },
+		},
+		{
+			name:  "UID",
+			input: "UID 100:110",
+			check: func(c *SearchCriteria) bool { return c.UIDSet == "100:110" },
+		},
+		{
+			name:  "LARGER",
+			input: "LARGER 1024",
+			check: func(c *SearchCriteria) bool { return c.Larger == 1024 },
+		},
+		{
+			name:  "SMALLER",
+			input: "SMALLER 1048576",
+			check: func(c *SearchCriteria) bool { return c.Smaller == 1048576 },
+		},
+		{
+			name:  "NEW",
+			input: "NEW",
+			check: func(c *SearchCriteria) bool { return c.New },
+		},
+		{
+			name:  "OLD",
+			input: "OLD",
+			check: func(c *SearchCriteria) bool { return c.Old },
+		},
+		{
+			name:  "RECENT",
+			input: "RECENT",
+			check: func(c *SearchCriteria) bool { return c.Recent },
+		},
+		{
+			name:  "UNANSWERED",
+			input: "UNANSWERED",
+			check: func(c *SearchCriteria) bool { return c.Unanswered },
+		},
+		{
+			name:  "UNDELETED",
+			input: "UNDELETED",
+			check: func(c *SearchCriteria) bool { return c.Undeleted },
+		},
+		{
+			name:  "UNFLAGGED",
+			input: "UNFLAGGED",
+			check: func(c *SearchCriteria) bool { return c.Unflagged },
+		},
+		{
+			name:  "DRAFT",
+			input: "DRAFT",
+			check: func(c *SearchCriteria) bool { return c.Draft },
+		},
+		{
+			name:  "UNDRAFT",
+			input: "UNDRAFT",
+			check: func(c *SearchCriteria) bool { return c.Undraft },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			criteria, err := ParseSearchCriteria(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !tt.check(criteria) {
+				t.Errorf("check failed for input %q", tt.input)
+			}
+		})
+	}
+}
+
+func TestParseSearchCriteriaNOT(t *testing.T) {
+	criteria, err := ParseSearchCriteria("NOT SEEN")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if criteria.Not == nil {
+		t.Fatal("expected Not to be set")
+	}
+	if !criteria.Not.Seen {
+		t.Error("expected inner criteria Seen to be true")
+	}
+}
+
+func TestParseSearchCriteriaOR(t *testing.T) {
+	criteria, err := ParseSearchCriteria("OR SEEN FLAGGED")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if criteria.Or[0] == nil || criteria.Or[1] == nil {
+		t.Fatal("expected both Or criteria to be set")
+	}
+}
+
+func TestParseSearchCriteriaHeader(t *testing.T) {
+	criteria, err := ParseSearchCriteria("HEADER X-Priority 1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if criteria.Header == nil {
+		t.Fatal("expected Header map to be set")
+	}
+	if criteria.Header["X-Priority"] != "1" {
+		t.Errorf("expected X-Priority 1, got %s", criteria.Header["X-Priority"])
+	}
+}
+
+func TestParseSearchCriteriaQuoted(t *testing.T) {
+	criteria, err := ParseSearchCriteria(`FROM "test user"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if criteria.From != "test user" {
+		t.Errorf("expected From 'test user', got %s", criteria.From)
+	}
+}
+
+func TestParseSearchCriteriaSeqSet(t *testing.T) {
+	criteria, err := ParseSearchCriteria("1:10")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if criteria.SeqSet != "1:10" {
+		t.Errorf("expected SeqSet '1:10', got %s", criteria.SeqSet)
+	}
+}
+
+func TestParseFlagsNotParenthesized(t *testing.T) {
+	_, err := ParseFlags("\\Seen")
+	if err == nil {
+		t.Error("expected error for flags without parentheses")
+	}
+}
+
+func TestSeqRangeContainsSwapped(t *testing.T) {
+	// Test with start > end (should be swapped)
+	r := SeqRange{Start: 10, End: 5}
+	if !r.Contains(7, 10) {
+		t.Error("expected 7 to be in range 10:5")
+	}
+}
+
+func TestParseFetchItemsNested(t *testing.T) {
+	items, err := ParseFetchItems("(FLAGS (RFC822.SIZE UID))")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if len(items) == 0 {
+		t.Error("expected items")
+	}
+}

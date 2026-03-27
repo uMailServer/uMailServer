@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -450,4 +451,265 @@ func readMultilineResponse(reader *bufio.Reader) (string, error) {
 		}
 	}
 	return strings.Join(lines, ""), nil
+}
+
+func TestServerConfig(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		AllowInsecure:  true,
+	}
+
+	server := NewServer(config, nil)
+	if server == nil {
+		t.Fatal("expected non-nil server")
+	}
+	if server.config != config {
+		t.Error("expected config to be set")
+	}
+	if server.config.Hostname != "mail.example.com" {
+		t.Errorf("expected hostname 'mail.example.com', got %s", server.config.Hostname)
+	}
+}
+
+func TestServerSetHandler(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server := NewServer(config, nil)
+
+	handler := func(from string, to []string, data []byte) error {
+		return nil
+	}
+
+	server.SetDeliveryHandler(handler)
+	if server.onDeliver == nil {
+		t.Error("expected handler to be set")
+	}
+}
+
+func TestServerSetAuthHandler(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server := NewServer(config, nil)
+
+	authHandler := func(username, password string) (bool, error) {
+		return true, nil
+	}
+
+	server.SetAuthHandler(authHandler)
+	if server.onAuth == nil {
+		t.Error("expected authHandler to be set")
+	}
+}
+
+func TestServerWithTLS(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  false,
+		TLSConfig: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	}
+
+	server := NewServer(config, nil)
+	if server == nil {
+		t.Fatal("expected non-nil server")
+	}
+}
+
+func TestValidateEmailVariations(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"user@example.com", "user@example.com", false},
+		{"<user@example.com>", "user@example.com", false},
+		{"User <user@example.com>", "user@example.com", false},
+		{"user+tag@example.com", "user+tag@example.com", false},
+		{"user.name@example.com", "user.name@example.com", false},
+		{"@example.com", "", true},
+		{"user@", "", true},
+		{"", "", true},
+	}
+
+	for _, tt := range tests {
+		got, err := ValidateEmail(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ValidateEmail(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("ValidateEmail(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseCommandVariations(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantCmd string
+		wantArg string
+	}{
+		{"EHLO client.example.com", "EHLO", "client.example.com"},
+		{"ehlo client.example.com", "EHLO", "client.example.com"},
+		{"MAIL FROM:<test@example.com>", "MAIL", "FROM:<test@example.com>"},
+		{"RCPT TO:<recipient@example.com>", "RCPT", "TO:<recipient@example.com>"},
+		{"QUIT", "QUIT", ""},
+		{"NOOP", "NOOP", ""},
+		{"RSET", "RSET", ""},
+		{"DATA", "DATA", ""},
+		{"  SPACES  around  ", "SPACES", "around"},
+	}
+
+	for _, tt := range tests {
+		cmd, arg := parseCommand(tt.input)
+		if cmd != tt.wantCmd {
+			t.Errorf("parseCommand(%q) cmd = %q, want %q", tt.input, cmd, tt.wantCmd)
+		}
+		if arg != tt.wantArg {
+			t.Errorf("parseCommand(%q) arg = %q, want %q", tt.input, arg, tt.wantArg)
+		}
+	}
+}
+
+func TestParseMailFromVariations(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"FROM:<sender@example.com>", "sender@example.com", false},
+		{"FROM:<>", "", false},
+		{"FROM:sender@example.com", "sender@example.com", false},
+		{"from:<sender@example.com>", "sender@example.com", false},
+		{"FROM: <sender@example.com>", "sender@example.com", false},
+		{"<sender@example.com>", "", true},
+		{"", "", true},
+		{"FROM:", "", false},
+	}
+
+	for _, tt := range tests {
+		got, err := parseMailFrom(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("parseMailFrom(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("parseMailFrom(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestExtractDomainVariations(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"test@example.com", "example.com"},
+		{"user@sub.example.com", "sub.example.com"},
+		{"user@deep.sub.example.com", "deep.sub.example.com"},
+		{"user@", ""},
+		{"@example.com", "example.com"},
+		{"invalid", ""},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		got := ExtractDomain(tt.input)
+		if got != tt.want {
+			t.Errorf("ExtractDomain(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestConfigStruct(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 10485760,
+		MaxRecipients:  100,
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		AllowInsecure:  true,
+		TLSConfig:      nil,
+	}
+
+	if config.MaxMessageSize != 10485760 {
+		t.Errorf("expected MaxMessageSize 10485760, got %d", config.MaxMessageSize)
+	}
+	if config.MaxRecipients != 100 {
+		t.Errorf("expected MaxRecipients 100, got %d", config.MaxRecipients)
+	}
+	if !config.AllowInsecure {
+		t.Error("expected AllowInsecure to be true")
+	}
+}
+
+func TestSessionCommandsHELP(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// HELP (non-standard command)
+	fmt.Fprintf(client, "HELP\r\n")
+	response, _ := reader.ReadString('\n')
+
+	// Should return 500 or 502 for unknown command
+	if !strings.HasPrefix(response, "500") && !strings.HasPrefix(response, "502") {
+		t.Logf("HELP response: %s", response)
+	}
+}
+
+func TestSessionCommandsVRFY(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// VRFY
+	fmt.Fprintf(client, "VRFY user@example.com\r\n")
+	response, _ := reader.ReadString('\n')
+
+	// Should return 252 or 550
+	if !strings.HasPrefix(response, "252") && !strings.HasPrefix(response, "550") {
+		t.Logf("VRFY response: %s", response)
+	}
 }

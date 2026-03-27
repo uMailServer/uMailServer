@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -118,14 +119,14 @@ func New(cfg *config.Config) (*Server, error) {
 
 // parseLogLevel parses log level string
 func parseLogLevel(level string) slog.Level {
-	switch level {
-	case "debug":
+	switch strings.ToLower(level) {
+	case "debug", "trace":
 		return slog.LevelDebug
 	case "info":
 		return slog.LevelInfo
-	case "warn":
+	case "warn", "warning":
 		return slog.LevelWarn
-	case "error":
+	case "error", "fatal":
 		return slog.LevelError
 	default:
 		return slog.LevelInfo

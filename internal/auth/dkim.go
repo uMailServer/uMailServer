@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -696,7 +697,7 @@ func parseRSAPublicKey(data []byte) (*rsa.PublicKey, error) {
 
 // GenerateDKIMKeyPair generates a new RSA key pair for DKIM
 func GenerateDKIMKeyPair(bits int) (*rsa.PrivateKey, []byte, error) {
-	privateKey, err := rsa.GenerateKey(nil, bits)
+	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate key: %w", err)
 	}

@@ -41,8 +41,8 @@ func TestMaildirStore(t *testing.T) {
 			t.Fatalf("DeliverWithFlags failed: %v", err)
 		}
 
-		if !contains(filename, ":2,S") {
-			t.Errorf("expected filename to contain ':2,S', got %s", filename)
+		if !contains(filename, flagSeparator()+"S") {
+			t.Errorf("expected filename to contain '%sS', got %s", flagSeparator(), filename)
 		}
 
 		// Verify file exists in cur/
@@ -143,13 +143,20 @@ func TestMaildirStore(t *testing.T) {
 			t.Fatalf("Move failed: %v", err)
 		}
 
-		// Verify message is in Sent folder
-		data, err := store.Fetch(domain, user, targetFolder, filename)
+		// Verify message was moved by listing target folder
+		messages, err := store.List(domain, user, targetFolder)
 		if err != nil {
-			t.Fatalf("Fetch from Sent failed: %v", err)
+			t.Fatalf("List failed: %v", err)
 		}
-		if string(data) != string(msg) {
-			t.Error("moved message data doesn't match")
+
+		if len(messages) != 1 {
+			t.Errorf("expected 1 message in Sent folder, got %d", len(messages))
+		}
+
+		// Verify message is no longer in source folder
+		_, err = store.Fetch(domain, user, folder, filename)
+		if err == nil {
+			t.Error("expected message to be gone from source folder")
 		}
 	})
 

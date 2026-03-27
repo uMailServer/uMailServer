@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -21,6 +22,36 @@ type MessageInfo struct {
 	ModTime      time.Time
 	Flags        string
 	UID          uint32
+}
+
+// flagSeparator returns the platform-compatible flag separator
+// Maildir uses ":2," but Windows doesn't allow ":" in filenames
+func flagSeparator() string {
+	if runtime.GOOS == "windows" {
+		return "!2,"
+	}
+	return ":2,"
+}
+
+// splitFlags splits a filename into base name and flags
+func splitFlags(filename string) (baseName, flags string) {
+	sep := flagSeparator()
+	if idx := strings.Index(filename, sep); idx != -1 {
+		return filename[:idx], filename[idx+len(sep):]
+	}
+	// Try standard Maildir format as fallback
+	if idx := strings.Index(filename, ":2,"); idx != -1 {
+		return filename[:idx], filename[idx+3:]
+	}
+	return filename, ""
+}
+
+// joinFlags joins base name with flags
+func joinFlags(baseName, flags string) string {
+	if flags == "" {
+		return baseName
+	}
+	return baseName + flagSeparator() + flags
 }
 
 // NewMaildirStore creates a new Maildir store
@@ -120,10 +151,8 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 	basePath := s.folderPath(domain, user, folder)
 	uniqueName := s.generateUniqueName()
 
-	// Add flags to filename
-	if flags != "" {
-		uniqueName = uniqueName + ":2," + flags
-	}
+	// Add flags to filename using platform separator
+	uniqueName = joinFlags(uniqueName, flags)
 
 	// Write to tmp directory first
 	tmpPath := filepath.Join(basePath, "tmp", uniqueName)
@@ -199,8 +228,8 @@ func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string)
 	fromBase := s.folderPath(domain, user, fromFolder)
 	toBase := s.folderPath(domain, user, toFolder)
 
-	// Find source file (strip any flags)
-	baseName := strings.Split(filename, ":2,")[0]
+	// Find source file (strip any flags using platform separator)
+	baseName, _ := splitFlags(filename)
 
 	var fromPath string
 	for _, subdir := range []string{"cur", "new"} {
@@ -253,18 +282,10 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 	}
 
 	// Extract base name (without flags)
-	baseName := filename
-	if idx := strings.Index(filename, ":2,"); idx != -1 {
-		baseName = filename[:idx]
-	}
+	baseName, _ := splitFlags(filename)
 
 	// Build new filename with flags
-	var newName string
-	if flags == "" {
-		newName = baseName
-	} else {
-		newName = baseName + ":2," + flags
-	}
+	newName := joinFlags(baseName, flags)
 
 	// If filename hasn't changed, nothing to do
 	if newName == filename {
@@ -320,11 +341,8 @@ func (s *MaildirStore) List(domain, user, folder string) ([]MessageInfo, error) 
 
 			filename := entry.Name()
 
-			// Extract flags from filename
-			flags := ""
-			if idx := strings.Index(filename, ":2,"); idx != -1 {
-				flags = filename[idx+3:]
-			}
+			// Extract flags from filename using platform separator
+			_, flags := splitFlags(filename)
 
 			messages = append(messages, MessageInfo{
 				Filename: filename,

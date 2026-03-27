@@ -243,3 +243,98 @@ func TestRenewCertificatesNoAutocert(t *testing.T) {
 		t.Error("Expected error when autocert is not configured")
 	}
 }
+
+func TestNewManagerNilLogger(t *testing.T) {
+	config := Config{
+		Enabled: true,
+	}
+
+	manager, err := NewManager(config, nil)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	if manager.logger == nil {
+		t.Error("expected logger to be initialized with default")
+	}
+}
+
+func TestManagerDisabled(t *testing.T) {
+	config := Config{
+		Enabled: false,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, err := NewManager(config, logger)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	if manager.IsEnabled() {
+		t.Error("IsEnabled should return false")
+	}
+}
+
+func TestConfigStruct(t *testing.T) {
+	config := Config{
+		Enabled:      true,
+		AutoTLS:      true,
+		CertFile:     "/certs/cert.pem",
+		KeyFile:      "/certs/key.pem",
+		Email:        "admin@example.com",
+		Domains:      []string{"example.com", "mail.example.com"},
+		ACMEEndpoint: "https://custom.acme.endpoint",
+		UseStaging:   true,
+	}
+
+	if !config.Enabled {
+		t.Error("expected Enabled to be true")
+	}
+	if config.CertFile != "/certs/cert.pem" {
+		t.Errorf("expected CertFile /certs/cert.pem, got %s", config.CertFile)
+	}
+	if config.KeyFile != "/certs/key.pem" {
+		t.Errorf("expected KeyFile /certs/key.pem, got %s", config.KeyFile)
+	}
+	if config.ACMEEndpoint != "https://custom.acme.endpoint" {
+		t.Errorf("expected ACMEEndpoint, got %s", config.ACMEEndpoint)
+	}
+}
+
+func TestManagerGetCertificate(t *testing.T) {
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	// Test GetCertificate with hello info
+	hello := &tls.ClientHelloInfo{ServerName: "test.example.com"}
+	cert, err := manager.GetCertificate(hello)
+
+	// Should fail since no cert is configured
+	if err == nil {
+		t.Error("expected error when no certificate available")
+	}
+	if cert != nil {
+		t.Error("expected nil certificate on error")
+	}
+}
+
+func TestParseCertificateNoBlock(t *testing.T) {
+	// PEM without certificate block
+	data := []byte("-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----\n")
+	cert, err := parseCertificate(data)
+
+	if err == nil {
+		t.Error("expected error for certificate without CERTIFICATE block")
+	}
+	if cert != nil {
+		t.Error("expected nil certificate")
+	}
+}
+

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
 )
@@ -96,3 +97,107 @@ func TestWebhookManager(t *testing.T) {
 		}
 	})
 }
+
+func TestNewManager(t *testing.T) {
+	database := &db.DB{}
+	manager := NewManager(database, "secret")
+
+	if manager == nil {
+		t.Fatal("expected non-nil manager")
+	}
+	if manager.db != database {
+		t.Error("expected database to be set")
+	}
+	if manager.secret != "secret" {
+		t.Error("expected secret to be set")
+	}
+	if manager.client == nil {
+		t.Error("expected http client to be initialized")
+	}
+	if manager.hooks == nil {
+		t.Error("expected hooks slice to be initialized")
+	}
+}
+
+func TestEventTypes(t *testing.T) {
+	events := []string{
+		EventMailReceived,
+		EventMailSent,
+		EventDeliveryFailed,
+		EventDeliverySuccess,
+		EventSpamDetected,
+		EventLoginSuccess,
+		EventLoginFailed,
+	}
+
+	for _, event := range events {
+		if event == "" {
+			t.Error("event type should not be empty")
+		}
+	}
+}
+
+func TestEventStruct(t *testing.T) {
+	now := time.Now()
+	event := Event{
+		Type:      EventMailReceived,
+		Timestamp: now,
+		Data:      map[string]string{"from": "test@example.com"},
+	}
+
+	if event.Type != EventMailReceived {
+		t.Errorf("expected type %s, got %s", EventMailReceived, event.Type)
+	}
+	if event.Timestamp != now {
+		t.Error("expected timestamp to match")
+	}
+}
+
+func TestWebhookStruct(t *testing.T) {
+	now := time.Now()
+	webhook := Webhook{
+		ID:        "webhook-1",
+		URL:       "https://example.com/webhook",
+		Events:    []string{"mail.received"},
+		Active:    true,
+		CreatedAt: now,
+	}
+
+	if webhook.ID != "webhook-1" {
+		t.Errorf("expected id webhook-1, got %s", webhook.ID)
+	}
+	if webhook.URL != "https://example.com/webhook" {
+		t.Errorf("expected url, got %s", webhook.URL)
+	}
+	if !webhook.Active {
+		t.Error("expected active to be true")
+	}
+}
+
+func TestEventMatchesEmpty(t *testing.T) {
+	database := &db.DB{}
+	manager := NewManager(database, "")
+
+	// Empty patterns should not match
+	result := manager.eventMatches([]string{}, "event")
+	if result {
+		t.Error("empty patterns should not match")
+	}
+}
+
+func TestEventMatchesWildcard(t *testing.T) {
+	database := &db.DB{}
+	manager := NewManager(database, "")
+
+	// Test wildcard matching
+	if !manager.eventMatches([]string{"*"}, "any.event") {
+		t.Error("* should match any event")
+	}
+	if !manager.eventMatches([]string{"mail.*"}, "mail.received") {
+		t.Error("mail.* should match mail.received")
+	}
+	if manager.eventMatches([]string{"mail.*"}, "auth.login") {
+		t.Error("mail.* should not match auth.login")
+	}
+}
+

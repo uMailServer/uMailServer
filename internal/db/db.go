@@ -172,6 +172,11 @@ func (d *DB) Close() error {
 	return d.bolt.Close()
 }
 
+// BoltDB returns the underlying bbolt database (for internal use only)
+func (d *DB) BoltDB() *bbolt.DB {
+	return d.bolt
+}
+
 // initBuckets creates all required buckets
 func (d *DB) initBuckets() error {
 	buckets := []string{
