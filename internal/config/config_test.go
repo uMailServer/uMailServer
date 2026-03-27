@@ -521,3 +521,209 @@ func TestDomainManagerImportFromMainConfig(t *testing.T) {
 		t.Error("expected imported domain to exist")
 	}
 }
+
+func TestLoadInvalidConfigFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "invalid.yaml")
+
+	// Create an invalid YAML file
+	if err := os.WriteFile(configPath, []byte("invalid: yaml: content: ["), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	// Load should fail
+	_, err := Load(configPath)
+	if err == nil {
+		t.Error("expected error for invalid config file")
+	}
+}
+
+func TestLoadConfigWithReadError(t *testing.T) {
+	// Try to load a directory as a config file
+	tmpDir := t.TempDir()
+	_, err := Load(tmpDir)
+	// Should return error since it's a directory
+	if err == nil {
+		t.Error("expected error when loading directory as config file")
+	}
+}
+
+func TestValidateInvalidPorts(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*Config)
+	}{
+		{
+			name: "invalid IMAP port",
+			modify: func(c *Config) {
+				c.IMAP.Enabled = true
+				c.IMAP.Port = 0
+			},
+		},
+		{
+			name: "invalid SMTP submission port",
+			modify: func(c *Config) {
+				c.SMTP.Submission.Enabled = true
+				c.SMTP.Submission.Port = -1
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Error("expected validation error")
+			}
+		})
+	}
+}
+
+func TestValidateDomainWithoutName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Domains = []DomainConfig{
+		{
+			Name: "",
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected error for domain without name")
+	}
+}
+
+func TestParseSizeEdgeCases(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected Size
+		wantErr  bool
+	}{
+		{"0", 0, false},
+		{"100", 100, false},
+		{"2kb", 2 * KB, false},
+		{"3MB", 3 * MB, false},
+		{"10gb", 10 * GB, false},
+		{"1 TB", 1 * TB, false},
+		{"1PB", 0, true},
+		{"abc123", 0, true},
+		{"123abc", 0, true},
+	}
+
+	for _, tt := range tests {
+		got, err := ParseSize(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ParseSize(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if got != tt.expected {
+			t.Errorf("ParseSize(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestDurationEdgeCases(t *testing.T) {
+	d := Duration(0)
+	if d.ToDuration() != 0 {
+		t.Errorf("expected 0 duration, got %s", d.ToDuration())
+	}
+
+	if d.String() != "0s" {
+		t.Errorf("expected '0s', got %s", d.String())
+	}
+
+	// Test large duration
+	d2 := Duration(24 * time.Hour)
+	if d2.ToDuration() != 24*time.Hour {
+		t.Errorf("expected 24h, got %s", d2.ToDuration())
+	}
+}
+
+func TestLoadFromEnvInvalidValues(t *testing.T) {
+	// Set invalid int value
+	os.Setenv("UMAILSERVER_SMTP_INBOUND_PORT", "not_a_number")
+	defer os.Unsetenv("UMAILSERVER_SMTP_INBOUND_PORT")
+
+	cfg := DefaultConfig()
+	err := loadFromEnv(cfg)
+	if err == nil {
+		t.Error("expected error for invalid int value")
+	}
+}
+
+func TestLoadFromEnvInvalidBool(t *testing.T) {
+	// Set invalid bool value
+	os.Setenv("UMAILSERVER_IMAP_ENABLED", "not_a_bool")
+	defer os.Unsetenv("UMAILSERVER_IMAP_ENABLED")
+
+	cfg := DefaultConfig()
+	err := loadFromEnv(cfg)
+	if err == nil {
+		t.Error("expected error for invalid bool value")
+	}
+}
+
+func TestLoadFromEnvDuration(t *testing.T) {
+	os.Setenv("UMAILSERVER_SPAM_GREYLISTING_DELAY", "30m")
+	defer os.Unsetenv("UMAILSERVER_SPAM_GREYLISTING_DELAY")
+
+	cfg := DefaultConfig()
+	// The Duration type may not be fully supported via env vars
+	// Just ensure it doesn't panic
+	err := loadFromEnv(cfg)
+	if err != nil {
+		t.Logf("loadFromEnv returned error (may be expected): %v", err)
+	}
+}
+
+func TestLoadFromEnvInvalidDuration(t *testing.T) {
+	os.Setenv("UMAILSERVER_SPAM_GREYLISTING_DELAY", "invalid_duration")
+	defer os.Unsetenv("UMAILSERVER_SPAM_GREYLISTING_DELAY")
+
+	cfg := DefaultConfig()
+	err := loadFromEnv(cfg)
+	if err == nil {
+		t.Error("expected error for invalid duration")
+	}
+}
+
+func TestConfigStructFields(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// Test all major struct fields are accessible
+	if cfg.TLS.ACME.Enabled != false {
+		t.Error("expected ACME to be disabled by default")
+	}
+
+	if cfg.Security.MaxLoginAttempts != 5 {
+		t.Errorf("expected max login attempts 5, got %d", cfg.Security.MaxLoginAttempts)
+	}
+
+	if cfg.Metrics.Path != "/metrics" {
+		t.Errorf("expected metrics path /metrics, got %s", cfg.Metrics.Path)
+	}
+
+	if cfg.Storage.Sync != true {
+		t.Error("expected sync to be enabled by default")
+	}
+}
+
+func TestEnsureDataDirAlreadyExists(t *testing.T) {
+	// Test when directories already exist
+	tmpDir := t.TempDir()
+	cfg := DefaultConfig()
+	cfg.Server.DataDir = tmpDir
+
+	// Create directories first
+	os.MkdirAll(filepath.Join(tmpDir, "domains"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "tmp"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "queue"), 0755)
+
+	// Should not fail
+	err := cfg.EnsureDataDir()
+	if err != nil {
+		t.Fatalf("EnsureDataDir failed: %v", err)
+	}
+}

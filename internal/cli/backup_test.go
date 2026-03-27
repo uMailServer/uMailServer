@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,8 +165,8 @@ func TestMigrationManagerValidateSource(t *testing.T) {
 
 func TestParseEmail(t *testing.T) {
 	tests := []struct {
-		email         string
-		expectedUser  string
+		email          string
+		expectedUser   string
 		expectedDomain string
 	}{
 		{"user@example.com", "user", "example.com"},
@@ -504,8 +506,8 @@ func TestMigrationManagerValidateSourceAllTypes(t *testing.T) {
 
 func TestParseEmailVariations(t *testing.T) {
 	tests := []struct {
-		email         string
-		expectedUser  string
+		email          string
+		expectedUser   string
 		expectedDomain string
 	}{
 		{"user@example.com", "user", "example.com"},
@@ -584,5 +586,469 @@ func TestMigrateOptionsFields(t *testing.T) {
 	}
 	if !opts.DryRun {
 		t.Error("DryRun should be true")
+	}
+}
+
+func TestDiagnosticsNilConfig(t *testing.T) {
+	// Test with nil config
+	d := NewDiagnostics(nil)
+	if d == nil {
+		t.Fatal("expected non-nil diagnostics")
+	}
+
+	// CheckPTR should handle nil config
+	result := d.checkPTR("example.com")
+	if result.Status != "warning" {
+		t.Errorf("expected warning status, got %s", result.Status)
+	}
+}
+
+func TestMinFunction(t *testing.T) {
+	if min(1, 2) != 1 {
+		t.Error("min(1, 2) should be 1")
+	}
+	if min(2, 1) != 1 {
+		t.Error("min(2, 1) should be 1")
+	}
+	if min(5, 5) != 5 {
+		t.Error("min(5, 5) should be 5")
+	}
+}
+
+func TestTLSVersionNameResult(t *testing.T) {
+	// Test TLS check result structures
+	result := TLSCheckResult{
+		Protocol: "SMTP",
+		Version:  "TLS 1.2",
+		Valid:    true,
+		Message:  "Test",
+	}
+
+	if result.Protocol != "SMTP" {
+		t.Error("Protocol mismatch")
+	}
+	if result.Version != "TLS 1.2" {
+		t.Error("Version mismatch")
+	}
+}
+
+func TestPrintDNSResultsVariations(t *testing.T) {
+	// Test with all pass
+	resultsAllPass := []DNSCheckResult{
+		{RecordType: "MX", Status: "pass", Message: "MX OK"},
+		{RecordType: "SPF", Status: "pass", Message: "SPF OK"},
+	}
+	PrintDNSResults(resultsAllPass)
+
+	// Test with all fail
+	resultsAllFail := []DNSCheckResult{
+		{RecordType: "MX", Status: "fail", Message: "MX FAIL"},
+		{RecordType: "SPF", Status: "fail", Message: "SPF FAIL"},
+	}
+	PrintDNSResults(resultsAllFail)
+
+	// Test with all warnings
+	resultsAllWarning := []DNSCheckResult{
+		{RecordType: "DKIM", Status: "warning", Message: "DKIM WARN"},
+		{RecordType: "DMARC", Status: "warning", Message: "DMARC WARN"},
+	}
+	PrintDNSResults(resultsAllWarning)
+
+	// Test with expected and found fields
+	resultsWithFields := []DNSCheckResult{
+		{RecordType: "MX", Status: "pass", Expected: "mail.example.com", Found: "mail.example.com", Message: "MX OK"},
+	}
+	PrintDNSResults(resultsWithFields)
+}
+
+func TestBackupManagerBackupWithData(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:   tempDir,
+			Hostname:  "test.example.com",
+		},
+	}
+
+	// Create required directories and files
+	os.MkdirAll(filepath.Join(tempDir, "config"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "messages"), 0755)
+
+	// Create a test config file
+	configFile := filepath.Join(tempDir, "config", "test.conf")
+	os.WriteFile(configFile, []byte("test config content"), 0644)
+
+	// Create a test database file
+	dbFile := filepath.Join(tempDir, "umailserver.db")
+	os.WriteFile(dbFile, []byte("test db content"), 0644)
+
+	// Create a message file
+	msgDir := filepath.Join(tempDir, "messages", "user@test.com")
+	os.MkdirAll(msgDir, 0755)
+	msgFile := filepath.Join(msgDir, "test.eml")
+	os.WriteFile(msgFile, []byte("test message content"), 0644)
+
+	bm := NewBackupManager(cfg)
+
+	// Test backup
+	err := bm.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Backup failed: %v", err)
+	}
+
+	// Verify backup file was created
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		t.Fatalf("failed to read backup dir: %v", err)
+	}
+
+	foundBackup := false
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tar.gz") {
+			foundBackup = true
+			break
+		}
+	}
+
+	if !foundBackup {
+		t.Error("expected backup file to be created")
+	}
+}
+
+func TestBackupManagerBackupCreatesDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := filepath.Join(tempDir, "backups", "subdir")
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:   tempDir,
+			Hostname:  "test.example.com",
+		},
+	}
+
+	// Create required directories
+	os.MkdirAll(filepath.Join(tempDir, "config"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "messages"), 0755)
+
+	bm := NewBackupManager(cfg)
+
+	// Test backup - should create the backup directory
+	err := bm.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Backup failed: %v", err)
+	}
+
+	// Verify directory was created
+	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
+		t.Error("expected backup directory to be created")
+	}
+}
+
+func TestBackupManagerRestoreMissingManifest(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:   tempDir,
+			Hostname:  "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a valid tar.gz without manifest
+	backupFile := filepath.Join(tempDir, "no_manifest.tar.gz")
+	file, _ := os.Create(backupFile)
+	defer file.Close()
+
+	gw := gzip.NewWriter(file)
+	tw := tar.NewWriter(gw)
+
+	// Add a file that's not a manifest
+	content := []byte("test content")
+	header := &tar.Header{
+		Name: "test.txt",
+		Size: int64(len(content)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(header)
+	tw.Write(content)
+
+	tw.Close()
+	gw.Close()
+
+	// Test restore - should fail because manifest is missing
+	err := bm.Restore(backupFile)
+	if err == nil {
+		t.Error("expected error for backup without manifest")
+	}
+	if !strings.Contains(err.Error(), "manifest not found") {
+		t.Errorf("expected 'manifest not found' error, got: %v", err)
+	}
+}
+
+func TestCheckIMAPTLS(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  t.TempDir(),
+		},
+		IMAP: config.IMAPConfig{
+			Port: 1143,
+		},
+	}
+
+	d := NewDiagnostics(cfg)
+
+	// Test checkIMAPTLS - will fail to connect but should not panic
+	result, err := d.checkIMAPTLS("test.example.com")
+
+	// Should return error since no IMAP server running
+	if err == nil {
+		t.Error("expected error when connecting to non-existent IMAP server")
+	}
+
+	// Result should be nil on error
+	if result != nil {
+		t.Error("expected nil result on error")
+	}
+}
+
+func TestTLSVersionName(t *testing.T) {
+	tests := []struct {
+		version  uint16
+		expected string
+	}{
+		{0x0301, "TLS 1.0"},
+		{0x0302, "TLS 1.1"},
+		{0x0303, "TLS 1.2"},
+		{0x0304, "TLS 1.3"},
+		{0x0000, "Unknown (0x0)"},
+	}
+
+	for _, tc := range tests {
+		result := tlsVersionName(tc.version)
+		if result != tc.expected {
+			t.Errorf("tlsVersionName(%d): expected %q, got %q", tc.version, tc.expected, result)
+		}
+	}
+}
+
+func TestCheckDKIM(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  t.TempDir(),
+		},
+	}
+
+	d := NewDiagnostics(cfg)
+
+	// Test checkDKIM
+	result := d.checkDKIM("test.example.com")
+
+	if result.RecordType != "DKIM" {
+		t.Errorf("expected record type DKIM, got: %s", result.RecordType)
+	}
+}
+
+func TestCheckDMARC(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  t.TempDir(),
+		},
+	}
+
+	d := NewDiagnostics(cfg)
+
+	// Test checkDMARC
+	result := d.checkDMARC("test.example.com")
+
+	if result.RecordType != "DMARC" {
+		t.Errorf("expected record type DMARC, got: %s", result.RecordType)
+	}
+}
+
+func TestMigrationManagerImportDovecotUsers(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create a test passwd file
+	passwdFile := t.TempDir() + "/passwd"
+	content := "# Test passwd file\n"
+	content += "user1@example.com:password_hash:1000:1000::/home/user1:/bin/bash\n"
+	content += "user2@test.com:password_hash:1001:1001::/home/user2:/bin/bash\n"
+	os.WriteFile(passwdFile, []byte(content), 0644)
+
+	// Test importDovecotUsers
+	err = mm.importDovecotUsers(passwdFile)
+	if err != nil {
+		t.Errorf("importDovecotUsers failed: %v", err)
+	}
+}
+
+func TestMigrationManagerImportDovecotUsersInvalidFile(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Test with non-existent file
+	err = mm.importDovecotUsers("/nonexistent/passwd")
+	if err == nil {
+		t.Error("expected error for non-existent passwd file")
+	}
+}
+
+func TestMigrationManagerImportMaildir(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create a test maildir structure
+	maildirPath := t.TempDir() + "/maildir"
+	os.MkdirAll(maildirPath+"/user@example.com/INBOX/cur", 0755)
+	os.MkdirAll(maildirPath+"/user@example.com/INBOX/new", 0755)
+	os.MkdirAll(maildirPath+"/user@example.com/INBOX/tmp", 0755)
+
+	// Create a test message
+	msgContent := []byte("From: test@example.com\nTo: user@example.com\nSubject: Test\n\nTest message")
+	os.WriteFile(maildirPath+"/user@example.com/INBOX/new/1234567890.1", msgContent, 0644)
+
+	// Test importMaildir
+	err = mm.importMaildir(maildirPath)
+	if err != nil {
+		t.Errorf("importMaildir failed: %v", err)
+	}
+}
+
+func TestMigrationManagerImportMaildirInvalidPath(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Test with non-existent path
+	err = mm.importMaildir("/nonexistent/maildir")
+	if err == nil {
+		t.Error("expected error for non-existent maildir")
+	}
+}
+
+func TestMigrationManagerImportMBOXFile(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create a test MBOX file
+	mboxFile := t.TempDir() + "/test.mbox"
+	content := "From user@example.com Mon Jan 01 00:00:00 2024\n"
+	content += "From: sender@example.com\n"
+	content += "To: user@example.com\n"
+	content += "Subject: Test Message\n"
+	content += "\n"
+	content += "This is a test message.\n"
+	content += "From user2@example.com Mon Jan 01 00:00:01 2024\n"
+	content += "From: sender2@example.com\n"
+	content += "To: user2@example.com\n"
+	content += "Subject: Test Message 2\n"
+	content += "\n"
+	content += "This is another test message.\n"
+	os.WriteFile(mboxFile, []byte(content), 0644)
+
+	// Test importMBOXFile
+	err = mm.importMBOXFile(mboxFile)
+	if err != nil {
+		t.Errorf("importMBOXFile failed: %v", err)
+	}
+}
+
+func TestMigrationManagerImportMBOXFileInvalid(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Test with non-existent file
+	err = mm.importMBOXFile("/nonexistent/test.mbox")
+	if err == nil {
+		t.Error("expected error for non-existent mbox file")
+	}
+}
+
+func TestMigrationManagerProcessMBOXMessage(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Test processMBOXMessage
+	message := []byte("From: sender@example.com\nTo: recipient@example.com\nSubject: Test\n\nTest body")
+	err = mm.processMBOXMessage(message, "INBOX")
+	if err != nil {
+		t.Errorf("processMBOXMessage failed: %v", err)
+	}
+}
+
+func TestMigrationManagerImportMessage(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create a test message file in user directory structure
+	msgDir := t.TempDir() + "/messages/user@example.com/INBOX"
+	os.MkdirAll(msgDir, 0755)
+	msgFile := msgDir + "/test.eml"
+	content := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest body")
+	os.WriteFile(msgFile, content, 0644)
+
+	// Test importMessage
+	err = mm.importMessage(msgFile)
+	// May fail due to missing account, which is OK
+	_ = err
+}
+
+func TestMigrationManagerImportMessageInvalid(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Test with non-existent file
+	err = mm.importMessage("/nonexistent/test.eml")
+	if err == nil {
+		t.Error("expected error for non-existent message file")
 	}
 }

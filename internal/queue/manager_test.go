@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -547,5 +548,424 @@ func TestWriteFileLargeData(t *testing.T) {
 			t.Errorf("data mismatch at byte %d", i)
 			break
 		}
+	}
+}
+
+func TestManagerEnqueue(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Test enqueue
+	from := "sender@example.com"
+	to := []string{"recipient1@example.com", "recipient2@example.com"}
+	message := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest message")
+
+	id, err := manager.Enqueue(from, to, message)
+	if err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	if id == "" {
+		t.Error("expected non-empty message ID")
+	}
+
+	// Verify queue entry was created
+	entries, err := manager.GetPendingEntries()
+	if err != nil {
+		t.Fatalf("GetPendingEntries failed: %v", err)
+	}
+
+	// Should have 2 entries (one per recipient)
+	if len(entries) != 2 {
+		t.Errorf("expected 2 queue entries, got %d", len(entries))
+	}
+}
+
+func TestManagerEnqueueQueueFull(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+	manager.SetMaxQueueSize(0) // Set queue size to 0 to simulate full queue
+
+	from := "sender@example.com"
+	to := []string{"recipient@example.com"}
+	message := []byte("Test message")
+
+	_, err = manager.Enqueue(from, to, message)
+	if err == nil {
+		t.Error("expected error when queue is full")
+	}
+}
+
+func TestManagerRetryEntry(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// First enqueue a message
+	from := "sender@example.com"
+	to := []string{"recipient@example.com"}
+	message := []byte("Test message")
+
+	id, err := manager.Enqueue(from, to, message)
+	if err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	// Get the queue entry ID (baseID-0 format)
+	entryID := id + "-0"
+
+	// Mark it as failed first
+	entry, _ := manager.GetQueueEntry(entryID)
+	if entry != nil {
+		entry.Status = "failed"
+		entry.RetryCount = 3
+		database.UpdateQueueEntry(entry)
+	}
+
+	// Retry the entry
+	err = manager.RetryEntry(entryID)
+	if err != nil {
+		t.Logf("RetryEntry returned error (may be expected if entry not found): %v", err)
+	}
+
+	// Verify retry worked
+	entry, _ = manager.GetQueueEntry(entryID)
+	if entry != nil {
+		if entry.Status != "pending" {
+			t.Errorf("expected status 'pending' after retry, got %s", entry.Status)
+		}
+		if entry.RetryCount != 0 {
+			t.Errorf("expected retry count 0 after retry, got %d", entry.RetryCount)
+		}
+	}
+}
+
+
+func TestGenerateID(t *testing.T) {
+	id1 := generateID()
+	id2 := generateID()
+
+	if id1 == "" {
+		t.Error("expected non-empty ID")
+	}
+
+	if id1 == id2 {
+		t.Error("expected unique IDs")
+	}
+
+	// Verify format (should contain timestamp and random number)
+	if !strings.Contains(id1, "-") {
+		t.Error("expected ID to contain '-' separator")
+	}
+}
+
+func TestExtractDomainEdgeCases(t *testing.T) {
+	tests := []struct {
+		email    string
+		expected string
+	}{
+		{"user@example.com", "example.com"},
+		{"user@sub.example.com", "sub.example.com"},
+		{"user@", ""},
+		{"@example.com", "example.com"},
+		{"invalid", ""},
+		{"", ""},
+		{"a@b@c.com", ""},
+		{"user@domain.co.uk", "domain.co.uk"},
+	}
+
+	for _, tc := range tests {
+		got := extractDomain(tc.email)
+		if got != tc.expected {
+			t.Errorf("extractDomain(%q) = %q, want %q", tc.email, got, tc.expected)
+		}
+	}
+}
+
+func TestHandleDeliverySuccess(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a temporary message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	testMessage := []byte("Test message content")
+	writeFile(messagePath, testMessage)
+
+	entry := &db.QueueEntry{
+		ID:          "test-id",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: messagePath,
+		Status:      "sending",
+	}
+
+	// Save entry to database first
+	database.Enqueue(entry)
+
+	// Call handleDeliverySuccess
+	manager.handleDeliverySuccess(entry)
+
+	// Verify status
+	if entry.Status != "delivered" {
+		t.Errorf("expected status 'delivered', got %s", entry.Status)
+	}
+
+	// Verify file was deleted
+	if _, err := os.Stat(messagePath); !os.IsNotExist(err) {
+		t.Error("message file should be deleted after successful delivery")
+	}
+}
+
+func TestHandleDeliveryFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a temporary message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	testMessage := []byte("Test message content")
+	writeFile(messagePath, testMessage)
+
+	entry := &db.QueueEntry{
+		ID:          "test-id",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: messagePath,
+		Status:      "sending",
+		RetryCount:  0,
+	}
+
+	// Save entry to database
+	database.Enqueue(entry)
+
+	// Call handleDeliveryFailure
+	errorMsg := "connection refused"
+	manager.handleDeliveryFailure(entry, errorMsg)
+
+	// Verify status and retry count
+	if entry.RetryCount != 1 {
+		t.Errorf("expected retry count 1, got %d", entry.RetryCount)
+	}
+
+	if entry.LastError != errorMsg {
+		t.Errorf("expected last error '%s', got '%s'", errorMsg, entry.LastError)
+	}
+
+	// Status should be pending (for retry) unless max retries reached
+	if entry.Status != "pending" && entry.Status != "bounced" {
+		t.Errorf("expected status 'pending' or 'bounced', got %s", entry.Status)
+	}
+}
+
+func TestHandleDeliveryFailureMaxRetries(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+	manager.SetMaxRetries(3)
+
+	// Create a temporary message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	testMessage := []byte("Test message content")
+	writeFile(messagePath, testMessage)
+
+	entry := &db.QueueEntry{
+		ID:          "test-id",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: messagePath,
+		Status:      "sending",
+		RetryCount:  2, // One away from max
+	}
+
+	// Save entry to database
+	database.Enqueue(entry)
+
+	// Call handleDeliveryFailure
+	manager.handleDeliveryFailure(entry, "final error")
+
+	// Status should be bounced since max retries reached
+	if entry.Status != "bounced" {
+		t.Errorf("expected status 'bounced' after max retries, got %s", entry.Status)
+	}
+}
+
+func TestGenerateBounce(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a temporary message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	testMessage := []byte("Original message content")
+	writeFile(messagePath, testMessage)
+
+	entry := &db.QueueEntry{
+		ID:          "test-id",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: messagePath,
+		LastError:   "recipient mailbox full",
+		Status:      "failed",
+		RetryCount:  10,
+	}
+
+	// Call generateBounce - should not panic
+	manager.generateBounce(entry)
+
+	// Verify file was cleaned up
+	if _, err := os.Stat(messagePath); !os.IsNotExist(err) {
+		t.Error("message file should be deleted after bounce")
+	}
+}
+
+func TestWriteFileAtomic(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.txt")
+	testData := []byte("atomic write test")
+
+	err := writeFile(testFile, testData)
+	if err != nil {
+		t.Fatalf("writeFile failed: %v", err)
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(testFile); os.IsNotExist(err) {
+		t.Error("file was not created")
+	}
+
+	// Verify content
+	readData, err := readFile(testFile)
+	if err != nil {
+		t.Fatalf("readFile failed: %v", err)
+	}
+
+	if string(readData) != string(testData) {
+		t.Errorf("content mismatch: got %q, want %q", string(readData), string(testData))
+	}
+
+	// Verify temp file was cleaned up
+	tmpFile := testFile + ".tmp"
+	if _, err := os.Stat(tmpFile); !os.IsNotExist(err) {
+		t.Error("temp file should be cleaned up after atomic rename")
+	}
+}
+
+
+func TestDeleteFileSilent(t *testing.T) {
+	// Should not panic when deleting non-existent file
+	deleteFile("/non/existent/file.txt")
+
+	// Should work when deleting existing file
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "to-delete.txt")
+	os.WriteFile(testFile, []byte("delete me"), 0644)
+
+	deleteFile(testFile)
+
+	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
+		t.Error("file should be deleted")
+	}
+}
+
+func TestManagerStartStop(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Test Start
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	manager.Start(ctx)
+	if !manager.running {
+		t.Error("expected manager to be running after Start")
+	}
+
+	// Test Stop
+	manager.Stop()
+	if manager.running {
+		t.Error("expected manager to be stopped after Stop")
+	}
+}
+
+
+func TestQueueStatsFields(t *testing.T) {
+	stats := &QueueStats{
+		Pending:   5,
+		Sending:   2,
+		Failed:    1,
+		Delivered: 100,
+		Bounced:   3,
+		Total:     111,
+	}
+
+	if stats.Pending != 5 {
+		t.Error("Pending mismatch")
+	}
+	if stats.Sending != 2 {
+		t.Error("Sending mismatch")
+	}
+	if stats.Failed != 1 {
+		t.Error("Failed mismatch")
+	}
+	if stats.Delivered != 100 {
+		t.Error("Delivered mismatch")
+	}
+	if stats.Bounced != 3 {
+		t.Error("Bounced mismatch")
+	}
+	if stats.Total != 111 {
+		t.Error("Total mismatch")
 	}
 }

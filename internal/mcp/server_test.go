@@ -134,3 +134,223 @@ func TestMCPServer(t *testing.T) {
 		}
 	})
 }
+
+func TestMCPServerInvalidMethod(t *testing.T) {
+	tmpDB, err := os.CreateTemp("", "mcp-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp db: %v", err)
+	}
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, err := db.Open(tmpDB.Name())
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database)
+
+	// Test GET method (should fail)
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("GET", "/mcp", nil))
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", rr.Code)
+	}
+}
+
+func TestMCPServerInvalidJSON(t *testing.T) {
+	tmpDB, err := os.CreateTemp("", "mcp-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp db: %v", err)
+	}
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, err := db.Open(tmpDB.Name())
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database)
+
+	// Test invalid JSON
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader([]byte("invalid json"))))
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
+	}
+}
+
+func TestMCPServerListAccountsWithDomain(t *testing.T) {
+	tmpDB, err := os.CreateTemp("", "mcp-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp db: %v", err)
+	}
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, err := db.Open(tmpDB.Name())
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      5,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "list_accounts",
+			"arguments": map[string]interface{}{
+				"domain": "example.com",
+			},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+func TestMCPServerListDomains(t *testing.T) {
+	tmpDB, err := os.CreateTemp("", "mcp-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp db: %v", err)
+	}
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, err := db.Open(tmpDB.Name())
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      6,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "list_domains",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+func TestMCPServerUnknownTool(t *testing.T) {
+	tmpDB, err := os.CreateTemp("", "mcp-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp db: %v", err)
+	}
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, err := db.Open(tmpDB.Name())
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      7,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "unknown_tool",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", rr.Code)
+	}
+}
+
+func TestMCPServerInvalidToolCallParams(t *testing.T) {
+	tmpDB, err := os.CreateTemp("", "mcp-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp db: %v", err)
+	}
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, err := db.Open(tmpDB.Name())
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database)
+
+	// Test with invalid params (not valid JSON for ToolCallRequest)
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      8,
+		"method":  "tools/call",
+		"params":  "invalid_params",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	// Should return error due to invalid params
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", rr.Code)
+	}
+}
+
+func TestNewServer(t *testing.T) {
+	tmpDB, err := os.CreateTemp("", "mcp-test-*.db")
+	if err != nil {
+		t.Fatalf("Failed to create temp db: %v", err)
+	}
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, err := db.Open(tmpDB.Name())
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database)
+	if server == nil {
+		t.Fatal("expected non-nil server")
+	}
+	if server.version != "1.0.0" {
+		t.Errorf("expected version 1.0.0, got %s", server.version)
+	}
+}
