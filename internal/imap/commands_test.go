@@ -2155,3 +2155,83 @@ func TestHandleSelectedNoop(t *testing.T) {
 		t.Errorf("expected OK response, got: %s", written)
 	}
 }
+
+func TestHandleIdleAuthenticated(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	// Test IDLE in authenticated state - should work
+	err := session.handleIdle()
+	if err != nil {
+		t.Errorf("handleIdle failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleIdleSelected(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	// Test IDLE in selected state
+	err := session.handleIdle()
+	if err != nil {
+		t.Errorf("handleIdle failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleIdleNotAuthenticated(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateNotAuthenticated
+	session.tag = "A1"
+
+	// Test IDLE in not authenticated state - should fail
+	err := session.handleIdle()
+	if err != nil {
+		t.Errorf("handleIdle failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response in NotAuthenticated state, got: %s", written)
+	}
+}
+
+func TestHandleStartTLSNotAuthenticated(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateNotAuthenticated
+	session.tag = "A1"
+
+	// Test STARTTLS in not authenticated state
+	err := session.handleStartTLS()
+	if err != nil {
+		t.Errorf("handleStartTLS failed: %v", err)
+	}
+
+	written := mock.Written()
+	// Should return NO since TLS is not configured
+	if !strings.Contains(written, "NO") && !strings.Contains(written, "BAD") {
+		t.Errorf("expected NO or BAD response, got: %s", written)
+	}
+}
