@@ -3,6 +3,7 @@ package imap
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"net"
 	"strings"
 	"testing"
@@ -727,5 +728,890 @@ func TestBufioReaderWriter(t *testing.T) {
 	expected := "A1 LOGIN user pass"
 	if line != expected {
 		t.Errorf("expected '%s', got: '%s'", expected, line)
+	}
+}
+
+// Test state handlers
+func TestHandleNotAuthenticated(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	// Test CAPABILITY in NotAuthenticated state
+	err := session.handleNotAuthenticated("CAPABILITY", []string{}, "")
+	if err != nil {
+		t.Errorf("handleNotAuthenticated CAPABILITY failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "CAPABILITY") {
+		t.Errorf("expected CAPABILITY in response, got: %s", written)
+	}
+}
+
+func TestHandleNotAuthenticatedNoop(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleNotAuthenticated("NOOP", []string{}, "")
+	if err != nil {
+		t.Errorf("handleNotAuthenticated NOOP failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleNotAuthenticatedLogout(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleNotAuthenticated("LOGOUT", []string{}, "")
+	if err != nil {
+		t.Errorf("handleNotAuthenticated LOGOUT failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BYE") {
+		t.Errorf("expected BYE in response, got: %s", written)
+	}
+}
+
+func TestHandleNotAuthenticatedUnknown(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleNotAuthenticated("UNKNOWN", []string{}, "")
+	if err != nil {
+		t.Errorf("handleNotAuthenticated UNKNOWN failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for unknown command, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticated(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateAuthenticated
+	session.user = "test"
+
+	// Test SELECT
+	err := session.handleAuthenticated("SELECT", []string{"INBOX"}, "")
+	if err != nil {
+		t.Errorf("handleAuthenticated SELECT failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "EXISTS") {
+		t.Errorf("expected EXISTS in response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedUnknown(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateAuthenticated
+	session.user = "test"
+
+	err := session.handleAuthenticated("UNKNOWN", []string{}, "")
+	if err != nil {
+		t.Errorf("handleAuthenticated UNKNOWN failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for unknown command, got: %s", written)
+	}
+}
+
+func TestHandleSelected(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	// Test CHECK
+	err := session.handleSelected("CHECK", []string{}, "")
+	if err != nil {
+		t.Errorf("handleSelected CHECK failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedUnknown(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleSelected("UNKNOWN", []string{}, "")
+	if err != nil {
+		t.Errorf("handleSelected UNKNOWN failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for unknown command, got: %s", written)
+	}
+}
+
+func TestHandleStartTLSNoConfig(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	// TLS not configured
+	err := session.handleStartTLS()
+	if err != nil {
+		t.Errorf("handleStartTLS failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response when TLS not available, got: %s", written)
+	}
+}
+
+func TestHandleStartTLSAlreadyActive(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143", TLSConfig: &tls.Config{}}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.tlsActive = true
+
+	err := session.handleStartTLS()
+	if err != nil {
+		t.Errorf("handleStartTLS failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response when TLS already active, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticate(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	// Missing mechanism
+	err := session.handleAuthenticate([]string{})
+	if err != nil {
+		t.Errorf("handleAuthenticate failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for missing mechanism, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatePlain(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleAuthenticate([]string{"PLAIN"})
+	if err != nil {
+		t.Errorf("handleAuthenticate PLAIN failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response for unimplemented PLAIN, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticateLogin(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleAuthenticate([]string{"LOGIN"})
+	if err != nil {
+		t.Errorf("handleAuthenticate LOGIN failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response for unimplemented LOGIN mechanism, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticateUnknown(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleAuthenticate([]string{"UNKNOWN"})
+	if err != nil {
+		t.Errorf("handleAuthenticate UNKNOWN failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response for unsupported mechanism, got: %s", written)
+	}
+}
+
+func TestHandleAuthPlain(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleAuthPlain()
+	if err != nil {
+		t.Errorf("handleAuthPlain failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response, got: %s", written)
+	}
+}
+
+func TestHandleAuthLogin(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleAuthLogin()
+	if err != nil {
+		t.Errorf("handleAuthLogin failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response, got: %s", written)
+	}
+}
+
+func TestHandleAppend(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateAuthenticated
+	session.user = "test"
+
+	// Missing args
+	err := session.handleAppend([]string{}, "")
+	if err != nil {
+		t.Errorf("handleAppend failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for missing args, got: %s", written)
+	}
+}
+
+func TestHandleAppendWithMailbox(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateAuthenticated
+	session.user = "test"
+
+	// Only mailbox, no message data
+	err := session.handleAppend([]string{"INBOX"}, "")
+	if err != nil {
+		t.Errorf("handleAppend failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response, got: %s", written)
+	}
+}
+
+func TestHandleCheck(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleCheck()
+	if err != nil {
+		t.Errorf("handleCheck failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleClose(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleClose()
+	if err != nil {
+		t.Errorf("handleClose failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+
+	if session.state != StateAuthenticated {
+		t.Errorf("expected state to be StateAuthenticated, got: %d", session.state)
+	}
+
+	if session.selected != nil {
+		t.Error("expected selected to be nil after close")
+	}
+}
+
+func TestHandleExpunge(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleExpunge()
+	if err != nil {
+		t.Errorf("handleExpunge failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleExpungeNoMailbox(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = nil
+
+	err := session.handleExpunge()
+	if err != nil {
+		t.Errorf("handleExpunge failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response when no mailbox selected, got: %s", written)
+	}
+}
+
+func TestHandleSearch(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleSearch([]string{"ALL"}, "")
+	if err != nil {
+		t.Errorf("handleSearch failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "SEARCH") {
+		t.Errorf("expected SEARCH in response, got: %s", written)
+	}
+}
+
+func TestHandleSearchNoMailbox(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = nil
+
+	err := session.handleSearch([]string{"ALL"}, "")
+	if err != nil {
+		t.Errorf("handleSearch failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response when no mailbox selected, got: %s", written)
+	}
+}
+
+func TestHandleFetch(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleFetch([]string{"1:*", "FLAGS"}, "")
+	if err != nil {
+		t.Errorf("handleFetch failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleFetchMissingArgs(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleFetch([]string{"1"}, "")
+	if err != nil {
+		t.Errorf("handleFetch failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for missing args, got: %s", written)
+	}
+}
+
+func TestHandleFetchNoMailbox(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = nil
+
+	err := session.handleFetch([]string{"1:*", "FLAGS"}, "")
+	if err != nil {
+		t.Errorf("handleFetch failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response when no mailbox selected, got: %s", written)
+	}
+}
+
+func TestHandleStore(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleStore([]string{"1:*", "+FLAGS", "(\\Seen)"})
+	if err != nil {
+		t.Errorf("handleStore failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleStoreMissingArgs(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleStore([]string{"1", "+FLAGS"})
+	if err != nil {
+		t.Errorf("handleStore failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for missing args, got: %s", written)
+	}
+}
+
+func TestHandleStoreNoMailbox(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = nil
+
+	err := session.handleStore([]string{"1:*", "+FLAGS", "(\\Seen)"})
+	if err != nil {
+		t.Errorf("handleStore failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response when no mailbox selected, got: %s", written)
+	}
+}
+
+func TestHandleStoreInvalidOperation(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleStore([]string{"1:*", "INVALID", "(\\Seen)"})
+	if err != nil {
+		t.Errorf("handleStore failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for invalid operation, got: %s", written)
+	}
+}
+
+func TestHandleCopy(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleCopy([]string{"1:*", "Sent"})
+	if err != nil {
+		t.Errorf("handleCopy failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleCopyMissingArgs(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleCopy([]string{"1:*"})
+	if err != nil {
+		t.Errorf("handleCopy failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for missing args, got: %s", written)
+	}
+}
+
+func TestHandleCopyNoMailbox(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = nil
+
+	err := session.handleCopy([]string{"1:*", "Sent"})
+	if err != nil {
+		t.Errorf("handleCopy failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response when no mailbox selected, got: %s", written)
+	}
+}
+
+func TestHandleMove(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleMove([]string{"1:*", "Archive"})
+	if err != nil {
+		t.Errorf("handleMove failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleMoveMissingArgs(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleMove([]string{"1:*"})
+	if err != nil {
+		t.Errorf("handleMove failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for missing args, got: %s", written)
+	}
+}
+
+func TestHandleMoveNoMailbox(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = nil
+
+	err := session.handleMove([]string{"1:*", "Archive"})
+	if err != nil {
+		t.Errorf("handleMove failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO") {
+		t.Errorf("expected NO response when no mailbox selected, got: %s", written)
+	}
+}
+
+func TestHandleUID(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	// Test UID SEARCH
+	err := session.handleUID([]string{"SEARCH", "ALL"}, "")
+	if err != nil {
+		t.Errorf("handleUID SEARCH failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "SEARCH") {
+		t.Errorf("expected SEARCH in response, got: %s", written)
+	}
+}
+
+func TestHandleUIDMissingCommand(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleUID([]string{}, "")
+	if err != nil {
+		t.Errorf("handleUID failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for missing command, got: %s", written)
+	}
+}
+
+func TestHandleUIDUnknown(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleUID([]string{"UNKNOWN"}, "")
+	if err != nil {
+		t.Errorf("handleUID failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response for unknown command, got: %s", written)
+	}
+}
+
+func TestHandleUIDFetch(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleUIDFetch([]string{"1:*", "FLAGS"}, "")
+	if err != nil {
+		t.Errorf("handleUIDFetch failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleUIDStore(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleUIDStore([]string{"1:*", "+FLAGS", "(\\Seen)"})
+	if err != nil {
+		t.Errorf("handleUIDStore failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleUIDCopy(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleUIDCopy([]string{"1:*", "Sent"})
+	if err != nil {
+		t.Errorf("handleUIDCopy failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleUIDMove(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleUIDMove([]string{"1:*", "Archive"})
+	if err != nil {
+		t.Errorf("handleUIDMove failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleUIDSearch(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+
+	err := session.handleUIDSearch([]string{"ALL"}, "")
+	if err != nil {
+		t.Errorf("handleUIDSearch failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "SEARCH") {
+		t.Errorf("expected SEARCH in response, got: %s", written)
+	}
+}
+
+func TestHandleUIDExpunge(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleUIDExpunge([]string{"1:*"})
+	if err != nil {
+		t.Errorf("handleUIDExpunge failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
 	}
 }
