@@ -482,3 +482,98 @@ func TestGenerateDKIMKeyPair(t *testing.T) {
 		t.Error("DNS key is empty")
 	}
 }
+
+func TestParseInt(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+	}{
+		{"123", 123},
+		{"0", 0},
+		{"999", 999},
+		{"12a34", 1234}, // non-digit characters are skipped
+		{"abc", 0},      // no digits
+		{"", 0},         // empty string
+	}
+
+	for _, tt := range tests {
+		got := parseInt(tt.input)
+		if got != tt.expected {
+			t.Errorf("parseInt(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestParseCopiedHeaders(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected map[string]string
+	}{
+		{
+			"from=test@example.com|to=recipient@example.com",
+			map[string]string{"from": "test@example.com", "to": "recipient@example.com"},
+		},
+		{
+			"subject=Hello World",
+			map[string]string{"subject": "Hello World"},
+		},
+		{
+			"From=Test@Example.Com", // case insensitive
+			map[string]string{"from": "Test@Example.Com"},
+		},
+		{
+			"", // empty string
+			map[string]string{},
+		},
+		{
+			"noequalsign", // no = sign
+			map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		got := parseCopiedHeaders(tt.input)
+		if len(got) != len(tt.expected) {
+			t.Errorf("parseCopiedHeaders(%q) = %v, want %v", tt.input, got, tt.expected)
+			continue
+		}
+		for k, v := range tt.expected {
+			if got[k] != v {
+				t.Errorf("parseCopiedHeaders(%q)[%q] = %q, want %q", tt.input, k, got[k], v)
+			}
+		}
+	}
+}
+
+func TestDKIMHeaderWithoutSig(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "signature with b=",
+			input:    "v=1; a=rsa-sha256; d=example.com; s=selector; b=abc123; bh=hash",
+			expected: "v=1; a=rsa-sha256; d=example.com; s=selector; b=; bh=hash",
+		},
+		{
+			name:     "signature without b=",
+			input:    "v=1; a=rsa-sha256; d=example.com; s=selector; bh=hash",
+			expected: "v=1; a=rsa-sha256; d=example.com; s=selector; bh=hash",
+		},
+		{
+			name:     "empty signature",
+			input:    "",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dkimHeaderWithoutSig(tt.input)
+			if got != tt.expected {
+				t.Errorf("dkimHeaderWithoutSig(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}

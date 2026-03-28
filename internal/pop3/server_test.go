@@ -1282,6 +1282,15 @@ func TestPOP3CommandRETR(t *testing.T) {
 		t.Errorf("Expected +OK after RETR 1, got %s", resp)
 	}
 
+	// Read the message data until we see the terminator
+	// Message data ends with "\r\n.\r\n"
+	for {
+		line, _ := reader.ReadString('\n')
+		if strings.TrimSpace(line) == "." {
+			break
+		}
+	}
+
 	// Test RETR without argument
 	fmt.Fprintf(clientConn, "RETR\r\n")
 	resp, _ = reader.ReadString('\n')
