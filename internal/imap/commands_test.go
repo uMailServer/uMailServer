@@ -1615,3 +1615,543 @@ func TestHandleUIDExpunge(t *testing.T) {
 		t.Errorf("expected OK response, got: %s", written)
 	}
 }
+
+func TestFormatFetchResponse(t *testing.T) {
+	msg := &Message{
+		UID:           123,
+		SeqNum:        1,
+		Flags:         []string{"\\Seen", "\\Answered"},
+		Size:          1024,
+		InternalDate:  time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+		Subject:       "Test Subject",
+		From:          "sender@example.com",
+		To:            "recipient@example.com",
+		Date:          "15-Jan-2024 10:30:00 +0000",
+		Data:          []byte("Test message body"),
+	}
+
+	tests := []struct {
+		name  string
+		items []string
+		check []string
+	}{
+		{
+			name:  "FLAGS",
+			items: []string{"FLAGS"},
+			check: []string{"FLAGS", "\\Seen", "\\Answered"},
+		},
+		{
+			name:  "RFC822.SIZE",
+			items: []string{"RFC822.SIZE"},
+			check: []string{"RFC822.SIZE", "1024"},
+		},
+		{
+			name:  "UID",
+			items: []string{"UID"},
+			check: []string{"UID", "123"},
+		},
+		{
+			name:  "RFC822",
+			items: []string{"RFC822"},
+			check: []string{"RFC822", "Test message body"},
+		},
+		{
+			name:  "BODYSTRUCTURE",
+			items: []string{"BODYSTRUCTURE"},
+			check: []string{"BODYSTRUCTURE"},
+		},
+		{
+			name:  "ENVELOPE",
+			items: []string{"ENVELOPE"},
+			check: []string{"ENVELOPE", "Test Subject"},
+		},
+		{
+			name:  "multiple items",
+			items: []string{"FLAGS", "UID", "RFC822.SIZE"},
+			check: []string{"FLAGS", "UID", "RFC822.SIZE"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatFetchResponse(msg, tt.items)
+			for _, expected := range tt.check {
+				if !strings.Contains(result, expected) {
+					t.Errorf("expected result to contain %q, got: %s", expected, result)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleIdleInWrongState(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateNotAuthenticated
+	session.tag = "A1"
+
+	err := session.handleIdle()
+	if err != nil {
+		t.Errorf("handleIdle failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response in NotAuthenticated state, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedSelect(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("SELECT", []string{"INBOX"}, "A1 SELECT INBOX")
+	if err != nil {
+		t.Errorf("handleAuthenticated SELECT failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedExamine(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("EXAMINE", []string{"INBOX"}, "A1 EXAMINE INBOX")
+	if err != nil {
+		t.Errorf("handleAuthenticated EXAMINE failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedCreate(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("CREATE", []string{"NewMailbox"}, "A1 CREATE NewMailbox")
+	if err != nil {
+		t.Errorf("handleAuthenticated CREATE failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedDelete(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("DELETE", []string{"OldMailbox"}, "A1 DELETE OldMailbox")
+	if err != nil {
+		t.Errorf("handleAuthenticated DELETE failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedRename(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("RENAME", []string{"OldName", "NewName"}, "A1 RENAME OldName NewName")
+	if err != nil {
+		t.Errorf("handleAuthenticated RENAME failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedList(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("LIST", []string{"", "*"}, "A1 LIST \"\" *")
+	if err != nil {
+		t.Errorf("handleAuthenticated LIST failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "LIST") {
+		t.Errorf("expected LIST in response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedLsub(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("LSUB", []string{"", "*"}, "A1 LSUB \"\" *")
+	if err != nil {
+		t.Errorf("handleAuthenticated LSUB failed: %v", err)
+	}
+
+	written := mock.Written()
+	// LSUB returns LIST responses in this implementation
+	if !strings.Contains(written, "LIST") {
+		t.Errorf("expected LIST in response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedStatus(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("STATUS", []string{"INBOX", "(MESSAGES UNSEEN)"}, "A1 STATUS INBOX (MESSAGES UNSEEN)")
+	if err != nil {
+		t.Errorf("handleAuthenticated STATUS failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "STATUS") {
+		t.Errorf("expected STATUS in response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedAppend(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err := session.handleAuthenticated("APPEND", []string{"INBOX", "{0}"}, "A1 APPEND INBOX {0}")
+	if err != nil {
+		t.Errorf("handleAuthenticated APPEND failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") && !strings.Contains(written, "+") {
+		t.Errorf("expected OK or continuation response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedClose(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("CLOSE", []string{}, "A1 CLOSE")
+	if err != nil {
+		t.Errorf("handleSelected CLOSE failed: %v", err)
+	}
+
+	if session.state != StateAuthenticated {
+		t.Errorf("expected state to change to Authenticated, got: %d", session.state)
+	}
+
+	if session.selected != nil {
+		t.Error("expected selected mailbox to be cleared")
+	}
+}
+
+func TestHandleSelectedCheck(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("CHECK", []string{}, "A1 CHECK")
+	if err != nil {
+		t.Errorf("handleSelected CHECK failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedExpunge(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("EXPUNGE", []string{}, "A1 EXPUNGE")
+	if err != nil {
+		t.Errorf("handleSelected EXPUNGE failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedFetch(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("FETCH", []string{"1:*", "FLAGS"}, "A1 FETCH 1:* FLAGS")
+	if err != nil {
+		t.Errorf("handleSelected FETCH failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedStore(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("STORE", []string{"1", "+FLAGS", "(\\Seen)"}, "A1 STORE 1 +FLAGS (\\Seen)")
+	if err != nil {
+		t.Errorf("handleSelected STORE failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedCopy(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("COPY", []string{"1", "Sent"}, "A1 COPY 1 Sent")
+	if err != nil {
+		t.Errorf("handleSelected COPY failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedMove(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("MOVE", []string{"1", "Trash"}, "A1 MOVE 1 Trash")
+	if err != nil {
+		t.Errorf("handleSelected MOVE failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedSearch(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("SEARCH", []string{"ALL"}, "A1 SEARCH ALL")
+	if err != nil {
+		t.Errorf("handleSelected SEARCH failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "SEARCH") {
+		t.Errorf("expected SEARCH in response, got: %s", written)
+	}
+}
+
+func TestHandleSelectedUidCommands(t *testing.T) {
+	commands := []string{"UID FETCH", "UID STORE", "UID COPY", "UID MOVE", "UID SEARCH"}
+
+	for _, cmd := range commands {
+		t.Run(cmd, func(t *testing.T) {
+			mock := newMockConn("")
+			server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+			session := NewSession(mock, server)
+			session.state = StateSelected
+			session.user = "test"
+			session.selected = &Mailbox{Name: "INBOX"}
+			session.tag = "A1"
+
+			var err error
+			switch cmd {
+			case "UID FETCH":
+				err = session.handleSelected("UID", []string{"FETCH", "1:*", "FLAGS"}, "A1 UID FETCH 1:* FLAGS")
+			case "UID STORE":
+				err = session.handleSelected("UID", []string{"STORE", "1", "FLAGS", "(\\Seen)"}, "A1 UID STORE 1 FLAGS (\\Seen)")
+			case "UID COPY":
+				err = session.handleSelected("UID", []string{"COPY", "1", "Sent"}, "A1 UID COPY 1 Sent")
+			case "UID MOVE":
+				err = session.handleSelected("UID", []string{"MOVE", "1", "Trash"}, "A1 UID MOVE 1 Trash")
+			case "UID SEARCH":
+				err = session.handleSelected("UID", []string{"SEARCH", "ALL"}, "A1 UID SEARCH ALL")
+			}
+
+			if err != nil {
+				t.Errorf("handleSelected %s failed: %v", cmd, err)
+			}
+
+			written := mock.Written()
+			if !strings.Contains(written, "OK") && !strings.Contains(written, "SEARCH") {
+				t.Errorf("expected OK or SEARCH response, got: %s", written)
+			}
+		})
+	}
+}
+
+func TestHandleStartTLSWithConfig(t *testing.T) {
+	mock := newMockConn("")
+	config := &Config{
+		Addr: ":1143",
+		// Note: TLSConfig is nil here, testing the code path where TLS is not configured
+	}
+	server := NewServer(config, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateNotAuthenticated
+	session.tag = "A1"
+
+	// When TLSConfig is nil, the function returns "NO TLS not available" but doesn't error
+	err := session.handleStartTLS()
+	if err != nil {
+		t.Errorf("handleStartTLS returned error: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "NO TLS not available") {
+		t.Errorf("expected 'NO TLS not available' response, got: %s", written)
+	}
+}
+
+func TestHandleAuthenticatedSubscribeUnsubscribe(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	// Test SUBSCRIBE
+	err := session.handleAuthenticated("SUBSCRIBE", []string{"INBOX"}, "A1 SUBSCRIBE INBOX")
+	if err != nil {
+		t.Errorf("handleAuthenticated SUBSCRIBE failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response for SUBSCRIBE, got: %s", written)
+	}
+
+	// Test UNSUBSCRIBE
+	mock = newMockConn("")
+	session = NewSession(mock, server)
+	session.state = StateAuthenticated
+	session.user = "test"
+	session.tag = "A1"
+
+	err = session.handleAuthenticated("UNSUBSCRIBE", []string{"INBOX"}, "A1 UNSUBSCRIBE INBOX")
+	if err != nil {
+		t.Errorf("handleAuthenticated UNSUBSCRIBE failed: %v", err)
+	}
+
+	written = mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response for UNSUBSCRIBE, got: %s", written)
+	}
+}
+
+func TestHandleSelectedNoop(t *testing.T) {
+	mock := newMockConn("")
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	session := NewSession(mock, server)
+	session.state = StateSelected
+	session.user = "test"
+	session.selected = &Mailbox{Name: "INBOX"}
+	session.tag = "A1"
+
+	err := session.handleSelected("NOOP", []string{}, "A1 NOOP")
+	if err != nil {
+		t.Errorf("handleSelected NOOP failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+}
