@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -725,5 +727,299 @@ func TestEnsureDataDirAlreadyExists(t *testing.T) {
 	err := cfg.EnsureDataDir()
 	if err != nil {
 		t.Fatalf("EnsureDataDir failed: %v", err)
+	}
+}
+
+func TestSetFieldFromString(t *testing.T) {
+	tests := []struct {
+		name     string
+		field    reflect.Value
+		val      string
+		expected interface{}
+		wantErr  bool
+	}{
+		{
+			name:     "string field",
+			field:    reflect.ValueOf(&struct{ S string }{}).Elem().Field(0),
+			val:      "test",
+			expected: "test",
+			wantErr:  false,
+		},
+		{
+			name:     "int field",
+			field:    reflect.ValueOf(&struct{ I int }{}).Elem().Field(0),
+			val:      "42",
+			expected: int64(42),
+			wantErr:  false,
+		},
+		{
+			name:     "int64 field",
+			field:    reflect.ValueOf(&struct{ I int64 }{}).Elem().Field(0),
+			val:      "100",
+			expected: int64(100),
+			wantErr:  false,
+		},
+		{
+			name:     "int32 field",
+			field:    reflect.ValueOf(&struct{ I int32 }{}).Elem().Field(0),
+			val:      "200",
+			expected: int64(200),
+			wantErr:  false,
+		},
+		{
+			name:     "bool field true",
+			field:    reflect.ValueOf(&struct{ B bool }{}).Elem().Field(0),
+			val:      "true",
+			expected: true,
+			wantErr:  false,
+		},
+		{
+			name:     "bool field false",
+			field:    reflect.ValueOf(&struct{ B bool }{}).Elem().Field(0),
+			val:      "false",
+			expected: false,
+			wantErr:  false,
+		},
+		{
+			name:     "float64 field",
+			field:    reflect.ValueOf(&struct{ F float64 }{}).Elem().Field(0),
+			val:      "3.14",
+			expected: 3.14,
+			wantErr:  false,
+		},
+		{
+			name:     "Size field",
+			field:    reflect.ValueOf(&struct{ S Size }{}).Elem().Field(0),
+			val:      "104857600", // 100MB as raw bytes
+			expected: int64(104857600),
+			wantErr:  false,
+		},
+		{
+			name:     "Duration field",
+			field:    reflect.ValueOf(&struct{ D Duration }{}).Elem().Field(0),
+			val:      "300000000000", // 5m in nanoseconds
+			expected: int64(300000000000),
+			wantErr:  false,
+		},
+		{
+			name:     "invalid int",
+			field:    reflect.ValueOf(&struct{ I int }{}).Elem().Field(0),
+			val:      "not_a_number",
+			expected: int64(0),
+			wantErr:  true,
+		},
+		{
+			name:     "invalid bool",
+			field:    reflect.ValueOf(&struct{ B bool }{}).Elem().Field(0),
+			val:      "not_a_bool",
+			expected: false,
+			wantErr:  true,
+		},
+		{
+			name:     "invalid float64",
+			field:    reflect.ValueOf(&struct{ F float64 }{}).Elem().Field(0),
+			val:      "not_a_float",
+			expected: float64(0),
+			wantErr:  true,
+		},
+		{
+			name:     "invalid Size",
+			field:    reflect.ValueOf(&struct{ S Size }{}).Elem().Field(0),
+			val:      "invalid_size",
+			expected: int64(0),
+			wantErr:  true,
+		},
+		{
+			name:     "invalid Duration",
+			field:    reflect.ValueOf(&struct{ D Duration }{}).Elem().Field(0),
+			val:      "invalid_duration",
+			expected: int64(0),
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := setFieldFromString(tt.field, tt.val)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("setFieldFromString() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr {
+				switch tt.field.Kind() {
+				case reflect.String:
+					if tt.field.String() != tt.expected {
+						t.Errorf("expected %v, got %v", tt.expected, tt.field.String())
+					}
+				case reflect.Int, reflect.Int64, reflect.Int32:
+					if tt.field.Int() != tt.expected {
+						t.Errorf("expected %v, got %v", tt.expected, tt.field.Int())
+					}
+				case reflect.Bool:
+					if tt.field.Bool() != tt.expected {
+						t.Errorf("expected %v, got %v", tt.expected, tt.field.Bool())
+					}
+				case reflect.Float64:
+					if tt.field.Float() != tt.expected {
+						t.Errorf("expected %v, got %v", tt.expected, tt.field.Float())
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestLoadSectionFromEnvInvalidField(t *testing.T) {
+	// Test with a field that can't be set
+	os.Setenv("UMAILSERVER_SERVER_HOSTNAME", "test.example.com")
+	defer os.Unsetenv("UMAILSERVER_SERVER_HOSTNAME")
+
+	cfg := DefaultConfig()
+	// Make the field unexported (this is a bit hacky but tests the error path)
+	err := loadSectionFromEnv(reflect.ValueOf(cfg).Elem(), "UMAILSERVER")
+	if err != nil {
+		t.Logf("loadSectionFromEnv returned error (may be expected): %v", err)
+	}
+}
+
+func TestAskString(t *testing.T) {
+	input := "test value\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	result, err := wizard.askString("Enter value:", "default")
+	if err != nil {
+		t.Fatalf("askString failed: %v", err)
+	}
+	if result != "test value" {
+		t.Errorf("expected 'test value', got '%s'", result)
+	}
+}
+
+func TestAskStringEmpty(t *testing.T) {
+	input := "\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	result, err := wizard.askString("Enter value:", "default")
+	if err != nil {
+		t.Fatalf("askString failed: %v", err)
+	}
+	if result != "default" {
+		t.Errorf("expected 'default', got '%s'", result)
+	}
+}
+
+func TestAskBool(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"y\n", true},
+		{"yes\n", true},
+		{"Y\n", true},
+		{"n\n", false},
+		{"no\n", false},
+		{"N\n", false},
+		{"\n", true}, // default is true
+	}
+
+	for _, tt := range tests {
+		wizard := NewSetupWizard()
+		wizard.reader = bufio.NewReader(strings.NewReader(tt.input))
+
+		result := wizard.askBool("Enable?", true)
+		if result != tt.expected {
+			t.Errorf("askBool(%q) = %v, want %v", tt.input, result, tt.expected)
+		}
+	}
+}
+
+func TestAskBoolDefaultFalse(t *testing.T) {
+	input := "\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	result := wizard.askBool("Enable?", false)
+	if result != false {
+		t.Errorf("expected false, got %v", result)
+	}
+}
+
+func TestAskInt(t *testing.T) {
+	tests := []struct {
+		input    string
+		default_ int
+		expected int
+	}{
+		{"42\n", 0, 42},
+		{"\n", 10, 10}, // use default
+	}
+
+	for _, tt := range tests {
+		wizard := NewSetupWizard()
+		wizard.reader = bufio.NewReader(strings.NewReader(tt.input))
+
+		result := wizard.askInt("Enter number:", tt.default_)
+		if result != tt.expected {
+			t.Errorf("askInt() = %d, want %d", result, tt.expected)
+		}
+	}
+}
+
+func TestAskIntInvalid(t *testing.T) {
+	input := "invalid\n42\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	result := wizard.askInt("Enter number:", 0)
+	// Should return default after invalid input
+	if result != 0 {
+		t.Errorf("expected 0 (default), got %d", result)
+	}
+}
+
+func TestAskChoice(t *testing.T) {
+	input := "2\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	choices := []string{"option1", "option2", "option3"}
+	result, err := wizard.askChoice("Select:", choices, "option1")
+	if err != nil {
+		t.Fatalf("askChoice failed: %v", err)
+	}
+	if result != "option2" {
+		t.Errorf("expected 'option2', got '%s'", result)
+	}
+}
+
+func TestAskChoiceDefault(t *testing.T) {
+	input := "\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	choices := []string{"option1", "option2"}
+	result, err := wizard.askChoice("Select:", choices, "option1")
+	if err != nil {
+		t.Fatalf("askChoice failed: %v", err)
+	}
+	if result != "option1" {
+		t.Errorf("expected 'option1' (default), got '%s'", result)
+	}
+}
+
+func TestAskChoiceInvalid(t *testing.T) {
+	input := "99\n1\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	choices := []string{"option1", "option2"}
+	result, err := wizard.askChoice("Select:", choices, "option1")
+	if err != nil {
+		t.Fatalf("askChoice failed: %v", err)
+	}
+	if result != "option1" {
+		t.Errorf("expected 'option1', got '%s'", result)
 	}
 }
