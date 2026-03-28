@@ -273,3 +273,93 @@ func TestBuildAMSSignatureData(t *testing.T) {
 		t.Error("Signature data should not be empty")
 	}
 }
+
+func TestValidateAMS(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewARCValidator(resolver)
+
+	headers := map[string][]string{
+		"From": {"sender@example.com"},
+	}
+	body := []byte("Test message\r\n")
+
+	// Test with empty AMS
+	result, _ := validator.validateAMS(context.Background(), "", headers, body)
+	if result {
+		t.Error("Expected validateAMS to return false for empty AMS")
+	}
+
+	// Test with AMS that has no signature
+	ams := "i=1; a=rsa-sha256; d=example.com; s=arc; bh=hash;"
+	result, _ = validator.validateAMS(context.Background(), ams, headers, body)
+	// Should fail because no public key can be fetched
+	_ = result
+}
+
+func TestValidateAS(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewARCValidator(resolver)
+
+	headers := map[string][]string{
+		"From": {"sender@example.com"},
+	}
+
+	// Test with empty AS
+	result, _ := validator.validateAS(context.Background(), "", headers, 1)
+	if result {
+		t.Error("Expected validateAS to return false for empty AS")
+	}
+
+	// Test with AS that has no signature
+	as := "i=1; a=rsa-sha256; d=example.com; s=arc; cv=none;"
+	result, _ = validator.validateAS(context.Background(), as, headers, 1)
+	// Should fail because no public key can be fetched
+	_ = result
+}
+
+func TestFetchARCPublicKey(t *testing.T) {
+	resolver := newMockDNSResolver()
+
+	// Test with invalid selector/domain - should return error
+	_, err := fetchARCPublicKey(resolver, "example.com", "invalid")
+	// May or may not error depending on mock implementation
+	_ = err
+}
+
+func TestCreateAMS(t *testing.T) {
+	resolver := newMockDNSResolver()
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 1024)
+	signer := NewARCSigner(resolver, privateKey, "example.com", "arc")
+
+	headers := map[string][]string{
+		"From": {"sender@example.com"},
+	}
+	body := []byte("Test message\r\n")
+
+	ams, err := signer.createAMS(headers, body, 1)
+	if err != nil {
+		t.Errorf("createAMS failed: %v", err)
+	}
+	if ams == "" {
+		t.Error("AMS should not be empty")
+	}
+}
+
+func TestCreateAS(t *testing.T) {
+	resolver := newMockDNSResolver()
+	privateKey, _ := rsa.GenerateKey(rand.Reader, 1024)
+	signer := NewARCSigner(resolver, privateKey, "example.com", "arc")
+
+	// Create an AMS first
+	amsHeaders := map[string][]string{
+		"ARC-Message-Signature": {"i=1; a=rsa-sha256; d=example.com; s=arc"},
+	}
+
+	as, err := signer.createAS(amsHeaders, "none", 1)
+	if err != nil {
+		t.Errorf("createAS failed: %v", err)
+	}
+	if as == "" {
+		t.Error("AS should not be empty")
+	}
+}

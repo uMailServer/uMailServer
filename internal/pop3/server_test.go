@@ -1185,3 +1185,281 @@ func TestAuthCommandWithError(t *testing.T) {
 		t.Errorf("Expected -ERR for AUTH without auth function, got %s", resp)
 	}
 }
+
+func TestPOP3CommandLISTSpecificMessage(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	store := NewSimpleMemoryStore()
+	server := NewServer(":0", store, nil)
+	server.SetAuthFunc(func(u, p string) (bool, error) {
+		return true, nil
+	})
+
+	store.AddMessage("test", &Message{
+		Index: 1,
+		UID:   "test123",
+		Size:  100,
+		Data:  []byte("test"),
+	})
+
+	session := NewSession(serverConn, server)
+	reader := bufio.NewReader(clientConn)
+
+	go func() {
+		session.WriteResponse("+OK POP3 server ready")
+		session.Handle()
+	}()
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Authenticate
+	fmt.Fprintf(clientConn, "USER test\r\n")
+	reader.ReadString('\n')
+	fmt.Fprintf(clientConn, "PASS pass\r\n")
+	reader.ReadString('\n')
+
+	// Send LIST with specific message number
+	fmt.Fprintf(clientConn, "LIST 1\r\n")
+	resp, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "+OK") {
+		t.Errorf("Expected +OK after LIST 1, got %s", resp)
+	}
+
+	// Test LIST with invalid message number
+	fmt.Fprintf(clientConn, "LIST 999\r\n")
+	resp, _ = reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Expected -ERR for invalid message number, got %s", resp)
+	}
+
+	clientConn.Close()
+	serverConn.Close()
+	time.Sleep(10 * time.Millisecond)
+}
+
+func TestPOP3CommandRETR(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	store := NewSimpleMemoryStore()
+	server := NewServer(":0", store, nil)
+	server.SetAuthFunc(func(u, p string) (bool, error) {
+		return true, nil
+	})
+
+	store.AddMessage("test", &Message{
+		Index: 1,
+		UID:   "test123",
+		Size:  100,
+		Data:  []byte("Subject: Test\r\n\r\nTest body content"),
+	})
+
+	session := NewSession(serverConn, server)
+	reader := bufio.NewReader(clientConn)
+
+	go func() {
+		session.WriteResponse("+OK POP3 server ready")
+		session.Handle()
+	}()
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Authenticate
+	fmt.Fprintf(clientConn, "USER test\r\n")
+	reader.ReadString('\n')
+	fmt.Fprintf(clientConn, "PASS pass\r\n")
+	reader.ReadString('\n')
+
+	// Send RETR command
+	fmt.Fprintf(clientConn, "RETR 1\r\n")
+	resp, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "+OK") {
+		t.Errorf("Expected +OK after RETR 1, got %s", resp)
+	}
+
+	// Test RETR without argument
+	fmt.Fprintf(clientConn, "RETR\r\n")
+	resp, _ = reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Expected -ERR for RETR without argument, got %s", resp)
+	}
+
+	// Test RETR with invalid message number
+	fmt.Fprintf(clientConn, "RETR 999\r\n")
+	resp, _ = reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Expected -ERR for invalid message number, got %s", resp)
+	}
+
+	clientConn.Close()
+	serverConn.Close()
+	time.Sleep(10 * time.Millisecond)
+}
+
+func TestPOP3CommandDELE(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	store := NewSimpleMemoryStore()
+	server := NewServer(":0", store, nil)
+	server.SetAuthFunc(func(u, p string) (bool, error) {
+		return true, nil
+	})
+
+	store.AddMessage("test", &Message{
+		Index: 1,
+		UID:   "test123",
+		Size:  100,
+		Data:  []byte("test"),
+	})
+
+	session := NewSession(serverConn, server)
+	reader := bufio.NewReader(clientConn)
+
+	go func() {
+		session.WriteResponse("+OK POP3 server ready")
+		session.Handle()
+	}()
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Authenticate
+	fmt.Fprintf(clientConn, "USER test\r\n")
+	reader.ReadString('\n')
+	fmt.Fprintf(clientConn, "PASS pass\r\n")
+	reader.ReadString('\n')
+
+	// Send DELE command
+	fmt.Fprintf(clientConn, "DELE 1\r\n")
+	resp, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "+OK") {
+		t.Errorf("Expected +OK after DELE 1, got %s", resp)
+	}
+
+	// Test DELE without argument
+	fmt.Fprintf(clientConn, "DELE\r\n")
+	resp, _ = reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Expected -ERR for DELE without argument, got %s", resp)
+	}
+
+	// Test DELE with invalid message number
+	fmt.Fprintf(clientConn, "DELE 999\r\n")
+	resp, _ = reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Expected -ERR for invalid message number, got %s", resp)
+	}
+
+	clientConn.Close()
+	serverConn.Close()
+	time.Sleep(10 * time.Millisecond)
+}
+
+func TestPOP3CommandRETRDeletedMessage(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	store := NewSimpleMemoryStore()
+	server := NewServer(":0", store, nil)
+	server.SetAuthFunc(func(u, p string) (bool, error) {
+		return true, nil
+	})
+
+	store.AddMessage("test", &Message{
+		Index: 1,
+		UID:   "test123",
+		Size:  100,
+		Data:  []byte("test"),
+	})
+
+	session := NewSession(serverConn, server)
+	reader := bufio.NewReader(clientConn)
+
+	go func() {
+		session.WriteResponse("+OK POP3 server ready")
+		session.Handle()
+	}()
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Authenticate
+	fmt.Fprintf(clientConn, "USER test\r\n")
+	reader.ReadString('\n')
+	fmt.Fprintf(clientConn, "PASS pass\r\n")
+	reader.ReadString('\n')
+
+	// Delete message first
+	fmt.Fprintf(clientConn, "DELE 1\r\n")
+	reader.ReadString('\n')
+
+	// Try to RETR deleted message
+	fmt.Fprintf(clientConn, "RETR 1\r\n")
+	resp, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Expected -ERR for deleted message, got %s", resp)
+	}
+
+	clientConn.Close()
+	serverConn.Close()
+	time.Sleep(10 * time.Millisecond)
+}
+
+func TestPOP3CommandLISTDeletedMessage(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	store := NewSimpleMemoryStore()
+	server := NewServer(":0", store, nil)
+	server.SetAuthFunc(func(u, p string) (bool, error) {
+		return true, nil
+	})
+
+	store.AddMessage("test", &Message{
+		Index: 1,
+		UID:   "test123",
+		Size:  100,
+		Data:  []byte("test"),
+	})
+
+	session := NewSession(serverConn, server)
+	reader := bufio.NewReader(clientConn)
+
+	go func() {
+		session.WriteResponse("+OK POP3 server ready")
+		session.Handle()
+	}()
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Authenticate
+	fmt.Fprintf(clientConn, "USER test\r\n")
+	reader.ReadString('\n')
+	fmt.Fprintf(clientConn, "PASS pass\r\n")
+	reader.ReadString('\n')
+
+	// Delete message first
+	fmt.Fprintf(clientConn, "DELE 1\r\n")
+	reader.ReadString('\n')
+
+	// Try to LIST deleted message
+	fmt.Fprintf(clientConn, "LIST 1\r\n")
+	resp, _ := reader.ReadString('\n')
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Expected -ERR for deleted message, got %s", resp)
+	}
+
+	clientConn.Close()
+	serverConn.Close()
+	time.Sleep(10 * time.Millisecond)
+}
