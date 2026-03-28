@@ -201,3 +201,133 @@ func TestEventMatchesWildcard(t *testing.T) {
 	}
 }
 
+func TestTrigger(t *testing.T) {
+	database := &db.DB{}
+	manager := NewManager(database, "test-secret")
+
+	// Create a test webhook
+	testHook := &Webhook{
+		ID:        "test-hook-1",
+		URL:       "http://localhost:9999/webhook",
+		Events:    []string{"mail.received"},
+		Active:    true,
+		CreatedAt: time.Now(),
+	}
+
+	manager.hooks = append(manager.hooks, testHook)
+
+	// Test triggering an event
+	manager.Trigger("mail.received", map[string]string{"from": "test@example.com"})
+
+	// Give it a moment to process
+	time.Sleep(10 * time.Millisecond)
+
+	// Test triggering an event that doesn't match
+	manager.Trigger("mail.sent", map[string]string{"to": "other@example.com"})
+
+	// Test triggering when webhook is inactive
+	testHook.Active = false
+	manager.Trigger("mail.received", map[string]string{"from": "test@example.com"})
+}
+
+func TestSend(t *testing.T) {
+	// Create a test server
+	var receivedRequest bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedRequest = true
+
+		// Verify headers
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("Expected Content-Type application/json, got %s", r.Header.Get("Content-Type"))
+		}
+		if r.Header.Get("User-Agent") != "uMailServer-Webhook/1.0" {
+			t.Errorf("Expected User-Agent uMailServer-Webhook/1.0, got %s", r.Header.Get("User-Agent"))
+		}
+		if r.Header.Get("X-Webhook-ID") != "test-hook" {
+			t.Errorf("Expected X-Webhook-ID test-hook, got %s", r.Header.Get("X-Webhook-ID"))
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	database := &db.DB{}
+	manager := NewManager(database, "test-secret")
+
+	hook := &Webhook{
+		ID:     "test-hook",
+		URL:    server.URL,
+		Events: []string{"mail.received"},
+		Active: true,
+	}
+
+	event := Event{
+		Type:      "mail.received",
+		Timestamp: time.Now(),
+		Data:      map[string]string{"from": "test@example.com"},
+	}
+
+	// Call send directly
+	manager.send(hook, event)
+
+	// Wait for request
+	time.Sleep(100 * time.Millisecond)
+
+	if !receivedRequest {
+		t.Error("Expected webhook request to be received")
+	}
+}
+
+func TestSendWithSignature(t *testing.T) {
+	// Create a test server that verifies signature
+	var receivedSignature string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedSignature = r.Header.Get("X-Webhook-Signature")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	database := &db.DB{}
+	manager := NewManager(database, "test-secret")
+
+	hook := &Webhook{
+		ID:     "test-hook",
+		URL:    server.URL,
+		Events: []string{"mail.received"},
+		Active: true,
+	}
+
+	event := Event{
+		Type:      "mail.received",
+		Timestamp: time.Now(),
+		Data:      map[string]string{"from": "test@example.com"},
+	}
+
+	manager.send(hook, event)
+	time.Sleep(100 * time.Millisecond)
+
+	if receivedSignature == "" {
+		t.Error("Expected signature header to be set")
+	}
+}
+
+func TestSendInvalidURL(t *testing.T) {
+	database := &db.DB{}
+	manager := NewManager(database, "")
+
+	hook := &Webhook{
+		ID:     "test-hook",
+		URL:    "http://invalid-url-that-does-not-exist.example:99999",
+		Events: []string{"mail.received"},
+		Active: true,
+	}
+
+	event := Event{
+		Type:      "mail.received",
+		Timestamp: time.Now(),
+		Data:      map[string]string{"from": "test@example.com"},
+	}
+
+	// Should not panic even with invalid URL
+	manager.send(hook, event)
+}
