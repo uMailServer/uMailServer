@@ -1023,3 +1023,188 @@ func TestAskChoiceInvalid(t *testing.T) {
 		t.Errorf("expected 'option1', got '%s'", result)
 	}
 }
+
+func TestSetupWizardRun(t *testing.T) {
+	// Create a temporary directory for test
+	tmpDir := t.TempDir()
+
+	// Input sequence for the wizard:
+	// 1. Data directory
+	// 2. Hostname
+	// 3. SMTP inbound enabled (y)
+	// 4. SMTP inbound port (25)
+	// 5. SMTP submission enabled (y)
+	// 6. SMTP submission port (587)
+	// 7. IMAP enabled (y)
+	// 8. IMAP port (993)
+	// 9. POP3 enabled (n)
+	// 10. Admin enabled (y)
+	// 11. Admin port (8080)
+	// 12. ACME enabled (n)
+	// 13. Spam enabled (n)
+	// 14. Log level (1)
+	input := tmpDir + "\n" +
+		"mail.example.com\n" +
+		"y\n" +
+		"25\n" +
+		"y\n" +
+		"587\n" +
+		"y\n" +
+		"993\n" +
+		"n\n" +
+		"y\n" +
+		"8080\n" +
+		"n\n" +
+		"n\n" +
+		"1\n"
+
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	cfg, err := wizard.Run()
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	if cfg.Server.Hostname != "mail.example.com" {
+		t.Errorf("expected hostname mail.example.com, got %s", cfg.Server.Hostname)
+	}
+
+	if cfg.Server.DataDir != tmpDir {
+		t.Errorf("expected data dir %s, got %s", tmpDir, cfg.Server.DataDir)
+	}
+
+	if !cfg.SMTP.Inbound.Enabled {
+		t.Error("expected SMTP inbound to be enabled")
+	}
+
+	if cfg.SMTP.Inbound.Port != 25 {
+		t.Errorf("expected SMTP inbound port 25, got %d", cfg.SMTP.Inbound.Port)
+	}
+
+	if !cfg.IMAP.Enabled {
+		t.Error("expected IMAP to be enabled")
+	}
+
+	if cfg.IMAP.Port != 993 {
+		t.Errorf("expected IMAP port 993, got %d", cfg.IMAP.Port)
+	}
+}
+
+func TestSetupWizardRunWithACME(t *testing.T) {
+	// Create a temporary directory for test
+	tmpDir := t.TempDir()
+
+	// Input with ACME enabled
+	input := tmpDir + "\n" +
+		"mail.example.com\n" +
+		"y\n" +
+		"25\n" +
+		"y\n" +
+		"587\n" +
+		"n\n" +
+		"n\n" +
+		"n\n" +
+		"y\n" +
+		"admin@example.com\n" +
+		"n\n" +
+		"1\n"
+
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	cfg, err := wizard.Run()
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	if !cfg.TLS.ACME.Enabled {
+		t.Error("expected ACME to be enabled")
+	}
+
+	if cfg.TLS.ACME.Email != "admin@example.com" {
+		t.Errorf("expected ACME email admin@example.com, got %s", cfg.TLS.ACME.Email)
+	}
+}
+
+func TestSizeUnmarshalYAML(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected Size
+		wantErr  bool
+	}{
+		{
+			name:     "valid size",
+			input:    "1GB",
+			expected: GB,
+			wantErr:  false,
+		},
+		{
+			name:     "empty size",
+			input:    "",
+			expected: 0,
+			wantErr:  false,
+		},
+		{
+			name:     "invalid size",
+			input:    "invalid",
+			expected: 0,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var size Size
+			err := size.UnmarshalYAML(func(v interface{}) error {
+				*(v.(*string)) = tt.input
+				return nil
+			})
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalYAML() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if size != tt.expected {
+				t.Errorf("UnmarshalYAML() size = %d, want %d", size, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDurationUnmarshalYAML(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Duration
+		wantErr  bool
+	}{
+		{
+			name:     "valid duration",
+			input:    "1h",
+			expected: time.Hour,
+			wantErr:  false,
+		},
+		{
+			name:     "invalid duration",
+			input:    "invalid",
+			expected: 0,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d Duration
+			err := d.UnmarshalYAML(func(v interface{}) error {
+				*(v.(*string)) = tt.input
+				return nil
+			})
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalYAML() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if time.Duration(d) != tt.expected {
+				t.Errorf("UnmarshalYAML() duration = %v, want %v", time.Duration(d), tt.expected)
+			}
+		})
+	}
+}
