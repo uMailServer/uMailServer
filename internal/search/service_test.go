@@ -257,3 +257,59 @@ func TestNewService(t *testing.T) {
 		t.Fatal("expected non-nil service")
 	}
 }
+
+func TestServiceSearch(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Search without index - will need to build index first
+	results, err := svc.Search(MessageSearchOptions{
+		User:  "testuser",
+		Query: "test",
+		Limit: 10,
+	})
+
+	// Without a database, this will fail but should not panic
+	if err != nil {
+		t.Logf("Search returned error (expected without db): %v", err)
+	}
+
+	// Results should be empty or nil
+	_ = results
+}
+
+func TestServiceClearIndex(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Create an index for a user
+	svc.indexes["testuser"] = NewIndex()
+
+	// Clear the index
+	svc.ClearIndex("testuser")
+
+	// Verify index was removed
+	if _, exists := svc.indexes["testuser"]; exists {
+		t.Error("expected index to be removed after ClearIndex")
+	}
+}
+
+func TestServiceRemoveMessage(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Create an index and add a document
+	idx := NewIndex()
+	svc.indexes["testuser"] = idx
+
+	doc := &Document{
+		ID:      "INBOX:1",
+		Content: "test content",
+	}
+	idx.Add(doc)
+
+	// Remove the message
+	svc.RemoveMessage("testuser", "INBOX", 1)
+
+	// Verify document was removed
+	if idx.DocCount() != 0 {
+		t.Errorf("expected 0 documents after remove, got %d", idx.DocCount())
+	}
+}

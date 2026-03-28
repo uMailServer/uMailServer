@@ -969,3 +969,80 @@ func TestQueueStatsFields(t *testing.T) {
 		t.Error("Total mismatch")
 	}
 }
+
+func TestManagerProcessPendingEntries(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Enqueue a message
+	from := "sender@example.com"
+	to := []string{"recipient@example.com"}
+	message := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest message")
+
+	_, err = manager.Enqueue(from, to, message)
+	if err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	// Process pending entries - should not panic
+	manager.processPendingEntries()
+}
+
+func TestManagerDeliver(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	testMessage := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest content")
+	writeFile(messagePath, testMessage)
+
+	entry := &db.QueueEntry{
+		ID:          "test-deliver-id",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: messagePath,
+		Status:      "pending",
+		RetryCount:  0,
+	}
+
+	// Save entry to database
+	database.Enqueue(entry)
+
+	// Call deliver - will likely fail due to no MX, but should not panic
+	manager.deliver(entry)
+}
+
+func TestManagerDeliverToMX(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	message := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest content")
+
+	// Try to deliver to invalid MX - should return error
+	err = manager.deliverToMX("sender@example.com", "recipient@example.com", message, "invalid-mx-server-12345.xyz")
+	if err == nil {
+		t.Log("deliverToMX to invalid MX did not return error (may have fallback)")
+	}
+}

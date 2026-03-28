@@ -836,3 +836,114 @@ func TestServerConfigAccess(t *testing.T) {
 	}
 }
 
+func TestServerDeliverMessage(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "mail.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	// Test delivery
+	err = server.deliverMessage("sender@example.com", []string{"recipient@example.com"}, []byte("Subject: Test\r\n\r\nBody"))
+	// Local delivery may fail without proper setup, just verify it doesn't panic
+	if err != nil {
+		t.Logf("deliverMessage returned error (expected without full setup): %v", err)
+	}
+}
+
+func TestServerDeliverLocal(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "mail.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	// Test local delivery
+	err = server.deliverLocal("recipient", "example.com", "sender@example.com", []byte("Subject: Test\r\n\r\nBody"))
+	// Delivery may fail without user setup, just verify it doesn't panic
+	if err != nil {
+		t.Logf("deliverLocal returned error (expected without user setup): %v", err)
+	}
+}
+
+func TestServerAuthenticate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "mail.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	// Test authentication
+	authenticated, err := server.authenticate("testuser", "testpass")
+	if err != nil {
+		t.Logf("authenticate returned error (may be expected without users): %v", err)
+	}
+	// Without users setup, should return false
+	if authenticated {
+		t.Error("Expected authentication to fail without user setup")
+	}
+}
+
+func TestServerRelayMessage(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "mail.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	// Test relay
+	err = server.relayMessage("sender@example.com", "recipient@external.com", []byte("Subject: Test\r\n\r\nBody"))
+	// Relay may fail without proper setup, just verify it doesn't panic
+	if err != nil {
+		t.Logf("relayMessage returned error (expected without relay setup): %v", err)
+	}
+}
+

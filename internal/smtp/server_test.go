@@ -3,6 +3,7 @@ package smtp
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"strings"
@@ -711,5 +712,319 @@ func TestSessionCommandsVRFY(t *testing.T) {
 	// Should return 252 or 550
 	if !strings.HasPrefix(response, "252") && !strings.HasPrefix(response, "550") {
 		t.Logf("VRFY response: %s", response)
+	}
+}
+
+func TestAuthPLAIN(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	// Set auth handler
+	server.SetAuthHandler(func(username, password string) (bool, error) {
+		return username == "testuser" && password == "testpass", nil
+	})
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH PLAIN with inline credentials
+	// Format: \0username\0password base64 encoded
+	credentials := base64.StdEncoding.EncodeToString([]byte("\x00testuser\x00testpass"))
+	fmt.Fprintf(client, "AUTH PLAIN %s\r\n", credentials)
+	response, _ := reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "235") {
+		t.Errorf("Expected 235 authentication successful, got: %s", response)
+	}
+}
+
+func TestAuthPLAINInvalid(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	// Set auth handler
+	server.SetAuthHandler(func(username, password string) (bool, error) {
+		return false, nil
+	})
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH PLAIN with invalid credentials
+	credentials := base64.StdEncoding.EncodeToString([]byte("\x00wrong\x00wrong"))
+	fmt.Fprintf(client, "AUTH PLAIN %s\r\n", credentials)
+	response, _ := reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "535") {
+		t.Errorf("Expected 535 authentication failed, got: %s", response)
+	}
+}
+
+func TestAuthPLAINMultiline(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	// Set auth handler
+	server.SetAuthHandler(func(username, password string) (bool, error) {
+		return username == "testuser" && password == "testpass", nil
+	})
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH PLAIN without credentials (will prompt)
+	fmt.Fprintf(client, "AUTH PLAIN\r\n")
+	response, _ := reader.ReadString('\n')
+
+	// Should get 334 continue
+	if !strings.HasPrefix(response, "334") {
+		t.Fatalf("Expected 334 continue, got: %s", response)
+	}
+
+	// Send credentials
+	credentials := base64.StdEncoding.EncodeToString([]byte("\x00testuser\x00testpass"))
+	fmt.Fprintf(client, "%s\r\n", credentials)
+	response, _ = reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "235") {
+		t.Errorf("Expected 235 authentication successful, got: %s", response)
+	}
+}
+
+func TestAuthLOGIN(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	// Set auth handler
+	server.SetAuthHandler(func(username, password string) (bool, error) {
+		return username == "testuser" && password == "testpass", nil
+	})
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH LOGIN
+	fmt.Fprintf(client, "AUTH LOGIN\r\n")
+	response, _ := reader.ReadString('\n')
+
+	// Should get 334 VXNlcm5hbWU6 (Username:)
+	if !strings.HasPrefix(response, "334") {
+		t.Fatalf("Expected 334 continue, got: %s", response)
+	}
+
+	// Send username
+	usernameEnc := base64.StdEncoding.EncodeToString([]byte("testuser"))
+	fmt.Fprintf(client, "%s\r\n", usernameEnc)
+	response, _ = reader.ReadString('\n')
+
+	// Should get 334 UGFzc3dvcmQ6 (Password:)
+	if !strings.HasPrefix(response, "334") {
+		t.Fatalf("Expected 334 continue for password, got: %s", response)
+	}
+
+	// Send password
+	passwordEnc := base64.StdEncoding.EncodeToString([]byte("testpass"))
+	fmt.Fprintf(client, "%s\r\n", passwordEnc)
+	response, _ = reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "235") {
+		t.Errorf("Expected 235 authentication successful, got: %s", response)
+	}
+}
+
+func TestAuthLOGINInvalid(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	// Set auth handler
+	server.SetAuthHandler(func(username, password string) (bool, error) {
+		return false, nil
+	})
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH LOGIN
+	fmt.Fprintf(client, "AUTH LOGIN\r\n")
+	response, _ := reader.ReadString('\n')
+
+	// Should get 334
+	if !strings.HasPrefix(response, "334") {
+		t.Fatalf("Expected 334 continue, got: %s", response)
+	}
+
+	// Send username
+	usernameEnc := base64.StdEncoding.EncodeToString([]byte("wronguser"))
+	fmt.Fprintf(client, "%s\r\n", usernameEnc)
+	reader.ReadString('\n')
+
+	// Send password
+	passwordEnc := base64.StdEncoding.EncodeToString([]byte("wrongpass"))
+	fmt.Fprintf(client, "%s\r\n", passwordEnc)
+	response, _ = reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "535") {
+		t.Errorf("Expected 535 authentication failed, got: %s", response)
+	}
+}
+
+func TestAuthInvalidMechanism(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH CRAM-MD5 (not supported)
+	fmt.Fprintf(client, "AUTH CRAM-MD5\r\n")
+	response, _ := reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "504") {
+		t.Errorf("Expected 504 unrecognized auth type, got: %s", response)
+	}
+}
+
+func TestAuthPLAINInvalidBase64(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH PLAIN with invalid base64
+	fmt.Fprintf(client, "AUTH PLAIN not-valid-base64!!!\r\n")
+	response, _ := reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "501") {
+		t.Errorf("Expected 501 syntax error, got: %s", response)
+	}
+}
+
+func TestAuthPLAINInvalidFormat(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// AUTH PLAIN with valid base64 but invalid format (not \0user\0pass)
+	invalidCreds := base64.StdEncoding.EncodeToString([]byte("invalid-format"))
+	fmt.Fprintf(client, "AUTH PLAIN %s\r\n", invalidCreds)
+	response, _ := reader.ReadString('\n')
+
+	if !strings.HasPrefix(response, "501") {
+		t.Errorf("Expected 501 syntax error, got: %s", response)
 	}
 }

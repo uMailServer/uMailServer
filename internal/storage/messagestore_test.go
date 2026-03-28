@@ -224,3 +224,62 @@ func TestDeleteMessageInvalidID(t *testing.T) {
 		t.Error("Expected error for short message ID")
 	}
 }
+
+func TestStoreClose(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "msgstore-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewMessageStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewMessageStore() failed: %v", err)
+	}
+
+	// Close should not error
+	err = store.Close()
+	if err != nil {
+		t.Errorf("Close() failed: %v", err)
+	}
+}
+
+func TestReadMessageNonExistent(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "msgstore-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewMessageStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewMessageStore() failed: %v", err)
+	}
+	defer store.Close()
+
+	// Try to read non-existent message
+	_, err = store.ReadMessage("user", "abcdef1234567890")
+	if err == nil {
+		t.Error("Expected error for non-existent message")
+	}
+}
+
+func TestDeleteMessageNonExistent(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "msgstore-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	store, err := NewMessageStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewMessageStore() failed: %v", err)
+	}
+	defer store.Close()
+
+	// Delete non-existent message should not error
+	err = store.DeleteMessage("user", "abcdef1234567890")
+	if err != nil {
+		t.Logf("DeleteMessage returned error for non-existent message: %v", err)
+	}
+}

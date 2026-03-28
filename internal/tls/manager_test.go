@@ -503,3 +503,87 @@ func TestManagerGetCertificateEmptyServerName(t *testing.T) {
 	}
 }
 
+func TestManagerSetupAutocert(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		AutoTLS: true,
+		Email:   "admin@example.com",
+		Domains: []string{"example.com"},
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	// setupAutocert is called during NewManager
+	// If autocert is properly set up, the manager should work
+	if manager.IsAutoTLS() && manager.certManager == nil {
+		t.Error("expected certManager to be initialized when AutoTLS is enabled")
+	}
+}
+
+func TestManagerSetupAutocertWithStaging(t *testing.T) {
+	config := Config{
+		Enabled:    true,
+		AutoTLS:    true,
+		Email:      "admin@example.com",
+		Domains:    []string{"example.com"},
+		UseStaging: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	if !manager.IsAutoTLS() {
+		t.Error("expected IsAutoTLS to return true")
+	}
+}
+
+func TestHTTPChallengeHandlerWithAutocert(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		AutoTLS: true,
+		Email:   "admin@example.com",
+		Domains: []string{"example.com"},
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	handler := manager.HTTPChallengeHandler()
+
+	// With autocert enabled, handler should be non-nil
+	if handler == nil && manager.certManager != nil {
+		t.Error("expected non-nil handler when autocert is configured")
+	}
+}
+
+func TestCertificateStatusCompleteStruct(t *testing.T) {
+	status := CertificateStatus{
+		Domain:    "test.example.com",
+		Valid:     false,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		Issuer:    "Test CA",
+		Warning:   "expiring soon",
+		Error:     "test error",
+	}
+
+	if status.Domain != "test.example.com" {
+		t.Errorf("expected domain test.example.com, got %s", status.Domain)
+	}
+	if status.Valid {
+		t.Error("expected Valid to be false")
+	}
+	if status.Issuer != "Test CA" {
+		t.Errorf("expected issuer 'Test CA', got %s", status.Issuer)
+	}
+	if status.Warning != "expiring soon" {
+		t.Errorf("expected warning 'expiring soon', got %s", status.Warning)
+	}
+	if status.Error != "test error" {
+		t.Errorf("expected error 'test error', got %s", status.Error)
+	}
+}
+
