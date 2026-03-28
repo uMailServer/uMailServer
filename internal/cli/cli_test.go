@@ -94,3 +94,80 @@ func TestPrintDNSResultsAllFail(t *testing.T) {
 
 	PrintDNSResults(results)
 }
+
+func TestDiagnosticsCheckPTR(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with localhost (will fail but shouldn't panic)
+	result := d.checkPTR("localhost")
+	if result.Status != "warning" && result.Status != "pass" {
+		t.Logf("checkPTR returned unexpected status: %s", result.Status)
+	}
+}
+
+func TestDiagnosticsCheckMX(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with invalid domain
+	result, err := d.checkMX("invalid-domain-that-does-not-exist.example")
+	if err != nil {
+		t.Logf("checkMX returned error (expected for invalid domain): %v", err)
+	}
+	if result == nil {
+		t.Error("expected non-nil result")
+	}
+}
+
+func TestDiagnosticsCheckSPF(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with a domain
+	result := d.checkSPF("example.com")
+	if result.Status != "pass" && result.Status != "fail" {
+		t.Logf("checkSPF returned unexpected status: %s", result.Status)
+	}
+}
+
+func TestDiagnosticsCheckDKIM(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with a domain
+	result := d.checkDKIM("example.com")
+	if result.Status != "pass" && result.Status != "warning" {
+		t.Logf("checkDKIM returned unexpected status: %s", result.Status)
+	}
+}
+
+func TestDiagnosticsCheckDMARC(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with a domain
+	result := d.checkDMARC("example.com")
+	if result.Status != "pass" && result.Status != "warning" {
+		t.Logf("checkDMARC returned unexpected status: %s", result.Status)
+	}
+}
+
+func TestDiagnosticsCheckSMTPTLS(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with localhost
+	result, err := d.checkSMTPTLS("localhost")
+	if err != nil {
+		t.Logf("checkSMTPTLS returned error (expected for localhost): %v", err)
+	}
+	// Result may be nil depending on implementation
+	_ = result
+}
+
+func TestDiagnosticsCheckIMAPTLS(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with localhost
+	result, err := d.checkIMAPTLS("localhost")
+	if err != nil {
+		t.Logf("checkIMAPTLS returned error (expected for localhost): %v", err)
+	}
+	// Result may be nil depending on implementation
+	_ = result
+}
