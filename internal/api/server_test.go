@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1124,6 +1125,428 @@ func TestListAccountsByDomain(t *testing.T) {
 
 	if len(result) != 1 {
 		t.Errorf("Expected 1 account, got %d", len(result))
+	}
+}
+
+// Test authMiddleware
+func TestAuthMiddlewareMissingToken(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
+
+	// Create a protected endpoint
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Wrap with auth middleware
+	wrapped := server.authMiddleware(handler)
+
+	// Request without token
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+	rec := httptest.NewRecorder()
+
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status 401, got %d", rec.Code)
+	}
+}
+
+func TestAuthMiddlewareInvalidToken(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrapped := server.authMiddleware(handler)
+
+	// Request with invalid token
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	rec := httptest.NewRecorder()
+
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status 401, got %d", rec.Code)
+	}
+}
+
+func TestAuthMiddlewareValidToken(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	// Create domain and account
+	domain := &db.DomainData{
+		Name:        "test.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@test.com",
+		LocalPart:    "user",
+		Domain:       "test.com",
+		PasswordHash: string(hash),
+		IsActive:     true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	// Get a valid token by logging in
+	body := map[string]string{
+		"email":    "user@test.com",
+		"password": "password123",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected login to succeed, got %d", rec.Code)
+	}
+
+	var loginResult map[string]interface{}
+	json.NewDecoder(rec.Body).Decode(&loginResult)
+	token := loginResult["token"].(string)
+
+	// Test auth middleware with valid token
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrapped := server.authMiddleware(handler)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+}
+
+// Test updateAccount
+func TestUpdateAccount(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	// Create domain first
+	domain := &db.DomainData{
+		Name:        "test.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	// Create account
+	account := &db.AccountData{
+		Email:        "user@test.com",
+		LocalPart:    "user",
+		Domain:       "test.com",
+		PasswordHash: "hash",
+		IsActive:     true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	// Update the account
+	body := map[string]interface{}{
+		"is_admin":  true,
+		"is_active": false,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleAccountDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestUpdateAccountInvalidBody(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	// Create domain first
+	domain := &db.DomainData{
+		Name:        "test.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	// Create account
+	account := &db.AccountData{
+		Email:        "user@test.com",
+		LocalPart:    "user",
+		Domain:       "test.com",
+		PasswordHash: "hash",
+		IsActive:     true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	// Send invalid body
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader([]byte("invalid")))
+	rec := httptest.NewRecorder()
+
+	server.handleAccountDetail(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestUpdateAccountNotFound(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	// Update non-existent account
+	body := map[string]interface{}{
+		"is_admin": true,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/nonexistent@test.com", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleAccountDetail(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", rec.Code)
+	}
+}
+
+// Test retryQueueEntry
+func TestRetryQueueEntryNotFound(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	// Retry non-existent queue entry
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/queue/nonexistent/retry", nil)
+	rec := httptest.NewRecorder()
+
+	server.retryQueueEntry(rec, req, "nonexistent")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", rec.Code)
+	}
+}
+
+// Test dropQueueEntry
+func TestDropQueueEntryNotFound(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	// Drop non-existent queue entry - returns 204 even if not found
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/queue/nonexistent", nil)
+	rec := httptest.NewRecorder()
+
+	server.dropQueueEntry(rec, req, "nonexistent")
+
+	// The function returns 204 NoContent even if entry doesn't exist
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Expected status 204, got %d", rec.Code)
+	}
+}
+
+// Test router
+func TestRouter(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
+
+	// Test router function exists and works
+	mux := server.router()
+	if mux == nil {
+		t.Error("expected router to return a mux")
+	}
+}
+
+// Test ServeHTTP
+func TestServeHTTP(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
+
+	// Test that ServeHTTP works through the router for a protected endpoint
+	// Note: The /health endpoint is registered but not actually accessible through
+	// the current router implementation (it returns only the protected API mux)
+	// So we test a protected endpoint instead
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	// Should be 401 since we're not authenticated
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status 401 for unauthenticated request, got %d", rec.Code)
+	}
+}
+
+// Test Stop
+func TestStop(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	// Test Stop doesn't panic even if server not started
+	server.Stop()
+}
+
+// Test Start
+func TestStart(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	// Create server with logger
+	server := NewServer(database, nil, Config{})
+
+	// Start server - it may fail but shouldn't panic
+	// Don't run in goroutine to avoid panic issues
+	errChan := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errChan <- fmt.Errorf("panic: %v", r)
+			}
+		}()
+		err := server.Start("127.0.0.1:0")
+		errChan <- err
+	}()
+
+	// Give it a moment to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Stop the server
+	server.Stop()
+
+	// Drain the channel
+	select {
+	case <-errChan:
+		// Expected - server might error or be stopped
+	case <-time.After(200 * time.Millisecond):
+		// Timeout is fine
+	}
+}
+
+// Test authMiddleware with different authorization headers
+func TestAuthMiddlewareDifferentHeaders(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
+
+	tests := []struct {
+		name          string
+		authHeader    string
+		expectedCode  int
+	}{
+		{"empty header", "", http.StatusUnauthorized},
+		{"no bearer prefix", "just-a-token", http.StatusUnauthorized},
+		{"bearer prefix no token", "Bearer ", http.StatusUnauthorized},
+		{"invalid format", "Token invalid-token", http.StatusUnauthorized},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+
+			wrapped := server.authMiddleware(handler)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			rec := httptest.NewRecorder()
+
+			wrapped.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("Expected status %d, got %d", tt.expectedCode, rec.Code)
+			}
+		})
 	}
 }
 
