@@ -232,3 +232,148 @@ func (l *testLogger) Debug(msg string, args ...interface{}) {}
 func (l *testLogger) Info(msg string, args ...interface{})  {}
 func (l *testLogger) Warn(msg string, args ...interface{})  {}
 func (l *testLogger) Error(msg string, args ...interface{}) {}
+
+// mockDNSResolver is a mock DNS resolver for testing
+type mockDNSResolver struct {
+	records map[string][]string
+}
+
+func (m *mockDNSResolver) LookupTXT(domain string) ([]string, error) {
+	if records, ok := m.records[domain]; ok {
+		return records, nil
+	}
+	return []string{}, nil
+}
+
+func TestSPFStage(t *testing.T) {
+	mockResolver := &mockDNSResolver{
+		records: map[string][]string{
+			"example.com": {"v=spf1 ip4:192.168.1.1 -all"},
+		},
+	}
+	stage := NewSPFStage(mockResolver)
+
+	t.Run("Name", func(t *testing.T) {
+		if stage.Name() != "SPF" {
+			t.Errorf("Expected name 'SPF', got %s", stage.Name())
+		}
+	})
+
+	t.Run("NoSPFRecord", func(t *testing.T) {
+		ip := net.ParseIP("192.168.1.1")
+		ctx := NewMessageContext(ip, "sender@unknown.com", []string{"recipient@example.com"}, []byte("test"))
+
+		result := stage.Process(ctx)
+		// Should accept when no SPF record exists
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %d", result)
+		}
+		if ctx.SPFResult.Result != "none" {
+			t.Errorf("Expected SPF result 'none', got %s", ctx.SPFResult.Result)
+		}
+	})
+
+	t.Run("InvalidSender", func(t *testing.T) {
+		ip := net.ParseIP("192.168.1.1")
+		ctx := NewMessageContext(ip, "invalid-email", []string{"recipient@example.com"}, []byte("test"))
+
+		result := stage.Process(ctx)
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %d", result)
+		}
+		if ctx.SPFResult.Result != "none" {
+			t.Errorf("Expected SPF result 'none', got %s", ctx.SPFResult.Result)
+		}
+	})
+}
+
+func TestRBLStage(t *testing.T) {
+	stage := NewRBLStage([]string{}) // Empty servers list
+
+	t.Run("Name", func(t *testing.T) {
+		if stage.Name() != "RBL" {
+			t.Errorf("Expected name 'RBL', got %s", stage.Name())
+		}
+	})
+
+	t.Run("Process", func(t *testing.T) {
+		ip := net.ParseIP("192.168.1.1")
+		ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+
+		result := stage.Process(ctx)
+		// Should accept for private IPs not in RBL
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %d", result)
+		}
+	})
+}
+
+func TestStageNames(t *testing.T) {
+	tests := []struct {
+		stage    PipelineStage
+		expected string
+	}{
+		{NewRateLimitStage(), "RateLimit"},
+		{NewGreylistStage(), "Greylist"},
+		{NewHeuristicStage(), "Heuristic"},
+		{NewScoreStage(9.0, 3.0), "Score"},
+	}
+
+	for _, tt := range tests {
+		if tt.stage.Name() != tt.expected {
+			t.Errorf("Expected name %q, got %q", tt.expected, tt.stage.Name())
+		}
+	}
+}
+
+func TestNewPipeline(t *testing.T) {
+	t.Run("WithLogger", func(t *testing.T) {
+		logger := &testLogger{}
+		pipeline := NewPipeline(logger)
+		if pipeline == nil {
+			t.Fatal("Expected non-nil pipeline")
+		}
+		if pipeline.logger == nil {
+			t.Error("Expected logger to be set")
+		}
+	})
+
+	t.Run("WithNilLogger", func(t *testing.T) {
+		pipeline := NewPipeline(nil)
+		if pipeline == nil {
+			t.Fatal("Expected non-nil pipeline")
+		}
+		if pipeline.logger == nil {
+			t.Error("Expected default logger to be set")
+		}
+	})
+}
+
+func TestProcessStages(t *testing.T) {
+	logger := &testLogger{}
+	pipeline := NewPipeline(logger)
+
+	// Add a rejecting stage
+	pipeline.AddStage(&rejectStage{})
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+
+	result, err := pipeline.Process(ctx)
+	// Rejection returns both ResultReject and an error
+	if err == nil {
+		t.Error("Expected error for rejected message")
+	}
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject, got %d", result)
+	}
+}
+
+// Test helpers
+
+type rejectStage struct{}
+
+func (s *rejectStage) Name() string { return "reject" }
+func (s *rejectStage) Process(ctx *MessageContext) PipelineResult {
+	return ResultReject
+}
