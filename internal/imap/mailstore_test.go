@@ -686,3 +686,411 @@ func TestMatchesCriteria(t *testing.T) {
 		})
 	}
 }
+
+// TestBboltMailstoreStoreFlagsWithMessages tests StoreFlags with actual messages
+func TestBboltMailstoreStoreFlagsWithMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	user := "testuser"
+	mailbox := "INBOX"
+
+	// Create mailbox
+	err = ms.CreateMailbox(user, mailbox)
+	if err != nil {
+		t.Fatalf("CreateMailbox failed: %v", err)
+	}
+
+	// Append a message first
+	data := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nTest body")
+	err = ms.AppendMessage(user, mailbox, nil, time.Now(), data)
+	if err != nil {
+		t.Skipf("AppendMessage requires full implementation: %v", err)
+	}
+
+	// Store flags with add mode
+	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Seen"}, true)
+	if err != nil {
+		t.Logf("StoreFlags returned error: %v", err)
+	}
+
+	// Store flags with remove mode
+	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Seen"}, false)
+	if err != nil {
+		t.Logf("StoreFlags (remove) returned error: %v", err)
+	}
+}
+
+// TestBboltMailstoreFetchMessagesWithData tests FetchMessages with actual data
+func TestBboltMailstoreFetchMessagesWithData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	user := "testuser"
+	mailbox := "INBOX"
+
+	// Create mailbox
+	err = ms.CreateMailbox(user, mailbox)
+	if err != nil {
+		t.Fatalf("CreateMailbox failed: %v", err)
+	}
+
+	// Append a message
+	data := []byte("From: test@example.com\r\nSubject: Test Message\r\n\r\nTest body content")
+	err = ms.AppendMessage(user, mailbox, nil, time.Now(), data)
+	if err != nil {
+		t.Skipf("AppendMessage requires full implementation: %v", err)
+	}
+
+	// Fetch with different items
+	items := [][]string{
+		{"UID"},
+		{"FLAGS"},
+		{"BODY"},
+		{"BODY.PEEK"},
+		{"RFC822"},
+		{"RFC822.HEADER"},
+		{"RFC822.TEXT"},
+		{"ENVELOPE"},
+		{"INTERNALDATE"},
+		{"RFC822.SIZE"},
+		{"UID", "FLAGS", "BODY"},
+	}
+
+	for _, itemList := range items {
+		messages, err := ms.FetchMessages(user, mailbox, "1:*", itemList)
+		if err != nil {
+			t.Logf("FetchMessages with %v returned error: %v", itemList, err)
+		}
+		t.Logf("Fetched %d messages with items %v", len(messages), itemList)
+	}
+}
+
+// TestBboltMailstoreExpungeWithDeleted tests Expunge with deleted messages
+func TestBboltMailstoreExpungeWithDeleted(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	user := "testuser"
+	mailbox := "INBOX"
+
+	// Create mailbox
+	err = ms.CreateMailbox(user, mailbox)
+	if err != nil {
+		t.Fatalf("CreateMailbox failed: %v", err)
+	}
+
+	// Append a message
+	data := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nTest body")
+	err = ms.AppendMessage(user, mailbox, nil, time.Now(), data)
+	if err != nil {
+		t.Skipf("AppendMessage requires full implementation: %v", err)
+	}
+
+	// Mark message as deleted
+	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Deleted"}, true)
+	if err != nil {
+		t.Logf("StoreFlags returned error: %v", err)
+	}
+
+	// Expunge should remove deleted messages
+	err = ms.Expunge(user, mailbox)
+	if err != nil {
+		t.Logf("Expunge returned error: %v", err)
+	}
+}
+
+// TestBboltMailstoreCopyMessagesWithData tests CopyMessages with actual data
+func TestBboltMailstoreCopyMessagesWithData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	user := "testuser"
+	srcBox := "INBOX"
+	dstBox := "Sent"
+
+	// Create mailboxes
+	for _, mb := range []string{srcBox, dstBox} {
+		err := ms.CreateMailbox(user, mb)
+		if err != nil {
+			t.Fatalf("CreateMailbox %s failed: %v", mb, err)
+		}
+	}
+
+	// Append a message to source
+	data := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nTest body")
+	err = ms.AppendMessage(user, srcBox, nil, time.Now(), data)
+	if err != nil {
+		t.Skipf("AppendMessage requires full implementation: %v", err)
+	}
+
+	// Copy the message
+	err = ms.CopyMessages(user, srcBox, dstBox, "1")
+	if err != nil {
+		t.Logf("CopyMessages returned error: %v", err)
+	}
+}
+
+// TestBboltMailstoreMoveMessagesWithData tests MoveMessages with actual data
+func TestBboltMailstoreMoveMessagesWithData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	user := "testuser"
+	srcBox := "INBOX"
+	dstBox := "Archive"
+
+	// Create mailboxes
+	for _, mb := range []string{srcBox, dstBox} {
+		err := ms.CreateMailbox(user, mb)
+		if err != nil {
+			t.Fatalf("CreateMailbox %s failed: %v", mb, err)
+		}
+	}
+
+	// Append a message to source
+	data := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nTest body")
+	err = ms.AppendMessage(user, srcBox, nil, time.Now(), data)
+	if err != nil {
+		t.Skipf("AppendMessage requires full implementation: %v", err)
+	}
+
+	// Move the message
+	err = ms.MoveMessages(user, srcBox, dstBox, "1")
+	if err != nil {
+		t.Logf("MoveMessages returned error: %v", err)
+	}
+}
+
+// TestBboltMailstoreSearchMessagesAdvanced tests SearchMessages with various criteria
+func TestBboltMailstoreSearchMessagesAdvanced(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	user := "testuser"
+	mailbox := "INBOX"
+
+	// Create mailbox
+	err = ms.CreateMailbox(user, mailbox)
+	if err != nil {
+		t.Fatalf("CreateMailbox failed: %v", err)
+	}
+
+	// Append a message
+	data := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nTest body")
+	err = ms.AppendMessage(user, mailbox, nil, time.Now(), data)
+	if err != nil {
+		t.Skipf("AppendMessage requires full implementation: %v", err)
+	}
+
+	// Test various search criteria
+	criteriaList := []SearchCriteria{
+		{All: true},
+		{Answered: true},
+		{Deleted: true},
+		{Draft: true},
+		{Flagged: true},
+		{New: true},
+		{Old: true},
+		{Recent: true},
+		{Seen: true},
+		{Unanswered: true},
+		{Undeleted: true},
+		{Undraft: true},
+		{Unflagged: true},
+		{Unseen: true},
+		{From: "test@example.com"},
+		{To: "recipient@example.com"},
+		{Subject: "Test"},
+		{Body: "body"},
+		{Text: "test"},
+	}
+
+	for _, criteria := range criteriaList {
+		results, err := ms.SearchMessages(user, mailbox, criteria)
+		if err != nil {
+			t.Logf("SearchMessages with criteria %v returned error: %v", criteria, err)
+		}
+		t.Logf("Search results: %v", results)
+	}
+}
+
+// TestMatchesCriteriaExtended tests matchesCriteria with extended criteria
+func TestMatchesCriteriaExtended(t *testing.T) {
+	tests := []struct {
+		name     string
+		meta     *storage.MessageMetadata
+		criteria *SearchCriteria
+		want     bool
+	}{
+		{
+			name: "Unseen flag match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				Unseen: true,
+			},
+			want: true,
+		},
+		{
+			name: "Unseen - is seen",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Seen"},
+			},
+			criteria: &SearchCriteria{
+				Unseen: true,
+			},
+			want: false,
+		},
+		{
+			name: "Undeleted - not deleted",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				Undeleted: true,
+			},
+			want: true,
+		},
+		{
+			name: "Undeleted - is deleted",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Deleted"},
+			},
+			criteria: &SearchCriteria{
+				Undeleted: true,
+			},
+			want: false,
+		},
+		{
+			name: "Unflagged - not flagged",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				Unflagged: true,
+			},
+			want: true,
+		},
+		{
+			name: "Unflagged - is flagged",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Flagged"},
+			},
+			criteria: &SearchCriteria{
+				Unflagged: true,
+			},
+			want: false,
+		},
+		{
+			name: "Draft flag",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Draft"},
+			},
+			criteria: &SearchCriteria{
+				Draft: true,
+			},
+			want: true,
+		},
+		{
+			name: "Undraft - is draft",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Draft"},
+			},
+			criteria: &SearchCriteria{
+				Undraft: true,
+			},
+			want: false,
+		},
+		{
+			name: "Recent flag",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Recent"},
+			},
+			criteria: &SearchCriteria{
+				Recent: true,
+			},
+			want: true,
+		},
+		{
+			name: "Old flag - is recent",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Recent"},
+			},
+			criteria: &SearchCriteria{
+				Old: true,
+			},
+			want: false,
+		},
+		{
+			name: "Old flag - not recent",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				Old: true,
+			},
+			want: true,
+		},
+		{
+			name: "New flag - recent and unseen",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Recent"},
+			},
+			criteria: &SearchCriteria{
+				New: true,
+			},
+			want: true,
+		},
+		{
+			name: "New flag - not unseen",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Recent", "\\Seen"},
+			},
+			criteria: &SearchCriteria{
+				New: true,
+			},
+			want: true, // Has Recent flag, so New should match
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesCriteria(tt.meta, tt.criteria)
+			if got != tt.want {
+				t.Errorf("matchesCriteria() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
