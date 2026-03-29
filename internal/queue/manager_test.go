@@ -308,6 +308,92 @@ func TestWriteFileCreatesDirectories(t *testing.T) {
 	}
 }
 
+// TestManagerFlushQueueWithFailedEntries tests FlushQueue with failed entries
+func TestManagerFlushQueueWithFailedEntries(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a failed queue entry
+	entry := &db.QueueEntry{
+		ID:          "test-failed-entry",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		Status:      "failed",
+		RetryCount:  3,
+		MessagePath: filepath.Join(dataDir, "test.msg"),
+	}
+
+	// Create the message file
+	err = writeFile(entry.MessagePath, []byte("test message"))
+	if err != nil {
+		t.Fatalf("Failed to write message file: %v", err)
+	}
+
+	// Add entry to database
+	err = database.Enqueue(entry)
+	if err != nil {
+		t.Fatalf("Failed to enqueue: %v", err)
+	}
+
+	// Flush queue should process entries (may or may not retry depending on implementation)
+	err = manager.FlushQueue()
+	if err != nil {
+		t.Fatalf("FlushQueue failed: %v", err)
+	}
+}
+
+// TestManagerFlushQueueNoFailedEntries tests FlushQueue with no failed entries
+func TestManagerFlushQueueNoFailedEntries(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a pending queue entry (not failed)
+	entry := &db.QueueEntry{
+		ID:          "test-pending-entry",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		Status:      "pending",
+		RetryCount:  1,
+		MessagePath: "/tmp/test.msg",
+	}
+
+	// Add entry to database
+	err = database.Enqueue(entry)
+	if err != nil {
+		t.Fatalf("Failed to enqueue: %v", err)
+	}
+
+	// Flush queue should not retry pending entries
+	err = manager.FlushQueue()
+	if err != nil {
+		t.Errorf("FlushQueue failed: %v", err)
+	}
+
+	// Verify entry is still pending
+	updated, err := database.GetQueueEntry(entry.ID)
+	if err != nil {
+		t.Fatalf("Failed to get queue entry: %v", err)
+	}
+
+	if updated.Status != "pending" {
+		t.Errorf("Expected status 'pending' to remain, got %q", updated.Status)
+	}
+}
+
 func TestReadFileNonExistent(t *testing.T) {
 	tmpDir := t.TempDir()
 	nonExistentPath := filepath.Join(tmpDir, "non-existent.txt")
