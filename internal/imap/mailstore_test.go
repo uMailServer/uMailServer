@@ -552,3 +552,137 @@ func TestParseMessageHeaders(t *testing.T) {
 		})
 	}
 }
+
+// TestMatchesCriteria tests the matchesCriteria function
+func TestMatchesCriteria(t *testing.T) {
+	tests := []struct {
+		name     string
+		meta     *storage.MessageMetadata
+		criteria *SearchCriteria
+		want     bool
+	}{
+		{
+			name: "All messages",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				All: true,
+			},
+			want: true,
+		},
+		{
+			name: "Answered flag match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Answered"},
+			},
+			criteria: &SearchCriteria{
+				Answered: true,
+			},
+			want: true,
+		},
+		{
+			name: "Answered flag no match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				Answered: true,
+			},
+			want: false,
+		},
+		{
+			name: "Deleted flag match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Deleted"},
+			},
+			criteria: &SearchCriteria{
+				Deleted: true,
+			},
+			want: true,
+		},
+		{
+			name: "Seen flag match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Seen"},
+			},
+			criteria: &SearchCriteria{
+				Seen: true,
+			},
+			want: true,
+		},
+		{
+			name: "Flagged flag match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Flagged"},
+			},
+			criteria: &SearchCriteria{
+				Flagged: true,
+			},
+			want: true,
+		},
+		{
+			name: "Draft flag match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Draft"},
+			},
+			criteria: &SearchCriteria{
+				Draft: true,
+			},
+			want: true,
+		},
+		{
+			name: "Unanswered - not answered",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				Unanswered: true,
+			},
+			want: true,
+		},
+		{
+			name: "Unanswered - is answered",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Answered"},
+			},
+			criteria: &SearchCriteria{
+				Unanswered: true,
+			},
+			want: false,
+		},
+		{
+			name: "NOT criteria - match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{},
+			},
+			criteria: &SearchCriteria{
+				Not: &SearchCriteria{
+					Answered: true,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "NOT criteria - no match",
+			meta: &storage.MessageMetadata{
+				Flags: []string{"\\Answered"},
+			},
+			criteria: &SearchCriteria{
+				Not: &SearchCriteria{
+					Answered: true,
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesCriteria(tt.meta, tt.criteria)
+			if got != tt.want {
+				t.Errorf("matchesCriteria() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
