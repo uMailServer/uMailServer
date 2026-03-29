@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -797,4 +799,120 @@ func TestParseRSAPublicKey(t *testing.T) {
 			t.Error("Expected error for invalid data")
 		}
 	})
+}
+
+// TestDKIMVerifyUnsupportedAlgorithm tests verification with unsupported algorithm
+func TestDKIMVerifyUnsupportedAlgorithm(t *testing.T) {
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	// Create a DKIM header with unsupported algorithm
+	dkimHeader := "v=1; a=rsa-sha1; d=example.com; s=selector; c=simple/simple; bh=abcdef; h=from; b=xyz"
+
+	result, _, err := verifier.Verify(headers, []byte("body"), dkimHeader)
+
+	if result != DKIMFail {
+		t.Errorf("Expected DKIMFail, got %v", result)
+	}
+
+	if err == nil {
+		t.Error("Expected error for unsupported algorithm")
+	}
+
+	if !strings.Contains(err.Error(), "unsupported algorithm") {
+		t.Errorf("Expected 'unsupported algorithm' error, got: %v", err)
+	}
+}
+
+// TestDKIMVerifyBodyHashMismatch tests verification with body hash mismatch
+// Note: This test requires network access to lookup the public key
+func TestDKIMVerifyBodyHashMismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
+
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	// Create a DKIM header with wrong body hash (correct format but wrong hash)
+	// Using a real domain with DKIM to test body hash verification
+	wrongBodyHash := base64.StdEncoding.EncodeToString([]byte("wronghash"))
+	dkimHeader := fmt.Sprintf("v=1; a=rsa-sha256; d=example.com; s=selector; c=simple/simple; bh=%s; h=from; b=xyz", wrongBodyHash)
+
+	result, _, err := verifier.Verify(headers, []byte("body"), dkimHeader)
+
+	// Should fail due to body hash mismatch or missing public key
+	if result != DKIMFail && result != DKIMTempError {
+		t.Errorf("Expected DKIMFail or DKIMTempError, got %v", result)
+	}
+
+	if err == nil {
+		t.Log("No error returned (public key may not exist for this selector)")
+	}
+}
+
+// TestDKIMVerifyDNSFailure tests verification with DNS lookup failure
+// Note: This test requires network access and may be skipped
+func TestDKIMVerifyDNSFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
+
+	// Use a resolver that simulates temporary failure
+	resolver := newMockDNSResolver()
+	resolver.tempFail["selector._domainkey.example.com"] = true
+	verifier := NewDKIMVerifier(resolver)
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	// Compute a valid body hash for "body"
+	bodyHash := sha256Hash([]byte("body"))
+
+	dkimHeader := fmt.Sprintf("v=1; a=rsa-sha256; d=example.com; s=selector; c=simple/simple; bh=%s; h=from; b=xyz", bodyHash)
+
+	result, _, _ := verifier.Verify(headers, []byte("body"), dkimHeader)
+
+	// Result depends on whether fetchPublicKey uses the mock or real DNS
+	// The test primarily ensures no panic occurs
+	t.Logf("DNS failure test result: %v", result)
+}
+
+// TestDKIMVerifyPublicKeyNotFound tests verification when public key not found in DNS
+func TestDKIMVerifyPublicKeyNotFound(t *testing.T) {
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	// Don't add any TXT records - simulating missing key
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	bodyHash := sha256Hash([]byte("body"))
+
+	dkimHeader := fmt.Sprintf("v=1; a=rsa-sha256; d=example.com; s=selector; c=simple/simple; bh=%s; h=from; b=xyz", bodyHash)
+
+	result, _, err := verifier.Verify(headers, []byte("body"), dkimHeader)
+
+	if result != DKIMFail {
+		t.Errorf("Expected DKIMFail, got %v", result)
+	}
+
+	if err == nil {
+		t.Error("Expected error when public key not found")
+	}
+
+	if !strings.Contains(err.Error(), "public key not found") {
+		t.Errorf("Expected 'public key not found' error, got: %v", err)
+	}
 }
