@@ -187,3 +187,40 @@ func TestMakeTripletIPv6(t *testing.T) {
 		t.Error("Expected non-empty triplet for IPv6")
 	}
 }
+
+// TestDoCleanup tests the cleanup of expired greylist entries
+func TestDoCleanup(t *testing.T) {
+	cfg := GreylistConfig{
+		Enabled:       true,
+		Delay:         5 * time.Minute,
+		Expiry:        100 * time.Millisecond, // Short expiry for testing
+		WhitelistPass: 5,
+	}
+	g := NewGreylisting(cfg)
+	defer g.Close()
+
+	ip := net.ParseIP("192.168.1.1")
+	sender := "sender@example.com"
+	recipient := "recipient@example.com"
+
+	// Create a greylist entry
+	g.Check(ip, sender, recipient)
+
+	// Should have 1 entry
+	stats := g.GetStats()
+	if stats["total_triplets"] != 1 {
+		t.Errorf("Expected 1 triplet, got %v", stats["total_triplets"])
+	}
+
+	// Wait for expiry
+	time.Sleep(150 * time.Millisecond)
+
+	// Run cleanup
+	g.doCleanup()
+
+	// Should have 0 entries after cleanup
+	stats = g.GetStats()
+	if stats["total_triplets"] != 0 {
+		t.Errorf("Expected 0 triplets after cleanup, got %v", stats["total_triplets"])
+	}
+}

@@ -3,6 +3,7 @@ package spam
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -91,6 +92,28 @@ func TestRBLCodeToReason(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("rblCodeToReason(%s) = %s, want %s", tt.code, result, tt.expected)
 		}
+	}
+}
+
+// TestReverseIPv6 tests IPv6 address reversal for RBL lookups
+func TestReverseIPv6(t *testing.T) {
+	// Test with a known IPv6 address
+	ip := net.ParseIP("2001:db8::1")
+	if ip == nil {
+		t.Fatal("Failed to parse IPv6 address")
+	}
+
+	reversed := reverseIPv6(ip)
+
+	// The result should be in nibble format
+	// For 2001:db8::1, we expect something like "1.0.0.0...0.8.b.d.1.0.0.2"
+	if reversed == "" {
+		t.Error("Expected non-empty reversed IPv6")
+	}
+
+	// Should contain dots separating nibbles
+	if !strings.Contains(reversed, ".") {
+		t.Error("Expected reversed IPv6 to contain dots")
 	}
 }
 

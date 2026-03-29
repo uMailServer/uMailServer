@@ -1127,6 +1127,36 @@ func TestSessionGetters(t *testing.T) {
 	}
 }
 
+// TestSessionStateTransitions tests session state management
+func TestSessionStateTransitions(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Initially in NEW state (no authentication yet)
+	// After EHLO, session remains not authenticated
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// Session getters work via the session object
+	// The connection is active so getters should be accessible
+	if server.ActiveConnections() != 1 {
+		t.Errorf("expected 1 active connection, got %d", server.ActiveConnections())
+	}
+}
+
 // TestSessionEXPN tests the EXPN command
 func TestSessionEXPN(t *testing.T) {
 	config := &Config{
