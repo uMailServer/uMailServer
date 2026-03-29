@@ -358,3 +358,61 @@ func TestTLSAMatchingTypeConstants(t *testing.T) {
 		t.Error("TLSAMatchingTypeSHA512 should be 2")
 	}
 }
+
+func TestDANEValidateWithMatchingCert(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	// Generate a test certificate
+	cert := generateTestCert(t)
+
+	// Generate TLSA record from certificate
+	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeSHA256)
+
+	// Add TLSA record to resolver
+	resolver.txtRecords["_25._tcp.example.com"] = []string{record.String()}
+
+	// Create TLS connection state with certificate
+	state := &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+	}
+
+	result, err := validator.Validate("example.com", 25, state)
+
+	// Should return DANEValidated
+	if result != DANEValidated {
+		t.Errorf("Expected DANEValidated, got %s", result.String())
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestDANEValidateWithNonMatchingCert(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	// Generate two different certificates
+	cert1 := generateTestCert(t)
+	cert2 := generateTestCert(t)
+
+	// Generate TLSA record from cert1
+	record := GenerateTLSARecord(cert1, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeSHA256)
+
+	// Add TLSA record to resolver
+	resolver.txtRecords["_25._tcp.example.com"] = []string{record.String()}
+
+	// Create TLS connection state with different certificate (cert2)
+	state := &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert2},
+	}
+
+	result, _ := validator.Validate("example.com", 25, state)
+
+	// Should return DANEFailed due to hash mismatch
+	if result != DANEFailed {
+		t.Errorf("Expected DANEFailed, got %s", result.String())
+	}
+	// Note: Error may or may not be returned depending on implementation
+}
