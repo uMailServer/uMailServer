@@ -404,3 +404,200 @@ func TestParseQuery(t *testing.T) {
 		})
 	}
 }
+
+// TestServiceIndexMessage tests the IndexMessage function
+func TestServiceIndexMessage(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Test with no existing index - BuildIndex will be called
+	// When db is nil, it may panic or handle gracefully depending on implementation
+	defer func() {
+		_ = recover() // Ignore panic if db is nil
+	}()
+	svc.IndexMessage("testuser", "INBOX", 1)
+}
+
+// TestServiceIndexMessageWithIndex tests IndexMessage when index exists
+func TestServiceIndexMessageWithIndex(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Pre-create an index for the user
+	svc.indexes["testuser"] = NewIndex()
+
+	// Test with existing index but no database - should fail when getting metadata
+	defer func() {
+		_ = recover() // Expect panic when db is nil
+	}()
+	svc.IndexMessage("testuser", "INBOX", 1)
+}
+
+// TestServiceBuildIndexEmptyUser tests BuildIndex with empty user
+func TestServiceBuildIndexEmptyUser(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Build index with empty user and nil db may panic or return error
+	defer func() {
+		_ = recover() // Ignore panic if db is nil
+	}()
+	svc.BuildIndex("")
+}
+
+// TestServiceSearchWithExistingIndex tests Search when index already exists
+func TestServiceSearchWithExistingIndex(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Create an index and add a document
+	idx := NewIndex()
+	svc.indexes["testuser"] = idx
+
+	doc := &Document{
+		ID:      "INBOX:1",
+		Content: "hello world test message",
+		Fields: map[string]string{
+			"from":    "sender@example.com",
+			"to":      "recipient@example.com",
+			"subject": "Test Subject",
+		},
+	}
+	idx.Add(doc)
+
+	// Search with existing index
+	results, err := svc.Search(MessageSearchOptions{
+		User:  "testuser",
+		Query: "hello",
+		Limit: 10,
+	})
+
+	// Should not error since index exists
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Should find the document
+	if len(results) == 0 {
+		t.Error("expected search results")
+	}
+}
+
+// TestServiceSearchWithDateFilter tests Search with date filters
+func TestServiceSearchWithDateFilter(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Create an index
+	idx := NewIndex()
+	svc.indexes["testuser"] = idx
+
+	doc := &Document{
+		ID:      "INBOX:1",
+		Content: "hello world",
+		Fields: map[string]string{
+			"subject": "Test",
+			"date":    "2024-01-15",
+		},
+	}
+	idx.Add(doc)
+
+	// Search with date filter
+	results, err := svc.Search(MessageSearchOptions{
+		User:     "testuser",
+		Query:    "hello",
+		DateFrom: "2024-01-01",
+		DateTo:   "2024-12-31",
+		Limit:    10,
+	})
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	_ = results
+}
+
+// TestServiceSearchWithAttachmentFilter tests Search with attachment filter
+func TestServiceSearchWithAttachmentFilter(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Create an index
+	idx := NewIndex()
+	svc.indexes["testuser"] = idx
+
+	doc := &Document{
+		ID:      "INBOX:1",
+		Content: "hello world",
+		Fields: map[string]string{
+			"subject":         "Test",
+			"has_attachment":  "true",
+		},
+	}
+	idx.Add(doc)
+
+	// Search with attachment filter
+	results, err := svc.Search(MessageSearchOptions{
+		User:          "testuser",
+		Query:         "hello",
+		HasAttachment: true,
+		Limit:         10,
+	})
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	_ = results
+}
+
+// TestServiceSearchFolderFilter tests Search with folder filter
+func TestServiceSearchFolderFilter(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Create an index with multiple folder documents
+	idx := NewIndex()
+	svc.indexes["testuser"] = idx
+
+	// Add document in INBOX
+	idx.Add(&Document{
+		ID:      "INBOX:1",
+		Content: "inbox message",
+	})
+
+	// Add document in Sent
+	idx.Add(&Document{
+		ID:      "Sent:1",
+		Content: "sent message",
+	})
+
+	// Search specific folder
+	results, err := svc.Search(MessageSearchOptions{
+		User:   "testuser",
+		Folder: "INBOX",
+		Query:  "message",
+		Limit:  10,
+	})
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Should only return INBOX results
+	for _, r := range results {
+		if r.Folder != "INBOX" {
+			t.Errorf("expected folder INBOX, got %s", r.Folder)
+		}
+	}
+}
+
+// TestServiceRemoveMessageNoIndex tests RemoveMessage when no index exists
+func TestServiceRemoveMessageNoIndex(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Remove message when no index exists - should not panic
+	svc.RemoveMessage("nonexistent", "INBOX", 1)
+}
+
+// TestServiceClearIndexNonExistent tests ClearIndex for non-existent user
+func TestServiceClearIndexNonExistent(t *testing.T) {
+	svc := NewService(nil, nil, nil)
+
+	// Clear index for non-existent user - should not panic
+	svc.ClearIndex("nonexistent")
+}

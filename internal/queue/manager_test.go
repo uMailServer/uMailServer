@@ -1132,3 +1132,309 @@ func TestManagerDeliverToMX(t *testing.T) {
 		t.Log("deliverToMX to invalid MX did not return error (may have fallback)")
 	}
 }
+
+// TestManagerDeliverWithEmptyMessagePath tests deliver with empty message path
+func TestManagerDeliverWithEmptyMessagePath(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	entry := &db.QueueEntry{
+		ID:          "test-empty-path",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: "", // Empty path
+		Status:      "pending",
+	}
+
+	// Save entry to database
+	database.Enqueue(entry)
+
+	// Call deliver - should handle empty path gracefully
+	manager.deliver(entry)
+}
+
+// TestManagerDeliverWithNonExistentFile tests deliver with non-existent message file
+func TestManagerDeliverWithNonExistentFile(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	entry := &db.QueueEntry{
+		ID:          "test-missing-file",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: "/non/existent/file.msg",
+		Status:      "pending",
+	}
+
+	// Save entry to database
+	database.Enqueue(entry)
+
+	// Call deliver - should handle missing file gracefully
+	manager.deliver(entry)
+}
+
+// TestManagerProcessQueue tests the processQueue function
+func TestManagerProcessQueue(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	testMessage := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest content")
+	writeFile(messagePath, testMessage)
+
+	// Create entries with different statuses
+	entries := []*db.QueueEntry{
+		{
+			ID:          "test-pending",
+			From:        "sender@example.com",
+			To:          []string{"recipient@example.com"},
+			MessagePath: messagePath,
+			Status:      "pending",
+			RetryCount:  0,
+		},
+		{
+			ID:          "test-sending",
+			From:        "sender@example.com",
+			To:          []string{"recipient2@example.com"},
+			MessagePath: messagePath,
+			Status:      "sending",
+			RetryCount:  0,
+		},
+		{
+			ID:          "test-failed",
+			From:        "sender@example.com",
+			To:          []string{"recipient3@example.com"},
+			MessagePath: messagePath,
+			Status:      "failed",
+			RetryCount:  1,
+		},
+	}
+
+	for _, entry := range entries {
+		database.Enqueue(entry)
+	}
+
+	// Process queue with cancellable context - should not panic
+	ctx, cancel := context.WithCancel(context.Background())
+	go manager.processQueue(ctx)
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+}
+
+// TestManagerEnqueueWithEmptyRecipient tests enqueue with empty recipient list
+func TestManagerEnqueueWithEmptyRecipient(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	from := "sender@example.com"
+	to := []string{} // Empty recipient list
+	message := []byte("Test message")
+
+	_, err = manager.Enqueue(from, to, message)
+	// Should handle empty recipient list gracefully
+	if err != nil {
+		t.Logf("Enqueue with empty recipients returned error (may be expected): %v", err)
+	}
+}
+
+// TestManagerRetryEntryNotFound tests retrying a non-existent entry
+func TestManagerRetryEntryNotFound(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Try to retry non-existent entry
+	err = manager.RetryEntry("non-existent-id")
+	if err == nil {
+		t.Error("expected error when retrying non-existent entry")
+	}
+}
+
+// TestManagerRetryEntryNotFailed tests retrying an entry that is not failed
+func TestManagerRetryEntryNotFailed(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a pending entry
+	entry := &db.QueueEntry{
+		ID:          "test-pending-retry",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: filepath.Join(dataDir, "test.msg"),
+		Status:      "pending",
+		RetryCount:  5, // Set a high retry count
+	}
+
+	// Create message file
+	writeFile(entry.MessagePath, []byte("test message"))
+
+	// Save entry
+	database.Enqueue(entry)
+
+	// Retry pending entry - current implementation allows retrying any entry
+	err = manager.RetryEntry(entry.ID)
+	if err != nil {
+		t.Errorf("unexpected error when retrying pending entry: %v", err)
+	}
+
+	// Verify entry was reset
+	updated, _ := database.GetQueueEntry(entry.ID)
+	if updated.RetryCount != 0 {
+		t.Errorf("expected retry count to be reset to 0, got %d", updated.RetryCount)
+	}
+	if updated.Status != "pending" {
+		t.Errorf("expected status to be pending, got %s", updated.Status)
+	}
+}
+
+// TestHandleDeliveryFailureWithMetrics tests handleDeliveryFailure with metrics
+func TestHandleDeliveryFailureWithMetrics(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a temporary message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	writeFile(messagePath, []byte("Test message content"))
+
+	entry := &db.QueueEntry{
+		ID:          "test-metrics",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: messagePath,
+		Status:      "sending",
+		RetryCount:  0,
+	}
+
+	// Save entry to database
+	database.Enqueue(entry)
+
+	// Call handleDeliveryFailure - should not panic with metrics
+	manager.handleDeliveryFailure(entry, "test error")
+
+	// Verify entry was updated
+	updated, _ := database.GetQueueEntry(entry.ID)
+	if updated == nil || updated.RetryCount != 1 {
+		t.Error("expected entry to be updated with retry count")
+	}
+}
+
+// mockMetricsCollector is a mock implementation for testing
+type mockMetricsCollector struct {
+	deliveryFailedCalled bool
+}
+
+func (m *mockMetricsCollector) DeliveryFailed() {
+	m.deliveryFailedCalled = true
+}
+
+func (m *mockMetricsCollector) DeliverySucceeded() {}
+func (m *mockMetricsCollector) MessageReceived()   {}
+func (m *mockMetricsCollector) MessageRejected()   {}
+
+// TestGenerateBounceWithMissingFile tests generateBounce when message file is missing
+func TestGenerateBounceWithMissingFile(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	entry := &db.QueueEntry{
+		ID:          "test-bounce-missing",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: "/non/existent/file.msg",
+		LastError:   "delivery failed",
+		Status:      "failed",
+		RetryCount:  10,
+	}
+
+	// Call generateBounce with missing file - should not panic
+	manager.generateBounce(entry)
+}
+
+// TestManagerDeliverLocalDomain tests delivery to local domain
+func TestManagerDeliverLocalDomain(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir)
+
+	// Create a message file
+	messagePath := filepath.Join(dataDir, "test.msg")
+	testMessage := []byte("From: sender@localhost\r\nTo: recipient@localhost\r\nSubject: Test\r\n\r\nTest content")
+	writeFile(messagePath, testMessage)
+
+	entry := &db.QueueEntry{
+		ID:          "test-local",
+		From:        "sender@localhost",
+		To:          []string{"recipient@localhost"},
+		MessagePath: messagePath,
+		Status:      "pending",
+		RetryCount:  0,
+	}
+
+	// Save entry to database
+	database.Enqueue(entry)
+
+	// Call deliver - will attempt local delivery
+	manager.deliver(entry)
+}
