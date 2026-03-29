@@ -224,3 +224,179 @@ func TestDoCleanup(t *testing.T) {
 		t.Errorf("Expected 0 triplets after cleanup, got %v", stats["total_triplets"])
 	}
 }
+
+// TestGreylistingRetryAfterDelay tests greylist retry after delay has passed
+func TestGreylistingRetryAfterDelay(t *testing.T) {
+	cfg := GreylistConfig{
+		Enabled:       true,
+		Delay:         100 * time.Millisecond,
+		Expiry:        1 * time.Hour,
+		WhitelistPass: 5,
+	}
+	g := NewGreylisting(cfg)
+	defer g.Close()
+
+	ip := net.ParseIP("192.168.1.1")
+	sender := "sender@example.com"
+	recipient := "recipient@example.com"
+
+	// First check - greylisted
+	allowed, retryAfter, err := g.Check(ip, sender, recipient)
+	if err != nil {
+		t.Fatalf("Check failed: %v", err)
+	}
+	if allowed {
+		t.Error("Expected not allowed on first check")
+	}
+	if retryAfter == 0 {
+		t.Error("Expected retryAfter > 0")
+	}
+
+	// Wait for the delay to pass
+	time.Sleep(150 * time.Millisecond)
+
+	// Second check - should be allowed now
+	allowed, retryAfter, err = g.Check(ip, sender, recipient)
+	if err != nil {
+		t.Fatalf("Check failed: %v", err)
+	}
+	if !allowed {
+		t.Error("Expected allowed after delay")
+	}
+	if retryAfter != 0 {
+		t.Errorf("Expected retryAfter 0, got %v", retryAfter)
+	}
+}
+
+// TestGreylistingMultipleAttempts tests multiple greylist attempts
+func TestGreylistingMultipleAttempts(t *testing.T) {
+	cfg := GreylistConfig{
+		Enabled:       true,
+		Delay:         500 * time.Millisecond,
+		Expiry:        1 * time.Hour,
+		WhitelistPass: 5,
+	}
+	g := NewGreylisting(cfg)
+	defer g.Close()
+
+	ip := net.ParseIP("192.168.1.1")
+	sender := "sender@example.com"
+	recipient := "recipient@example.com"
+
+	// Multiple checks before delay passes - should remain greylisted
+	for i := 0; i < 3; i++ {
+		allowed, _, err := g.Check(ip, sender, recipient)
+		if err != nil {
+			t.Fatalf("Check failed: %v", err)
+		}
+		if allowed {
+			t.Errorf("Expected not allowed on attempt %d", i+1)
+		}
+	}
+
+	// Verify count was incremented
+	g.mu.RLock()
+	triplet := g.makeTriplet(ip, sender, recipient)
+	entry := g.triplets[triplet]
+	g.mu.RUnlock()
+
+	if entry == nil {
+		t.Fatal("Expected entry to exist")
+	}
+	if entry.Count != 3 {
+		t.Errorf("Expected count 3, got %d", entry.Count)
+	}
+}
+
+// TestGreylistingIsWhitelistedDisabled tests IsWhitelisted when greylisting is disabled
+func TestGreylistingIsWhitelistedDisabled(t *testing.T) {
+	cfg := GreylistConfig{
+		Enabled:       false,
+		Delay:         5 * time.Minute,
+		WhitelistPass: 5,
+	}
+	g := NewGreylisting(cfg)
+	defer g.Close()
+
+	ip := net.ParseIP("192.168.1.1")
+	sender := "sender@example.com"
+	recipient := "recipient@example.com"
+
+	// When disabled, should always return false
+	whitelisted := g.IsWhitelisted(ip, sender, recipient)
+	if whitelisted {
+		t.Error("Expected not whitelisted when disabled")
+	}
+}
+
+// TestGreylistingIsWhitelistedTrue tests IsWhitelisted when entry is whitelisted
+func TestGreylistingIsWhitelistedTrue(t *testing.T) {
+	cfg := GreylistConfig{
+		Enabled:       true,
+		Delay:         0, // No delay
+		Expiry:        1 * time.Hour,
+		WhitelistPass: 1,
+	}
+	g := NewGreylisting(cfg)
+	defer g.Close()
+
+	ip := net.ParseIP("192.168.1.1")
+	sender := "sender@example.com"
+	recipient := "recipient@example.com"
+
+	// First check - creates entry
+	g.Check(ip, sender, recipient)
+
+	// Manually set Passed=true and Count >= WhitelistPass
+	triplet := g.makeTriplet(ip, sender, recipient)
+	g.mu.Lock()
+	if entry, exists := g.triplets[triplet]; exists {
+		entry.Passed = true
+		entry.Count = 2 // Ensure >= WhitelistPass
+	}
+	g.mu.Unlock()
+
+	whitelisted := g.IsWhitelisted(ip, sender, recipient)
+	if !whitelisted {
+		t.Error("Expected whitelisted after setting Passed=true and sufficient count")
+	}
+}
+
+// TestGreylistingCleanupKeepsWhitelisted tests that cleanup preserves whitelisted entries
+func TestGreylistingCleanupKeepsWhitelisted(t *testing.T) {
+	cfg := GreylistConfig{
+		Enabled:       true,
+		Delay:         0,
+		Expiry:        100 * time.Millisecond,
+		WhitelistPass: 1,
+	}
+	g := NewGreylisting(cfg)
+	defer g.Close()
+
+	ip := net.ParseIP("192.168.1.1")
+	sender := "sender@example.com"
+	recipient := "recipient@example.com"
+
+	// Create entry
+	g.Check(ip, sender, recipient)
+
+	// Manually set Passed=true to make it whitelisted
+	triplet := g.makeTriplet(ip, sender, recipient)
+	g.mu.Lock()
+	if entry, exists := g.triplets[triplet]; exists {
+		entry.Passed = true
+	}
+	g.mu.Unlock()
+
+	// Wait past normal expiry time but not past extended expiry (7x)
+	time.Sleep(150 * time.Millisecond)
+
+	// Run cleanup
+	g.doCleanup()
+
+	// Whitelisted entry should still exist (extended expiry = 700ms)
+	stats := g.GetStats()
+	if stats["total_triplets"] != 1 {
+		t.Errorf("Expected 1 triplet after cleanup (whitelisted), got %v", stats["total_triplets"])
+	}
+}
