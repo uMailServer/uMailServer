@@ -416,3 +416,234 @@ func TestDANEValidateWithNonMatchingCert(t *testing.T) {
 	}
 	// Note: Error may or may not be returned depending on implementation
 }
+
+// Test ValidateMX function
+func TestValidateMX(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	// Generate a test certificate
+	cert := generateTestCert(t)
+
+	// Generate TLSA record from certificate for port 25
+	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeSHA256)
+	resolver.txtRecords["_25._tcp.mail.example.com"] = []string{record.String()}
+
+	// Create TLS connection state with certificate
+	state := &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+	}
+
+	// ValidateMX should work with port 25
+	result, err := validator.ValidateMX("mail.example.com", state)
+
+	if result != DANEValidated {
+		t.Errorf("Expected DANEValidated, got %s", result.String())
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+// Test ValidateSubmission function
+func TestValidateSubmission(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	// Generate a test certificate
+	cert := generateTestCert(t)
+
+	// Generate TLSA record from certificate for port 587
+	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeSHA256)
+	resolver.txtRecords["_587._tcp.example.com"] = []string{record.String()}
+
+	// Create TLS connection state with certificate
+	state := &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+	}
+
+	// ValidateSubmission should work with port 587
+	result, err := validator.ValidateSubmission("example.com", state)
+
+	if result != DANEValidated {
+		t.Errorf("Expected DANEValidated, got %s", result.String())
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+// Test GetPolicy function
+func TestGetPolicy(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	// Create TLSA records
+	hash := make([]byte, 32)
+	for i := range hash {
+		hash[i] = byte(i)
+	}
+
+	// Add DANE-TA usage record (should count as valid)
+	record1 := &TLSARecord{
+		Usage:        TLSAUsageDANETA,
+		Selector:     TLSASelectorSPKI,
+		MatchingType: TLSAMatchingTypeSHA256,
+		Certificate:  hash,
+	}
+
+	// Add DANE-EE usage record (should count as valid)
+	record2 := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelectorSPKI,
+		MatchingType: TLSAMatchingTypeSHA256,
+		Certificate:  hash,
+	}
+
+	resolver.txtRecords["_25._tcp.example.com"] = []string{
+		record1.String(),
+		record2.String(),
+	}
+
+	policy, err := validator.GetPolicy("example.com", 25)
+	if err != nil {
+		t.Fatalf("GetPolicy failed: %v", err)
+	}
+
+	if policy.Domain != "example.com" {
+		t.Errorf("Expected domain 'example.com', got %q", policy.Domain)
+	}
+
+	if policy.Port != 25 {
+		t.Errorf("Expected port 25, got %d", policy.Port)
+	}
+
+	if !policy.HasTLSA {
+		t.Error("Expected HasTLSA to be true")
+	}
+
+	// Should have 2 valid records (DANE-TA and DANE-EE)
+	if policy.ValidRecords != 2 {
+		t.Errorf("Expected 2 valid records, got %d", policy.ValidRecords)
+	}
+
+	// Should have 2 unique usages
+	if len(policy.Usages) != 2 {
+		t.Errorf("Expected 2 usages, got %d", len(policy.Usages))
+	}
+}
+
+// Test GetPolicy with no records
+func TestGetPolicyNoRecords(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	policy, err := validator.GetPolicy("example.com", 25)
+	if err != nil {
+		t.Fatalf("GetPolicy failed: %v", err)
+	}
+
+	if policy.Domain != "example.com" {
+		t.Errorf("Expected domain 'example.com', got %q", policy.Domain)
+	}
+
+	if policy.HasTLSA {
+		t.Error("Expected HasTLSA to be false when no records")
+	}
+
+	if policy.ValidRecords != 0 {
+		t.Errorf("Expected 0 valid records, got %d", policy.ValidRecords)
+	}
+}
+
+// Test ValidateWithDNSSEC function
+func TestValidateWithDNSSEC(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	// Generate a test certificate
+	cert := generateTestCert(t)
+
+	// Generate TLSA record from certificate
+	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeSHA256)
+	resolver.txtRecords["_25._tcp.example.com"] = []string{record.String()}
+
+	// Create TLS connection state with certificate
+	state := &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+	}
+
+	// Test with DNSSEC secured - should validate
+	result, err := validator.ValidateWithDNSSEC("example.com", 25, state, DNSSECSecured)
+	if result != DANEValidated {
+		t.Errorf("Expected DANEValidated with DNSSEC, got %s", result.String())
+	}
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	// Test with DNSSEC unknown - should return DANENone
+	result, err = validator.ValidateWithDNSSEC("example.com", 25, state, DNSSECUnknown)
+	if result != DANENone {
+		t.Errorf("Expected DANENone without DNSSEC, got %s", result.String())
+	}
+
+	// Test with DNSSEC insecure - should return DANENone
+	result, err = validator.ValidateWithDNSSEC("example.com", 25, state, DNSSECInsecure)
+	if result != DANENone {
+		t.Errorf("Expected DANENone with insecure DNSSEC, got %s", result.String())
+	}
+
+	// Test with DNSSEC bogus - should return DANENone
+	result, err = validator.ValidateWithDNSSEC("example.com", 25, state, DNSSECBogus)
+	if result != DANENone {
+		t.Errorf("Expected DANENone with bogus DNSSEC, got %s", result.String())
+	}
+}
+
+// Test GetPolicy with non-DANE usages (should not count as valid)
+func TestGetPolicyWithNonDANEUsages(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	hash := make([]byte, 32)
+
+	// Add PKI-TA usage record (should NOT count as valid DANE)
+	record1 := &TLSARecord{
+		Usage:        TLSAUsagePKITAAncillary,
+		Selector:     TLSASelectorSPKI,
+		MatchingType: TLSAMatchingTypeSHA256,
+		Certificate:  hash,
+	}
+
+	// Add PKI-EE usage record (should NOT count as valid DANE)
+	record2 := &TLSARecord{
+		Usage:        TLSAUsagePKITEEAncillary,
+		Selector:     TLSASelectorSPKI,
+		MatchingType: TLSAMatchingTypeSHA256,
+		Certificate:  hash,
+	}
+
+	resolver.txtRecords["_25._tcp.example.com"] = []string{
+		record1.String(),
+		record2.String(),
+	}
+
+	policy, err := validator.GetPolicy("example.com", 25)
+	if err != nil {
+		t.Fatalf("GetPolicy failed: %v", err)
+	}
+
+	// Has records but none are valid DANE records
+	if !policy.HasTLSA {
+		t.Error("Expected HasTLSA to be true (has records)")
+	}
+
+	// ValidRecords should be 0 since neither PKI-TA nor PKI-EE count
+	if policy.ValidRecords != 0 {
+		t.Errorf("Expected 0 valid DANE records, got %d", policy.ValidRecords)
+	}
+}
+
