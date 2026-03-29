@@ -313,3 +313,94 @@ func TestServiceRemoveMessage(t *testing.T) {
 		t.Errorf("expected 0 documents after remove, got %d", idx.DocCount())
 	}
 }
+
+// TestParseQuery tests the parseQuery function
+func TestParseQuery(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		expected []QueryTerm
+	}{
+		{
+			name:  "simple term",
+			query: "hello",
+			expected: []QueryTerm{
+				{Field: "", Value: "hello", Boost: 1.0},
+			},
+		},
+		{
+			name:  "multiple terms",
+			query: "hello world",
+			expected: []QueryTerm{
+				{Field: "", Value: "hello", Boost: 1.0},
+				{Field: "", Value: "world", Boost: 1.0},
+			},
+		},
+		{
+			name:  "field search",
+			query: "from:john",
+			expected: []QueryTerm{
+				{Field: "from", Value: "john", Boost: 2.0},
+			},
+		},
+		{
+			name:  "multiple fields",
+			query: "from:john subject:hello",
+			expected: []QueryTerm{
+				{Field: "from", Value: "john", Boost: 2.0},
+				{Field: "subject", Value: "hello", Boost: 2.0},
+			},
+		},
+		{
+			name:  "mixed field and text",
+			query: "from:john hello world",
+			expected: []QueryTerm{
+				{Field: "from", Value: "john", Boost: 2.0},
+				{Field: "", Value: "hello", Boost: 1.0},
+				{Field: "", Value: "world", Boost: 1.0},
+			},
+		},
+		{
+			name:  "has attachment",
+			query: "has:attachment",
+			expected: []QueryTerm{
+				{Field: "has", Value: "attachment", Boost: 2.0},
+			},
+		},
+		{
+			name:     "empty query",
+			query:    "",
+			expected: []QueryTerm{},
+		},
+		{
+			name:  "only field pattern",
+			query: "subject:test",
+			expected: []QueryTerm{
+				{Field: "subject", Value: "test", Boost: 2.0},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := parseQuery(tc.query)
+
+			if len(result) != len(tc.expected) {
+				t.Errorf("expected %d terms, got %d: %v", len(tc.expected), len(result), result)
+				return
+			}
+
+			for i, term := range result {
+				if term.Field != tc.expected[i].Field {
+					t.Errorf("term %d: expected field '%s', got '%s'", i, tc.expected[i].Field, term.Field)
+				}
+				if term.Value != tc.expected[i].Value {
+					t.Errorf("term %d: expected value '%s', got '%s'", i, tc.expected[i].Value, term.Value)
+				}
+				if term.Boost != tc.expected[i].Boost {
+					t.Errorf("term %d: expected boost %f, got %f", i, tc.expected[i].Boost, term.Boost)
+				}
+			}
+		})
+	}
+}
