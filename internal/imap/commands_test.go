@@ -2646,3 +2646,212 @@ func TestHandleCommandWithContinuation(t *testing.T) {
 		t.Logf("expected continuation request (+), got: %s", written)
 	}
 }
+
+// TestParseSearchCriteriaAllVariations tests parseSearchCriteria with all criteria types
+func TestParseSearchCriteriaAllVariations(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		expected SearchCriteria
+	}{
+		{
+			name: "ALL",
+			args: []string{"ALL"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "ANSWERED",
+			args: []string{"ANSWERED"},
+			expected: SearchCriteria{
+				All:      true,
+				Answered: true,
+			},
+		},
+		{
+			name: "DELETED",
+			args: []string{"DELETED"},
+			expected: SearchCriteria{
+				All:     true,
+				Deleted: true,
+			},
+		},
+		{
+			name: "FLAGGED",
+			args: []string{"FLAGGED"},
+			expected: SearchCriteria{
+				All:     true,
+				Flagged: true,
+			},
+		},
+		{
+			name: "NEW",
+			args: []string{"NEW"},
+			expected: SearchCriteria{
+				All:  true,
+				New:  true,
+			},
+		},
+		{
+			name: "OLD",
+			args: []string{"OLD"},
+			expected: SearchCriteria{
+				All: true,
+				Old: true,
+			},
+		},
+		{
+			name: "RECENT",
+			args: []string{"RECENT"},
+			expected: SearchCriteria{
+				All:    true,
+				Recent: true,
+			},
+		},
+		{
+			name: "SEEN",
+			args: []string{"SEEN"},
+			expected: SearchCriteria{
+				All:  true,
+				Seen: true,
+			},
+		},
+		{
+			name: "UNANSWERED",
+			args: []string{"UNANSWERED"},
+			expected: SearchCriteria{
+				All:        true,
+				Unanswered: true,
+			},
+		},
+		{
+			name: "UNDELETED",
+			args: []string{"UNDELETED"},
+			expected: SearchCriteria{
+				All:       true,
+				Undeleted: true,
+			},
+		},
+		{
+			name: "UNFLAGGED",
+			args: []string{"UNFLAGGED"},
+			expected: SearchCriteria{
+				All:       true,
+				Unflagged: true,
+			},
+		},
+		{
+			name: "UNSEEN",
+			args: []string{"UNSEEN"},
+			expected: SearchCriteria{
+				All:    true,
+				Unseen: true,
+			},
+		},
+		{
+			name: "DRAFT",
+			args: []string{"DRAFT"},
+			expected: SearchCriteria{
+				All:   true,
+				Draft: true,
+			},
+		},
+		{
+			name: "UNDRAFT",
+			args: []string{"UNDRAFT"},
+			expected: SearchCriteria{
+				All:     true,
+				Undraft: true,
+			},
+		},
+		{
+			name: "FROM",
+			args: []string{"FROM", "test@example.com"},
+			expected: SearchCriteria{
+				All:  true,
+				From: "test@example.com",
+			},
+		},
+		{
+			name: "TO",
+			args: []string{"TO", "recipient@example.com"},
+			expected: SearchCriteria{
+				All: true,
+				To:  "recipient@example.com",
+			},
+		},
+		{
+			name: "CC",
+			args: []string{"CC", "cc@example.com"},
+			expected: SearchCriteria{
+				All: true,
+				Cc:  "cc@example.com",
+			},
+		},
+		{
+			name: "BCC",
+			args: []string{"BCC", "bcc@example.com"},
+			expected: SearchCriteria{
+				All:  true,
+				Bcc:  "bcc@example.com",
+			},
+		},
+		{
+			name: "SUBJECT",
+			args: []string{"SUBJECT", "test subject"},
+			expected: SearchCriteria{
+				All:     true,
+				Subject: "test subject",
+			},
+		},
+		{
+			name: "Multiple criteria",
+			args: []string{"FROM", "test@example.com", "SUBJECT", "hello", "SEEN"},
+			expected: SearchCriteria{
+				All:     true,
+				From:    "test@example.com",
+				Subject: "hello",
+				Seen:    true,
+			},
+		},
+		{
+			name: "Empty args",
+			args: []string{},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseSearchCriteria(tt.args)
+
+			if result.All != tt.expected.All {
+				t.Errorf("All = %v, want %v", result.All, tt.expected.All)
+			}
+			if result.Answered != tt.expected.Answered {
+				t.Errorf("Answered = %v, want %v", result.Answered, tt.expected.Answered)
+			}
+			if result.Deleted != tt.expected.Deleted {
+				t.Errorf("Deleted = %v, want %v", result.Deleted, tt.expected.Deleted)
+			}
+			if result.Flagged != tt.expected.Flagged {
+				t.Errorf("Flagged = %v, want %v", result.Flagged, tt.expected.Flagged)
+			}
+			if result.Seen != tt.expected.Seen {
+				t.Errorf("Seen = %v, want %v", result.Seen, tt.expected.Seen)
+			}
+			if result.From != tt.expected.From {
+				t.Errorf("From = %v, want %v", result.From, tt.expected.From)
+			}
+			if result.To != tt.expected.To {
+				t.Errorf("To = %v, want %v", result.To, tt.expected.To)
+			}
+			if result.Subject != tt.expected.Subject {
+				t.Errorf("Subject = %v, want %v", result.Subject, tt.expected.Subject)
+			}
+		})
+	}
+}
