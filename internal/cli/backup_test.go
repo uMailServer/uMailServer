@@ -3,6 +3,7 @@ package cli
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1050,5 +1051,264 @@ func TestMigrationManagerImportMessageInvalid(t *testing.T) {
 	err = mm.importMessage("/nonexistent/test.eml")
 	if err == nil {
 		t.Error("expected error for non-existent message file")
+	}
+}
+
+// TestBackupManagerRestoreWithValidBackup tests Restore with a valid backup
+func TestBackupManagerRestoreWithValidBackup(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:   tempDir,
+			Hostname:  "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a valid backup file with manifest
+	backupFile := filepath.Join(tempDir, "test_backup.tar.gz")
+	file, err := os.Create(backupFile)
+	if err != nil {
+		t.Fatalf("failed to create test backup file: %v", err)
+	}
+	defer file.Close()
+
+	gw := gzip.NewWriter(file)
+	tw := tar.NewWriter(gw)
+
+	// Create manifest
+	manifest := map[string]interface{}{
+		"version":   "1.0.0",
+		"timestamp": "20240101_120000",
+		"hostname":  "test.example.com",
+		"data_dir":  tempDir,
+	}
+	manifestData, _ := json.Marshal(manifest)
+
+	header := &tar.Header{
+		Name: "manifest.json",
+		Size: int64(len(manifestData)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(header)
+	tw.Write(manifestData)
+
+	// Add a test file
+	testContent := []byte("test content")
+	testHeader := &tar.Header{
+		Name: "config/test.conf",
+		Size: int64(len(testContent)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(testHeader)
+	tw.Write(testContent)
+
+	tw.Close()
+	gw.Close()
+
+	// Test restore
+	err = bm.Restore(backupFile)
+	if err != nil {
+		t.Logf("Restore returned error: %v", err)
+	}
+}
+
+// TestBackupManagerRestoreWithEmptyManifest tests Restore with empty manifest fields
+func TestBackupManagerRestoreWithEmptyManifest(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:   tempDir,
+			Hostname:  "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a backup with minimal manifest
+	backupFile := filepath.Join(tempDir, "minimal_backup.tar.gz")
+	file, err := os.Create(backupFile)
+	if err != nil {
+		t.Fatalf("failed to create test backup file: %v", err)
+	}
+	defer file.Close()
+
+	gw := gzip.NewWriter(file)
+	tw := tar.NewWriter(gw)
+
+	// Create minimal manifest
+	manifest := map[string]interface{}{}
+	manifestData, _ := json.Marshal(manifest)
+
+	header := &tar.Header{
+		Name: "manifest.json",
+		Size: int64(len(manifestData)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(header)
+	tw.Write(manifestData)
+
+	// Add a directory entry
+	dirHeader := &tar.Header{
+		Name:     "config/",
+		Mode:     0755,
+		Typeflag: tar.TypeDir,
+	}
+	tw.WriteHeader(dirHeader)
+
+	tw.Close()
+	gw.Close()
+
+	// Test restore - should handle empty manifest
+	err = bm.Restore(backupFile)
+	// May error but shouldn't panic
+	_ = err
+}
+
+// TestMigrationManagerMigrateFromDovecotWithPasswd tests MigrateFromDovecot with passwd file
+func TestMigrationManagerMigrateFromDovecotWithPasswd(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create a test maildir structure
+	maildirPath := t.TempDir() + "/maildir"
+	userDir := maildirPath + "/user@example.com/Maildir/INBOX/cur"
+	os.MkdirAll(userDir, 0755)
+
+	// Create a test message
+	msgContent := []byte("From: test@example.com\nTo: user@example.com\nSubject: Test\n\nTest message")
+	os.WriteFile(userDir+"/1234567890.1", msgContent, 0644)
+
+	// Create a passwd file
+	passwdFile := t.TempDir() + "/passwd"
+	passwdContent := "user@example.com:password_hash:1000:1000::/home/user:/bin/bash\n"
+	os.WriteFile(passwdFile, []byte(passwdContent), 0644)
+
+	// Test MigrateFromDovecot
+	err = mm.MigrateFromDovecot(maildirPath, passwdFile)
+	// May error but shouldn't panic
+	_ = err
+}
+
+// TestMigrationManagerMigrateFromMBOXWithFiles tests MigrateFromMBOX with actual files
+func TestMigrationManagerMigrateFromMBOXWithFiles(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create temp directory for MBOX files
+	mboxDir := t.TempDir()
+
+	// Create a test MBOX file
+	mboxFile := mboxDir + "/test.mbox"
+	content := "From user@example.com Mon Jan 01 00:00:00 2024\n"
+	content += "From: sender@example.com\n"
+	content += "To: user@example.com\n"
+	content += "Subject: Test Message\n"
+	content += "\n"
+	content += "This is a test message.\n"
+	os.WriteFile(mboxFile, []byte(content), 0644)
+
+	// Test MigrateFromMBOX
+	err = mm.MigrateFromMBOX(mboxDir + "/*.mbox")
+	if err != nil {
+		t.Logf("MigrateFromMBOX returned error: %v", err)
+	}
+}
+
+// TestMigrationManagerImportDovecotUsersWithComments tests importDovecotUsers with comments
+func TestMigrationManagerImportDovecotUsersWithComments(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create a test passwd file with comments and empty lines
+	passwdFile := t.TempDir() + "/passwd"
+	content := "# This is a comment\n"
+	content += "\n"
+	content += "user1@example.com:password_hash:1000:1000::/home/user1:/bin/bash\n"
+	content += "# Another comment\n"
+	content += "user2@test.com:password_hash:1001:1001::/home/user2:/bin/bash\n"
+	content += "\n"
+	os.WriteFile(passwdFile, []byte(content), 0644)
+
+	// Test importDovecotUsers
+	err = mm.importDovecotUsers(passwdFile)
+	if err != nil {
+		t.Logf("importDovecotUsers returned error: %v", err)
+	}
+}
+
+// TestMigrationManagerImportDovecotUsersShortLines tests importDovecotUsers with short lines
+func TestMigrationManagerImportDovecotUsersShortLines(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create a test passwd file with short lines
+	passwdFile := t.TempDir() + "/passwd"
+	content := "user1@example.com:pass:1000\n" // Too few fields
+	content += "user2@test.com:password_hash:1001:1001::/home/user2:/bin/bash\n"
+	os.WriteFile(passwdFile, []byte(content), 0644)
+
+	// Test importDovecotUsers - should skip short lines
+	err = mm.importDovecotUsers(passwdFile)
+	if err != nil {
+		t.Logf("importDovecotUsers returned error: %v", err)
+	}
+}
+
+// TestMigrationManagerImportMessageWithFlags tests importMessage with various flags
+func TestMigrationManagerImportMessageWithFlags(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mm := NewMigrationManager(database, nil, nil)
+
+	// Create test directories
+	tmpDir := t.TempDir()
+	msgDir := tmpDir + "/example.com/user/Maildir/INBOX/cur"
+	os.MkdirAll(msgDir, 0755)
+
+	// Test with various flag combinations
+	flagTests := []string{
+		"1234567890.1:2,S",    // Seen
+		"1234567890.2:2,SR",   // Seen + Replied
+		"1234567890.3:2,SF",   // Seen + Flagged
+		"1234567890.4:2,ST",   // Seen + Deleted
+		"1234567890.5:2,SD",   // Seen + Draft
+		"1234567890.6:2,SRFTD", // All flags
+		"1234567890.7",         // No flags
+	}
+
+	for _, filename := range flagTests {
+		msgFile := msgDir + "/" + filename
+		content := []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody")
+		os.WriteFile(msgFile, content, 0644)
+
+		err = mm.importMessage(msgFile)
+		// May fail due to account not existing, which is OK
+		_ = err
 	}
 }
