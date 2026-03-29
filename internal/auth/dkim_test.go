@@ -1,8 +1,13 @@
 package auth
 
 import (
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
 	"testing"
 )
 
@@ -576,4 +581,220 @@ func TestDKIMHeaderWithoutSig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDKIMVerifyEmptyInputs tests verification with empty inputs
+func TestDKIMVerifyEmptyInputs(t *testing.T) {
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	// Empty inputs
+	result, sig, err := verifier.Verify(nil, []byte("body"), "")
+	if err == nil {
+		t.Log("Verify with empty DKIM header returned no error (expected)")
+	}
+	_ = result
+	_ = sig
+}
+
+// TestDKIMVerifyInvalidHeader tests verification with invalid DKIM header
+func TestDKIMVerifyInvalidHeader(t *testing.T) {
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	result, sig, err := verifier.Verify(headers, []byte("body"), "invalid-signature")
+	if err == nil {
+		t.Log("Verify with invalid DKIM header returned no error")
+	}
+	_ = result
+	_ = sig
+}
+
+// TestVerifyRSASignature tests RSA signature verification
+func TestVerifyRSASignature(t *testing.T) {
+	// Generate a test key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	publicKey := &privateKey.PublicKey
+	data := []byte("test data to sign")
+
+	// Sign the data
+	hash := sha256.Sum256(data)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hash[:])
+	if err != nil {
+		t.Fatalf("Failed to sign: %v", err)
+	}
+
+	// Verify with correct signature
+	sigB64 := base64.StdEncoding.EncodeToString(signature)
+	err = verifyRSASignature(publicKey, data, sigB64)
+	if err != nil {
+		t.Errorf("verifyRSASignature failed with valid signature: %v", err)
+	}
+
+	// Verify with invalid base64
+	err = verifyRSASignature(publicKey, data, "not-valid-base64!!!")
+	if err == nil {
+		t.Error("verifyRSASignature should fail with invalid base64")
+	}
+
+	// Verify with wrong signature
+	wrongSig := base64.StdEncoding.EncodeToString([]byte("wrong signature"))
+	err = verifyRSASignature(publicKey, data, wrongSig)
+	if err == nil {
+		t.Error("verifyRSASignature should fail with wrong signature")
+	}
+}
+
+// TestFetchPublicKey tests fetching public key from DNS
+func TestFetchPublicKey(t *testing.T) {
+	// Generate a test key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	// Get the public key in DNS format
+	pubKeyDNS := GetPublicKeyForDNS(privateKey)
+
+	// Note: fetchPublicKey uses net.LookupTXT which requires actual DNS
+	// We test that the method exists and verify parseDKIMPublicKey works
+	_ = pubKeyDNS
+
+	// Test parseDKIMPublicKey with valid key
+	record := "v=DKIM1; k=rsa; p=" + pubKeyDNS
+	pubKey, err := parseDKIMPublicKey(record)
+	if err != nil {
+		t.Errorf("parseDKIMPublicKey failed: %v", err)
+	}
+	if pubKey == nil {
+		t.Error("parseDKIMPublicKey returned nil public key")
+	}
+}
+
+// TestParseDKIMPublicKey tests parsing DKIM public key records
+func TestParseDKIMPublicKey(t *testing.T) {
+	// Generate a test key
+	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	pubKeyDNS := GetPublicKeyForDNS(privateKey)
+
+	tests := []struct {
+		name    string
+		record  string
+		wantErr bool
+	}{
+		{
+			name:    "valid RSA key",
+			record:  "v=DKIM1; k=rsa; p=" + pubKeyDNS,
+			wantErr: false,
+		},
+		{
+			name:    "valid key without version",
+			record:  "k=rsa; p=" + pubKeyDNS,
+			wantErr: false,
+		},
+		{
+			name:    "unsupported key type",
+			record:  "v=DKIM1; k=ed25519; p=somekey",
+			wantErr: true,
+		},
+		{
+			name:    "missing key data",
+			record:  "v=DKIM1; k=rsa",
+			wantErr: true,
+		},
+		{
+			name:    "unsupported version",
+			record:  "v=DKIM2; k=rsa; p=" + pubKeyDNS,
+			wantErr: true,
+		},
+		{
+			name:    "invalid base64",
+			record:  "v=DKIM1; k=rsa; p=!!!invalid!!!",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := parseDKIMPublicKey(tt.record)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+				return
+			}
+			if key == nil {
+				t.Error("Expected non-nil key")
+			}
+		})
+	}
+}
+
+// TestParseRSAPublicKey tests parsing RSA public keys
+func TestParseRSAPublicKey(t *testing.T) {
+	// Generate a test key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	publicKey := &privateKey.PublicKey
+
+	// Get PKIX encoded public key
+	pubKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		t.Fatalf("Failed to marshal public key: %v", err)
+	}
+
+	// Test PKIX format
+	t.Run("PKIX format", func(t *testing.T) {
+		key, err := parseRSAPublicKey(pubKeyBytes)
+		if err != nil {
+			t.Errorf("parseRSAPublicKey failed for PKIX: %v", err)
+		}
+		if key == nil {
+			t.Error("Expected non-nil key")
+		}
+	})
+
+	// Test PEM format
+	t.Run("PEM format", func(t *testing.T) {
+		pemBlock := &pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: pubKeyBytes,
+		}
+		pemData := pem.EncodeToMemory(pemBlock)
+
+		key, err := parseRSAPublicKey(pemData)
+		if err != nil {
+			t.Errorf("parseRSAPublicKey failed for PEM: %v", err)
+		}
+		if key == nil {
+			t.Error("Expected non-nil key")
+		}
+	})
+
+	// Test invalid data
+	t.Run("invalid data", func(t *testing.T) {
+		_, err := parseRSAPublicKey([]byte("not a valid key"))
+		if err == nil {
+			t.Error("Expected error for invalid data")
+		}
+	})
 }

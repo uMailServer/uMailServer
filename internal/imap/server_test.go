@@ -1276,3 +1276,51 @@ func TestSessionHandleStatus(t *testing.T) {
 		client.Close()
 	}
 }
+
+// TestServerStartTLSNoTLSConfig tests StartTLS without TLS config
+func TestServerStartTLSNoTLSConfig(t *testing.T) {
+	mailstore := &mockMailstore{}
+	s := NewServer(&Config{Addr: ":1143"}, mailstore)
+
+	err := s.StartTLS()
+	if err == nil {
+		t.Error("Expected error when starting TLS without config")
+	}
+	if !strings.Contains(err.Error(), "TLS config not provided") {
+		t.Errorf("Expected 'TLS config not provided' error, got: %v", err)
+	}
+}
+
+// TestAcceptLoopShutdown tests acceptLoop exits on shutdown signal
+func TestAcceptLoopShutdown(t *testing.T) {
+	mailstore := &mockMailstore{}
+	s := NewServer(&Config{Addr: "127.0.0.1:0"}, mailstore)
+
+	// Create a listener
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to create listener: %v", err)
+	}
+	defer listener.Close()
+
+	// Initialize shutdown channel
+	s.shutdown = make(chan struct{})
+	s.running = true
+
+	// Start acceptLoop
+	done := make(chan bool)
+	go func() {
+		s.acceptLoop(listener)
+		done <- true
+	}()
+
+	// Close shutdown channel to trigger exit
+	close(s.shutdown)
+
+	select {
+	case <-done:
+		// Success
+	case <-time.After(500 * time.Millisecond):
+		t.Error("Timeout waiting for acceptLoop to exit")
+	}
+}

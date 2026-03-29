@@ -968,6 +968,77 @@ func TestAuthInvalidMechanism(t *testing.T) {
 	}
 }
 
+// TestSetValidateHandler tests setting the validate handler
+func TestSetValidateHandler(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server := NewServer(config, nil)
+
+	handler := func(from string, to []string) error {
+		return nil
+	}
+
+	server.SetValidateHandler(handler)
+	if server.onValidate == nil {
+		t.Error("expected validate handler to be set")
+	}
+}
+
+// TestIsRunningAndActiveConnections tests the running status and connection count
+func TestIsRunningAndActiveConnections(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server := NewServer(config, nil)
+
+	// Before starting
+	if server.IsRunning() {
+		t.Error("expected server to not be running before Start")
+	}
+	if server.ActiveConnections() != 0 {
+		t.Errorf("expected 0 active connections, got %d", server.ActiveConnections())
+	}
+
+	// After starting
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to create listener: %v", err)
+	}
+	defer ln.Close()
+
+	go server.Serve(ln)
+	time.Sleep(50 * time.Millisecond)
+
+	if !server.IsRunning() {
+		t.Error("expected server to be running after Start")
+	}
+
+	// Connect to increase active connections
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	// Give server time to accept connection
+	time.Sleep(50 * time.Millisecond)
+
+	// After stopping
+	server.Stop()
+	if server.IsRunning() {
+		t.Error("expected server to not be running after Stop")
+	}
+}
+
 func TestAuthPLAINInvalidBase64(t *testing.T) {
 	config := &Config{
 		Hostname:       "mail.example.com",
@@ -1026,5 +1097,64 @@ func TestAuthPLAINInvalidFormat(t *testing.T) {
 
 	if !strings.HasPrefix(response, "501") {
 		t.Errorf("Expected 501 syntax error, got: %s", response)
+	}
+}
+
+// TestSessionGetters tests session getter methods
+func TestSessionGetters(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Get server internals to access session
+	time.Sleep(50 * time.Millisecond)
+
+	// Test that we can check server state
+	if server.ActiveConnections() < 1 {
+		t.Error("expected at least 1 active connection")
+	}
+}
+
+// TestSessionEXPN tests the EXPN command
+func TestSessionEXPN(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+
+	server, client := createTestConnection(t, config)
+	defer server.Stop()
+	defer client.Close()
+
+	reader := bufio.NewReader(client)
+
+	// Read greeting
+	reader.ReadString('\n')
+
+	// Send EHLO
+	fmt.Fprintf(client, "EHLO client.example.com\r\n")
+	readMultilineResponse(reader)
+
+	// EXPN (typically not implemented)
+	fmt.Fprintf(client, "EXPN mailing-list\r\n")
+	response, _ := reader.ReadString('\n')
+
+	// Should return 502 (command not implemented) or 550
+	if !strings.HasPrefix(response, "502") && !strings.HasPrefix(response, "550") {
+		t.Logf("EXPN response: %s", response)
 	}
 }

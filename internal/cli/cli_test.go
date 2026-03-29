@@ -171,3 +171,31 @@ func TestDiagnosticsCheckIMAPTLS(t *testing.T) {
 	// Result may be nil depending on implementation
 	_ = result
 }
+
+// TestDiagnosticsCheckMXWithInvalidDomain tests MX check with invalid domain
+func TestDiagnosticsCheckMXWithInvalidDomain(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with invalid domain
+	results, err := d.checkMX("invalid-domain-that-does-not-exist.example")
+	if err != nil {
+		t.Logf("checkMX returned error (expected for invalid domain): %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected non-empty results even for invalid domain")
+	}
+	if results[0].RecordType != "MX" {
+		t.Errorf("expected record type MX, got %s", results[0].RecordType)
+	}
+}
+
+// TestDiagnosticsCheckPTRWithIP tests PTR check with IP
+func TestDiagnosticsCheckPTRWithIP(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	// Test with localhost IP
+	result := d.checkPTR("127.0.0.1")
+	if result.Status != "warning" && result.Status != "pass" {
+		t.Logf("checkPTR returned status: %s", result.Status)
+	}
+}

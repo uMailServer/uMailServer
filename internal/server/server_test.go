@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/config"
+	"github.com/umailserver/umailserver/internal/db"
 )
 
 func TestParseLogLevel(t *testing.T) {
@@ -1029,3 +1030,247 @@ func TestPIDFileCreateExisting(t *testing.T) {
 	pidFile.Remove()
 }
 
+// TestAuthenticateSuccess tests successful authentication
+func TestAuthenticateSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+		Logging: config.LoggingConfig{
+			Level: "info",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	hashedPassword := "$2a$10$BXVavbSB/53WBHDuJlzIHeCsgSTgzrOqtbdPmrkPa68dA3jYmKux2"
+	account := &db.AccountData{
+		Email:        "testuser@test.example.com",
+		LocalPart:    "testuser",
+		Domain:       "test.example.com",
+		PasswordHash: hashedPassword,
+		IsActive:     true,
+		QuotaLimit:   1000000,
+		CreatedAt:    time.Now(),
+	}
+
+	if err := server.database.CreateAccount(account); err != nil {
+		t.Fatalf("Failed to create account: %v", err)
+	}
+
+	authenticated, err := server.authenticate("testuser@test.example.com", "testpass123")
+	if err != nil {
+		t.Errorf("authenticate returned error: %v", err)
+	}
+	if !authenticated {
+		t.Error("Expected authentication to succeed")
+	}
+}
+
+// TestAuthenticateInvalidPassword tests authentication with wrong password
+func TestAuthenticateInvalidPassword(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+		Logging: config.LoggingConfig{
+			Level: "info",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	hashedPassword := "$2a$10$BXVavbSB/53WBHDuJlzIHeCsgSTgzrOqtbdPmrkPa68dA3jYmKux2"
+	account := &db.AccountData{
+		Email:        "testuser@test.example.com",
+		LocalPart:    "testuser",
+		Domain:       "test.example.com",
+		PasswordHash: hashedPassword,
+		IsActive:     true,
+		CreatedAt:    time.Now(),
+	}
+
+	if err := server.database.CreateAccount(account); err != nil {
+		t.Fatalf("Failed to create account: %v", err)
+	}
+
+	authenticated, err := server.authenticate("testuser@test.example.com", "wrongpassword")
+	if err != nil {
+		t.Errorf("authenticate returned error: %v", err)
+	}
+	if authenticated {
+		t.Error("Expected authentication to fail with wrong password")
+	}
+}
+
+// TestDeliverLocalQuotaExceeded tests delivery when quota is exceeded
+func TestDeliverLocalQuotaExceeded(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+		Logging: config.LoggingConfig{
+			Level: "info",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	account := &db.AccountData{
+		Email:        "fulluser@test.example.com",
+		LocalPart:    "fulluser",
+		Domain:       "test.example.com",
+		PasswordHash: "hash",
+		IsActive:     true,
+		QuotaUsed:    1000000,
+		QuotaLimit:   1000000,
+		CreatedAt:    time.Now(),
+	}
+	if err := server.database.CreateAccount(account); err != nil {
+		t.Fatalf("Failed to create account: %v", err)
+	}
+
+	msgData := []byte("Subject: Test\r\n\r\nBody")
+	err = server.deliverLocal("fulluser", "test.example.com", "sender@example.com", msgData)
+
+	if err == nil {
+		t.Error("Expected error for quota exceeded")
+	}
+}
+
+// TestDeliverLocalNonExistentUser tests delivery to non-existent user
+func TestDeliverLocalNonExistentUser(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+		Logging: config.LoggingConfig{
+			Level: "info",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	msgData := []byte("Subject: Test\r\n\r\nBody")
+	err = server.deliverLocal("nonexistent", "test.example.com", "sender@example.com", msgData)
+
+	if err == nil {
+		t.Error("Expected error for non-existent user")
+	}
+}
+
+// TestDeliverLocalInactiveUser tests delivery to inactive user
+func TestDeliverLocalInactiveUser(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+		Logging: config.LoggingConfig{
+			Level: "info",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	account := &db.AccountData{
+		Email:        "inactive@test.example.com",
+		LocalPart:    "inactive",
+		Domain:       "test.example.com",
+		PasswordHash: "hash",
+		IsActive:     false,
+		CreatedAt:    time.Now(),
+	}
+	if err := server.database.CreateAccount(account); err != nil {
+		t.Fatalf("Failed to create account: %v", err)
+	}
+
+	msgData := []byte("Subject: Test\r\n\r\nBody")
+	err = server.deliverLocal("inactive", "test.example.com", "sender@example.com", msgData)
+
+	if err == nil {
+		t.Error("Expected error for inactive user")
+	}
+}
+
+// TestRelayMessageWithoutQueue tests relaying when queue is nil
+func TestRelayMessageWithoutQueue(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "test.example.com",
+			DataDir:  tmpDir,
+		},
+		Database: config.DatabaseConfig{
+			Path: tmpDir + "/test.db",
+		},
+		Logging: config.LoggingConfig{
+			Level: "info",
+		},
+	}
+
+	server, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer server.Stop()
+
+	server.queue = nil
+
+	msgData := []byte("Subject: Test\r\n\r\nBody")
+	err = server.relayMessage("sender@test.example.com", "recipient@external.com", msgData)
+
+	if err != nil {
+		t.Errorf("relayMessage without queue should not error, got: %v", err)
+	}
+}
