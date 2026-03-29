@@ -375,3 +375,139 @@ func containsSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// TestCheckPolicy tests the CheckPolicy method
+func TestCheckPolicy(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewMTASTSValidator(resolver)
+
+	// Add a policy to cache
+	validator.cacheMu.Lock()
+	validator.cache["example.com"] = &MTASTSCacheEntry{
+		Policy: &MTASTSPolicy{
+			Version: "STSv1",
+			Mode:    MTASTSModeEnforce,
+			MX:      []string{"mail.example.com", "*.backup.example.com"},
+			MaxAge:  86400,
+		},
+		Domain:    "example.com",
+		FetchedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	validator.cacheMu.Unlock()
+
+	tests := []struct {
+		name          string
+		domain        string
+		mx            string
+		expectedValid bool
+		expectPolicy  bool
+	}{
+		{
+			name:          "valid MX exact match",
+			domain:        "example.com",
+			mx:            "mail.example.com",
+			expectedValid: true,
+			expectPolicy:  true,
+		},
+		{
+			name:          "valid MX wildcard match",
+			domain:        "example.com",
+			mx:            "mx.backup.example.com",
+			expectedValid: true,
+			expectPolicy:  true,
+		},
+		{
+			name:          "invalid MX",
+			domain:        "example.com",
+			mx:            "mail.other.com",
+			expectedValid: false,
+			expectPolicy:  true,
+		},
+		{
+			name:          "no policy domain",
+			domain:        "nopolicy.com",
+			mx:            "mail.nopolicy.com",
+			expectedValid: true,
+			expectPolicy:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			valid, policy, err := validator.CheckPolicy(context.Background(), tt.domain, tt.mx)
+			if err != nil {
+				t.Fatalf("CheckPolicy failed: %v", err)
+			}
+			if valid != tt.expectedValid {
+				t.Errorf("valid = %v, want %v", valid, tt.expectedValid)
+			}
+			if tt.expectPolicy && policy == nil {
+				t.Error("expected policy, got nil")
+			}
+			if !tt.expectPolicy && policy != nil {
+				t.Error("expected nil policy")
+			}
+		})
+	}
+}
+
+// TestIsMTASTSEnforced tests the IsMTASTSEnforced method
+func TestIsMTASTSEnforced(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewMTASTSValidator(resolver)
+
+	// Test with no policy
+	enforced, err := validator.IsMTASTSEnforced(context.Background(), "nopolicy.com")
+	if err != nil {
+		t.Fatalf("IsMTASTSEnforced failed: %v", err)
+	}
+	if enforced {
+		t.Error("expected no enforcement for domain without policy")
+	}
+
+	// Add an enforced policy to cache
+	validator.cacheMu.Lock()
+	validator.cache["enforced.com"] = &MTASTSCacheEntry{
+		Policy: &MTASTSPolicy{
+			Version: "STSv1",
+			Mode:    MTASTSModeEnforce,
+			MX:      []string{"mail.enforced.com"},
+			MaxAge:  86400,
+		},
+		Domain:    "enforced.com",
+		FetchedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	// Add a testing mode policy
+	validator.cache["testing.com"] = &MTASTSCacheEntry{
+		Policy: &MTASTSPolicy{
+			Version: "STSv1",
+			Mode:    MTASTSModeTesting,
+			MX:      []string{"mail.testing.com"},
+			MaxAge:  86400,
+		},
+		Domain:    "testing.com",
+		FetchedAt: time.Now(),
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	validator.cacheMu.Unlock()
+
+	// Test enforced policy
+	enforced, err = validator.IsMTASTSEnforced(context.Background(), "enforced.com")
+	if err != nil {
+		t.Fatalf("IsMTASTSEnforced failed: %v", err)
+	}
+	if !enforced {
+		t.Error("expected enforcement for domain with enforce policy")
+	}
+
+	// Test testing mode (not enforced)
+	enforced, err = validator.IsMTASTSEnforced(context.Background(), "testing.com")
+	if err != nil {
+		t.Fatalf("IsMTASTSEnforced failed: %v", err)
+	}
+	if enforced {
+		t.Error("expected no enforcement for domain with testing policy")
+	}
+}

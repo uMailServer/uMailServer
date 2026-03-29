@@ -314,3 +314,117 @@ func TestAccountKey(t *testing.T) {
 		t.Errorf("expected %s, got %s", expected, key)
 	}
 }
+
+// TestBoltDB tests the BoltDB getter
+func TestBoltDB(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test.db"
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	// Test that BoltDB returns the underlying database
+	boltDB := db.BoltDB()
+	if boltDB == nil {
+		t.Error("BoltDB() returned nil")
+	}
+}
+
+// TestUpdateDomain tests updating a domain
+func TestUpdateDomain(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test.db"
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	// Create a domain
+	domain := &DomainData{
+		Name:          "update-test.com",
+		MaxAccounts:   100,
+		MaxMailboxSize: 5 * 1024 * 1024 * 1024,
+		DKIMSelector:  "default",
+		IsActive:      true,
+	}
+
+	if err := db.CreateDomain(domain); err != nil {
+		t.Fatalf("CreateDomain failed: %v", err)
+	}
+
+	// Update the domain
+	domain.MaxAccounts = 200
+	domain.DKIMSelector = "updated"
+
+	if err := db.UpdateDomain(domain); err != nil {
+		t.Fatalf("UpdateDomain failed: %v", err)
+	}
+
+	// Verify the update
+	retrieved, err := db.GetDomain("update-test.com")
+	if err != nil {
+		t.Fatalf("GetDomain failed: %v", err)
+	}
+	if retrieved.MaxAccounts != 200 {
+		t.Errorf("expected MaxAccounts 200, got %d", retrieved.MaxAccounts)
+	}
+	if retrieved.DKIMSelector != "updated" {
+		t.Errorf("expected DKIMSelector 'updated', got %s", retrieved.DKIMSelector)
+	}
+	if retrieved.UpdatedAt.IsZero() {
+		t.Error("expected UpdatedAt to be set")
+	}
+}
+
+// TestUpdateQueueEntry tests updating a queue entry
+func TestUpdateQueueEntry(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test.db"
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	// Create a queue entry
+	entry := &QueueEntry{
+		ID:          "update-queue-test",
+		From:        "sender@example.com",
+		To:          []string{"recipient@example.com"},
+		MessagePath: "/tmp/update-test",
+		Status:      "pending",
+		NextRetry:   time.Now(),
+		RetryCount:  0,
+	}
+
+	if err := db.Enqueue(entry); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	// Update the entry
+	entry.Status = "retrying"
+	entry.RetryCount = 1
+	entry.NextRetry = time.Now().Add(time.Minute)
+
+	if err := db.UpdateQueueEntry(entry); err != nil {
+		t.Fatalf("UpdateQueueEntry failed: %v", err)
+	}
+
+	// Verify the update
+	retrieved, err := db.GetQueueEntry("update-queue-test")
+	if err != nil {
+		t.Fatalf("GetQueueEntry failed: %v", err)
+	}
+	if retrieved.Status != "retrying" {
+		t.Errorf("expected Status 'retrying', got %s", retrieved.Status)
+	}
+	if retrieved.RetryCount != 1 {
+		t.Errorf("expected RetryCount 1, got %d", retrieved.RetryCount)
+	}
+}
