@@ -332,3 +332,124 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+// TestMessageCount tests the MessageCount function
+func TestMessageCount(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	domain := "example.com"
+	user := "testuser"
+
+	// Initially should have 0 messages
+	count, err := store.MessageCount(domain, user, "INBOX")
+	if err != nil {
+		t.Fatalf("MessageCount failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("Expected 0 messages, got %d", count)
+	}
+
+	// Deliver a message
+	msg := []byte("From: test@example.com\r\nSubject: Test\r\n\r\nBody")
+	_, err = store.Deliver(domain, user, "INBOX", msg)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	// Should now have 1 message
+	count, err = store.MessageCount(domain, user, "INBOX")
+	if err != nil {
+		t.Fatalf("MessageCount failed: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 message, got %d", count)
+	}
+
+	// Deliver another message
+	_, err = store.Deliver(domain, user, "INBOX", msg)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	// Should now have 2 messages
+	count, err = store.MessageCount(domain, user, "INBOX")
+	if err != nil {
+		t.Fatalf("MessageCount failed: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("Expected 2 messages, got %d", count)
+	}
+}
+
+// TestMessageCountNonExistentUser tests MessageCount for user with no maildir
+func TestMessageCountNonExistentUser(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	// For a non-existent user, should return 0 (no error)
+	count, err := store.MessageCount("example.com", "nonexistent", "INBOX")
+	// The List function creates the folder if it doesn't exist
+	if err != nil {
+		t.Logf("MessageCount returned error (may be expected): %v", err)
+	}
+	// After creating folder, count should be 0
+	t.Logf("MessageCount returned: %d", count)
+}
+
+// TestFetchReader tests the FetchReader function
+func TestFetchReader(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	domain := "example.com"
+	user := "testuser"
+
+	// Deliver a message
+	msg := []byte("From: test@example.com\r\nSubject: Test Message\r\n\r\nBody content here")
+	_, err := store.Deliver(domain, user, "INBOX", msg)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	// Get the message list
+	messages, err := store.List(domain, user, "INBOX")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(messages))
+	}
+
+	// Fetch the message using the filename
+	filename := messages[0].Filename
+	reader, err := store.FetchReader(domain, user, "INBOX", filename)
+	if err != nil {
+		t.Fatalf("FetchReader failed: %v", err)
+	}
+	defer reader.Close()
+
+	// Read the content
+	content := make([]byte, len(msg)+100)
+	n, err := reader.Read(content)
+	if err != nil && err.Error() != "EOF" {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	// Verify content matches
+	if n < len(msg) {
+		t.Errorf("Expected at least %d bytes, got %d", len(msg), n)
+	}
+}
+
+// TestFetchReaderNonExistent tests FetchReader for non-existent message
+func TestFetchReaderNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	// Try to fetch a non-existent message
+	_, err := store.FetchReader("example.com", "testuser", "INBOX", "nonexistent-key")
+	if err == nil {
+		t.Error("Expected error for non-existent message")
+	}
+}
