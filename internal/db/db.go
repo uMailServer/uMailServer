@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -26,6 +27,8 @@ const (
 	BucketIndex        = "index"
 	BucketContacts     = "contacts"
 	BucketAliases      = "aliases"
+	BucketACL           = "acl"
+	BucketSubscriptions = "subscriptions"
 )
 
 // DB wraps bbolt database
@@ -44,6 +47,10 @@ type AccountData struct {
 	QuotaUsed      int64     `json:"quota_used"`
 	QuotaLimit     int64     `json:"quota_limit"`
 	MaxMessageSize int64     `json:"max_message_size"`
+	ForwardTo      string    `json:"forward_to,omitempty"`
+	ForwardKeepCopy bool      `json:"forward_keep_copy"`
+	SieveScript    string `json:"sieve_script,omitempty"`
+	VacationSettings string `json:"vacation_settings,omitempty"`
 	IsAdmin        bool      `json:"is_admin"`
 	IsActive       bool      `json:"is_active"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -60,6 +67,7 @@ type DomainData struct {
 	DKIMPublicKey string            `json:"dkim_public_key,omitempty"`
 	DKIMPrivateKey string           `json:"dkim_private_key,omitempty"`
 	Settings      map[string]string `json:"settings,omitempty"`
+	CatchAllTarget string            `json:"catch_all_target,omitempty"`
 	IsActive      bool              `json:"is_active"`
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
@@ -194,6 +202,8 @@ func (d *DB) initBuckets() error {
 		BucketIndex,
 		BucketContacts,
 		BucketAliases,
+		BucketACL,
+		BucketSubscriptions,
 	}
 
 	return d.bolt.Update(func(tx *bbolt.Tx) error {
@@ -578,4 +588,147 @@ func (d *DB) IsBlocked(ip string) (bool, *BlockEntry) {
 // Unblock removes an IP from the blocklist
 func (d *DB) Unblock(ip string) error {
 	return d.Delete(BucketBlocklist, ip)
+}
+
+// CreateAlias stores a new alias
+func (d *DB) CreateAlias(alias *AliasData) error {
+	if alias.CreatedAt.IsZero() {
+		alias.CreatedAt = time.Now()
+	}
+	key := alias.Domain + ":" + strings.ToLower(strings.Split(alias.Alias, "@")[0])
+	return d.Put(BucketAliases, key, alias)
+}
+
+// GetAlias retrieves an alias by domain and local part
+func (d *DB) GetAlias(domain, localPart string) (*AliasData, error) {
+	key := domain + ":" + strings.ToLower(localPart)
+	var alias AliasData
+	if err := d.Get(BucketAliases, key, &alias); err != nil {
+		return nil, err
+	}
+	return &alias, nil
+}
+
+// UpdateAlias updates an existing alias
+func (d *DB) UpdateAlias(alias *AliasData) error {
+	key := alias.Domain + ":" + strings.ToLower(strings.Split(alias.Alias, "@")[0])
+	return d.Put(BucketAliases, key, alias)
+}
+
+// DeleteAlias removes an alias
+func (d *DB) DeleteAlias(domain, localPart string) error {
+	key := domain + ":" + strings.ToLower(localPart)
+	return d.Delete(BucketAliases, key)
+}
+
+// ListAliasesByDomain returns all aliases for a domain
+func (d *DB) ListAliasesByDomain(domain string) ([]*AliasData, error) {
+	prefix := domain + ":"
+	var aliases []*AliasData
+	err := d.ForEachPrefix(BucketAliases, prefix, func(key string, value []byte) error {
+		var alias AliasData
+		if err := json.Unmarshal(value, &alias); err != nil {
+			return nil
+		}
+		aliases = append(aliases, &alias)
+		return nil
+	})
+	return aliases, err
+}
+
+// ResolveAlias resolves an alias to its target address
+func (d *DB) ResolveAlias(domain, localPart string) (string, error) {
+	alias, err := d.GetAlias(domain, localPart)
+	if err != nil {
+		return "", err
+	}
+	if alias == nil || !alias.IsActive {
+		return "", nil
+	}
+	return alias.Target, nil
+}
+
+// --- ACL operations (RFC 4314) ---
+
+// ACLData represents an ACL entry for a mailbox
+type ACLData struct {
+	Mailbox    string   `json:"mailbox"`
+	Identifier string   `json:"identifier"`
+	Rights     []string `json:"rights"`
+}
+
+// SetMailboxACL sets ACL rights for an identifier on a mailbox
+func (d *DB) SetMailboxACL(user, mailbox, identifier string, rights []string) error {
+	key := fmt.Sprintf("%s/%s/%s", strings.ToLower(user), mailbox, identifier)
+	entry := &ACLData{
+		Mailbox:    mailbox,
+		Identifier: identifier,
+		Rights:     rights,
+	}
+	return d.Put(BucketACL, key, entry)
+}
+
+// ACLEntry is a lightweight ACL entry returned by GetMailboxACL
+type ACLEntry struct {
+	Identifier string
+	Rights     []string
+}
+
+// GetMailboxACL returns all ACL entries for a mailbox
+func (d *DB) GetMailboxACL(user, mailbox string) ([]*ACLEntry, error) {
+	prefix := fmt.Sprintf("%s/%s/", strings.ToLower(user), mailbox)
+	var entries []*ACLEntry
+	err := d.ForEachPrefix(BucketACL, prefix, func(key string, value []byte) error {
+		var data ACLData
+		if err := json.Unmarshal(value, &data); err != nil {
+			return nil
+		}
+		entries = append(entries, &ACLEntry{
+			Identifier: data.Identifier,
+			Rights:     data.Rights,
+		})
+		return nil
+	})
+	return entries, err
+}
+
+// DeleteMailboxACL removes ACL rights for an identifier on a mailbox
+func (d *DB) DeleteMailboxACL(user, mailbox, identifier string) error {
+	key := fmt.Sprintf("%s/%s/%s", strings.ToLower(user), mailbox, identifier)
+	return d.Delete(BucketACL, key)
+}
+
+// --- Subscription operations ---
+
+// Subscribe stores a mailbox subscription for a user
+func (d *DB) Subscribe(user, mailbox string) error {
+	key := fmt.Sprintf("%s/%s", strings.ToLower(user), mailbox)
+	return d.Put(BucketSubscriptions, key, true)
+}
+
+// Unsubscribe removes a mailbox subscription for a user
+func (d *DB) Unsubscribe(user, mailbox string) error {
+	key := fmt.Sprintf("%s/%s", strings.ToLower(user), mailbox)
+	return d.Delete(BucketSubscriptions, key)
+}
+
+// IsSubscribed checks if a user is subscribed to a mailbox
+func (d *DB) IsSubscribed(user, mailbox string) (bool, error) {
+	key := fmt.Sprintf("%s/%s", strings.ToLower(user), mailbox)
+	return d.Exists(BucketSubscriptions, key), nil
+}
+
+// ListSubscriptions returns all subscribed mailboxes for a user
+func (d *DB) ListSubscriptions(user string) ([]string, error) {
+	prefix := strings.ToLower(user) + "/"
+	var mailboxes []string
+	err := d.ForEachPrefix(BucketSubscriptions, prefix, func(key string, value []byte) error {
+		// key is "user/mailbox", extract mailbox part
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) == 2 {
+			mailboxes = append(mailboxes, parts[1])
+		}
+		return nil
+	})
+	return mailboxes, err
 }

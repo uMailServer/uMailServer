@@ -354,3 +354,177 @@ func TestNewServer(t *testing.T) {
 		t.Errorf("expected version 1.0.0, got %s", server.version)
 	}
 }
+
+// --- Additional coverage tests ---
+
+func TestToolGetStatsWithDomains(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	// Create some domains and accounts
+	database.CreateDomain(&db.DomainData{Name: "example.com", MaxAccounts: 10})
+	database.CreateDomain(&db.DomainData{Name: "test.org", MaxAccounts: 5})
+	database.CreateAccount(&db.AccountData{Email: "user1@example.com", Domain: "example.com", PasswordHash: "hash"})
+	database.CreateAccount(&db.AccountData{Email: "user2@test.org", Domain: "test.org", PasswordHash: "hash"})
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      10,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "get_server_stats",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+func TestToolListAccountsAll(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	database.CreateDomain(&db.DomainData{Name: "example.com", MaxAccounts: 10})
+	database.CreateAccount(&db.AccountData{Email: "user1@example.com", Domain: "example.com", PasswordHash: "hash", IsAdmin: true})
+	database.CreateAccount(&db.AccountData{Email: "user2@example.com", Domain: "example.com", PasswordHash: "hash", IsAdmin: false})
+
+	server := NewServer(database)
+
+	// List all accounts (no domain filter)
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      11,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "list_accounts",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+func TestToolListAccountsNoAccounts(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	server := NewServer(database)
+
+	// List accounts on empty database
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      12,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "list_accounts",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+
+	// Should contain "No accounts found"
+	var resp map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["result"] == nil {
+		t.Error("Expected result")
+	}
+}
+
+func TestToolListDomainsWithDomains(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	database.CreateDomain(&db.DomainData{Name: "example.com", MaxAccounts: 10})
+	database.CreateDomain(&db.DomainData{Name: "test.org", MaxAccounts: 5})
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      13,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "list_domains",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+func TestToolListDomainsNoDomains(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      14,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "list_domains",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}

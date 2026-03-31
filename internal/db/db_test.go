@@ -381,6 +381,365 @@ func TestUpdateDomain(t *testing.T) {
 	}
 }
 
+// --- Alias Operations ---
+
+func TestAliasOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test_alias.db"
+
+	database, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer database.Close()
+
+	t.Run("CreateAndGetAlias", func(t *testing.T) {
+		alias := &AliasData{
+			Alias:    "info@example.com",
+			Target:   "admin@example.com",
+			Domain:   "example.com",
+			IsActive: true,
+		}
+
+		if err := database.CreateAlias(alias); err != nil {
+			t.Fatalf("CreateAlias failed: %v", err)
+		}
+
+		retrieved, err := database.GetAlias("example.com", "info")
+		if err != nil {
+			t.Fatalf("GetAlias failed: %v", err)
+		}
+		if retrieved.Target != "admin@example.com" {
+			t.Errorf("expected target admin@example.com, got %s", retrieved.Target)
+		}
+		if !retrieved.IsActive {
+			t.Error("expected IsActive=true")
+		}
+		if retrieved.CreatedAt.IsZero() {
+			t.Error("expected CreatedAt to be set")
+		}
+	})
+
+	t.Run("UpdateAlias", func(t *testing.T) {
+		alias := &AliasData{
+			Alias:    "sales@example.com",
+			Target:   "team@example.com",
+			Domain:   "example.com",
+			IsActive: true,
+		}
+		if err := database.CreateAlias(alias); err != nil {
+			t.Fatalf("CreateAlias failed: %v", err)
+		}
+
+		alias.Target = "newteam@example.com"
+		if err := database.UpdateAlias(alias); err != nil {
+			t.Fatalf("UpdateAlias failed: %v", err)
+		}
+
+		retrieved, err := database.GetAlias("example.com", "sales")
+		if err != nil {
+			t.Fatalf("GetAlias failed: %v", err)
+		}
+		if retrieved.Target != "newteam@example.com" {
+			t.Errorf("expected target newteam@example.com, got %s", retrieved.Target)
+		}
+	})
+
+	t.Run("DeleteAlias", func(t *testing.T) {
+		alias := &AliasData{
+			Alias:    "tmp@example.com",
+			Target:   "admin@example.com",
+			Domain:   "example.com",
+			IsActive: true,
+		}
+		if err := database.CreateAlias(alias); err != nil {
+			t.Fatalf("CreateAlias failed: %v", err)
+		}
+
+		if err := database.DeleteAlias("example.com", "tmp"); err != nil {
+			t.Fatalf("DeleteAlias failed: %v", err)
+		}
+
+		_, err := database.GetAlias("example.com", "tmp")
+		if err == nil {
+			t.Error("expected error after deleting alias")
+		}
+	})
+
+	t.Run("ListAliasesByDomain", func(t *testing.T) {
+		aliases, err := database.ListAliasesByDomain("example.com")
+		if err != nil {
+			t.Fatalf("ListAliasesByDomain failed: %v", err)
+		}
+		if len(aliases) < 2 {
+			t.Errorf("expected at least 2 aliases, got %d", len(aliases))
+		}
+	})
+
+	t.Run("ListAliasesEmptyDomain", func(t *testing.T) {
+		aliases, err := database.ListAliasesByDomain("nonexistent.com")
+		if err != nil {
+			t.Fatalf("ListAliasesByDomain failed: %v", err)
+		}
+		if len(aliases) != 0 {
+			t.Errorf("expected 0 aliases, got %d", len(aliases))
+		}
+	})
+
+	t.Run("ResolveAlias", func(t *testing.T) {
+		target, err := database.ResolveAlias("example.com", "info")
+		if err != nil {
+			t.Fatalf("ResolveAlias failed: %v", err)
+		}
+		if target != "admin@example.com" {
+			t.Errorf("expected target admin@example.com, got %s", target)
+		}
+	})
+
+	t.Run("ResolveAliasInactive", func(t *testing.T) {
+		alias := &AliasData{
+			Alias:    "inactive@example.com",
+			Target:   "admin@example.com",
+			Domain:   "example.com",
+			IsActive: false,
+		}
+		if err := database.CreateAlias(alias); err != nil {
+			t.Fatalf("CreateAlias failed: %v", err)
+		}
+
+		target, err := database.ResolveAlias("example.com", "inactive")
+		if err != nil {
+			t.Fatalf("ResolveAlias failed: %v", err)
+		}
+		if target != "" {
+			t.Errorf("expected empty target for inactive alias, got %s", target)
+		}
+	})
+
+	t.Run("ResolveAliasNonExistent", func(t *testing.T) {
+		target, err := database.ResolveAlias("example.com", "nonexistent")
+		if err != nil {
+			// Non-existent alias returns error from GetAlias
+			return
+		}
+		if target != "" {
+			t.Errorf("expected empty target, got %s", target)
+		}
+	})
+
+	t.Run("GetAliasNotFound", func(t *testing.T) {
+		_, err := database.GetAlias("nonexistent.com", "nope")
+		if err == nil {
+			t.Error("expected error for non-existent alias")
+		}
+	})
+}
+
+// --- ACL Operations ---
+
+func TestACLOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test_acl.db"
+
+	database, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer database.Close()
+
+	user := "testuser"
+	mailbox := "INBOX"
+
+	t.Run("SetAndGetACL", func(t *testing.T) {
+		rights := []string{"l", "r", "s", "w"}
+		if err := database.SetMailboxACL(user, mailbox, "user2", rights); err != nil {
+			t.Fatalf("SetMailboxACL failed: %v", err)
+		}
+
+		entries, err := database.GetMailboxACL(user, mailbox)
+		if err != nil {
+			t.Fatalf("GetMailboxACL failed: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 ACL entry, got %d", len(entries))
+		}
+		if entries[0].Identifier != "user2" {
+			t.Errorf("expected identifier user2, got %s", entries[0].Identifier)
+		}
+		if len(entries[0].Rights) != 4 {
+			t.Errorf("expected 4 rights, got %d", len(entries[0].Rights))
+		}
+	})
+
+	t.Run("GetACLNotFound", func(t *testing.T) {
+		entries, err := database.GetMailboxACL("nouser", "nomailbox")
+		if err != nil {
+			t.Fatalf("GetMailboxACL failed: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("expected 0 entries, got %d", len(entries))
+		}
+	})
+
+	t.Run("SetMultipleACL", func(t *testing.T) {
+		if err := database.SetMailboxACL(user, mailbox, "user3", []string{"l", "r"}); err != nil {
+			t.Fatalf("SetMailboxACL failed: %v", err)
+		}
+
+		entries, err := database.GetMailboxACL(user, mailbox)
+		if err != nil {
+			t.Fatalf("GetMailboxACL failed: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Errorf("expected 2 ACL entries, got %d", len(entries))
+		}
+	})
+
+	t.Run("DeleteACL", func(t *testing.T) {
+		if err := database.DeleteMailboxACL(user, mailbox, "user2"); err != nil {
+			t.Fatalf("DeleteMailboxACL failed: %v", err)
+		}
+
+		entries, err := database.GetMailboxACL(user, mailbox)
+		if err != nil {
+			t.Fatalf("GetMailboxACL failed: %v", err)
+		}
+		if len(entries) != 1 {
+			t.Errorf("expected 1 ACL entry after delete, got %d", len(entries))
+		}
+		if entries[0].Identifier != "user3" {
+			t.Errorf("expected remaining identifier user3, got %s", entries[0].Identifier)
+		}
+	})
+
+	t.Run("GetACLEmpty", func(t *testing.T) {
+		entries, err := database.GetMailboxACL("otheruser", "OtherBox")
+		if err != nil {
+			t.Fatalf("GetMailboxACL failed: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("expected 0 ACL entries, got %d", len(entries))
+		}
+	})
+
+	t.Run("UpdateACL", func(t *testing.T) {
+		if err := database.SetMailboxACL(user, mailbox, "user3", []string{"l", "r", "w", "i", "p"}); err != nil {
+			t.Fatalf("SetMailboxACL update failed: %v", err)
+		}
+
+		entries, err := database.GetMailboxACL(user, mailbox)
+		if err != nil {
+			t.Fatalf("GetMailboxACL failed: %v", err)
+		}
+		for _, e := range entries {
+			if e.Identifier == "user3" && len(e.Rights) != 5 {
+				t.Errorf("expected 5 rights after update, got %d", len(e.Rights))
+			}
+		}
+	})
+}
+
+// --- Subscription Operations ---
+
+func TestSubscriptionOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test_subs.db"
+
+	database, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer database.Close()
+
+	user := "testuser"
+
+	t.Run("SubscribeAndCheck", func(t *testing.T) {
+		if err := database.Subscribe(user, "INBOX"); err != nil {
+			t.Fatalf("Subscribe failed: %v", err)
+		}
+
+		subscribed, err := database.IsSubscribed(user, "INBOX")
+		if err != nil {
+			t.Fatalf("IsSubscribed failed: %v", err)
+		}
+		if !subscribed {
+			t.Error("expected INBOX to be subscribed")
+		}
+	})
+
+	t.Run("NotSubscribed", func(t *testing.T) {
+		subscribed, err := database.IsSubscribed(user, "Archive")
+		if err != nil {
+			t.Fatalf("IsSubscribed failed: %v", err)
+		}
+		if subscribed {
+			t.Error("expected Archive to not be subscribed")
+		}
+	})
+
+	t.Run("ListSubscriptions", func(t *testing.T) {
+		if err := database.Subscribe(user, "Sent"); err != nil {
+			t.Fatalf("Subscribe failed: %v", err)
+		}
+		if err := database.Subscribe(user, "Drafts"); err != nil {
+			t.Fatalf("Subscribe failed: %v", err)
+		}
+
+		subs, err := database.ListSubscriptions(user)
+		if err != nil {
+			t.Fatalf("ListSubscriptions failed: %v", err)
+		}
+		if len(subs) != 3 {
+			t.Errorf("expected 3 subscriptions, got %d", len(subs))
+		}
+	})
+
+	t.Run("Unsubscribe", func(t *testing.T) {
+		if err := database.Unsubscribe(user, "Sent"); err != nil {
+			t.Fatalf("Unsubscribe failed: %v", err)
+		}
+
+		subscribed, err := database.IsSubscribed(user, "Sent")
+		if err != nil {
+			t.Fatalf("IsSubscribed failed: %v", err)
+		}
+		if subscribed {
+			t.Error("expected Sent to not be subscribed after unsubscribe")
+		}
+
+		subs, err := database.ListSubscriptions(user)
+		if err != nil {
+			t.Fatalf("ListSubscriptions failed: %v", err)
+		}
+		if len(subs) != 2 {
+			t.Errorf("expected 2 subscriptions after unsubscribe, got %d", len(subs))
+		}
+	})
+
+	t.Run("ListSubscriptionsEmpty", func(t *testing.T) {
+		subs, err := database.ListSubscriptions("otheruser")
+		if err != nil {
+			t.Fatalf("ListSubscriptions failed: %v", err)
+		}
+		if len(subs) != 0 {
+			t.Errorf("expected 0 subscriptions for unknown user, got %d", len(subs))
+		}
+	})
+
+	t.Run("CaseInsensitiveUser", func(t *testing.T) {
+		if err := database.Subscribe("TestUser", "INBOX"); err != nil {
+			t.Fatalf("Subscribe failed: %v", err)
+		}
+		subscribed, err := database.IsSubscribed("testuser", "INBOX")
+		if err != nil {
+			t.Fatalf("IsSubscribed failed: %v", err)
+		}
+		if !subscribed {
+			t.Error("expected case-insensitive subscription to work")
+		}
+	})
+}
+
 // TestUpdateQueueEntry tests updating a queue entry
 func TestUpdateQueueEntry(t *testing.T) {
 	tmpDir := t.TempDir()

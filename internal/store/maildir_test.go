@@ -453,3 +453,357 @@ func TestFetchReaderNonExistent(t *testing.T) {
 		t.Error("Expected error for non-existent message")
 	}
 }
+
+// --- New tests to improve coverage ---
+
+func TestFlagSeparator(t *testing.T) {
+	sep := flagSeparator()
+	if sep == "" {
+		t.Error("flagSeparator() returned empty string")
+	}
+	// On all platforms it should end with comma
+	if sep[len(sep)-1] != ',' {
+		t.Errorf("flagSeparator() = %q, expected to end with ','", sep)
+	}
+}
+
+func TestJoinFlags(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseName string
+		flags    string
+		expected string
+	}{
+		{"empty flags returns base only", "1234567890.1.localhost", "", "1234567890.1.localhost"},
+		{"flags appended with separator", "1234567890.1.localhost", "S", "1234567890.1.localhost" + flagSeparator() + "S"},
+		{"multiple flags", "1234567890.1.localhost", "SRF", "1234567890.1.localhost" + flagSeparator() + "SRF"},
+		{"single char base name", "a", "S", "a" + flagSeparator() + "S"},
+		{"empty base with flags", "", "S", flagSeparator() + "S"},
+		{"empty base and empty flags", "", "", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := joinFlags(tc.baseName, tc.flags)
+			if result != tc.expected {
+				t.Errorf("joinFlags(%q, %q) = %q, want %q", tc.baseName, tc.flags, result, tc.expected)
+			}
+		})
+	}
+}
+
+func TestSplitFlags(t *testing.T) {
+	sep := flagSeparator()
+
+	tests := []struct {
+		name         string
+		filename     string
+		expectedBase string
+		expectedFlag string
+	}{
+		{"no flags", "1234567890.1.localhost", "1234567890.1.localhost", ""},
+		{"with platform separator", "1234567890.1.localhost" + sep + "S", "1234567890.1.localhost", "S"},
+		{"multiple flags", "1234567890.1.localhost" + sep + "SRFTD", "1234567890.1.localhost", "SRFTD"},
+		{"empty filename", "", "", ""},
+		{"separator only", sep, "", ""},
+		{"separator with flag only", sep + "S", "", "S"},
+		{"standard Maildir fallback :2,", "1234567890.1.localhost:2,RS", "1234567890.1.localhost", "RS"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			base, flags := splitFlags(tc.filename)
+			if base != tc.expectedBase {
+				t.Errorf("splitFlags(%q) base = %q, want %q", tc.filename, base, tc.expectedBase)
+			}
+			if flags != tc.expectedFlag {
+				t.Errorf("splitFlags(%q) flags = %q, want %q", tc.filename, flags, tc.expectedFlag)
+			}
+		})
+	}
+}
+
+func TestJoinFlagsAndSplitFlagsRoundTrip(t *testing.T) {
+	// Verify that joinFlags -> splitFlags is a round trip
+	pairs := []struct {
+		base  string
+		flags string
+	}{
+		{"1234567890.1.myhost", "S"},
+		{"1234567890.1.myhost", "SRF"},
+		{"1234567890.1.myhost", ""},
+		{"abc.def.ghi", "T"},
+	}
+	for _, p := range pairs {
+		joined := joinFlags(p.base, p.flags)
+		gotBase, gotFlags := splitFlags(joined)
+		if gotBase != p.base || gotFlags != p.flags {
+			t.Errorf("round trip failed: joinFlags(%q,%q)=%q, splitFlags=%q,%q", p.base, p.flags, joined, gotBase, gotFlags)
+		}
+	}
+}
+
+func TestFetchNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	_, err := store.Fetch("example.com", "testuser", "INBOX", "nonexistent-file")
+	if err == nil {
+		t.Error("expected error fetching non-existent message")
+	}
+}
+
+func TestDeleteNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	err := store.Delete("example.com", "testuser", "INBOX", "nonexistent-file")
+	if err == nil {
+		t.Error("expected error deleting non-existent message")
+	}
+}
+
+func TestDeleteFolderEmptyName(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	err := store.DeleteFolder("example.com", "testuser", "")
+	if err == nil {
+		t.Error("expected error when deleting empty-name folder (treated as INBOX)")
+	}
+}
+
+func TestRenameFolderEmptyName(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	err := store.RenameFolder("example.com", "testuser", "", "NewName")
+	if err == nil {
+		t.Error("expected error when renaming empty-name folder (treated as INBOX)")
+	}
+}
+
+func TestListFoldersNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	// User with no maildir directory at all
+	folders, err := store.ListFolders("example.com", "nosuchuser")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(folders) != 1 || folders[0] != "INBOX" {
+		t.Errorf("expected [INBOX], got %v", folders)
+	}
+}
+
+func TestSetFlagsNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	err := store.SetFlags("example.com", "testuser", "INBOX", "nonexistent-file", "S")
+	if err == nil {
+		t.Error("expected error setting flags on non-existent message")
+	}
+}
+
+func TestSetFlagsNoChange(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	// Deliver a message with flags already set
+	msg := []byte("Subject: NoChange\r\n\r\nBody")
+	filename, err := store.DeliverWithFlags("example.com", "testuser", "INBOX", msg, "S")
+	if err != nil {
+		t.Fatalf("DeliverWithFlags failed: %v", err)
+	}
+
+	// Set the same flags again -- should return nil (no change)
+	err = store.SetFlags("example.com", "testuser", "INBOX", filename, "S")
+	if err != nil {
+		t.Errorf("expected no error when setting same flags, got: %v", err)
+	}
+}
+
+func TestMoveNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	err := store.Move("example.com", "testuser", "INBOX", "Sent", "nonexistent-file")
+	if err == nil {
+		t.Error("expected error moving non-existent message")
+	}
+}
+
+func TestDeliverAndFetchFromCur(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	// DeliverWithFlags puts file in cur/
+	msg := []byte("Subject: CurFetch\r\n\r\nFrom cur")
+	filename, err := store.DeliverWithFlags("example.com", "testuser", "INBOX", msg, "S")
+	if err != nil {
+		t.Fatalf("DeliverWithFlags failed: %v", err)
+	}
+
+	// Fetch should find it in cur/
+	data, err := store.Fetch("example.com", "testuser", "INBOX", filename)
+	if err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+	if string(data) != string(msg) {
+		t.Errorf("data mismatch: got %q, want %q", string(data), string(msg))
+	}
+}
+
+func TestFetchReaderFromCur(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	msg := []byte("Subject: ReaderCur\r\n\r\nReader from cur")
+	filename, err := store.DeliverWithFlags("example.com", "testuser", "INBOX", msg, "S")
+	if err != nil {
+		t.Fatalf("DeliverWithFlags failed: %v", err)
+	}
+
+	reader, err := store.FetchReader("example.com", "testuser", "INBOX", filename)
+	if err != nil {
+		t.Fatalf("FetchReader failed: %v", err)
+	}
+	defer reader.Close()
+}
+
+func TestGenerateUniqueName(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	name1 := store.generateUniqueName()
+	if name1 == "" {
+		t.Error("expected non-empty unique name")
+	}
+	// Verify format: contains timestamp, pid, and hostname parts
+	// Format: {timestamp}.{pid}{micros}.{hostname}
+	if name1 == "" {
+		t.Error("expected non-empty unique name")
+	}
+	// Name should contain at least one dot (separating timestamp from pid)
+	if !contains(name1, ".") {
+		t.Errorf("expected name with dots, got %q", name1)
+	}
+}
+
+func TestQuotaNonExistentUser(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	used, limit, err := store.Quota("example.com", "nosuchuser")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if used != 0 {
+		t.Errorf("expected 0 used for non-existent user, got %d", used)
+	}
+	if limit != 0 {
+		t.Errorf("expected 0 limit, got %d", limit)
+	}
+}
+
+func TestMoveWithFlaggedFilename(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	// Deliver with flags, then move
+	msg := []byte("Subject: MoveFlagged\r\n\r\nBody")
+	filename, err := store.DeliverWithFlags("example.com", "testuser", "INBOX", msg, "S")
+	if err != nil {
+		t.Fatalf("DeliverWithFlags failed: %v", err)
+	}
+
+	err = store.Move("example.com", "testuser", "INBOX", "Archive", filename)
+	if err != nil {
+		t.Fatalf("Move failed: %v", err)
+	}
+
+	// Verify it's in the destination
+	messages, err := store.List("example.com", "testuser", "Archive")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Errorf("expected 1 message in Archive, got %d", len(messages))
+	}
+}
+
+func TestListWithSubdirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	maildir := store.userMaildirPath("example.com", "testuser")
+	// Create the maildir structure
+	for _, sub := range []string{"tmp", "new", "cur"} {
+		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+	}
+	// Create a subdirectory inside new/ that should be skipped by List
+	os.MkdirAll(filepath.Join(maildir, "new", "subdir"), 0755)
+
+	msg := []byte("Subject: SubdirTest\r\n\r\nBody")
+	_, err := store.Deliver("example.com", "testuser", "INBOX", msg)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	messages, err := store.List("example.com", "testuser", "INBOX")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	// Should only return files, not directories
+	for _, m := range messages {
+		if m.Filename == "subdir" {
+			t.Error("List should not return directories")
+		}
+	}
+}
+
+func TestNewMaildirStoreCreation(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+	if store == nil {
+		t.Fatal("expected non-nil store")
+	}
+	if store.baseDir != tmpDir {
+		t.Errorf("expected baseDir %q, got %q", tmpDir, store.baseDir)
+	}
+}
+
+func TestFolderPathInbox(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	tests := []struct {
+		name   string
+		folder string
+	}{
+		{"empty folder", ""},
+		{"INBOX folder", "INBOX"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := store.folderPath("example.com", "testuser", tc.folder)
+			expected := store.userMaildirPath("example.com", "testuser")
+			if path != expected {
+				t.Errorf("folderPath(%q) = %q, want %q", tc.folder, path, expected)
+			}
+		})
+	}
+}
+
+func TestFolderPathCustom(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewMaildirStore(tmpDir)
+
+	path := store.folderPath("example.com", "testuser", "Archive")
+	expected := filepath.Join(store.userMaildirPath("example.com", "testuser"), ".Archive")
+	if path != expected {
+		t.Errorf("folderPath(Archive) = %q, want %q", path, expected)
+	}
+}

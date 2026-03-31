@@ -365,3 +365,85 @@ func TestVerifyCRAMMD5MissingUser(t *testing.T) {
 		t.Error("Expected CRAM-MD5 verification to fail when user not found")
 	}
 }
+
+// TestAuthenticateWithTOTP tests the full TOTP authentication flow
+func TestAuthenticateWithTOTP(t *testing.T) {
+	testPassword := "testpassword123"
+	passwordHash, _ := HashPassword(testPassword)
+
+	t.Run("NoTOTPRequired", func(t *testing.T) {
+		getUser := func(email string) (*UserData, error) {
+			return &UserData{
+				Email:        "test@example.com",
+				PasswordHash: passwordHash,
+				IsActive:     true,
+				TOTPSecret:   "",
+			}, nil
+		}
+		auth := NewUserAuthenticator(getUser)
+		user, err := auth.AuthenticateWithTOTP("test@example.com", testPassword, "")
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+		if user.Email != "test@example.com" {
+			t.Errorf("Expected email test@example.com, got %s", user.Email)
+		}
+	})
+
+	t.Run("TOTPRequiredButEmpty", func(t *testing.T) {
+		getUser := func(email string) (*UserData, error) {
+			return &UserData{
+				Email:        "totp@example.com",
+				PasswordHash: passwordHash,
+				IsActive:     true,
+				TOTPSecret:   "JBSWY3DPEHPK3PXP",
+			}, nil
+		}
+		auth := NewUserAuthenticator(getUser)
+		_, err := auth.AuthenticateWithTOTP("totp@example.com", testPassword, "")
+		if err != ErrTOTPRequired {
+			t.Errorf("Expected ErrTOTPRequired, got: %v", err)
+		}
+	})
+
+	t.Run("TOTPRequiredWithInvalidCode", func(t *testing.T) {
+		getUser := func(email string) (*UserData, error) {
+			return &UserData{
+				Email:        "totp@example.com",
+				PasswordHash: passwordHash,
+				IsActive:     true,
+				TOTPSecret:   "JBSWY3DPEHPK3PXP",
+			}, nil
+		}
+		auth := NewUserAuthenticator(getUser)
+		_, err := auth.AuthenticateWithTOTP("totp@example.com", testPassword, "000000")
+		if err != ErrInvalidCredentials {
+			t.Errorf("Expected ErrInvalidCredentials, got: %v", err)
+		}
+	})
+
+	t.Run("WrongPassword", func(t *testing.T) {
+		getUser := func(email string) (*UserData, error) {
+			return &UserData{
+				Email:        "test@example.com",
+				PasswordHash: passwordHash,
+				IsActive:     true,
+			}, nil
+		}
+		auth := NewUserAuthenticator(getUser)
+		_, err := auth.AuthenticateWithTOTP("test@example.com", "wrongpassword", "")
+		if err != ErrInvalidCredentials {
+			t.Errorf("Expected ErrInvalidCredentials, got: %v", err)
+		}
+	})
+
+	t.Run("UserNotFound", func(t *testing.T) {
+		auth := NewUserAuthenticator(func(email string) (*UserData, error) {
+			return nil, ErrUserNotFound
+		})
+		_, err := auth.AuthenticateWithTOTP("nonexistent@example.com", testPassword, "")
+		if err != ErrUserNotFound {
+			t.Errorf("Expected ErrUserNotFound, got: %v", err)
+		}
+	})
+}

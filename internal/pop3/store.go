@@ -56,7 +56,7 @@ func (s *MaildirStore) ListMessages(user string) ([]*Message, error) {
 	// Read cur directory
 	curPath := s.curPath(user)
 	curMsgs, _ := s.readMaildir(curPath, "cur")
-	messages = append(curMsgs, curMsgs...)
+	messages = append(messages, curMsgs...)
 
 	// Sort by time (filename starts with timestamp)
 	sort.Slice(messages, func(i, j int) bool {

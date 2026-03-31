@@ -28,6 +28,20 @@ type Server struct {
 	onAuth      func(username, password string) (bool, error)
 	onValidate  func(from string, to []string) error
 	onDeliver   func(from string, to []string, data []byte) error
+	pipeline    *Pipeline
+
+	// Rate limiting
+	rateLimiter ConnectionRateLimiter
+}
+
+// ConnectionRateLimiter checks if a connection is allowed
+type ConnectionRateLimiter interface {
+	Allow(key string, limitType string) bool
+}
+
+// SetRateLimiter sets the rate limiter for the server
+func (s *Server) SetRateLimiter(rl ConnectionRateLimiter) {
+	s.rateLimiter = rl
 }
 
 // Config holds SMTP server configuration
@@ -68,6 +82,11 @@ func (s *Server) SetValidateHandler(handler func(from string, to []string) error
 // SetDeliveryHandler sets the message delivery handler
 func (s *Server) SetDeliveryHandler(handler func(from string, to []string, data []byte) error) {
 	s.onDeliver = handler
+}
+
+// SetPipeline sets the message processing pipeline
+func (s *Server) SetPipeline(p *Pipeline) {
+	s.pipeline = p
 }
 
 // ListenAndServe starts listening on the specified address
@@ -126,6 +145,19 @@ func (s *Server) Serve(listener net.Listener) error {
 
 // handleConnection handles a new SMTP connection
 func (s *Server) handleConnection(conn net.Conn) {
+	// Check rate limit
+	if s.rateLimiter != nil {
+		ip := getIPFromAddr(conn.RemoteAddr().String())
+		if !s.rateLimiter.Allow(ip, "smtp_connection") {
+			s.logger.Warn("SMTP connection rate limited",
+				slog.String("remote_addr", conn.RemoteAddr().String()),
+			)
+			conn.Write([]byte("421 4.7.0 Rate limit exceeded, try again later\r\n"))
+			conn.Close()
+			return
+		}
+	}
+
 	session := NewSession(conn, s)
 
 	s.connMu.Lock()
@@ -222,6 +254,15 @@ func (s *Server) ActiveConnections() int {
 	return len(s.connections)
 }
 
+// getIPFromAddr extracts IP from an address string
+func getIPFromAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
 // Helper function
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
@@ -234,6 +275,12 @@ func truncate(s string, maxLen int) string {
 func ValidateEmail(email string) (string, error) {
 	addr, err := mail.ParseAddress(email)
 	if err != nil {
+		// Try to handle international addresses (SMTPUTF8)
+		// Some UTF-8 addresses may not parse with the strict parser
+		// Basic validation: check for non-ASCII and @ sign
+		if strings.Contains(email, "@") && !strings.HasPrefix(email, "@") && !strings.HasSuffix(email, "@") {
+			return email, nil
+		}
 		return "", err
 	}
 	return addr.Address, nil

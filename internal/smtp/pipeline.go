@@ -288,16 +288,7 @@ func (s *SPFStage) evaluateSPF(record string, ip net.IP, domain string) SPFResul
 	// Simplified SPF evaluation
 	// In production, this would fully implement RFC 7208
 
-	// Check for basic mechanisms
-	if strings.Contains(record, "+all") || strings.Contains(record, "all") {
-		// Check if IP matches any allowed mechanisms
-		// This is simplified - real implementation would check ip4, ip6, a, mx, etc.
-		return SPFResult{
-			Result: "pass",
-			Domain: domain,
-		}
-	}
-
+	// Check for basic mechanisms - order matters: check -all and ~all before bare "all"
 	if strings.Contains(record, "-all") {
 		return SPFResult{
 			Result: "fail",
@@ -308,6 +299,15 @@ func (s *SPFStage) evaluateSPF(record string, ip net.IP, domain string) SPFResul
 	if strings.Contains(record, "~all") {
 		return SPFResult{
 			Result: "softfail",
+			Domain: domain,
+		}
+	}
+
+	if strings.Contains(record, "+all") || strings.Contains(record, "all") {
+		// Check if IP matches any allowed mechanisms
+		// This is simplified - real implementation would check ip4, ip6, a, mx, etc.
+		return SPFResult{
+			Result: "pass",
 			Domain: domain,
 		}
 	}
@@ -532,6 +532,65 @@ func (s *ScoreStage) Process(ctx *MessageContext) PipelineResult {
 	}
 
 	ctx.SpamResult.Verdict = "inbox"
+	return ResultAccept
+}
+
+// AVStage scans messages for viruses using ClamAV
+type AVStage struct {
+	scanner AVScanner
+	action  string // "reject", "quarantine", "tag"
+}
+
+// AVScanner interface for virus scanning
+type AVScanner interface {
+	IsEnabled() bool
+	Scan(data []byte) (*AVScanResult, error)
+}
+
+// AVScanResult holds virus scan result
+type AVScanResult struct {
+	Infected bool
+	Virus    string
+}
+
+// NewAVStage creates a new antivirus scanning stage
+func NewAVStage(scanner AVScanner, action string) *AVStage {
+	return &AVStage{
+		scanner: scanner,
+		action:  action,
+	}
+}
+
+func (s *AVStage) Name() string { return "AV" }
+
+func (s *AVStage) Process(ctx *MessageContext) PipelineResult {
+	if s.scanner == nil || !s.scanner.IsEnabled() {
+		return ResultAccept
+	}
+
+	result, err := s.scanner.Scan(ctx.Data)
+	if err != nil {
+		// Scan error — accept but log
+		return ResultAccept
+	}
+
+	if result.Infected {
+		switch s.action {
+		case "reject":
+			ctx.Rejected = true
+			ctx.RejectionCode = 550
+			ctx.RejectionMessage = fmt.Sprintf("Message rejected: virus detected: %s", result.Virus)
+			return ResultReject
+		case "quarantine":
+			ctx.Quarantine = true
+			return ResultQuarantine
+		default: // "tag"
+			// Add tag header
+			ctx.Headers["X-Virus"] = []string{result.Virus}
+			return ResultAccept
+		}
+	}
+
 	return ResultAccept
 }
 

@@ -1671,3 +1671,792 @@ func TestAuthMiddlewareDifferentHeaders(t *testing.T) {
 	}
 }
 
+// --- Additional tests for low-coverage functions ---
+
+// TestCreateDomainEmptyName tests createDomain with empty name
+func TestCreateDomainEmptyName(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	body := map[string]interface{}{
+		"name":         "",
+		"max_accounts": 100,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/domains", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleDomains(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for empty domain name, got %d", rec.Code)
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+
+	if !strings.Contains(result["error"], "domain name is required") {
+		t.Errorf("Expected domain name is required error, got %s", result["error"])
+	}
+}
+
+// TestCreateAccountMissingEmail tests creating an account without email
+func TestCreateAccountMissingEmail(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	body := map[string]interface{}{
+		"email":    "",
+		"password": "password123",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleAccounts(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for missing email, got %d", rec.Code)
+	}
+}
+
+// TestCreateAccountMissingPassword tests creating an account without password
+func TestCreateAccountMissingPassword(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	body := map[string]interface{}{
+		"email":    "user@test.com",
+		"password": "",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleAccounts(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for missing password, got %d", rec.Code)
+	}
+}
+
+// TestCreateAccountInvalidBody tests creating an account with invalid JSON body
+func TestCreateAccountInvalidBody(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader([]byte("invalid json")))
+	rec := httptest.NewRecorder()
+
+	server.handleAccounts(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for invalid body, got %d", rec.Code)
+	}
+}
+
+// TestCreateAccountWithAdminFlag tests creating an account with is_admin=true
+func TestCreateAccountWithAdminFlag(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{
+		Name:        "admin-test.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	body := map[string]interface{}{
+		"email":    "admin@admin-test.com",
+		"password": "adminpass123",
+		"is_admin": true,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleAccounts(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Errorf("Expected status 201, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+
+	if result["is_admin"] != true {
+		t.Errorf("Expected is_admin true, got %v", result["is_admin"])
+	}
+}
+
+// TestHandleMetricsSuccess tests the GET /api/v1/metrics success path
+func TestHandleMetricsSuccess(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleMetrics(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+}
+
+// TestHandleStatsWithAccounts tests stats with multiple accounts
+func TestHandleStatsWithAccounts(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{
+		Name:        "stats-test.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		account := &db.AccountData{
+			Email:        fmt.Sprintf("user%d@stats-test.com", i),
+			LocalPart:    fmt.Sprintf("user%d", i),
+			Domain:       "stats-test.com",
+			PasswordHash: "hash",
+			IsActive:     true,
+		}
+		if err := database.CreateAccount(account); err != nil {
+			t.Fatalf("failed to create account %d: %v", i, err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleStats(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+
+	if result["domains"] != 1.0 {
+		t.Errorf("Expected domains count 1, got %v", result["domains"])
+	}
+	if result["accounts"] != 3.0 {
+		t.Errorf("Expected accounts count 3, got %v", result["accounts"])
+	}
+}
+
+// TestListQueueWithEntries tests listing queue when there are entries
+func TestListQueueWithEntries(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	for i := 0; i < 2; i++ {
+		entry := &db.QueueEntry{
+			ID:         fmt.Sprintf("queue-entry-%d", i),
+			From:       "sender@example.com",
+			To:         []string{fmt.Sprintf("recipient%d@test.com", i)},
+			Status:     "pending",
+			RetryCount: 0,
+			NextRetry:  time.Now().Add(-1 * time.Hour),
+			CreatedAt:  time.Now(),
+		}
+		if err := database.Enqueue(entry); err != nil {
+			t.Fatalf("failed to enqueue entry %d: %v", i, err)
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queue", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleQueue(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result []map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Errorf("Expected 2 queue entries, got %d", len(result))
+	}
+}
+
+// TestGetQueueEntrySuccess tests getting an existing queue entry
+func TestGetQueueEntrySuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	entry := &db.QueueEntry{
+		ID:         "test-queue-id",
+		From:       "sender@example.com",
+		To:         []string{"recipient@test.com"},
+		Status:     "pending",
+		RetryCount: 0,
+		NextRetry:  time.Now().Add(1 * time.Hour),
+		CreatedAt:  time.Now(),
+	}
+	if err := database.Enqueue(entry); err != nil {
+		t.Fatalf("failed to enqueue entry: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queue/test-queue-id", nil)
+	rec := httptest.NewRecorder()
+
+	server.getQueueEntry(rec, req, "test-queue-id")
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+
+	if result["id"] != "test-queue-id" {
+		t.Errorf("Expected id test-queue-id, got %v", result["id"])
+	}
+	if result["status"] != "pending" {
+		t.Errorf("Expected status pending, got %v", result["status"])
+	}
+}
+
+// TestRetryQueueEntrySuccess tests retrying an existing queue entry
+func TestRetryQueueEntrySuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	entry := &db.QueueEntry{
+		ID:         "retry-test-id",
+		From:       "sender@example.com",
+		To:         []string{"recipient@test.com"},
+		Status:     "failed",
+		RetryCount: 3,
+		LastError:  "connection refused",
+		NextRetry:  time.Now().Add(1 * time.Hour),
+		CreatedAt:  time.Now(),
+	}
+	if err := database.Enqueue(entry); err != nil {
+		t.Fatalf("failed to enqueue entry: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/queue/retry-test-id", nil)
+	rec := httptest.NewRecorder()
+
+	server.retryQueueEntry(rec, req, "retry-test-id")
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+
+	if result["status"] != "retrying" {
+		t.Errorf("Expected status retrying, got %s", result["status"])
+	}
+
+	// Verify the entry was updated in the database
+	updated, err := database.GetQueueEntry("retry-test-id")
+	if err != nil {
+		t.Fatalf("failed to get updated queue entry: %v", err)
+	}
+	if updated.Status != "pending" {
+		t.Errorf("Expected updated status pending, got %s", updated.Status)
+	}
+	if updated.RetryCount != 0 {
+		t.Errorf("Expected updated retry_count 0, got %d", updated.RetryCount)
+	}
+	if updated.LastError != "" {
+		t.Errorf("Expected updated last_error to be empty, got %s", updated.LastError)
+	}
+}
+
+// TestDropQueueEntrySuccess tests dropping an existing queue entry
+func TestDropQueueEntrySuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	entry := &db.QueueEntry{
+		ID:         "drop-test-id",
+		From:       "sender@example.com",
+		To:         []string{"recipient@test.com"},
+		Status:     "pending",
+		RetryCount: 0,
+		NextRetry:  time.Now().Add(1 * time.Hour),
+		CreatedAt:  time.Now(),
+	}
+	if err := database.Enqueue(entry); err != nil {
+		t.Fatalf("failed to enqueue entry: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/queue/drop-test-id", nil)
+	rec := httptest.NewRecorder()
+
+	server.dropQueueEntry(rec, req, "drop-test-id")
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Expected status 204, got %d", rec.Code)
+	}
+
+	_, err = database.GetQueueEntry("drop-test-id")
+	if err == nil {
+		t.Error("Expected queue entry to be deleted, but it still exists")
+	}
+}
+
+// TestHandleQueueDetailGetSuccess tests GET on queue detail with existing entry
+func TestHandleQueueDetailGetSuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	entry := &db.QueueEntry{
+		ID:         "detail-test-id",
+		From:       "sender@example.com",
+		To:         []string{"recipient@test.com"},
+		Status:     "pending",
+		RetryCount: 1,
+		LastError:  "timeout",
+		NextRetry:  time.Now().Add(1 * time.Hour),
+		CreatedAt:  time.Now(),
+	}
+	if err := database.Enqueue(entry); err != nil {
+		t.Fatalf("failed to enqueue entry: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queue/detail-test-id", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleQueueDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+}
+
+// TestHandleQueueDetailPostRetry tests POST via handleQueueDetail
+func TestHandleQueueDetailPostRetry(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	entry := &db.QueueEntry{
+		ID:         "post-retry-id",
+		From:       "sender@example.com",
+		To:         []string{"recipient@test.com"},
+		Status:     "failed",
+		RetryCount: 2,
+		LastError:  "connection timeout",
+		NextRetry:  time.Now().Add(1 * time.Hour),
+		CreatedAt:  time.Now(),
+	}
+	if err := database.Enqueue(entry); err != nil {
+		t.Fatalf("failed to enqueue entry: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/queue/post-retry-id", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleQueueDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+}
+
+// TestHandleQueueDetailDeleteDrop tests DELETE via handleQueueDetail
+func TestHandleQueueDetailDeleteDrop(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	entry := &db.QueueEntry{
+		ID:         "delete-drop-id",
+		From:       "sender@example.com",
+		To:         []string{"recipient@test.com"},
+		Status:     "pending",
+		RetryCount: 0,
+		NextRetry:  time.Now().Add(1 * time.Hour),
+		CreatedAt:  time.Now(),
+	}
+	if err := database.Enqueue(entry); err != nil {
+		t.Fatalf("failed to enqueue entry: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/queue/delete-drop-id", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleQueueDetail(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Expected status 204, got %d", rec.Code)
+	}
+}
+
+// TestDeleteDomainSuccess tests deleting an existing domain via deleteDomain
+func TestDeleteDomainSuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "delete-test.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/domains/delete-test.com", nil)
+	rec := httptest.NewRecorder()
+
+	server.deleteDomain(rec, req, "delete-test.com")
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Expected status 204, got %d", rec.Code)
+	}
+
+	_, err = database.GetDomain("delete-test.com")
+	if err == nil {
+		t.Error("Expected domain to be deleted, but it still exists")
+	}
+}
+
+// TestDeleteAccountSuccess tests deleting an existing account via deleteAccount
+func TestDeleteAccountSuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "delacct.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	account := &db.AccountData{
+		Email: "user@delacct.com", LocalPart: "user", Domain: "delacct.com",
+		PasswordHash: "hash", IsActive: true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/user@delacct.com", nil)
+	rec := httptest.NewRecorder()
+
+	server.deleteAccount(rec, req, "user@delacct.com")
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("Expected status 204, got %d", rec.Code)
+	}
+
+	_, err = database.GetAccount("delacct.com", "user")
+	if err == nil {
+		t.Error("Expected account to be deleted, but it still exists")
+	}
+}
+
+// TestUpdateAccountWithPassword tests updating account with a new password
+func TestUpdateAccountWithPassword(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "updpass.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	account := &db.AccountData{
+		Email: "user@updpass.com", LocalPart: "user", Domain: "updpass.com",
+		PasswordHash: "oldhash", IsActive: true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	body := map[string]interface{}{
+		"password":  "newpassword123",
+		"is_admin":  true,
+		"is_active": true,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@updpass.com", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleAccountDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	updated, err := database.GetAccount("updpass.com", "user")
+	if err != nil {
+		t.Fatalf("failed to get updated account: %v", err)
+	}
+	if updated.PasswordHash == "oldhash" {
+		t.Error("Expected password hash to be updated")
+	}
+	if !updated.IsAdmin {
+		t.Error("Expected is_admin to be true")
+	}
+}
+
+// TestGetDomainSuccess tests getting an existing domain
+func TestGetDomainSuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "getdomain.com", MaxAccounts: 50, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/domains/getdomain.com", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleDomainDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+	if result["name"] != "getdomain.com" {
+		t.Errorf("Expected name getdomain.com, got %v", result["name"])
+	}
+}
+
+// TestGetAccountSuccess tests getting an existing account
+func TestGetAccountSuccess(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "getacct.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	account := &db.AccountData{
+		Email: "user@getacct.com", LocalPart: "user", Domain: "getacct.com",
+		PasswordHash: "hash", IsActive: true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/user@getacct.com", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleAccountDetail(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+	if result["email"] != "user@getacct.com" {
+		t.Errorf("Expected email user@getacct.com, got %v", result["email"])
+	}
+}
+
+// TestListDomainsEmpty tests listing domains when there are none
+func TestListDomainsEmpty(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/domains", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleDomains(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result []map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("Expected 0 domains, got %d", len(result))
+	}
+}
+
+// TestListAccountsEmpty tests listing accounts when there are none
+func TestListAccountsEmpty(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts?domain=empty.com", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleAccounts(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result []map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("Expected 0 accounts, got %d", len(result))
+	}
+}
+
+// TestListQueueEmpty tests listing queue when it is empty
+func TestListQueueEmpty(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/queue", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleQueue(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+
+	var result []map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode JSON: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("Expected 0 queue entries, got %d", len(result))
+	}
+}

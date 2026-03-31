@@ -176,6 +176,23 @@ func TestGetIP(t *testing.T) {
 	}
 }
 
+func TestRateLimiterStartCleanup(t *testing.T) {
+	database, err := db.Open(t.TempDir()+"/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	rl := NewRateLimiter(DefaultRateLimitConfig(), database)
+
+	// Create a bucket entry
+	rl.Allow("192.168.1.1:smtp_connection", "smtp_connection")
+
+	// StartCleanup should not panic
+	rl.StartCleanup(50*time.Millisecond, 10*time.Millisecond)
+	time.Sleep(120 * time.Millisecond)
+}
+
 func TestDefaultRateLimitConfig(t *testing.T) {
 	config := DefaultRateLimitConfig()
 
@@ -199,5 +216,126 @@ func TestDefaultRateLimitConfig(t *testing.T) {
 	}
 	if config.MaxConcurrentConnections != 100 {
 		t.Errorf("expected MaxConcurrentConnections = 100, got %d", config.MaxConcurrentConnections)
+	}
+}
+
+// TestGetBucketParams tests all operation type branches.
+func TestGetBucketParams(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	config := RateLimitConfig{
+		SMTPConnectionsPerMinute: 30,
+		SMTPMessagesPerMinute:    60,
+		IMAPConnectionsPerMinute: 50,
+		IMAPCommandsPerMinute:    300,
+		HTTPRequestsPerMinute:    120,
+		LoginAttemptsPerMinute:   10,
+	}
+
+	rl := NewRateLimiter(config, database)
+
+	tests := []struct {
+		limitType       string
+		expectCapacity  float64
+		expectRefillRate float64
+	}{
+		{"smtp_connection", 30, 30.0 / 60.0},
+		{"smtp_message", 60, 60.0 / 60.0},
+		{"imap_connection", 50, 50.0 / 60.0},
+		{"imap_command", 300, 300.0 / 60.0},
+		{"http_request", 120, 120.0 / 60.0},
+		{"login_attempt", 10, 10.0 / 60.0},
+		{"unknown_type", 60.0, 1.0}, // default
+	}
+
+	for _, tc := range tests {
+		capacity, refillRate := rl.getBucketParams(tc.limitType)
+		if capacity != tc.expectCapacity {
+			t.Errorf("getBucketParams(%s): expected capacity %v, got %v", tc.limitType, tc.expectCapacity, capacity)
+		}
+		if refillRate != tc.expectRefillRate {
+			t.Errorf("getBucketParams(%s): expected refillRate %v, got %v", tc.limitType, tc.expectRefillRate, refillRate)
+		}
+	}
+}
+
+// TestMin tests the min function for all branches.
+func TestMin(t *testing.T) {
+	tests := []struct {
+		a, b     float64
+		expected float64
+	}{
+		{1.0, 2.0, 1.0},  // a < b
+		{3.0, 2.0, 2.0},  // a > b
+		{5.0, 5.0, 5.0},  // a == b
+		{0.0, -1.0, -1.0}, // zero and negative
+		{-5.0, -3.0, -5.0}, // both negative, a < b
+	}
+
+	for _, tc := range tests {
+		result := min(tc.a, tc.b)
+		if result != tc.expected {
+			t.Errorf("min(%v, %v) = %v, want %v", tc.a, tc.b, result, tc.expected)
+		}
+	}
+}
+
+// TestBucket_AllowN_InsufficientTokens tests that allowN returns false when
+// requesting more tokens than available.
+func TestBucket_AllowN_InsufficientTokens(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	config := RateLimitConfig{
+		SMTPConnectionsPerMinute: 5,
+	}
+	rl := NewRateLimiter(config, database)
+	key := "test_insufficient:smtp_connection"
+
+	// Consume all 5 tokens
+	if !rl.AllowN(key, "smtp_connection", 5) {
+		t.Fatal("expected initial batch of 5 to be allowed")
+	}
+
+	// Requesting 1 more should fail
+	if rl.AllowN(key, "smtp_connection", 1) {
+		t.Error("expected request to be denied when no tokens remain")
+	}
+}
+
+// TestAllow_AllLimitTypes tests Allow with each limit type to ensure buckets
+// are created correctly.
+func TestAllow_AllLimitTypes(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	config := DefaultRateLimitConfig()
+	rl := NewRateLimiter(config, database)
+
+	limitTypes := []string{
+		"smtp_connection",
+		"smtp_message",
+		"imap_connection",
+		"imap_command",
+		"http_request",
+		"login_attempt",
+		"some_random_type",
+	}
+
+	for _, lt := range limitTypes {
+		key := "test_all_types:" + lt
+		if !rl.Allow(key, lt) {
+			t.Errorf("expected first request for type %q to be allowed", lt)
+		}
 	}
 }

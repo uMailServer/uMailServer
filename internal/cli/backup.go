@@ -83,6 +83,11 @@ func (bm *BackupManager) Backup(backupPath string) error {
 func (bm *BackupManager) backupConfig(tw *tar.Writer) error {
 	configPath := bm.config.Server.DataDir + "/config"
 
+	// Skip if config directory doesn't exist
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return nil
+	}
+
 	return filepath.Walk(configPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -158,6 +163,11 @@ func (bm *BackupManager) backupDatabase(tw *tar.Writer) error {
 // backupMaildir adds maildir files to the backup
 func (bm *BackupManager) backupMaildir(tw *tar.Writer) error {
 	maildirPath := bm.config.Server.DataDir + "/messages"
+
+	// Skip if maildir directory doesn't exist
+	if _, err := os.Stat(maildirPath); os.IsNotExist(err) {
+		return nil
+	}
 
 	return filepath.Walk(maildirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {

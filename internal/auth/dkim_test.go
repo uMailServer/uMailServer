@@ -916,3 +916,726 @@ func TestDKIMVerifyPublicKeyNotFound(t *testing.T) {
 		t.Errorf("Expected 'public key not found' error, got: %v", err)
 	}
 }
+
+
+// --- NEW TESTS ADDED FOR COVERAGE IMPROVEMENT ---
+
+// TestVerifyFullRoundTrip tests the full sign-then-verify round trip by manually
+// constructing the verifier inputs to bypass the DNS lookup (fetchPublicKey uses net.LookupTXT).
+func TestVerifyFullRoundTrip(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	resolver := newMockDNSResolver()
+	signer := NewDKIMSigner(resolver, privateKey, "example.com", "test")
+
+	headers := map[string][]string{
+		"from":    {"sender@example.com"},
+		"to":      {"recipient@example.com"},
+		"subject": {"Test Message"},
+	}
+	body := []byte("This is a test message.\r\n")
+
+	dkimHeader, err := signer.Sign(headers, body)
+	if err != nil {
+		t.Fatalf("Failed to sign message: %v", err)
+	}
+
+	// Parse the signed DKIM header to extract body hash and compute data for verification
+	sig, err := parseDKIMSignature(dkimHeader)
+	if err != nil {
+		t.Fatalf("Failed to parse signed DKIM header: %v", err)
+	}
+
+	// Verify body hash independently
+	canonicalBody := canonicalizeBody(body, sig.BodyCanon)
+	computedBodyHash := sha256Hash(canonicalBody)
+	if computedBodyHash != sig.BodyHash {
+		t.Errorf("Body hash mismatch: computed=%s sig=%s", computedBodyHash, sig.BodyHash)
+	}
+
+	// Verify the RSA signature independently by reconstructing the data
+	// that was signed (canonical headers + partial DKIM header without b= value).
+	// Use the same buildHeaderWithoutSig the signer used during signing.
+	canonicalHeaders := canonicalizeHeaders(headers, sig.SignedHeaders, sig.HeaderCanon)
+	partialHeader := signer.buildHeaderWithoutSig(sig)
+	sigData := canonicalHeaders + partialHeader
+
+	err = verifyRSASignature(&privateKey.PublicKey, []byte(sigData), sig.Signature)
+	if err != nil {
+		t.Errorf("RSA signature verification failed: %v", err)
+	}
+}
+
+// TestVerifyWithTamperedBody tests that body hash verification detects tampering.
+func TestVerifyWithTamperedBody(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	resolver := newMockDNSResolver()
+	signer := NewDKIMSigner(resolver, privateKey, "example.com", "test")
+
+	headers := map[string][]string{
+		"from":    {"sender@example.com"},
+		"to":      {"recipient@example.com"},
+		"subject": {"Test Message"},
+	}
+	body := []byte("Original message body.\r\n")
+
+	dkimHeader, err := signer.Sign(headers, body)
+	if err != nil {
+		t.Fatalf("Failed to sign message: %v", err)
+	}
+
+	// Tamper with the body
+	tamperedBody := []byte("Tampered message body.\r\n")
+
+	// Verify that the body hash is different
+	sig, _ := parseDKIMSignature(dkimHeader)
+	canonicalBody := canonicalizeBody(tamperedBody, sig.BodyCanon)
+	computedBodyHash := sha256Hash(canonicalBody)
+	if computedBodyHash == sig.BodyHash {
+		t.Error("Body hash should differ when body is tampered")
+	}
+}
+
+// TestVerifyWithBodyLengthLimit tests the body length limit (l= tag) path in Verify.
+func TestVerifyWithBodyLengthLimit(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	resolver := newMockDNSResolver()
+	signer := NewDKIMSigner(resolver, privateKey, "example.com", "test")
+
+	headers := map[string][]string{
+		"from":    {"sender@example.com"},
+		"to":      {"recipient@example.com"},
+		"subject": {"Test Message"},
+	}
+	body := []byte("This is a test message.\r\n")
+
+	dkimHeader, err := signer.Sign(headers, body)
+	if err != nil {
+		t.Fatalf("Failed to sign message: %v", err)
+	}
+
+	sig, err := parseDKIMSignature(dkimHeader)
+	if err != nil {
+		t.Fatalf("Failed to parse DKIM header: %v", err)
+	}
+
+	// Test: body length exactly equals canonical body length
+	canonicalBodyData := canonicalizeBody(body, sig.BodyCanon)
+	sig.BodyLength = len(canonicalBodyData)
+	truncated := canonicalBodyData
+	if len(truncated) > sig.BodyLength {
+		truncated = truncated[:sig.BodyLength]
+	}
+	computedHash := sha256Hash(truncated)
+	if computedHash != sig.BodyHash {
+		t.Errorf("Body hash mismatch with exact length limit")
+	}
+
+	// Test: body length larger than canonical body (no truncation)
+	sig.BodyLength = len(canonicalBodyData) + 100
+	truncated2 := canonicalBodyData
+	if len(truncated2) > sig.BodyLength {
+		truncated2 = truncated2[:sig.BodyLength]
+	}
+	computedHash2 := sha256Hash(truncated2)
+	if computedHash2 != sig.BodyHash {
+		t.Errorf("Body hash mismatch with larger length limit")
+	}
+
+	// Test: body length smaller than canonical body (truncation should cause mismatch)
+	sig.BodyLength = 5
+	truncated3 := canonicalBodyData
+	if len(truncated3) > sig.BodyLength {
+		truncated3 = truncated3[:sig.BodyLength]
+	}
+	computedHash3 := sha256Hash(truncated3)
+	if computedHash3 == sig.BodyHash {
+		t.Error("Body hash should not match when body is truncated to a smaller size")
+	}
+}
+
+// TestVerifyParseError tests Verify with an unparseable DKIM header.
+func TestVerifyParseError(t *testing.T) {
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	// Missing required fields (no domain, no selector, no bh, no b)
+	result, sig, err := verifier.Verify(headers, []byte("body"), "garbage")
+	if result != DKIMFail {
+		t.Errorf("Expected DKIMFail for unparseable header, got %v", result)
+	}
+	if err == nil {
+		t.Error("Expected error for unparseable header")
+	}
+	if sig != nil {
+		t.Error("Expected nil signature for parse error")
+	}
+}
+
+// TestVerifyVersionMismatch tests Verify with wrong DKIM version.
+func TestVerifyVersionMismatch(t *testing.T) {
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	dkimHeader := "v=2; a=rsa-sha256; d=example.com; s=selector; bh=abc; b=xyz"
+	result, _, err := verifier.Verify(headers, []byte("body"), dkimHeader)
+	if result != DKIMFail {
+		t.Errorf("Expected DKIMFail for version mismatch, got %v", result)
+	}
+	if err == nil {
+		t.Error("Expected error for version mismatch")
+	}
+}
+
+// TestVerifyMissingRequiredTag tests Verify when required tags are missing.
+func TestVerifyMissingRequiredTag(t *testing.T) {
+	resolver := newMockDNSResolver()
+	verifier := NewDKIMVerifier(resolver)
+
+	headers := map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{"missing body hash", "v=1; a=rsa-sha256; d=example.com; s=selector; b=sigvalue"},
+		{"missing signature", "v=1; a=rsa-sha256; d=example.com; s=selector; bh=hashvalue"},
+		{"missing selector", "v=1; a=rsa-sha256; d=example.com; bh=hashvalue; b=sigvalue"},
+		{"missing domain", "v=1; a=rsa-sha256; s=selector; bh=hashvalue; b=sigvalue"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, _, err := verifier.Verify(headers, []byte("body"), tt.header)
+			if result != DKIMFail {
+				t.Errorf("Expected DKIMFail for %s, got %v", tt.name, result)
+			}
+			if err == nil {
+				t.Errorf("Expected error for %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestDKIMSignatureWithDKIMPrefix tests parsing when the header includes the "DKIM-Signature:" prefix.
+func TestDKIMSignatureWithDKIMPrefix(t *testing.T) {
+	header := "DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=selector; c=simple/simple; h=from:to; bh=abc123; b=xyz789"
+	sig, err := parseDKIMSignature(header)
+	if err != nil {
+		t.Fatalf("Failed to parse DKIM signature with prefix: %v", err)
+	}
+	if sig.Domain != "example.com" {
+		t.Errorf("Domain = %q, want %q", sig.Domain, "example.com")
+	}
+	if sig.Selector != "selector" {
+		t.Errorf("Selector = %q, want %q", sig.Selector, "selector")
+	}
+}
+
+// TestDKIMSignatureAllTags tests parsing a DKIM signature with all possible tags.
+func TestDKIMSignatureAllTags(t *testing.T) {
+	header := "v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=mysel; q=dns/txt; t=1609459200; x=1609545600; h=from:to:subject:date; bh=Y2FmZmVl; b=c3lnbmF0dXJl; l=1234; z=from=sender@example.com|to=recv@example.com"
+	sig, err := parseDKIMSignature(header)
+	if err != nil {
+		t.Fatalf("Failed to parse DKIM signature with all tags: %v", err)
+	}
+
+	if sig.Algorithm != "rsa-sha256" {
+		t.Errorf("Algorithm = %q, want %q", sig.Algorithm, "rsa-sha256")
+	}
+	if sig.Canonicalize != "relaxed/relaxed" {
+		t.Errorf("Canonicalize = %q, want %q", sig.Canonicalize, "relaxed/relaxed")
+	}
+	if sig.HeaderCanon != "relaxed" {
+		t.Errorf("HeaderCanon = %q, want %q", sig.HeaderCanon, "relaxed")
+	}
+	if sig.BodyCanon != "relaxed" {
+		t.Errorf("BodyCanon = %q, want %q", sig.BodyCanon, "relaxed")
+	}
+	if sig.Domain != "example.com" {
+		t.Errorf("Domain = %q, want %q", sig.Domain, "example.com")
+	}
+	if sig.Selector != "mysel" {
+		t.Errorf("Selector = %q, want %q", sig.Selector, "mysel")
+	}
+	if sig.QueryMethod != "dns/txt" {
+		t.Errorf("QueryMethod = %q, want %q", sig.QueryMethod, "dns/txt")
+	}
+	if sig.Timestamp != 1609459200 {
+		t.Errorf("Timestamp = %d, want %d", sig.Timestamp, 1609459200)
+	}
+	if sig.Expiration != 1609545600 {
+		t.Errorf("Expiration = %d, want %d", sig.Expiration, 1609545600)
+	}
+	if len(sig.SignedHeaders) != 4 {
+		t.Errorf("SignedHeaders count = %d, want 4", len(sig.SignedHeaders))
+	}
+	if sig.BodyLength != 1234 {
+		t.Errorf("BodyLength = %d, want 1234", sig.BodyLength)
+	}
+	if sig.CopiedHeaders == nil || len(sig.CopiedHeaders) != 2 {
+		t.Errorf("CopiedHeaders = %v, want 2 entries", sig.CopiedHeaders)
+	}
+}
+
+// TestDKIMSignatureCanonicalizationNoSlash tests parsing when c= has no slash (only header canon).
+func TestDKIMSignatureCanonicalizationNoSlash(t *testing.T) {
+	header := "v=1; a=rsa-sha256; d=example.com; s=selector; c=relaxed; bh=abc123; b=xyz789"
+	sig, err := parseDKIMSignature(header)
+	if err != nil {
+		t.Fatalf("Failed to parse: %v", err)
+	}
+	if sig.HeaderCanon != "relaxed" {
+		t.Errorf("HeaderCanon = %q, want %q", sig.HeaderCanon, "relaxed")
+	}
+	if sig.BodyCanon != "simple" {
+		t.Errorf("BodyCanon = %q, want %q (default)", sig.BodyCanon, "simple")
+	}
+}
+
+// TestDKIMSignerNilKey tests that Sign fails when no private key is configured.
+func TestDKIMSignerNilKey(t *testing.T) {
+	resolver := newMockDNSResolver()
+	signer := NewDKIMSigner(resolver, nil, "example.com", "test")
+
+	headers := map[string][]string{
+		"from": {"sender@example.com"},
+	}
+	body := []byte("test body\r\n")
+
+	_, err := signer.Sign(headers, body)
+	if err == nil {
+		t.Error("Expected error when private key is nil")
+	}
+	if !strings.Contains(err.Error(), "no private key") {
+		t.Errorf("Expected 'no private key' error, got: %v", err)
+	}
+}
+
+// TestCanonicalizeBodyWithLFLineEndings tests canonicalizeBodySimple with LF-only line endings.
+func TestCanonicalizeBodyWithLFLineEndings(t *testing.T) {
+	input := "Line 1\nLine 2\n"
+	result := canonicalizeBodySimple([]byte(input))
+	expected := "Line 1\nLine 2\n\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodySimple(LF input) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyWithCRLineEndings tests canonicalizeBodySimple with CR-only line endings.
+func TestCanonicalizeBodyWithCRLineEndings(t *testing.T) {
+	input := "Line 1\rLine 2\r"
+	result := canonicalizeBodySimple([]byte(input))
+	expected := "Line 1\rLine 2\r\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodySimple(CR input) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyMixedLineEndings tests with mixed CRLF and LF endings.
+func TestCanonicalizeBodyMixedLineEndings(t *testing.T) {
+	input := "Line 1\r\nLine 2\n"
+	result := canonicalizeBodySimple([]byte(input))
+	expected := "Line 1\r\nLine 2\n\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodySimple(mixed input) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyEmpty tests that an empty body produces a single CRLF.
+func TestCanonicalizeBodyEmpty(t *testing.T) {
+	result := canonicalizeBodySimple([]byte(""))
+	if string(result) != "\r\n" {
+		t.Errorf("canonicalizeBodySimple(empty) = %q, want %q", string(result), "\r\n")
+	}
+}
+
+// TestCanonicalizeBodyRelaxedEmpty tests relaxed canonicalization with empty body.
+func TestCanonicalizeBodyRelaxedEmpty(t *testing.T) {
+	result := canonicalizeBodyRelaxed([]byte(""))
+	if string(result) != "\r\n" {
+		t.Errorf("canonicalizeBodyRelaxed(empty) = %q, want %q", string(result), "\r\n")
+	}
+}
+
+// TestCanonicalizeBodyRelaxedMultipleTrailingCRLF tests that trailing empty lines are reduced to one CRLF.
+func TestCanonicalizeBodyRelaxedMultipleTrailingCRLF(t *testing.T) {
+	input := "Hello\r\n\r\n\r\n"
+	result := canonicalizeBodyRelaxed([]byte(input))
+	expected := "Hello\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodyRelaxed(trailing CRLFs) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyRelaxedMultipleSpaces tests collapsing of multiple spaces.
+func TestCanonicalizeBodyRelaxedMultipleSpaces(t *testing.T) {
+	input := "Hello    World\r\n"
+	result := canonicalizeBodyRelaxed([]byte(input))
+	expected := "Hello World\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodyRelaxed(multiple spaces) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyRelaxedTabs tests collapsing of tabs.
+func TestCanonicalizeBodyRelaxedTabs(t *testing.T) {
+	input := "Hello\t\tWorld\r\n"
+	result := canonicalizeBodyRelaxed([]byte(input))
+	expected := "Hello World\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodyRelaxed(tabs) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyRelaxedNoTrailingCRLF tests that CRLF is added if missing.
+func TestCanonicalizeBodyRelaxedNoTrailingCRLF(t *testing.T) {
+	input := "Hello World"
+	result := canonicalizeBodyRelaxed([]byte(input))
+	expected := "Hello World\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodyRelaxed(no trailing CRLF) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyRelaxedLFOnly tests with LF-only line endings in relaxed mode.
+func TestCanonicalizeBodyRelaxedLFOnly(t *testing.T) {
+	input := "Hello World\n"
+	result := canonicalizeBodyRelaxed([]byte(input))
+	expected := "Hello World\r\n"
+	if string(result) != expected {
+		t.Errorf("canonicalizeBodyRelaxed(LF only) = %q, want %q", string(result), expected)
+	}
+}
+
+// TestCanonicalizeBodyDispatch tests the canonicalizeBody dispatch function for all cases.
+func TestCanonicalizeBodyDispatch(t *testing.T) {
+	body := []byte("test body\r\n")
+
+	// Test "relaxed" dispatch
+	relaxedResult := canonicalizeBody(body, "relaxed")
+	if len(relaxedResult) == 0 {
+		t.Error("canonicalizeBody with 'relaxed' should return non-empty result")
+	}
+
+	// Test "simple" dispatch - falls through to return body as-is
+	simpleResult := canonicalizeBody(body, "simple")
+	if string(simpleResult) != string(body) {
+		t.Errorf("canonicalizeBody with 'simple' = %q, want %q", string(simpleResult), string(body))
+	}
+
+	// Test unknown dispatch - should use simple canonicalization
+	unknownResult := canonicalizeBody(body, "unknown")
+	simpleExpected := canonicalizeBodySimple(body)
+	if string(unknownResult) != string(simpleExpected) {
+		t.Errorf("canonicalizeBody with 'unknown' = %q, want %q", string(unknownResult), string(simpleExpected))
+	}
+}
+
+// TestCanonicalizeHeaderDispatch tests the canonicalizeHeader dispatch function.
+func TestCanonicalizeHeaderDispatch(t *testing.T) {
+	// Test "relaxed"
+	relaxedResult := canonicalizeHeader("From", "test@example.com", "relaxed")
+	if relaxedResult != "from:test@example.com\r\n" {
+		t.Errorf("canonicalizeHeader relaxed = %q, want %q", relaxedResult, "from:test@example.com\r\n")
+	}
+
+	// Test "simple" - falls through to default return (name + ": " + value, no \r\n)
+	simpleResult := canonicalizeHeader("From", "test@example.com", "simple")
+	if simpleResult != "From: test@example.com" {
+		t.Errorf("canonicalizeHeader simple = %q, want %q", simpleResult, "From: test@example.com")
+	}
+
+	// Test unknown - uses canonicalizeHeaderSimple
+	unknownResult := canonicalizeHeader("From", "test@example.com", "unknown")
+	if unknownResult != "From: test@example.com\r\n" {
+		t.Errorf("canonicalizeHeader unknown = %q, want %q", unknownResult, "From: test@example.com\r\n")
+	}
+}
+
+// TestCanonicalizeHeadersWithCaseInsensitiveLookup tests that headers are found case-insensitively.
+func TestCanonicalizeHeadersWithCaseInsensitiveLookup(t *testing.T) {
+	headers := map[string][]string{
+		"From":    {"sender@example.com"},
+		"Subject": {"Hello"},
+	}
+
+	signedHeaders := []string{"from", "subject"}
+
+	// Relaxed canonicalization
+	resultRelaxed := canonicalizeHeaders(headers, signedHeaders, "relaxed")
+	if !strings.Contains(resultRelaxed, "from:") {
+		t.Errorf("Expected 'from:' in relaxed result, got %q", resultRelaxed)
+	}
+	if !strings.Contains(resultRelaxed, "subject:") {
+		t.Errorf("Expected 'subject:' in relaxed result, got %q", resultRelaxed)
+	}
+}
+
+// TestCanonicalizeHeadersMissingHeader tests canonicalizeHeaders with a header not present in the map.
+func TestCanonicalizeHeadersMissingHeader(t *testing.T) {
+	headers := map[string][]string{
+		"From": {"sender@example.com"},
+	}
+
+	signedHeaders := []string{"from", "nonexistent"}
+	result := canonicalizeHeaders(headers, signedHeaders, "relaxed")
+
+	if !strings.Contains(result, "from:") {
+		t.Error("Expected 'from:' in result")
+	}
+	if strings.Contains(result, "nonexistent") {
+		t.Error("Should not contain 'nonexistent' header")
+	}
+}
+
+// TestParseTagValueListEmpty tests parseTagValueList with empty and edge-case inputs.
+func TestParseTagValueListEmpty(t *testing.T) {
+	// Empty string
+	result := parseTagValueList("")
+	if len(result) != 0 {
+		t.Errorf("parseTagValueList('') = %d entries, want 0", len(result))
+	}
+
+	// Only semicolons
+	result2 := parseTagValueList(";;;")
+	if len(result2) != 0 {
+		t.Errorf("parseTagValueList(';;;') = %d entries, want 0", len(result2))
+	}
+
+	// Semicolon at end
+	result3 := parseTagValueList("a=1;")
+	if result3["a"] != "1" {
+		t.Errorf("parseTagValueList('a=1;')[a] = %q, want %q", result3["a"], "1")
+	}
+
+	// Value with equals sign
+	result4 := parseTagValueList("a=b=c")
+	if result4["a"] != "b=c" {
+		t.Errorf("parseTagValueList('a=b=c')[a] = %q, want %q", result4["a"], "b=c")
+	}
+
+	// Spaces around tags
+	result5 := parseTagValueList("  a = 1 ;  b = 2  ")
+	if result5["a"] != "1" {
+		t.Errorf("parseTagValueList with spaces [a] = %q, want %q", result5["a"], "1")
+	}
+	if result5["b"] != "2" {
+		t.Errorf("parseTagValueList with spaces [b] = %q, want %q", result5["b"], "2")
+	}
+}
+
+// TestParseTagValueListEscapedSemicolon tests that escaped semicolons are handled.
+func TestParseTagValueListEscapedSemicolon(t *testing.T) {
+	result := parseTagValueList("a=hello\\;world")
+	if len(result) != 1 {
+		t.Errorf("Expected 1 entry with escaped semicolon, got %d", len(result))
+	}
+	if result["a"] != "hello\\;world" {
+		t.Errorf("parseTagValueList('a=hello\\;world')[a] = %q, want %q", result["a"], "hello\\;world")
+	}
+}
+
+// TestParseTagValueListBHWhitespace tests that b= and bh= values have whitespace removed.
+func TestParseTagValueListBHWhitespace(t *testing.T) {
+	result := parseTagValueList("bh=abc def ghi; b=xyz 123")
+	if result["bh"] != "abcdefghi" {
+		t.Errorf("bh value = %q, want %q", result["bh"], "abcdefghi")
+	}
+	if result["b"] != "xyz123" {
+		t.Errorf("b value = %q, want %q", result["b"], "xyz123")
+	}
+}
+
+// TestGenerateDKIMKeyPairInvalidBits tests that key generation fails with very small key size.
+func TestGenerateDKIMKeyPairInvalidBits(t *testing.T) {
+	_, _, err := GenerateDKIMKeyPair(0)
+	if err == nil {
+		t.Error("Expected error when generating key with 0 bits")
+	}
+}
+
+// TestGenerateDKIMKeyPairAndDNSRoundTrip tests generating a key, putting it in DNS format,
+// and parsing it back.
+func TestGenerateDKIMKeyPairAndDNSRoundTrip(t *testing.T) {
+	privateKey, pubKeyBytes, err := GenerateDKIMKeyPair(2048)
+	if err != nil {
+		t.Fatalf("GenerateDKIMKeyPair failed: %v", err)
+	}
+
+	// Convert to DNS format
+	dnsRecord := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubKeyBytes)
+
+	// Parse it back
+	parsedKey, err := parseDKIMPublicKey(dnsRecord)
+	if err != nil {
+		t.Fatalf("parseDKIMPublicKey failed: %v", err)
+	}
+
+	// Verify the parsed key matches the original
+	if parsedKey.N.Cmp(privateKey.N) != 0 {
+		t.Error("Parsed key modulus does not match original")
+	}
+	if parsedKey.E != privateKey.E {
+		t.Error("Parsed key exponent does not match original")
+	}
+}
+
+// TestGetPublicKeyForDNS tests that GetPublicKeyForDNS produces a valid base64 string.
+func TestGetPublicKeyForDNS(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	dnsKey := GetPublicKeyForDNS(privateKey)
+	if dnsKey == "" {
+		t.Error("GetPublicKeyForDNS returned empty string")
+	}
+
+	// Verify it is valid base64
+	decoded, err := base64.StdEncoding.DecodeString(dnsKey)
+	if err != nil {
+		t.Errorf("GetPublicKeyForDNS did not produce valid base64: %v", err)
+	}
+	if len(decoded) == 0 {
+		t.Error("Decoded public key is empty")
+	}
+}
+
+// TestComputeBodyHashRelaxed tests body hash computation with relaxed canonicalization.
+func TestComputeBodyHashRelaxed(t *testing.T) {
+	body := []byte("Hello   World\r\n")
+	hash := computeBodyHash(body, "relaxed")
+	if hash == "" {
+		t.Error("computeBodyHash should not return empty hash")
+	}
+
+	// Same content with single space should produce same hash in relaxed mode
+	bodyNormalized := []byte("Hello World\r\n")
+	hash2 := computeBodyHash(bodyNormalized, "relaxed")
+	if hash != hash2 {
+		t.Errorf("Relaxed canonicalization should normalize whitespace: %q vs %q", hash, hash2)
+	}
+}
+
+// TestComputeBodyHashEmpty tests body hash with empty body.
+func TestComputeBodyHashEmpty(t *testing.T) {
+	hash := computeBodyHash([]byte(""), "simple")
+	if hash == "" {
+		t.Error("computeBodyHash should not return empty hash for empty body")
+	}
+}
+
+// TestSha256Hash tests that sha256Hash returns a valid base64-encoded SHA256 hash.
+func TestSha256Hash(t *testing.T) {
+	data := []byte("test")
+	hash := sha256Hash(data)
+
+	// Verify it is valid base64
+	_, err := base64.StdEncoding.DecodeString(hash)
+	if err != nil {
+		t.Errorf("sha256Hash did not produce valid base64: %v", err)
+	}
+
+	// Should be deterministic
+	hash2 := sha256Hash(data)
+	if hash != hash2 {
+		t.Error("sha256Hash should be deterministic")
+	}
+
+	// Different input should produce different hash
+	hash3 := sha256Hash([]byte("different"))
+	if hash == hash3 {
+		t.Error("Different inputs should produce different hashes")
+	}
+}
+
+// TestDkimHeaderWithoutSigVariations tests dkimHeaderWithoutSig with various inputs.
+func TestDkimHeaderWithoutSigVariations(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "multiple b= occurrences",
+			input:    "v=1; b=first; d=example.com; b=second",
+			expected: "v=1; b=; d=example.com; b=",
+		},
+		{
+			name:     "b= at end with no semicolon",
+			input:    "v=1; d=example.com; b=signaturedata",
+			expected: "v=1; d=example.com; b=",
+		},
+		{
+			name:     "b= with spaces in value",
+			input:    "v=1; b=abc def; d=example.com",
+			expected: "v=1; b=; d=example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := dkimHeaderWithoutSig(tt.input)
+			if got != tt.expected {
+				t.Errorf("dkimHeaderWithoutSig(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestDKIMResultAdditionalValues tests additional DKIMResult string values.
+func TestDKIMResultAdditionalValues(t *testing.T) {
+	tests := []struct {
+		result   DKIMResult
+		expected string
+	}{
+		{DKIMNone, "none"},
+		{DKIMPass, "pass"},
+		{DKIMFail, "fail"},
+		{DKIMPERMError, "permerror"},
+		{DKIMTempError, "temperror"},
+		{DKIMResult(100), "unknown"},
+		{DKIMResult(-1), "unknown"},
+	}
+	for _, tt := range tests {
+		got := tt.result.String()
+		if got != tt.expected {
+			t.Errorf("DKIMResult(%d).String() = %q, want %q", tt.result, got, tt.expected)
+		}
+	}
+}
+
+// TestParseDKIMSignatureVersion2 tests that version 2 is rejected.
+func TestParseDKIMSignatureVersion2(t *testing.T) {
+	header := "v=2; d=example.com; s=selector; bh=abc; b=xyz"
+	_, err := parseDKIMSignature(header)
+	if err == nil {
+		t.Error("Expected error for DKIM version 2")
+	}
+	if !strings.Contains(err.Error(), "unsupported DKIM version") {
+		t.Errorf("Expected 'unsupported DKIM version' error, got: %v", err)
+	}
+}

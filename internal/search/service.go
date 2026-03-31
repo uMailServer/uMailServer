@@ -102,25 +102,25 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 			continue
 		}
 
-		// Get message metadata
-		meta, err := s.db.GetMessageMetadata(opts.User, folder, uid)
-		if err != nil {
-			continue
+		// Get message metadata (optional — use index data if db unavailable)
+		searchResult := MessageSearchResult{
+			UID:    uid,
+			Folder: folder,
+			Score:  result.Score,
 		}
 
-		// Generate preview
-		preview := generatePreview(meta.Subject, 100)
+		if s.db != nil {
+			meta, err := s.db.GetMessageMetadata(opts.User, folder, uid)
+			if err == nil && meta != nil {
+				searchResult.From = meta.From
+				searchResult.To = meta.To
+				searchResult.Subject = meta.Subject
+				searchResult.Preview = generatePreview(meta.Subject, 100)
+				searchResult.Date = meta.Date
+			}
+		}
 
-		searchResults = append(searchResults, MessageSearchResult{
-			UID:     uid,
-			Folder:  folder,
-			From:    meta.From,
-			To:      meta.To,
-			Subject: meta.Subject,
-			Preview: preview,
-			Date:    meta.Date,
-			Score:   result.Score,
-		})
+		searchResults = append(searchResults, searchResult)
 	}
 
 	return searchResults, nil
@@ -136,6 +136,9 @@ func (s *Service) BuildIndex(user string) error {
 	index := NewIndex()
 
 	// Get all folders for user
+	if s.db == nil {
+		return fmt.Errorf("database not available")
+	}
 	folders, err := s.db.ListMailboxes(user)
 	if err != nil {
 		return fmt.Errorf("failed to list folders: %w", err)

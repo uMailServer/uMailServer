@@ -1036,6 +1036,247 @@ func generateTestKey(t *testing.T) []byte {
 	return keyPEM
 }
 
+// TestGenerateSelfSignedEmptyDomains tests GenerateSelfSigned with no domains (default)
+func TestGenerateSelfSignedEmptyDomains(t *testing.T) {
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	// Pass empty domains slice - should use defaults
+	certPath, keyPath, err := manager.GenerateSelfSigned(nil)
+
+	if err != nil {
+		t.Errorf("GenerateSelfSigned with nil domains returned error: %v", err)
+	}
+
+	if certPath == "" {
+		t.Error("certPath should not be empty even with nil domains")
+	}
+
+	if keyPath == "" {
+		t.Error("keyPath should not be empty even with nil domains")
+	}
+}
+
+// TestGenerateSelfSignedEmptyDomainsSlice tests with explicitly empty slice
+func TestGenerateSelfSignedEmptyDomainsSlice(t *testing.T) {
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	certPath, keyPath, err := manager.GenerateSelfSigned([]string{})
+
+	if err != nil {
+		t.Errorf("GenerateSelfSigned with empty slice returned error: %v", err)
+	}
+
+	if certPath == "" {
+		t.Error("certPath should not be empty")
+	}
+
+	if keyPath == "" {
+		t.Error("keyPath should not be empty")
+	}
+}
+
+// TestGetCertificateWithAutocertEnabled tests GetCertificate when autocert is enabled
+// but autocert fails (no actual ACME server), falling back to manual certs
+func TestGetCertificateWithAutocertEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Generate a real cert+key pair for the fallback path
+	certData, keyData := generateTestCertAndKey(t, "fallback.example.com")
+
+	certPath := filepath.Join(tmpDir, "cert.pem")
+	keyPath := filepath.Join(tmpDir, "key.pem")
+	os.WriteFile(certPath, certData, 0644)
+	os.WriteFile(keyPath, keyData, 0600)
+
+	config := Config{
+		Enabled:  true,
+		AutoTLS:  true,
+		Email:    "admin@example.com",
+		Domains:  []string{"example.com"},
+		CertFile: certPath,
+		KeyFile:  keyPath,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	// Override certDir to tmpDir for test isolation
+	manager.certDir = tmpDir
+
+	// GetCertificate should attempt autocert (which will fail),
+	// then fall back to manual certificate loading
+	hello := &tls.ClientHelloInfo{ServerName: "fallback.example.com"}
+	cert, err := manager.GetCertificate(hello)
+
+	if err != nil {
+		t.Errorf("expected fallback to manual cert to succeed, got error: %v", err)
+	}
+	if cert == nil {
+		t.Error("expected certificate from manual fallback")
+	}
+}
+
+// TestGetCertificateWithAutocertEnabledNoFallback tests autocert enabled but no manual certs configured
+func TestGetCertificateWithAutocertEnabledNoFallback(t *testing.T) {
+	config := Config{
+		Enabled: true,
+		AutoTLS: true,
+		Email:   "admin@example.com",
+		Domains: []string{"example.com"},
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	// GetCertificate should attempt autocert (fails), then fall back to manual (also fails)
+	hello := &tls.ClientHelloInfo{ServerName: "unresolved.example.com"}
+	cert, err := manager.GetCertificate(hello)
+
+	if err == nil {
+		t.Error("expected error when both autocert and manual cert fail")
+	}
+	if cert != nil {
+		t.Error("expected nil certificate when both paths fail")
+	}
+}
+
+// TestGetManualCertificateWithServerSpecificCertOnlyKey tests when only the key
+// file exists for a server-specific cert (should not use server-specific paths)
+func TestGetManualCertificateWithServerSpecificCertOnlyKey(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	manager.certDir = tmpDir
+
+	// Create only the .crt file (no matching .key file)
+	certOnlyPath := filepath.Join(tmpDir, "partial.example.com.crt")
+	os.WriteFile(certOnlyPath, []byte("cert"), 0644)
+
+	// Should fail because no cert/key is configured and server-specific pair is incomplete
+	cert, err := manager.getManualCertificate("partial.example.com")
+	if err == nil {
+		t.Error("expected error when server-specific cert has no matching key")
+	}
+	if cert != nil {
+		t.Error("expected nil certificate")
+	}
+}
+
+// TestGetManualCertificateWithServerSpecificCertAndKey tests loading server-specific certs
+func TestGetManualCertificateWithServerSpecificCertAndKey(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Generate matching cert/key pair
+	certData, keyData := generateTestCertAndKey(t, "specific.example.com")
+
+	config := Config{
+		Enabled: true,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	manager.certDir = tmpDir
+
+	// Create server-specific cert and key files
+	os.WriteFile(filepath.Join(tmpDir, "specific.example.com.crt"), certData, 0644)
+	os.WriteFile(filepath.Join(tmpDir, "specific.example.com.key"), keyData, 0600)
+
+	// Should successfully load the server-specific certificate
+	cert, err := manager.getManualCertificate("specific.example.com")
+	if err != nil {
+		t.Errorf("expected successful cert load, got error: %v", err)
+	}
+	if cert == nil {
+		t.Error("expected non-nil certificate")
+	}
+
+	// Second call should return from cache
+	cert2, err2 := manager.getManualCertificate("specific.example.com")
+	if err2 != nil {
+		t.Errorf("expected cache hit to succeed, got error: %v", err2)
+	}
+	if cert2 == nil {
+		t.Error("expected non-nil certificate from cache")
+	}
+}
+
+// TestGetManualCertificateEmptyServerName tests with empty server name
+// (no server-specific cert lookup, uses config paths)
+func TestGetManualCertificateEmptyServerNameWithConfigPaths(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	certData, keyData := generateTestCertAndKey(t, "default.example.com")
+
+	certPath := filepath.Join(tmpDir, "cert.pem")
+	keyPath := filepath.Join(tmpDir, "key.pem")
+	os.WriteFile(certPath, certData, 0644)
+	os.WriteFile(keyPath, keyData, 0600)
+
+	config := Config{
+		Enabled:  true,
+		CertFile: certPath,
+		KeyFile:  keyPath,
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, _ := NewManager(config, logger)
+	defer manager.Close()
+
+	// Empty server name should skip server-specific lookup and use config paths
+	cert, err := manager.getManualCertificate("")
+	if err != nil {
+		t.Errorf("expected cert load from config paths, got error: %v", err)
+	}
+	if cert == nil {
+		t.Error("expected non-nil certificate")
+	}
+}
+
+// TestNewManagerWithACMEEndpoint tests creating a manager with custom ACME endpoint
+func TestNewManagerWithACMEEndpoint(t *testing.T) {
+	config := Config{
+		Enabled:      true,
+		AutoTLS:      true,
+		Email:        "admin@example.com",
+		Domains:      []string{"example.com"},
+		ACMEEndpoint: "https://custom-acme.example.com/directory",
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	manager, err := NewManager(config, logger)
+	if err != nil {
+		t.Fatalf("NewManager with custom ACME endpoint failed: %v", err)
+	}
+	defer manager.Close()
+
+	if manager.certManager == nil {
+		t.Error("expected certManager to be initialized with custom ACME endpoint")
+	}
+}
+
 // generateTestCertAndKey generates a matching certificate and key pair
 func generateTestCertAndKey(t *testing.T, domain string) (certPEM []byte, keyPEM []byte) {
 	t.Helper()

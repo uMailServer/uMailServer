@@ -541,6 +541,492 @@ func TestIsTemporaryError(t *testing.T) {
 	}
 }
 
+func TestEvaluateExists_NonExistingDomain(t *testing.T) {
+	// evaluateExists returns false, true (void) when the domain does not resolve
+	resolver := newMockDNSResolver()
+	resolver.failLookup["nonexistent.example.com"] = true
+	checker := NewSPFChecker(resolver)
+
+	match, void, err := checker.evaluateExists(context.Background(), "nonexistent.example.com", 0, 0)
+	if match {
+		t.Error("Expected match=false for non-existing domain")
+	}
+	if !void {
+		t.Error("Expected void=true for non-existing domain (non-temp error)")
+	}
+	if err != nil {
+		t.Errorf("Expected no error for non-temp lookup failure, got %v", err)
+	}
+}
+
+func TestEvaluateExists_TempError(t *testing.T) {
+	// evaluateExists returns error when a temporary DNS error occurs
+	resolver := newMockDNSResolver()
+	resolver.tempFail["tempfail.example.com"] = true
+	checker := NewSPFChecker(resolver)
+
+	match, void, err := checker.evaluateExists(context.Background(), "tempfail.example.com", 0, 0)
+	if match {
+		t.Error("Expected match=false for temp error")
+	}
+	if void {
+		t.Error("Expected void=false for temp error")
+	}
+	if err == nil {
+		t.Error("Expected error for temp DNS failure")
+	}
+}
+
+func TestEvaluateExists_ExistingDomain(t *testing.T) {
+	// evaluateExists returns true when the domain resolves (even to empty IP list is not enough;
+	// mock returns error if no records, so we set records)
+	resolver := newMockDNSResolver()
+	resolver.ipRecords["exists.example.com"] = []net.IP{net.ParseIP("1.2.3.4")}
+	checker := NewSPFChecker(resolver)
+
+	match, void, err := checker.evaluateExists(context.Background(), "exists.example.com", 0, 0)
+	if !match {
+		t.Error("Expected match=true for existing domain")
+	}
+	if void {
+		t.Error("Expected void=false for existing domain")
+	}
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestEvaluateMX_ExplicitDomain(t *testing.T) {
+	// evaluateMX with an explicit domain value (value != "")
+	resolver := newMockDNSResolver()
+	resolver.mxRecords["other.example.com"] = []*net.MX{
+		{Host: "mx.other.example.com"},
+	}
+	resolver.ipRecords["mx.other.example.com"] = []net.IP{net.ParseIP("10.0.0.5")}
+	checker := NewSPFChecker(resolver)
+
+	ip := net.ParseIP("10.0.0.5")
+	match, void, err := checker.evaluateMX(context.Background(), ip, "other.example.com", "example.com", 0, 0)
+	if !match {
+		t.Error("Expected match=true for MX record with explicit domain")
+	}
+	if void {
+		t.Error("Expected void=false for successful MX match")
+	}
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestEvaluateMX_NoMXRecords(t *testing.T) {
+	// evaluateMX returns void when no MX records found (non-temp error)
+	resolver := newMockDNSResolver()
+	resolver.failLookup["example.com"] = true
+	checker := NewSPFChecker(resolver)
+
+	ip := net.ParseIP("192.168.1.1")
+	match, void, err := checker.evaluateMX(context.Background(), ip, "", "example.com", 0, 0)
+	if match {
+		t.Error("Expected match=false when MX lookup fails")
+	}
+	if !void {
+		t.Error("Expected void=true for failed MX lookup")
+	}
+	if err != nil {
+		t.Errorf("Expected no error for non-temp failure, got %v", err)
+	}
+}
+
+func TestEvaluateMX_MXTempError(t *testing.T) {
+	// evaluateMX returns temp error when MX lookup times out
+	resolver := newMockDNSResolver()
+	resolver.tempFail["example.com"] = true
+	checker := NewSPFChecker(resolver)
+
+	ip := net.ParseIP("192.168.1.1")
+	match, void, err := checker.evaluateMX(context.Background(), ip, "", "example.com", 0, 0)
+	if match {
+		t.Error("Expected match=false for temp error")
+	}
+	if void {
+		t.Error("Expected void=false for temp error")
+	}
+	if err == nil {
+		t.Error("Expected error for temp DNS failure")
+	}
+}
+
+func TestEvaluateMX_MXHostNonResolving(t *testing.T) {
+	// evaluateMX: MX record exists but the host IP lookup fails (non-temp error)
+	resolver := newMockDNSResolver()
+	resolver.mxRecords["example.com"] = []*net.MX{
+		{Host: "mail.example.com"},
+	}
+	resolver.failLookup["mail.example.com"] = true
+	checker := NewSPFChecker(resolver)
+
+	ip := net.ParseIP("192.168.1.1")
+	match, void, err := checker.evaluateMX(context.Background(), ip, "", "example.com", 0, 0)
+	if match {
+		t.Error("Expected match=false when MX host IP lookup fails")
+	}
+	if void {
+		t.Error("Expected void=false when MX host IP lookup fails (non-temp)")
+	}
+	if err != nil {
+		t.Errorf("Expected no error for non-temp failure, got %v", err)
+	}
+}
+
+func TestEvaluateMX_MXHostTempError(t *testing.T) {
+	// evaluateMX returns temp error when resolving MX host IP times out
+	resolver := newMockDNSResolver()
+	resolver.mxRecords["example.com"] = []*net.MX{
+		{Host: "mail.example.com"},
+	}
+	resolver.tempFail["mail.example.com"] = true
+	checker := NewSPFChecker(resolver)
+
+	ip := net.ParseIP("192.168.1.1")
+	match, void, err := checker.evaluateMX(context.Background(), ip, "", "example.com", 0, 0)
+	if match {
+		t.Error("Expected match=false for temp error")
+	}
+	if void {
+		t.Error("Expected void=false for temp error")
+	}
+	if err == nil {
+		t.Error("Expected error for temp DNS failure on MX host lookup")
+	}
+}
+
+func TestEvaluateMX_EmptyMXRecords(t *testing.T) {
+	// evaluateMX with empty MX record list (returns void)
+	resolver := newMockDNSResolver()
+	resolver.mxRecords["example.com"] = []*net.MX{}
+	checker := NewSPFChecker(resolver)
+
+	ip := net.ParseIP("192.168.1.1")
+	match, void, err := checker.evaluateMX(context.Background(), ip, "", "example.com", 0, 0)
+	if match {
+		t.Error("Expected match=false for empty MX records")
+	}
+	if !void {
+		t.Error("Expected void=true for empty MX records")
+	}
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestEvaluateInclude_VoidLookup(t *testing.T) {
+	// evaluateInclude: included domain has no SPF record (void lookup)
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 include:nospf.example.com -all"}
+	resolver.failLookup["nospf.example.com"] = true
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	// The include results in void, then -all matches -> SPFFail
+	if result != SPFFail {
+		t.Errorf("Expected SPFFail (include void + -all), got %s", result.String())
+	}
+}
+
+func TestEvaluateInclude_PermError(t *testing.T) {
+	// evaluateInclude propagates permanent error from nested evaluation
+	resolver := newMockDNSResolver()
+	// Create a deep include chain that exceeds lookup limit
+	resolver.txtRecords["example.com"] = []string{"v=spf1 include:spf1.example.com -all"}
+	for i := 1; i <= 11; i++ {
+		next := fmt.Sprintf("spf%d.example.com", i+1)
+		if i == 11 {
+			resolver.txtRecords[fmt.Sprintf("spf%d.example.com", i)] = []string{"v=spf1 -all"}
+		} else {
+			resolver.txtRecords[fmt.Sprintf("spf%d.example.com", i)] = []string{fmt.Sprintf("v=spf1 include:%s -all", next)}
+		}
+	}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFPermError {
+		t.Errorf("Expected SPFPermError from deep include chain, got %s", result.String())
+	}
+}
+
+func TestEvaluateInclude_TempError(t *testing.T) {
+	// evaluateInclude returns temp error when included domain lookup times out
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 include:tempfail.example.com -all"}
+	resolver.tempFail["tempfail.example.com"] = true
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFTempError {
+		t.Errorf("Expected SPFTempError for include temp error, got %s", result.String())
+	}
+}
+
+func TestEvaluateInclude_NeutralResult(t *testing.T) {
+	// evaluateInclude: included SPF returns neutral (not pass), so include does not match
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 include:_spf.example.com -all"}
+	resolver.txtRecords["_spf.example.com"] = []string{"v=spf1 ?all"}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFFail {
+		t.Errorf("Expected SPFFail (include neutral -> no match, then -all), got %s", result.String())
+	}
+}
+
+func TestEvaluateInclude_SoftFailResult(t *testing.T) {
+	// evaluateInclude: included SPF returns softfail (not pass), so include does not match
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 include:_spf.example.com -all"}
+	resolver.txtRecords["_spf.example.com"] = []string{"v=spf1 ~all"}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFFail {
+		t.Errorf("Expected SPFFail (include softfail -> no match, then -all), got %s", result.String())
+	}
+}
+
+func TestEvaluateA_ExplicitHost(t *testing.T) {
+	// evaluateA with an explicit host value (not empty, not domain)
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 a:mail.example.com -all"}
+	resolver.ipRecords["mail.example.com"] = []net.IP{net.ParseIP("10.0.0.1")}
+	resolver.ipRecords["example.com"] = []net.IP{net.ParseIP("192.168.1.1")}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("10.0.0.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFPass {
+		t.Errorf("Expected SPFPass for A record with explicit host match, got %s", result.String())
+	}
+}
+
+func TestEvaluateA_EmptyIPs(t *testing.T) {
+	// evaluateA: DNS lookup returns empty IP list -> void lookup
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 a -all"}
+	resolver.ipRecords["example.com"] = []net.IP{}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFFail {
+		t.Errorf("Expected SPFFail for A record with empty IPs, got %s", result.String())
+	}
+}
+
+func TestEvaluateA_TempError(t *testing.T) {
+	// evaluateA returns error when DNS lookup times out
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 a -all"}
+	resolver.tempFail["example.com"] = true
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFTempError {
+		t.Errorf("Expected SPFTempError for A record temp error, got %s", result.String())
+	}
+}
+
+func TestEvaluateA_NonTempError(t *testing.T) {
+	// evaluateA returns void for non-temp DNS error
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 a:missing.example.com -all"}
+	resolver.failLookup["missing.example.com"] = true
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFFail {
+		t.Errorf("Expected SPFFail (void A lookup + -all), got %s", result.String())
+	}
+}
+
+func TestEvaluateIP4_IPv6Input(t *testing.T) {
+	// evaluateIP4 returns false when given an IPv6 address (ip.To4() == nil)
+	checker := NewSPFChecker(nil)
+	ip := net.ParseIP("2001:db8::1")
+	got := checker.evaluateIP4(ip, "192.168.1.0/24")
+	if got {
+		t.Error("Expected false when evaluating IPv6 address against IPv4 CIDR")
+	}
+}
+
+func TestEvaluateIP4_InvalidValue(t *testing.T) {
+	// evaluateIP4 returns false for invalid value (not CIDR, not parseable IP)
+	checker := NewSPFChecker(nil)
+	ip := net.ParseIP("192.168.1.1")
+	got := checker.evaluateIP4(ip, "not-an-ip")
+	if got {
+		t.Error("Expected false for invalid ip4 value")
+	}
+}
+
+func TestEvaluateIP4_CIDRNoMatch(t *testing.T) {
+	// evaluateIP4: valid CIDR but IP not in range
+	checker := NewSPFChecker(nil)
+	ip := net.ParseIP("10.0.0.1")
+	got := checker.evaluateIP4(ip, "192.168.0.0/16")
+	if got {
+		t.Error("Expected false for IP outside CIDR range")
+	}
+}
+
+func TestEvaluate_VoidLookupLimit(t *testing.T) {
+	// The void lookup limit is checked at the top of evaluate(), so we need
+	// to trigger re-entry via include or redirect after voids accumulate.
+	// Use an include that has 2 void lookups in its SPF record, then includes
+	// another domain -- that second include re-enters evaluate with voidLookups >= 2.
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 include:_spf.example.com -all"}
+	resolver.txtRecords["_spf.example.com"] = []string{"v=spf1 a:fail1.example.com a:fail2.example.com include:deep.example.com -all"}
+	resolver.failLookup["fail1.example.com"] = true
+	resolver.failLookup["fail2.example.com"] = true
+	resolver.txtRecords["deep.example.com"] = []string{"v=spf1 ip4:192.168.1.1 -all"}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, explanation := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFPermError {
+		t.Errorf("Expected SPFPermError for too many void lookups, got %s: %s", result.String(), explanation)
+	}
+}
+
+func TestEvaluate_RedirectTempError(t *testing.T) {
+	// evaluate: redirect target has temp DNS error
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 redirect=_spf.example.com"}
+	resolver.tempFail["_spf.example.com"] = true
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFTempError {
+		t.Errorf("Expected SPFTempError for redirect temp error, got %s", result.String())
+	}
+}
+
+func TestEvaluate_RedirectInvalidTarget(t *testing.T) {
+	// evaluate: redirect target has no SPF record (non-temp error)
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 redirect=missing.example.com"}
+	resolver.failLookup["missing.example.com"] = true
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, explanation := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFPermError {
+		t.Errorf("Expected SPFPermError for invalid redirect, got %s", result.String())
+	}
+	if explanation != "Invalid redirect" {
+		t.Errorf("Expected 'Invalid redirect', got %q", explanation)
+	}
+}
+
+func TestEvaluate_DefaultNeutralNoMechanisms(t *testing.T) {
+	// evaluate: SPF record with no mechanisms returns neutral
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1"}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFNeutral {
+		t.Errorf("Expected SPFNeutral for v=spf1 with no mechanisms, got %s", result.String())
+	}
+}
+
+func TestEvaluate_RedirectLookupLimit(t *testing.T) {
+	// evaluate: redirect should trigger lookup limit check
+	resolver := newMockDNSResolver()
+	// Build a long redirect chain
+	resolver.txtRecords["example.com"] = []string{"v=spf1 redirect=r1.example.com"}
+	for i := 1; i <= 12; i++ {
+		cur := fmt.Sprintf("r%d.example.com", i)
+		if i >= 10 {
+			resolver.txtRecords[cur] = []string{"v=spf1 ip4:192.168.1.0/24 -all"}
+		} else {
+			resolver.txtRecords[cur] = []string{fmt.Sprintf("v=spf1 redirect=r%d.example.com", i+1)}
+		}
+	}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, explanation := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFPermError {
+		t.Errorf("Expected SPFPermError for redirect lookup limit, got %s: %s", result.String(), explanation)
+	}
+}
+
+func TestEvaluate_PtrMechanism(t *testing.T) {
+	// PTR mechanism always returns false (discouraged)
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 ptr -all"}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFFail {
+		t.Errorf("Expected SPFFail (ptr always false + -all), got %s", result.String())
+	}
+}
+
+func TestEvaluate_UnknownMechanism(t *testing.T) {
+	// Unknown mechanism type returns false (no match)
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 unknown:foo ?all"}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFNeutral {
+		t.Errorf("Expected SPFNeutral (unknown mech + ?all), got %s", result.String())
+	}
+}
+
+func TestEvaluate_ExpModifier(t *testing.T) {
+	// exp= modifier is parsed but treated as unknown mechanism type -> no match
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 exp=explain.example.com ?all"}
+
+	checker := NewSPFChecker(resolver)
+	ip := net.ParseIP("192.168.1.1")
+	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
+
+	if result != SPFNeutral {
+		t.Errorf("Expected SPFNeutral (exp modifier + ?all), got %s", result.String())
+	}
+}
+
 func TestSPFMechanismString(t *testing.T) {
 	tests := []struct {
 		m        spfMechanism

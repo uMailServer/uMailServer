@@ -2,11 +2,13 @@ package smtp
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,9 +47,10 @@ type Session struct {
 	username    string
 
 	// Message data
-	mailFrom string
-	rcptTo   []string
-	data     []byte
+	mailFrom    string
+	rcptTo      []string
+	data        []byte
+	bdatBuffer  *bytes.Buffer
 }
 
 // NewSession creates a new SMTP session
@@ -146,6 +149,8 @@ func (s *Session) HandleCommand(line string) error {
 		return s.handleRCPT(arg)
 	case "DATA":
 		return s.handleDATA()
+	case "BDAT":
+		return s.handleBDAT(arg)
 	case "RSET":
 		return s.handleRSET()
 	case "VRFY":
@@ -163,14 +168,14 @@ func (s *Session) HandleCommand(line string) error {
 	case "STARTTLS":
 		return s.handleSTARTTLS()
 	default:
-		return s.WriteResponse(500, "Syntax error, command unrecognized")
+		return s.WriteResponse(500, "5.5.2 Syntax error, command unrecognized")
 	}
 }
 
 // handleEHLO handles the EHLO command
 func (s *Session) handleEHLO(arg string) error {
 	if arg == "" {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	s.mutex.Lock()
@@ -186,6 +191,8 @@ func (s *Session) handleEHLO(arg string) error {
 		"8BITMIME",
 		"PIPELINING",
 		"ENHANCEDSTATUSCODES",
+		"SMTPUTF8",
+		"CHUNKING",
 	}
 
 	if s.server.config.TLSConfig != nil && !s.isTLS {
@@ -203,7 +210,7 @@ func (s *Session) handleEHLO(arg string) error {
 // handleHELO handles the HELO command (legacy)
 func (s *Session) handleHELO(arg string) error {
 	if arg == "" {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	s.mutex.Lock()
@@ -222,20 +229,20 @@ func (s *Session) handleMAIL(arg string) error {
 
 	// Must have greeted first
 	if s.state == StateNew {
-		return s.WriteResponse(503, "Bad sequence of commands")
+		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
 	// Parse MAIL FROM:<address> [params]
 	from, err := parseMailFrom(arg)
 	if err != nil {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	// Validate from address
 	if from != "" {
 		validated, err := ValidateEmail(from)
 		if err != nil {
-			return s.WriteResponse(501, "Syntax error in parameters or arguments")
+			return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 		}
 		from = validated
 	}
@@ -253,24 +260,24 @@ func (s *Session) handleRCPT(arg string) error {
 
 	// Must have MAIL FROM first
 	if s.state != StateMailFrom && s.state != StateRcptTo {
-		return s.WriteResponse(503, "Bad sequence of commands")
+		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
 	// Parse RCPT TO:<address>
 	to, err := parseRcptTo(arg)
 	if err != nil {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	// Validate to address
 	validated, err := ValidateEmail(to)
 	if err != nil {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	// Check max recipients
 	if len(s.rcptTo) >= s.server.config.MaxRecipients {
-		return s.WriteResponse(452, "Too many recipients")
+		return s.WriteResponse(452, "4.5.3 Too many recipients")
 	}
 
 	s.rcptTo = append(s.rcptTo, validated)
@@ -286,7 +293,7 @@ func (s *Session) handleDATA() error {
 
 	// Must have RCPT TO first
 	if s.state != StateRcptTo {
-		return s.WriteResponse(503, "Bad sequence of commands")
+		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
 	s.state = StateData
@@ -299,22 +306,136 @@ func (s *Session) handleDATA() error {
 	// Read message data
 	data, err := s.readData()
 	if err != nil {
-		return s.WriteResponse(451, "Requested action aborted: local error in processing")
+		return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 	}
 
 	// Check message size
 	if int64(len(data)) > s.server.config.MaxMessageSize {
 		s.resetTransaction()
-		return s.WriteResponse(552, "Message exceeds fixed maximum message size")
+		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
 	}
 
 	s.data = data
+
+	// Run message through pipeline if configured
+	if s.server.pipeline != nil {
+		remoteIP := net.ParseIP("")
+	 if parts := strings.SplitN(s.conn.RemoteAddr().String(), ":", 2); len(parts) > 0 {
+			remoteIP = net.ParseIP(parts[0])
+		}
+
+		ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)
+		ctx.RemoteHost = s.helloDomain
+		ctx.TLS = s.isTLS
+		ctx.Authenticated = s.isAuth
+		ctx.Username = s.username
+
+		// Parse message headers for pipeline stages
+		if idx := bytes.Index(data, []byte("\r\n\r\n")); idx > 0 {
+			headerBlock := string(data[:idx])
+			for _, line := range strings.Split(headerBlock, "\r\n") {
+				if colonIdx := strings.Index(line, ":"); colonIdx > 0 {
+					key := strings.TrimSpace(line[:colonIdx])
+					value := strings.TrimSpace(line[colonIdx+1:])
+					ctx.Headers[key] = append(ctx.Headers[key], value)
+				}
+			}
+		}
+
+		result, err := s.server.pipeline.Process(ctx)
+		if err != nil {
+			s.resetTransaction()
+			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+		}
+
+		switch result {
+		case ResultReject:
+			s.resetTransaction()
+			code := 550
+			msg := "Message rejected"
+			if ctx.RejectionCode > 0 {
+				code = ctx.RejectionCode
+			}
+			if ctx.RejectionMessage != "" {
+				msg = ctx.RejectionMessage
+			}
+			return s.WriteResponse(code, msg)
+		case ResultQuarantine:
+			// Add spam headers but continue delivery
+			spamHeader := fmt.Sprintf("X-Spam-Status: Yes, score=%.1f\r\n", ctx.SpamScore)
+			data = append([]byte(spamHeader), data...)
+			s.data = data
+		}
+
+		// Add Authentication-Results header with SPF/DKIM/DMARC results
+		if ctx.SPFResult.Result != "" || ctx.DKIMResult.Domain != "" || ctx.DMARCResult.Result != "" {
+			var arParts []string
+			hostname := s.server.config.Hostname
+			if hostname == "" {
+				hostname = "localhost"
+			}
+			if ctx.SPFResult.Result != "" {
+				arParts = append(arParts, fmt.Sprintf("spf=%s smtp.mailfrom=%s", ctx.SPFResult.Result, ctx.SPFResult.Domain))
+			}
+			if ctx.DKIMResult.Domain != "" {
+				if ctx.DKIMResult.Valid {
+					arParts = append(arParts, fmt.Sprintf("dkim=pass header.d=%s", ctx.DKIMResult.Domain))
+				} else {
+					reason := ctx.DKIMResult.Error
+					if reason == "" {
+						reason = "verification failed"
+					}
+					arParts = append(arParts, fmt.Sprintf("dkim=fail reason=\"%s\" header.d=%s", reason, ctx.DKIMResult.Domain))
+				}
+			}
+			if ctx.DMARCResult.Result != "" {
+				arParts = append(arParts, fmt.Sprintf("dmarc=%s header.from=%s", ctx.DMARCResult.Result, s.mailFrom))
+			}
+			if len(arParts) > 0 {
+				arHeader := fmt.Sprintf("Authentication-Results: %s;\r\n\t%s\r\n", hostname, strings.Join(arParts, ";\r\n\t"))
+				data = append([]byte(arHeader), data...)
+				s.data = data
+			}
+		}
+
+		// Add X-Spam headers for all messages processed by pipeline
+		if ctx.SpamResult.Score > 0 {
+			spamScoreHeader := fmt.Sprintf("X-Spam-Score: %.1f\r\n", ctx.SpamResult.Score)
+			data = append([]byte(spamScoreHeader), data...)
+			s.data = data
+		}
+
+		// Add Received trace header
+		proto := "ESMTP"
+		if s.isTLS {
+			proto = "ESMTPS"
+		}
+		var received string
+		if len(s.rcptTo) > 0 {
+			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
+				s.helloDomain, remoteIP.String(), s.server.config.Hostname, proto, s.rcptTo[0],
+				time.Now().Format(time.RFC1123Z))
+		} else {
+			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
+				s.helloDomain, remoteIP.String(), s.server.config.Hostname, proto,
+				time.Now().Format(time.RFC1123Z))
+		}
+		data = append([]byte(received), data...)
+		s.data = data
+	}
+
+	// Add Message-ID if not present
+	if !bytes.Contains(bytes.ToLower(data), []byte("message-id:")) {
+		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", s.id, s.server.config.Hostname)
+		data = append([]byte(msgID), data...)
+		s.data = data
+	}
 
 	// Deliver message
 	if s.server.onDeliver != nil {
 		if err := s.server.onDeliver(s.mailFrom, s.rcptTo, s.data); err != nil {
 			s.resetTransaction()
-			return s.WriteResponse(451, "Requested action aborted: local error in processing")
+			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 		}
 	}
 
@@ -351,6 +472,129 @@ func (s *Session) readData() ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// handleBDAT handles the BDAT command (RFC 3030)
+func (s *Session) handleBDAT(arg string) error {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	// Must have RCPT TO first
+	if s.state != StateRcptTo {
+		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
+	}
+
+	// Parse: BDAT <size> [LAST]
+	parts := strings.Fields(arg)
+	if len(parts) < 1 {
+		return s.WriteResponse(501, "5.5.4 Syntax error in BDAT parameters")
+	}
+
+	size, err := strconv.Atoi(parts[0])
+	if err != nil || size < 0 {
+		return s.WriteResponse(501, "5.5.4 Syntax error in BDAT size parameter")
+	}
+
+	isLast := len(parts) > 1 && strings.ToUpper(parts[1]) == "LAST"
+
+	// Initialize chunking buffer if needed
+	if s.bdatBuffer == nil {
+		s.bdatBuffer = &bytes.Buffer{}
+	}
+
+	// Check total size
+	if int64(size) > s.server.config.MaxMessageSize {
+		s.bdatBuffer = nil
+		s.resetTransaction()
+		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
+	}
+
+	// Read chunk data
+	if size > 0 {
+		chunk := make([]byte, size)
+		_, err := io.ReadFull(s.conn, chunk)
+		if err != nil {
+			return fmt.Errorf("failed to read BDAT chunk: %w", err)
+		}
+		s.bdatBuffer.Write(chunk)
+	}
+
+	if isLast {
+		// Final chunk — process the complete message
+		data := s.bdatBuffer.Bytes()
+		s.bdatBuffer = nil
+
+		// Check total message size
+		if int64(len(data)) > s.server.config.MaxMessageSize {
+			s.resetTransaction()
+			return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
+		}
+
+		s.data = data
+
+		// Run through pipeline if configured
+		if s.server.pipeline != nil {
+			remoteIP := net.ParseIP("")
+			if parts := strings.SplitN(s.conn.RemoteAddr().String(), ":", 2); len(parts) > 0 {
+				remoteIP = net.ParseIP(parts[0])
+			}
+
+			ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)
+			ctx.RemoteHost = s.helloDomain
+			ctx.TLS = s.isTLS
+			ctx.Authenticated = s.isAuth
+			ctx.Username = s.username
+
+			if idx := bytes.Index(data, []byte("\r\n\r\n")); idx > 0 {
+				headerBlock := string(data[:idx])
+				for _, line := range strings.Split(headerBlock, "\r\n") {
+					if colonIdx := strings.Index(line, ":"); colonIdx > 0 {
+						key := strings.TrimSpace(line[:colonIdx])
+						value := strings.TrimSpace(line[colonIdx+1:])
+						ctx.Headers[key] = append(ctx.Headers[key], value)
+					}
+				}
+			}
+
+			result, err := s.server.pipeline.Process(ctx)
+			if err != nil {
+				s.resetTransaction()
+				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+			}
+
+			switch result {
+			case ResultReject:
+				s.resetTransaction()
+				code := 550
+				msg := "5.7.1 Message rejected"
+				if ctx.RejectionCode > 0 {
+					code = ctx.RejectionCode
+				}
+				if ctx.RejectionMessage != "" {
+					msg = ctx.RejectionMessage
+				}
+				return s.WriteResponse(code, msg)
+			case ResultQuarantine:
+				spamHeader := fmt.Sprintf("X-Spam-Status: Yes, score=%.1f\r\n", ctx.SpamScore)
+				data = append([]byte(spamHeader), data...)
+				s.data = data
+			}
+		}
+
+		// Deliver message
+		if s.server.onDeliver != nil {
+			if err := s.server.onDeliver(s.mailFrom, s.rcptTo, s.data); err != nil {
+				s.resetTransaction()
+				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+			}
+		}
+
+		s.resetTransaction()
+		return s.WriteResponse(250, "2.0.0 OK")
+	}
+
+	// Non-last chunk — acknowledge and wait for more
+	return s.WriteResponse(250, "2.0.0 OK")
 }
 
 // handleRSET handles the RSET command
@@ -397,17 +641,17 @@ func (s *Session) handleAUTH(arg string) error {
 
 	// Require TLS for authentication (unless insecure auth is allowed)
 	if !s.isTLS && !s.server.config.AllowInsecure {
-		return s.WriteResponse(538, "Encryption required for requested authentication mechanism")
+		return s.WriteResponse(538, "5.7.10 Encryption required for requested authentication mechanism")
 	}
 
 	// Must have greeted first
 	if s.state == StateNew {
-		return s.WriteResponse(503, "Bad sequence of commands")
+		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
 	// Already authenticated
 	if s.isAuth {
-		return s.WriteResponse(503, "Already authenticated")
+		return s.WriteResponse(503, "5.5.1 Already authenticated")
 	}
 
 	parts := strings.SplitN(arg, " ", 2)
@@ -447,13 +691,13 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	// Decode credentials
 	decoded, err := base64.StdEncoding.DecodeString(credentials)
 	if err != nil {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	// PLAIN format: \0username\0password
 	credParts := strings.Split(string(decoded), "\x00")
 	if len(credParts) != 3 {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	username := credParts[1]
@@ -463,7 +707,7 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	if s.server.onAuth != nil {
 		ok, err := s.server.onAuth(username, password)
 		if err != nil || !ok {
-			return s.WriteResponse(535, "Authentication credentials invalid")
+			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
 	}
 
@@ -490,7 +734,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 
 	usernameBytes, err := base64.StdEncoding.DecodeString(usernameEnc)
 	if err != nil {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 	username := string(usernameBytes)
 
@@ -508,7 +752,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 
 	passwordBytes, err := base64.StdEncoding.DecodeString(passwordEnc)
 	if err != nil {
-		return s.WriteResponse(501, "Syntax error in parameters or arguments")
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 	password := string(passwordBytes)
 
@@ -516,7 +760,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	if s.server.onAuth != nil {
 		ok, err := s.server.onAuth(username, password)
 		if err != nil || !ok {
-			return s.WriteResponse(535, "Authentication credentials invalid")
+			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
 	}
 
@@ -532,11 +776,11 @@ func (s *Session) handleSTARTTLS() error {
 	defer s.mutex.Unlock()
 
 	if s.isTLS {
-		return s.WriteResponse(503, "Bad sequence of commands")
+		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
 	if s.server.config.TLSConfig == nil {
-		return s.WriteResponse(502, "Command not implemented")
+		return s.WriteResponse(502, "5.5.1 Command not implemented")
 	}
 
 	if err := s.WriteResponse(220, "Ready to start TLS"); err != nil {

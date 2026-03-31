@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"crypto/sha256"
 	"encoding/hex"
 	"math/big"
 	"testing"
@@ -647,3 +648,238 @@ func TestGetPolicyWithNonDANEUsages(t *testing.T) {
 	}
 }
 
+
+// --- Additional coverage tests ---
+
+func TestGenerateTLSARecordFullCert(t *testing.T) {
+	cert := generateTestCert(t)
+	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorFullCert, TLSAMatchingTypeSHA256)
+	if record == nil {
+		t.Fatal("Expected non-nil record")
+	}
+	if len(record.Certificate) != 32 {
+		t.Errorf("Expected 32 bytes for SHA-256, got %d", len(record.Certificate))
+	}
+}
+
+func TestGenerateTLSARecordFullMatching(t *testing.T) {
+	cert := generateTestCert(t)
+	record := GenerateTLSARecord(cert, TLSAUsageDANETA, TLSASelectorFullCert, TLSAMatchingTypeFull)
+	if record == nil {
+		t.Fatal("Expected non-nil record")
+	}
+	// Full matching: Certificate should be the raw cert bytes
+	if !equalBytes(record.Certificate, cert.Raw) {
+		t.Error("Expected Certificate to match cert.Raw for full matching type")
+	}
+}
+
+func TestGenerateTLSARecordSPKIFull(t *testing.T) {
+	cert := generateTestCert(t)
+	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeFull)
+	if record == nil {
+		t.Fatal("Expected non-nil record")
+	}
+	if !equalBytes(record.Certificate, cert.RawSubjectPublicKeyInfo) {
+		t.Error("Expected Certificate to match RawSubjectPublicKeyInfo for SPKI+full")
+	}
+}
+
+func TestGenerateTLSARecordSHA512(t *testing.T) {
+	cert := generateTestCert(t)
+	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeSHA512)
+	if record != nil {
+		t.Error("Expected nil for SHA-512 (not implemented)")
+	}
+}
+
+func TestValidateRecordFullCertSHA256(t *testing.T) {
+	cert := generateTestCert(t)
+	validator := NewDANEValidator(newMockDNSResolver())
+
+	tlsa := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelectorFullCert,
+		MatchingType: TLSAMatchingTypeSHA256,
+		Certificate:  computeSHA256(cert.Raw),
+	}
+
+	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
+	if !result {
+		t.Error("Expected validateRecord to return true for matching full cert SHA-256")
+	}
+}
+
+func TestValidateRecordSPKISHA256(t *testing.T) {
+	cert := generateTestCert(t)
+	validator := NewDANEValidator(newMockDNSResolver())
+
+	tlsa := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelectorSPKI,
+		MatchingType: TLSAMatchingTypeSHA256,
+		Certificate:  computeSHA256(cert.RawSubjectPublicKeyInfo),
+	}
+
+	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
+	if !result {
+		t.Error("Expected validateRecord to return true for matching SPKI SHA-256")
+	}
+}
+
+func TestValidateRecordFullMatching(t *testing.T) {
+	cert := generateTestCert(t)
+	validator := NewDANEValidator(newMockDNSResolver())
+
+	tlsa := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelectorFullCert,
+		MatchingType: TLSAMatchingTypeFull,
+		Certificate:  cert.Raw,
+	}
+
+	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
+	if !result {
+		t.Error("Expected validateRecord to return true for full matching")
+	}
+}
+
+func TestValidateRecordSPKIFullMatching(t *testing.T) {
+	cert := generateTestCert(t)
+	validator := NewDANEValidator(newMockDNSResolver())
+
+	tlsa := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelectorSPKI,
+		MatchingType: TLSAMatchingTypeFull,
+		Certificate:  cert.RawSubjectPublicKeyInfo,
+	}
+
+	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
+	if !result {
+		t.Error("Expected validateRecord to return true for SPKI full matching")
+	}
+}
+
+func TestValidateRecordUnsupportedSelector(t *testing.T) {
+	cert := generateTestCert(t)
+	validator := NewDANEValidator(newMockDNSResolver())
+
+	tlsa := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelector(99),
+		MatchingType: TLSAMatchingTypeSHA256,
+		Certificate:  []byte{},
+	}
+
+	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
+	if result {
+		t.Error("Expected false for unsupported selector")
+	}
+}
+
+func TestValidateRecordSHA512(t *testing.T) {
+	cert := generateTestCert(t)
+	validator := NewDANEValidator(newMockDNSResolver())
+
+	tlsa := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelectorFullCert,
+		MatchingType: TLSAMatchingTypeSHA512,
+		Certificate:  []byte{},
+	}
+
+	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
+	if result {
+		t.Error("Expected false for SHA-512 (not implemented)")
+	}
+}
+
+func TestValidateRecordUnsupportedMatching(t *testing.T) {
+	cert := generateTestCert(t)
+	validator := NewDANEValidator(newMockDNSResolver())
+
+	tlsa := &TLSARecord{
+		Usage:        TLSAUsageDANEEE,
+		Selector:     TLSASelectorFullCert,
+		MatchingType: TLSAMatchingType(99),
+		Certificate:  []byte{},
+	}
+
+	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
+	if result {
+		t.Error("Expected false for unsupported matching type")
+	}
+}
+
+func TestDANEValidateWithCertMatchDANETA(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidator(resolver)
+
+	cert := generateTestCert(t)
+	record := GenerateTLSARecord(cert, TLSAUsageDANETA, TLSASelectorSPKI, TLSAMatchingTypeSHA256)
+	resolver.txtRecords["_25._tcp.example.com"] = []string{record.String()}
+
+	state := &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+	}
+
+	result, err := validator.Validate("example.com", 25, state)
+	if result != DANEValidated {
+		t.Errorf("Expected DANEValidated for DANE-TA, got %s: %v", result.String(), err)
+	}
+}
+
+func TestParseTLSARecordInvalidSelector(t *testing.T) {
+	_, err := parseTLSARecord("3 x 1 abc")
+	if err == nil {
+		t.Error("Expected error for invalid selector")
+	}
+}
+
+func TestParseTLSARecordInvalidMatchingType(t *testing.T) {
+	_, err := parseTLSARecord("3 1 x abc")
+	if err == nil {
+		t.Error("Expected error for invalid matching type")
+	}
+}
+
+func TestParseTLSARecordOddHex(t *testing.T) {
+	_, err := parseTLSARecord("3 1 1 xyz")
+	if err == nil {
+		t.Error("Expected error for odd-length hex")
+	}
+}
+
+func TestParseTLSAHexOddLength(t *testing.T) {
+	_, err := parseTLSAHex("abc")
+	if err == nil {
+		t.Error("Expected error for odd-length hex")
+	}
+}
+
+func TestParseTLSAHexTooShort(t *testing.T) {
+	_, err := parseTLSAHex("aabb")
+	if err == nil {
+		t.Error("Expected error for too short data (< 3 bytes)")
+	}
+}
+
+func computeSHA256(data []byte) []byte {
+	hash := make([]byte, 32)
+	h := sha256.Sum256(data)
+	copy(hash, h[:])
+	return hash
+}
+
+func equalBytes(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -46,7 +46,12 @@ func NewUserAuthenticator(getUser func(email string) (*UserData, error)) *UserAu
 	}
 }
 
-// Authenticate validates username and password
+// ErrTOTPRequired indicates password is correct but TOTP code is needed
+var ErrTOTPRequired = errors.New("TOTP code required")
+
+// Authenticate validates username and password.
+// If the user has TOTP enabled, returns ErrTOTPRequired after password validation.
+// Use AuthenticateWithTOTP for the full 2FA flow.
 func (a *UserAuthenticator) Authenticate(username, password string) (*UserData, error) {
 	// Normalize username (lowercase)
 	username = strings.ToLower(strings.TrimSpace(username))
@@ -62,6 +67,35 @@ func (a *UserAuthenticator) Authenticate(username, password string) (*UserData, 
 
 	// Verify password
 	if !VerifyPassword(password, user.PasswordHash) {
+		return nil, ErrInvalidCredentials
+	}
+
+	// If user has TOTP configured, password is correct but full auth requires TOTP
+	if user.TOTPSecret != "" {
+		return user, ErrTOTPRequired
+	}
+
+	return user, nil
+}
+
+// AuthenticateWithTOTP performs full authentication including optional TOTP verification.
+// If the user has TOTP enabled, the totpCode parameter must contain a valid TOTP code.
+func (a *UserAuthenticator) AuthenticateWithTOTP(username, password, totpCode string) (*UserData, error) {
+	user, err := a.Authenticate(username, password)
+	if err == nil {
+		// No TOTP required
+		return user, nil
+	}
+	if err != ErrTOTPRequired {
+		return nil, err
+	}
+
+	// TOTP required
+	if totpCode == "" {
+		return nil, ErrTOTPRequired
+	}
+
+	if !ValidateTOTP(user.TOTPSecret, totpCode) {
 		return nil, ErrInvalidCredentials
 	}
 

@@ -1,7 +1,9 @@
 package smtp
 
 import (
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -376,4 +378,370 @@ type rejectStage struct{}
 func (s *rejectStage) Name() string { return "reject" }
 func (s *rejectStage) Process(ctx *MessageContext) PipelineResult {
 	return ResultReject
+}
+
+// ---------------------------------------------------------------------------
+// evaluateSPF tests
+// ---------------------------------------------------------------------------
+
+func TestEvaluateSPF(t *testing.T) {
+	stage := &SPFStage{}
+	ip := net.ParseIP("192.168.1.1")
+
+	tests := []struct {
+		name     string
+		record   string
+		expected string
+	}{
+		{"plus_all", "v=spf1 +all", "pass"},
+		{"bare_all", "v=spf1 all", "pass"},
+		{"dash_all", "v=spf1 ip4:10.0.0.1 -all", "fail"},
+		{"tilde_all", "v=spf1 ip4:10.0.0.1 ~all", "softfail"},
+		{"redirect_only", "v=spf1 redirect=_spf.example.com", "neutral"},
+		{"no_mechanism", "v=spf1", "neutral"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stage.evaluateSPF(tt.record, ip, "example.com")
+			if result.Result != tt.expected {
+				t.Errorf("evaluateSPF(%q) result = %q, want %q", tt.record, result.Result, tt.expected)
+			}
+			if result.Domain != "example.com" {
+				t.Errorf("evaluateSPF domain = %q, want %q", result.Domain, "example.com")
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SPFStage.Process additional paths
+// ---------------------------------------------------------------------------
+
+func TestSPFStage_Process_DNSLookupError(t *testing.T) {
+	// mockDNSResolverErr returns an error for every domain
+	resolver := &mockDNSResolverErr{}
+	stage := NewSPFStage(resolver)
+
+	ip := net.ParseIP("1.2.3.4")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept on DNS error, got %v", result)
+	}
+	if ctx.SPFResult.Result != "temperror" {
+		t.Errorf("Expected SPF result 'temperror', got %q", ctx.SPFResult.Result)
+	}
+}
+
+func TestSPFStage_Process_WithSPFRecord(t *testing.T) {
+	mockResolver := &mockDNSResolver{
+		records: map[string][]string{
+			"example.com": {"v=spf1 ip4:10.0.0.1 -all"},
+		},
+	}
+	stage := NewSPFStage(mockResolver)
+
+	ip := net.ParseIP("10.0.0.2")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+	// The SPF record has -all so the simplified evaluateSPF should return "fail"
+	if ctx.SPFResult.Result != "fail" {
+		t.Errorf("Expected SPF result 'fail', got %q", ctx.SPFResult.Result)
+	}
+	if ctx.SpamScore != 2.0 {
+		t.Errorf("Expected SpamScore 2.0 for SPF fail, got %f", ctx.SpamScore)
+	}
+}
+
+func TestSPFStage_Process_SoftfailSpamScore(t *testing.T) {
+	mockResolver := &mockDNSResolver{
+		records: map[string][]string{
+			"example.com": {"v=spf1 ip4:10.0.0.1 ~all"},
+		},
+	}
+	stage := NewSPFStage(mockResolver)
+
+	ip := net.ParseIP("10.0.0.2")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+	if ctx.SPFResult.Result != "softfail" {
+		t.Errorf("Expected SPF result 'softfail', got %q", ctx.SPFResult.Result)
+	}
+	if ctx.SpamScore != 1.0 {
+		t.Errorf("Expected SpamScore 1.0 for SPF softfail, got %f", ctx.SpamScore)
+	}
+}
+
+func TestSPFStage_Process_EmptyFrom(t *testing.T) {
+	stage := NewSPFStage(&mockDNSResolver{})
+
+	ip := net.ParseIP("1.2.3.4")
+	ctx := NewMessageContext(ip, "", []string{"rcpt@example.com"}, []byte("data"))
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+	if ctx.SPFResult.Result != "none" {
+		t.Errorf("Expected SPF result 'none' for empty sender, got %q", ctx.SPFResult.Result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RBLStage.Process additional paths (with servers)
+// ---------------------------------------------------------------------------
+
+func TestRBLStage_Process_WithServers(t *testing.T) {
+	stage := NewRBLStage([]string{"zen.spamhaus.org", "bl.spamcop.net"})
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+
+	result := stage.Process(ctx)
+	// The current implementation always returns ResultAccept
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// extractDomain tests
+// ---------------------------------------------------------------------------
+
+func TestExtractDomain_Internal(t *testing.T) {
+	tests := []struct {
+		email    string
+		expected string
+	}{
+		{"user@example.com", "example.com"},
+		{"", ""},
+		{"no-at-sign", ""},
+		{"@domainonly.com", "domainonly.com"},
+		{"user@multiple@ats.com", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.email, func(t *testing.T) {
+			got := extractDomain(tt.email)
+			if got != tt.expected {
+				t.Errorf("extractDomain(%q) = %q, want %q", tt.email, got, tt.expected)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional test helpers
+// ---------------------------------------------------------------------------
+
+// mockDNSResolverErr always returns an error
+type mockDNSResolverErr struct{}
+
+func (m *mockDNSResolverErr) LookupTXT(domain string) ([]string, error) {
+	return nil, fmt.Errorf("DNS lookup failed for %s", domain)
+}
+
+// ---------------------------------------------------------------------------
+// AVStage tests
+// ---------------------------------------------------------------------------
+
+// mockAVScanner is a controllable mock for AVScanner
+type mockAVScanner struct {
+	enabled  bool
+	result   *AVScanResult
+	scanErr  error
+}
+
+func (m *mockAVScanner) IsEnabled() bool { return m.enabled }
+func (m *mockAVScanner) Scan(data []byte) (*AVScanResult, error) {
+	if m.scanErr != nil {
+		return nil, m.scanErr
+	}
+	return m.result, nil
+}
+
+func TestNewAVStage(t *testing.T) {
+	scanner := &mockAVScanner{enabled: true}
+	stage := NewAVStage(scanner, "reject")
+
+	if stage == nil {
+		t.Fatal("Expected non-nil AVStage")
+	}
+	if stage.Name() != "AV" {
+		t.Errorf("Expected name 'AV', got %s", stage.Name())
+	}
+}
+
+func TestAVStage_DisabledScanner(t *testing.T) {
+	scanner := &mockAVScanner{enabled: false}
+	stage := NewAVStage(scanner, "reject")
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for disabled scanner, got %v", result)
+	}
+}
+
+func TestAVStage_NilScanner(t *testing.T) {
+	stage := NewAVStage(nil, "reject")
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for nil scanner, got %v", result)
+	}
+}
+
+func TestAVStage_CleanMessage(t *testing.T) {
+	scanner := &mockAVScanner{
+		enabled: true,
+		result:  &AVScanResult{Infected: false},
+	}
+	stage := NewAVStage(scanner, "reject")
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for clean message, got %v", result)
+	}
+}
+
+func TestAVStage_VirusDetected_Reject(t *testing.T) {
+	scanner := &mockAVScanner{
+		enabled: true,
+		result:  &AVScanResult{Infected: true, Virus: "EICAR-Test"},
+	}
+	stage := NewAVStage(scanner, "reject")
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject for virus detected with reject action, got %v", result)
+	}
+	if ctx.RejectionCode != 550 {
+		t.Errorf("Expected rejection code 550, got %d", ctx.RejectionCode)
+	}
+	if !strings.Contains(ctx.RejectionMessage, "EICAR-Test") {
+		t.Errorf("Expected virus name in rejection message, got %q", ctx.RejectionMessage)
+	}
+}
+
+func TestAVStage_VirusDetected_Quarantine(t *testing.T) {
+	scanner := &mockAVScanner{
+		enabled: true,
+		result:  &AVScanResult{Infected: true, Virus: "EICAR-Test"},
+	}
+	stage := NewAVStage(scanner, "quarantine")
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+
+	if result != ResultQuarantine {
+		t.Errorf("Expected ResultQuarantine for virus detected with quarantine action, got %v", result)
+	}
+	if !ctx.Quarantine {
+		t.Error("Expected Quarantine flag to be set")
+	}
+}
+
+func TestAVStage_VirusDetected_Tag(t *testing.T) {
+	scanner := &mockAVScanner{
+		enabled: true,
+		result:  &AVScanResult{Infected: true, Virus: "EICAR-Test"},
+	}
+	stage := NewAVStage(scanner, "tag")
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for tag action, got %v", result)
+	}
+	if ctx.Headers["X-Virus"] == nil || len(ctx.Headers["X-Virus"]) == 0 {
+		t.Error("Expected X-Virus header to be set")
+	} else if ctx.Headers["X-Virus"][0] != "EICAR-Test" {
+		t.Errorf("Expected X-Virus header 'EICAR-Test', got %q", ctx.Headers["X-Virus"][0])
+	}
+}
+
+func TestAVStage_ScanError(t *testing.T) {
+	scanner := &mockAVScanner{
+		enabled: true,
+		scanErr: fmt.Errorf("scanner unavailable"),
+	}
+	stage := NewAVStage(scanner, "reject")
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+
+	// Scan error should still accept the message
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept on scan error, got %v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ScoreStage quarantine verdict
+// ---------------------------------------------------------------------------
+
+func TestScoreStage_QuarantineVerdict(t *testing.T) {
+	stage := NewScoreStage(9.0, 3.0)
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	ctx.SpamScore = 5.0 // Between junk (3.0) and reject (9.0)
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for junk verdict, got %v", result)
+	}
+	if ctx.SpamResult.Verdict != "junk" {
+		t.Errorf("Expected verdict 'junk', got %q", ctx.SpamResult.Verdict)
+	}
+	if ctx.SpamResult.Score != 5.0 {
+		t.Errorf("Expected SpamResult.Score 5.0, got %f", ctx.SpamResult.Score)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline with quarantine result from stages
+// ---------------------------------------------------------------------------
+
+func TestPipeline_QuarantineResult(t *testing.T) {
+	logger := &testLogger{}
+	pipeline := NewPipeline(logger)
+	pipeline.AddStage(&quarantineTestStage{})
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result, err := pipeline.Process(ctx)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if result != ResultQuarantine {
+		t.Errorf("Expected ResultQuarantine, got %v", result)
+	}
+	if !ctx.Quarantine {
+		t.Error("Expected Quarantine flag to be set on context")
+	}
+}
+
+type quarantineTestStage struct{}
+
+func (s *quarantineTestStage) Name() string { return "QuarantineTest" }
+func (s *quarantineTestStage) Process(ctx *MessageContext) PipelineResult {
+	return ResultQuarantine
 }

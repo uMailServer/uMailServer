@@ -85,6 +85,12 @@ func DefaultConfig() *Config {
 				"bl.spamcop.net",
 			},
 		},
+		AV: AVConfig{
+			Enabled: false,
+			Addr:    "127.0.0.1:3310",
+			Timeout: Duration(30 * time.Second),
+			Action:  "reject",
+		},
 		Security: SecurityConfig{
 			MaxLoginAttempts: 5,
 			LockoutDuration:  Duration(15 * time.Minute),

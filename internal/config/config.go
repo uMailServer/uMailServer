@@ -22,6 +22,7 @@ type Config struct {
 	HTTP     HTTPConfig     `yaml:"http"`
 	Admin    AdminConfig    `yaml:"admin"`
 	Spam     SpamConfig     `yaml:"spam"`
+	AV       AVConfig       `yaml:"av"`
 	Security SecurityConfig `yaml:"security"`
 	MCP      MCPConfig      `yaml:"mcp"`
 	Domains  []DomainConfig `yaml:"domains"`
@@ -142,6 +143,14 @@ type BayesianConfig struct {
 type GreylistingConfig struct {
 	Enabled bool     `yaml:"enabled"`
 	Delay   Duration `yaml:"delay"`
+}
+
+// AVConfig holds antivirus scanning settings
+type AVConfig struct {
+	Enabled bool          `yaml:"enabled"`
+	Addr    string        `yaml:"addr"`     // ClamAV address (e.g., "127.0.0.1:3310")
+	Timeout Duration      `yaml:"timeout"`
+	Action  string        `yaml:"action"`   // "reject", "quarantine", "tag"
 }
 
 // SecurityConfig holds security settings
@@ -304,6 +313,32 @@ func loadSectionFromEnv(v reflect.Value, prefix string) error {
 
 // setFieldFromString sets a field value from a string
 func setFieldFromString(field reflect.Value, val string) error {
+	// Check custom types first, since Size and Duration have Kind()==Int64
+	// and would otherwise be handled by the standard int parsing which
+	// cannot parse human-readable values like "50MB" or "10m".
+	if field.Type() == reflect.TypeOf(Size(0)) {
+		size, err := ParseSize(val)
+		if err != nil {
+			return err
+		}
+		field.SetInt(int64(size))
+		return nil
+	}
+	if field.Type() == reflect.TypeOf(Duration(0)) {
+		dur, err := time.ParseDuration(val)
+		if err != nil {
+			// Fallback: try parsing as plain nanoseconds
+			n, err2 := strconv.ParseInt(val, 10, 64)
+			if err2 != nil {
+				return err // return original ParseDuration error
+			}
+			field.SetInt(n)
+			return nil
+		}
+		field.SetInt(int64(dur))
+		return nil
+	}
+
 	switch field.Kind() {
 	case reflect.String:
 		field.SetString(val)
@@ -331,21 +366,6 @@ func setFieldFromString(field reflect.Value, val string) error {
 			return err
 		}
 		field.SetFloat(f)
-	default:
-		// Handle custom types
-		if field.Type() == reflect.TypeOf(Size(0)) {
-			size, err := ParseSize(val)
-			if err != nil {
-				return err
-			}
-			field.SetInt(int64(size))
-		} else if field.Type() == reflect.TypeOf(Duration(0)) {
-			dur, err := time.ParseDuration(val)
-			if err != nil {
-				return err
-			}
-			field.SetInt(int64(dur))
-		}
 	}
 	return nil
 }

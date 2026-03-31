@@ -1312,3 +1312,555 @@ func TestMigrationManagerImportMessageWithFlags(t *testing.T) {
 		_ = err
 	}
 }
+
+// --- New tests for improved coverage ---
+
+func TestBackupManagerBackupWithDatabase(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	// Create required directories and files
+	os.MkdirAll(filepath.Join(tempDir, "config"), 0755)
+	os.MkdirAll(filepath.Join(tempDir, "messages"), 0755)
+
+	// Create a test database file
+	dbFile := filepath.Join(tempDir, "umailserver.db")
+	os.WriteFile(dbFile, []byte("database content here"), 0644)
+
+	bm := NewBackupManager(cfg)
+
+	err := bm.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Backup failed: %v", err)
+	}
+
+	// Verify backup file was created
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		t.Fatalf("failed to read backup dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Error("expected backup file to be created")
+	}
+}
+
+func TestBackupManagerBackupNoMessagesDir(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	// Create config dir but not messages dir
+	os.MkdirAll(filepath.Join(tempDir, "config"), 0755)
+	configFile := filepath.Join(tempDir, "config", "app.conf")
+	os.WriteFile(configFile, []byte("key=value"), 0644)
+
+	bm := NewBackupManager(cfg)
+
+	err := bm.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Backup should succeed without messages dir: %v", err)
+	}
+}
+
+func TestBackupManagerBackupOnlyDatabase(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	// Only create database file, no config or messages dirs
+	dbFile := filepath.Join(tempDir, "umailserver.db")
+	os.WriteFile(dbFile, []byte("db content"), 0644)
+
+	bm := NewBackupManager(cfg)
+
+	err := bm.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Backup failed: %v", err)
+	}
+
+	entries, _ := os.ReadDir(backupDir)
+	foundBackup := false
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tar.gz") {
+			foundBackup = true
+		}
+	}
+	if !foundBackup {
+		t.Error("expected backup file to be created")
+	}
+}
+
+func TestBackupManagerListBackupsWithDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a subdirectory (should be skipped)
+	os.MkdirAll(filepath.Join(tempDir, "subdir"), 0755)
+
+	// Create a backup file
+	backupFile := filepath.Join(tempDir, "backup_20240101.tar.gz")
+	os.WriteFile(backupFile, []byte("data"), 0644)
+
+	backups, err := bm.ListBackups(tempDir)
+	if err != nil {
+		t.Fatalf("ListBackups failed: %v", err)
+	}
+	if len(backups) != 1 {
+		t.Errorf("expected 1 backup, got %d", len(backups))
+	}
+}
+
+func TestBackupManagerRestoreWithInvalidManifestJSON(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a backup with invalid JSON manifest
+	backupFile := filepath.Join(tempDir, "bad_manifest.tar.gz")
+	file, err := os.Create(backupFile)
+	if err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+	defer file.Close()
+
+	gw := gzip.NewWriter(file)
+	tw := tar.NewWriter(gw)
+
+	// Add a manifest with invalid JSON
+	badJSON := []byte("{invalid json")
+	header := &tar.Header{
+		Name: "manifest.json",
+		Size: int64(len(badJSON)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(header)
+	tw.Write(badJSON)
+
+	tw.Close()
+	gw.Close()
+
+	err = bm.Restore(backupFile)
+	if err == nil {
+		t.Error("expected error for invalid JSON manifest")
+	}
+}
+
+func TestBackupManagerRestoreWithDirectoryEntries(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a valid backup with directory entries
+	backupFile := filepath.Join(tempDir, "dir_backup.tar.gz")
+	file, err := os.Create(backupFile)
+	if err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+	defer file.Close()
+
+	gw := gzip.NewWriter(file)
+	tw := tar.NewWriter(gw)
+
+	// Create manifest
+	manifest := map[string]interface{}{
+		"version":   "1.0.0",
+		"timestamp": "20240101_120000",
+		"hostname":  "test.example.com",
+	}
+	manifestData, _ := json.Marshal(manifest)
+	mh := &tar.Header{
+		Name: "manifest.json",
+		Size: int64(len(manifestData)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(mh)
+	tw.Write(manifestData)
+
+	// Add a directory entry
+	dirHeader := &tar.Header{
+		Name:     "config/",
+		Mode:     0755,
+		Typeflag: tar.TypeDir,
+	}
+	tw.WriteHeader(dirHeader)
+
+	// Add a regular file
+	content := []byte("test config")
+	fh := &tar.Header{
+		Name: "config/app.conf",
+		Size: int64(len(content)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(fh)
+	tw.Write(content)
+
+	tw.Close()
+	gw.Close()
+
+	err = bm.Restore(backupFile)
+	if err != nil {
+		t.Errorf("Restore should succeed with valid backup: %v", err)
+	}
+}
+
+func TestBackupManagerRestoreWithManifestOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a backup with only manifest (no other files)
+	backupFile := filepath.Join(tempDir, "manifest_only.tar.gz")
+	file, err := os.Create(backupFile)
+	if err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+	defer file.Close()
+
+	gw := gzip.NewWriter(file)
+	tw := tar.NewWriter(gw)
+
+	manifest := map[string]interface{}{
+		"version":   "1.0.0",
+		"timestamp": "20240101_120000",
+		"hostname":  "test.example.com",
+		"data_dir":  "/var/lib/umailserver",
+	}
+	manifestData, _ := json.Marshal(manifest)
+	mh := &tar.Header{
+		Name: "manifest.json",
+		Size: int64(len(manifestData)),
+		Mode: 0644,
+	}
+	tw.WriteHeader(mh)
+	tw.Write(manifestData)
+
+	tw.Close()
+	gw.Close()
+
+	err = bm.Restore(backupFile)
+	if err != nil {
+		t.Errorf("Restore should succeed: %v", err)
+	}
+}
+
+func TestCheckSPFWithConfig(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "mail.example.com",
+			DataDir:  t.TempDir(),
+		},
+	}
+	d := NewDiagnostics(cfg)
+
+	// checkSPF on a domain that likely has no SPF for our test hostname
+	result := d.checkSPF("example.com")
+	if result.RecordType != "SPF" {
+		t.Errorf("expected record type SPF, got: %s", result.RecordType)
+	}
+	// The result will vary based on actual DNS, just verify it doesn't panic
+}
+
+func TestCheckMX(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "mail.example.com",
+			DataDir:  t.TempDir(),
+		},
+	}
+	d := NewDiagnostics(cfg)
+
+	// checkMX should work without panicking
+	results, err := d.checkMX("example.com")
+	if err != nil {
+		t.Errorf("checkMX returned unexpected error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Error("expected at least one MX result")
+	}
+}
+
+func TestCheckMXNilConfig(t *testing.T) {
+	d := NewDiagnostics(nil)
+
+	results, err := d.checkMX("example.com")
+	if err != nil {
+		t.Errorf("checkMX returned unexpected error: %v", err)
+	}
+	// Should still work, just won't match expected hostname
+	if len(results) == 0 {
+		t.Error("expected at least one MX result")
+	}
+}
+
+func TestCheckDNS(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "mail.example.com",
+			DataDir:  t.TempDir(),
+		},
+	}
+	d := NewDiagnostics(cfg)
+
+	results, err := d.CheckDNS("example.com")
+	if err != nil {
+		t.Errorf("CheckDNS returned unexpected error: %v", err)
+	}
+	// Should return results for MX, SPF, DKIM, DMARC, PTR
+	if len(results) < 4 {
+		t.Errorf("expected at least 4 DNS check results, got %d", len(results))
+	}
+}
+
+func TestCheckTLSNonExistentHost(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "nonexistent.host.invalid",
+			DataDir:  t.TempDir(),
+		},
+	}
+	d := NewDiagnostics(cfg)
+
+	result, err := d.CheckTLS("nonexistent.host.invalid")
+	if err != nil {
+		t.Errorf("CheckTLS should not return error, got: %v", err)
+	}
+	// Should have a message about failed connection
+	if result == nil {
+		t.Error("expected non-nil result")
+	}
+}
+
+func TestCheckSMTPTLSNonExistent(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Hostname: "nonexistent.host.invalid",
+			DataDir:  t.TempDir(),
+		},
+	}
+	d := NewDiagnostics(cfg)
+
+	result, err := d.checkSMTPTLS("nonexistent.host.invalid")
+	if err == nil {
+		t.Error("expected error connecting to non-existent SMTP server")
+	}
+	if result != nil {
+		t.Error("expected nil result on connection failure")
+	}
+}
+
+func TestTLSVersionNameAllVersions(t *testing.T) {
+	tests := []struct {
+		version  uint16
+		expected string
+	}{
+		{0x0300, "SSL 3.0"},
+		{0x0301, "TLS 1.0"},
+		{0x0302, "TLS 1.1"},
+		{0x0303, "TLS 1.2"},
+		{0x0304, "TLS 1.3"},
+		{0x00FF, "Unknown (0xff)"},
+	}
+	for _, tc := range tests {
+		result := tlsVersionName(tc.version)
+		if result != tc.expected {
+			t.Errorf("tlsVersionName(0x%x): expected %q, got %q", tc.version, tc.expected, result)
+		}
+	}
+}
+
+func TestMinFunctionAllCases(t *testing.T) {
+	tests := []struct {
+		a, b, expected int
+	}{
+		{1, 2, 1},
+		{2, 1, 1},
+		{5, 5, 5},
+		{0, 0, 0},
+		{-1, 1, -1},
+		{100, 200, 100},
+	}
+	for _, tc := range tests {
+		result := min(tc.a, tc.b)
+		if result != tc.expected {
+			t.Errorf("min(%d, %d) = %d, want %d", tc.a, tc.b, result, tc.expected)
+		}
+	}
+}
+
+func TestBackupManagerBackupEmptyDataDir(t *testing.T) {
+	tempDir := t.TempDir()
+	backupDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// No config, no database, no messages directories
+	err := bm.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Backup should succeed with empty data dir: %v", err)
+	}
+
+	entries, _ := os.ReadDir(backupDir)
+	foundBackup := false
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tar.gz") {
+			foundBackup = true
+		}
+	}
+	if !foundBackup {
+		t.Error("expected backup file to be created even with empty data dir")
+	}
+}
+
+func TestBackupManagerBackupCreatesNestedBackupDir(t *testing.T) {
+	tempDir := t.TempDir()
+	// Create a deeply nested backup directory that doesn't exist yet
+	backupDir := filepath.Join(tempDir, "a", "b", "c", "backups")
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	err := bm.Backup(backupDir)
+	if err != nil {
+		t.Fatalf("Backup failed: %v", err)
+	}
+	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
+		t.Error("expected nested backup directory to be created")
+	}
+}
+
+func TestListBackupsWithGZFile(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+	bm := NewBackupManager(cfg)
+
+	// Create a .gz file (not .tar.gz)
+	gzFile := filepath.Join(tempDir, "somefile.gz")
+	os.WriteFile(gzFile, []byte("gz data"), 0644)
+
+	backups, err := bm.ListBackups(tempDir)
+	if err != nil {
+		t.Fatalf("ListBackups failed: %v", err)
+	}
+	if len(backups) != 1 {
+		t.Errorf("expected 1 backup (.gz file), got %d", len(backups))
+	}
+}
+
+func TestRestoreWithManifestAndFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
+		},
+	}
+
+	bm := NewBackupManager(cfg)
+
+	// Create a complete backup
+	backupFile := filepath.Join(tempDir, "full_backup.tar.gz")
+	file, _ := os.Create(backupFile)
+	defer file.Close()
+
+	gw := gzip.NewWriter(file)
+	tw := tar.NewWriter(gw)
+
+	// Manifest
+	manifest := map[string]interface{}{
+		"version":   "1.0.0",
+		"timestamp": "20240615_100000",
+		"hostname":  "test.example.com",
+		"data_dir":  tempDir,
+	}
+	manifestData, _ := json.Marshal(manifest)
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	tw.WriteHeader(mh)
+	tw.Write(manifestData)
+
+	// Database file
+	dbContent := []byte("database dump")
+	dh := &tar.Header{Name: "database/umailserver.db", Size: int64(len(dbContent)), Mode: 0644}
+	tw.WriteHeader(dh)
+	tw.Write(dbContent)
+
+	// Config file
+	confContent := []byte("server.hostname=test.example.com")
+	ch := &tar.Header{Name: "config/test.conf", Size: int64(len(confContent)), Mode: 0644}
+	tw.WriteHeader(ch)
+	tw.Write(confContent)
+
+	// Messages directory
+	mdh := &tar.Header{Name: "messages/", Mode: 0755, Typeflag: tar.TypeDir}
+	tw.WriteHeader(mdh)
+
+	// Message file
+	msgContent := []byte("From: test@example.com\nSubject: Hello\n\nWorld")
+	msgH := &tar.Header{Name: "messages/user@example.com/INBOX/cur/msg1", Size: int64(len(msgContent)), Mode: 0644}
+	tw.WriteHeader(msgH)
+	tw.Write(msgContent)
+
+	tw.Close()
+	gw.Close()
+
+	err := bm.Restore(backupFile)
+	if err != nil {
+		t.Errorf("Restore failed: %v", err)
+	}
+}

@@ -166,11 +166,14 @@ func (m *BboltMailstore) FetchMessages(user, mailbox string, seqSet string, item
 	}
 
 	var messages []*Message
-	for seqNum, uid := range uids {
+	for i, uid := range uids {
+		// IMAP uses 1-based sequence numbers
+		seqNum := uint32(i + 1)
+
 		// Check if this sequence number is in the requested set
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(uint32(seqNum), uint32(len(uids))) {
+			if r.Contains(seqNum, uint32(len(uids))) {
 				inSet = true
 				break
 			}
@@ -181,7 +184,7 @@ func (m *BboltMailstore) FetchMessages(user, mailbox string, seqSet string, item
 		}
 
 		// Fetch message
-		msg, err := m.getMessage(user, mailbox, uint32(seqNum), uid, items)
+		msg, err := m.getMessage(user, mailbox, seqNum, uid, items)
 		if err != nil {
 			continue
 		}
@@ -246,11 +249,14 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		return err
 	}
 
-	for seqNum, uid := range uids {
+	for i, uid := range uids {
+		// IMAP uses 1-based sequence numbers
+		seqNum := uint32(i + 1)
+
 		// Check if in set
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(uint32(seqNum), uint32(len(uids))) {
+			if r.Contains(seqNum, uint32(len(uids))) {
 				inSet = true
 				break
 			}
@@ -289,7 +295,7 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		m.db.UpdateMessageMetadata(user, mailbox, uid, meta)
 
 		// Notify about flag changes
-		GetNotificationHub().NotifyFlagsChanged(user, mailbox, uid, uint32(seqNum), meta.Flags)
+		GetNotificationHub().NotifyFlagsChanged(user, mailbox, uid, seqNum, meta.Flags)
 	}
 
 	return nil
@@ -526,11 +532,12 @@ func (m *BboltMailstore) CopyMessages(user, sourceMailbox, destMailbox string, s
 		return err
 	}
 
-	for seqNum, uid := range uids {
+	for i, uid := range uids {
+		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
 		// Check if in set
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(uint32(seqNum), uint32(len(uids))) {
+			if r.Contains(seqNum, uint32(len(uids))) {
 				inSet = true
 				break
 			}
@@ -601,10 +608,11 @@ func (m *BboltMailstore) MoveMessages(user, sourceMailbox, destMailbox string, s
 		return err
 	}
 
-	for seqNum, uid := range uids {
+	for i, uid := range uids {
+		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(uint32(seqNum), uint32(len(uids))) {
+			if r.Contains(seqNum, uint32(len(uids))) {
 				inSet = true
 				break
 			}

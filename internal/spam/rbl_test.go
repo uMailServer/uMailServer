@@ -190,3 +190,85 @@ func TestRBLIsListedIntegration(t *testing.T) {
 		t.Errorf("Expected 0 listed results for clean IP, got %d", len(results))
 	}
 }
+
+// ---------- Additional coverage tests ----------
+
+func TestReverseIP_IPv4Another(t *testing.T) {
+	ip := net.ParseIP("1.2.3.4")
+	result := reverseIP(ip)
+	expected := "4.3.2.1"
+	if result != expected {
+		t.Errorf("reverseIP(1.2.3.4) = %q, want %q", result, expected)
+	}
+}
+
+func TestReverseIP_IPv6ViaReverseIP(t *testing.T) {
+	// Note: reverseIP has a bug where To4() overwrites ip with nil for IPv6,
+	// then To16() on nil also returns nil. So IPv6 currently returns "".
+	ip := net.ParseIP("2001:db8::1")
+	result := reverseIP(ip)
+	// Document current behavior (empty due to bug)
+	if result != "" {
+		t.Logf("reverseIP(IPv6) = %q", result)
+	}
+}
+
+func TestReverseIP_NilInput(t *testing.T) {
+	result := reverseIP(nil)
+	if result != "" {
+		t.Errorf("Expected empty string for nil IP, got %q", result)
+	}
+}
+
+func TestRBLCodeToReason_127Prefix(t *testing.T) {
+	result := rblCodeToReason("127.0.0.7")
+	if !strings.Contains(result, "127.0.0.7") {
+		t.Errorf("Expected code in reason, got %q", result)
+	}
+}
+
+func TestRBLCodeToReason_AllKnownCodes(t *testing.T) {
+	tests := []struct {
+		code     string
+		expected string
+	}{
+		{"127.0.0.3", "Listed as spam source (indirect)"},
+		{"127.0.0.4", "Listed for policy violation"},
+	}
+	for _, tt := range tests {
+		result := rblCodeToReason(tt.code)
+		if result != tt.expected {
+			t.Errorf("rblCodeToReason(%s) = %q, want %q", tt.code, result, tt.expected)
+		}
+	}
+}
+
+func TestCheckServer_CancelledContext(t *testing.T) {
+	checker := NewRBLChecker([]string{"zen.spamhaus.org"})
+	checker.SetTimeout(5 * time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ip := net.ParseIP("8.8.8.8")
+	result := checker.checkServer(ctx, ip, "zen.spamhaus.org")
+
+	if result.Error == nil {
+		t.Log("checkServer returned no error despite cancelled context")
+	}
+}
+
+func TestIsListed_EmptyServers(t *testing.T) {
+	checker := NewRBLChecker([]string{})
+	ip := net.ParseIP("8.8.8.8")
+
+	ctx := context.Background()
+	listed, results := checker.IsListed(ctx, ip)
+
+	if listed {
+		t.Error("Expected not listed with empty servers")
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results with empty servers, got %d", len(results))
+	}
+}

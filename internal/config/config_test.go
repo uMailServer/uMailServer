@@ -2,9 +2,11 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1206,5 +1208,972 @@ func TestDurationUnmarshalYAML(t *testing.T) {
 				t.Errorf("UnmarshalYAML() duration = %v, want %v", time.Duration(d), tt.expected)
 			}
 		})
+	}
+}
+
+// --- New tests for improved coverage ---
+
+// 1. setFieldFromString with unrecognized type silently returns nil
+func TestSetFieldFromStringUnrecognizedType(t *testing.T) {
+	// uint is not handled by setFieldFromString, should return nil without error
+	field := reflect.ValueOf(&struct{ U uint }{}).Elem().Field(0)
+	err := setFieldFromString(field, "42")
+	if err != nil {
+		t.Errorf("expected nil error for unrecognized type, got: %v", err)
+	}
+
+	// []string is not handled either
+	sliceField := reflect.ValueOf(&struct{ S []string }{}).Elem().Field(0)
+	err = setFieldFromString(sliceField, "a,b")
+	if err != nil {
+		t.Errorf("expected nil error for []string type, got: %v", err)
+	}
+}
+
+// 2. ListDomains with missing directory covers os.IsNotExist branch
+func TestListDomainsMissingDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Create a DomainManager pointing at a non-existent subdirectory
+	dm := NewDomainManager(tmpDir)
+	// Do NOT call dm.Init(), so domains directory does not exist
+	// Remove it just to be sure
+	os.RemoveAll(dm.baseDir)
+
+	domains, err := dm.ListDomains()
+	if err != nil {
+		t.Fatalf("expected nil error for missing directory, got: %v", err)
+	}
+	if len(domains) != 0 {
+		t.Errorf("expected 0 domains for missing directory, got %d", len(domains))
+	}
+}
+
+// 3. ListDomains only returns .yaml files, skipping .txt and others
+func TestListDomainsNonYAMLFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Create various files in the domains directory
+	domainsDir := dm.baseDir
+	os.WriteFile(filepath.Join(domainsDir, "example.com.yaml"), []byte("name: example.com"), 0644)
+	os.WriteFile(filepath.Join(domainsDir, "notes.txt"), []byte("notes"), 0644)
+	os.WriteFile(filepath.Join(domainsDir, "backup.yaml.bak"), []byte("backup"), 0644)
+	os.WriteFile(filepath.Join(domainsDir, "test.org.yaml"), []byte("name: test.org"), 0644)
+
+	domains, err := dm.ListDomains()
+	if err != nil {
+		t.Fatalf("ListDomains failed: %v", err)
+	}
+
+	// Only .yaml files should be returned: example.com and test.org
+	if len(domains) != 2 {
+		t.Errorf("expected 2 domains, got %d: %v", len(domains), domains)
+	}
+
+	// Verify .txt and .bak files are not included
+	for _, d := range domains {
+		if d == "notes" || d == "backup.yaml" {
+			t.Errorf("non-YAML file was incorrectly listed as domain: %s", d)
+		}
+	}
+}
+
+// 4. GetAllDomains skips corrupt YAML files without error
+func TestGetAllDomainsCorruptYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Create a valid domain
+	validSettings := &DomainSettings{
+		Name:        "valid.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	if err := dm.SaveDomain(validSettings); err != nil {
+		t.Fatalf("SaveDomain failed: %v", err)
+	}
+
+	// Create a corrupt YAML file directly
+	domainsDir := dm.baseDir
+	corruptPath := filepath.Join(domainsDir, "corrupt.com.yaml")
+	os.WriteFile(corruptPath, []byte("invalid: yaml: [\n  : broken"), 0644)
+
+	settings, err := dm.GetAllDomains()
+	if err != nil {
+		t.Fatalf("GetAllDomains should not return error for corrupt files: %v", err)
+	}
+	if len(settings) != 1 {
+		t.Errorf("expected 1 valid domain setting, got %d", len(settings))
+	}
+	if len(settings) > 0 && settings[0].Name != "valid.com" {
+		t.Errorf("expected valid.com, got %s", settings[0].Name)
+	}
+}
+
+// 5. Validate SMTP inbound port <= 0
+func TestValidateSMTPInboundPort(t *testing.T) {
+	tests := []struct {
+		name string
+		port int
+	}{
+		{"port zero", 0},
+		{"port negative", -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.SMTP.Inbound.Enabled = true
+			cfg.SMTP.Inbound.Port = tt.port
+			err := cfg.Validate()
+			if err == nil {
+				t.Errorf("expected validation error for SMTP inbound port %d", tt.port)
+			}
+		})
+	}
+}
+
+// 6. DeleteDomain error path - non-existent domain
+func TestDeleteDomainNonExistent(t *testing.T) {
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	err := dm.DeleteDomain("nonexistent.com")
+	if err == nil {
+		t.Error("expected error when deleting non-existent domain")
+	}
+}
+
+// 7. Size.MarshalYAML returns correct string
+func TestSizeMarshalYAML(t *testing.T) {
+	tests := []struct {
+		size     Size
+		expected string
+	}{
+		{0, "0"},
+		{KB, "1KB"},
+		{MB, "1MB"},
+		{GB, "1GB"},
+		{TB, "1TB"},
+		{5 * GB, "5GB"},
+		{512, "512"},
+	}
+
+	for _, tt := range tests {
+		result, err := tt.size.MarshalYAML()
+		if err != nil {
+			t.Errorf("MarshalYAML() error = %v", err)
+			continue
+		}
+		if result != tt.expected {
+			t.Errorf("Size(%d).MarshalYAML() = %q, want %q", tt.size, result, tt.expected)
+		}
+	}
+}
+
+// 8. Duration.MarshalYAML returns correct string
+func TestDurationMarshalYAML(t *testing.T) {
+	tests := []struct {
+		d        Duration
+		expected string
+	}{
+		{Duration(0), "0s"},
+		{Duration(5 * time.Minute), "5m0s"},
+		{Duration(time.Hour), "1h0m0s"},
+		{Duration(30 * time.Second), "30s"},
+	}
+
+	for _, tt := range tests {
+		result, err := tt.d.MarshalYAML()
+		if err != nil {
+			t.Errorf("MarshalYAML() error = %v", err)
+			continue
+		}
+		if result != tt.expected {
+			t.Errorf("Duration(%v).MarshalYAML() = %q, want %q", tt.d, result, tt.expected)
+		}
+	}
+}
+
+// 9. Size.UnmarshalYAML with non-string/int64 type (float64)
+func TestSizeUnmarshalYAMLFloat64(t *testing.T) {
+	var size Size
+	err := size.UnmarshalYAML(func(v interface{}) error {
+		// First call tries string - simulate it failing with a non-string type error
+		// Then it tries int64 - simulate it failing too
+		// This triggers the float64 path: unmarshal into int64 will fail
+		// We simulate the case where both string and int64 fail
+		switch tv := v.(type) {
+		case *string:
+			return fmt.Errorf("not a string")
+		case *int64:
+			return fmt.Errorf("not an int64")
+		default:
+			return fmt.Errorf("unexpected type: %T", tv)
+		}
+	})
+
+	if err == nil {
+		t.Error("expected error when unmarshaling Size from unsupported type")
+	}
+}
+
+// 10. Duration.UnmarshalYAML with non-string/int64 type (float64)
+func TestDurationUnmarshalYAMLFloat64(t *testing.T) {
+	var d Duration
+	err := d.UnmarshalYAML(func(v interface{}) error {
+		switch tv := v.(type) {
+		case *string:
+			return fmt.Errorf("not a string")
+		case *int64:
+			return fmt.Errorf("not an int64")
+		default:
+			return fmt.Errorf("unexpected type: %T", tv)
+		}
+	})
+
+	if err == nil {
+		t.Error("expected error when unmarshaling Duration from unsupported type")
+	}
+}
+
+// 11. sanitizeDomainName/unsanitizeDomainName with / character
+func TestSanitizeDomainNameWithSlash(t *testing.T) {
+	domain := "example.com/special"
+	sanitized := sanitizeDomainName(domain)
+	if strings.Contains(sanitized, "/") {
+		t.Errorf("sanitized name still contains /: %s", sanitized)
+	}
+
+	unsanitized := unsanitizeDomainName(sanitized)
+	if unsanitized != domain {
+		t.Errorf("unsanitizeDomainName(sanitizeDomainName(%q)) = %q, want %q", domain, unsanitized, domain)
+	}
+
+	// Verify round-trip through DomainManager
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	dm.Init()
+
+	path := dm.GetDomainPath(domain)
+	if strings.Contains(filepath.Base(path), "/") {
+		t.Errorf("GetDomainPath returned path with /: %s", path)
+	}
+}
+
+// 12. SaveDomain with write error (invalid path)
+func TestSaveDomainWriteError(t *testing.T) {
+	// Use a path that contains a null byte to trigger a write error
+	dm := NewDomainManager("/dev/null\x00invalid/path")
+	// Do NOT call Init - the base directory has a null byte so WriteFile will fail
+
+	settings := &DomainSettings{
+		Name:        "writetest.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	err := dm.SaveDomain(settings)
+	if err == nil {
+		t.Error("expected error when saving to invalid path")
+	}
+}
+
+// 13. ImportFromMainConfig with empty domains slice
+func TestImportFromMainConfigEmptyDomains(t *testing.T) {
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	dm.Init()
+
+	cfg := DefaultConfig()
+	cfg.Domains = []DomainConfig{} // empty slice
+
+	err := dm.ImportFromMainConfig(cfg)
+	if err != nil {
+		t.Fatalf("ImportFromMainConfig with empty domains should not error: %v", err)
+	}
+
+	domains, err := dm.ListDomains()
+	if err != nil {
+		t.Fatalf("ListDomains failed: %v", err)
+	}
+	if len(domains) != 0 {
+		t.Errorf("expected 0 domains after importing empty config, got %d", len(domains))
+	}
+}
+
+// 14. loadSectionFromEnv with pointer field (reflect.Ptr branch)
+func TestLoadSectionFromEnvPointerField(t *testing.T) {
+	os.Setenv("UMAILSERVER_SERVER_HOSTNAME", "pointer-test.example.com")
+	defer os.Unsetenv("UMAILSERVER_SERVER_HOSTNAME")
+
+	cfg := DefaultConfig()
+	// Pass a pointer to the config value to exercise the reflect.Ptr branch
+	ptrValue := reflect.ValueOf(cfg)
+	err := loadSectionFromEnv(ptrValue, "UMAILSERVER_")
+	if err != nil {
+		t.Fatalf("loadSectionFromEnv with pointer value failed: %v", err)
+	}
+
+	// Verify it still works through the pointer dereference
+	if cfg.Server.Hostname != "pointer-test.example.com" {
+		t.Errorf("expected hostname pointer-test.example.com, got %s", cfg.Server.Hostname)
+	}
+}
+
+// 15. GetDefaultDataDir returns non-empty
+func TestGetDefaultDataDirNonEmpty(t *testing.T) {
+	dir := GetDefaultDataDir()
+	if dir == "" {
+		t.Error("GetDefaultDataDir returned empty string")
+	}
+	t.Logf("GetDefaultDataDir() = %s", dir)
+}
+
+// 16. DomainManager Init called twice (already exists)
+func TestDomainManagerInitTwice(t *testing.T) {
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+
+	// First init
+	if err := dm.Init(); err != nil {
+		t.Fatalf("first Init failed: %v", err)
+	}
+
+	// Second init - should succeed (idempotent)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("second Init failed: %v", err)
+	}
+
+	// Verify the directory still works
+	info, err := os.Stat(dm.baseDir)
+	if err != nil {
+		t.Fatalf("domains directory does not exist after double init: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("domains path is not a directory")
+	}
+}
+
+// --- Additional coverage tests ---
+
+// setFieldFromString: test Size type with human-readable value
+func TestSetFieldFromStringSizeWithUnit(t *testing.T) {
+	field := reflect.ValueOf(&struct{ S Size }{}).Elem().Field(0)
+	err := setFieldFromString(field, "50MB")
+	if err != nil {
+		t.Fatalf("setFieldFromString with Size '50MB' failed: %v", err)
+	}
+	if field.Int() != int64(50*MB) {
+		t.Errorf("expected %d, got %d", int64(50*MB), field.Int())
+	}
+}
+
+// setFieldFromString: test Size with invalid value
+func TestSetFieldFromStringSizeInvalid(t *testing.T) {
+	field := reflect.ValueOf(&struct{ S Size }{}).Elem().Field(0)
+	err := setFieldFromString(field, "not_a_size")
+	if err == nil {
+		t.Error("expected error for invalid Size value")
+	}
+}
+
+// setFieldFromString: test Duration type with human-readable value
+func TestSetFieldFromStringDurationValid(t *testing.T) {
+	field := reflect.ValueOf(&struct{ D Duration }{}).Elem().Field(0)
+	err := setFieldFromString(field, "10m")
+	if err != nil {
+		t.Fatalf("setFieldFromString with Duration '10m' failed: %v", err)
+	}
+	if field.Int() != int64(10*time.Minute) {
+		t.Errorf("expected %d, got %d", int64(10*time.Minute), field.Int())
+	}
+}
+
+// setFieldFromString: test Duration with invalid value
+func TestSetFieldFromStringDurationInvalid(t *testing.T) {
+	field := reflect.ValueOf(&struct{ D Duration }{}).Elem().Field(0)
+	err := setFieldFromString(field, "not_a_duration")
+	if err == nil {
+		t.Error("expected error for invalid Duration value")
+	}
+}
+
+// setFieldFromString: test int32 with invalid value
+func TestSetFieldFromStringInt32Invalid(t *testing.T) {
+	field := reflect.ValueOf(&struct{ I int32 }{}).Elem().Field(0)
+	err := setFieldFromString(field, "not_a_number")
+	if err == nil {
+		t.Error("expected error for invalid int32 value")
+	}
+}
+
+// Load: test with config file that fails env var loading
+func TestLoadEnvOverrideError(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+server:
+  hostname: mail.example.com
+  data_dir: /var/lib/umailserver
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	// Set an env var with an invalid value to trigger loadFromEnv error
+	os.Setenv("UMAILSERVER_SMTP_INBOUND_PORT", "not_a_number")
+	defer os.Unsetenv("UMAILSERVER_SMTP_INBOUND_PORT")
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Error("expected error for invalid env override")
+	}
+	if !strings.Contains(err.Error(), "failed to load env vars") {
+		t.Errorf("expected env var error, got: %v", err)
+	}
+}
+
+// Load: test with config file that fails validation
+func TestLoadValidationFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Create config that will fail validation (empty hostname)
+	configContent := `
+server:
+  hostname: ""
+  data_dir: /var/lib/umailserver
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Error("expected validation error for empty hostname")
+	}
+	if !strings.Contains(err.Error(), "config validation failed") {
+		t.Errorf("expected validation error, got: %v", err)
+	}
+}
+
+// Validate: test quarantine threshold >= reject threshold
+func TestValidateQuarantineGreaterThanOrEqualReject(t *testing.T) {
+	cfg := DefaultConfig()
+	// Set quarantine >= reject to trigger the quarantine >= reject check
+	cfg.Spam.QuarantineThreshold = 9.0
+	cfg.Spam.RejectThreshold = 9.0
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error when quarantine >= reject threshold")
+	}
+	if !strings.Contains(err.Error(), "spam.quarantine_threshold must be less than spam.reject_threshold") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// EnsureDataDir: test error creating directory
+func TestEnsureDataDirError(t *testing.T) {
+	// Use a path with a null byte to trigger a MkdirAll error
+	cfg := DefaultConfig()
+	cfg.Server.DataDir = string([]byte{0}) // null byte
+	err := cfg.EnsureDataDir()
+	if err == nil {
+		t.Error("expected error creating data dir with null byte path")
+	}
+}
+
+// GetDefaultDataDir: test with XDG_DATA_HOME set
+func TestGetDefaultDataDirWithXDG(t *testing.T) {
+	// Save and restore
+	origXDG := os.Getenv("XDG_DATA_HOME")
+	defer os.Setenv("XDG_DATA_HOME", origXDG)
+
+	os.Setenv("XDG_DATA_HOME", "/custom/xdg/path")
+	dir := GetDefaultDataDir()
+	expected := filepath.Join("/custom/xdg/path", "umailserver")
+	if dir != expected {
+		t.Errorf("expected %s, got %s", expected, dir)
+	}
+}
+
+// GetDefaultDataDir: test without XDG_DATA_HOME (fallback to home dir)
+func TestGetDefaultDataDirWithoutXDG(t *testing.T) {
+	origXDG := os.Getenv("XDG_DATA_HOME")
+	defer os.Setenv("XDG_DATA_HOME", origXDG)
+
+	os.Unsetenv("XDG_DATA_HOME")
+	dir := GetDefaultDataDir()
+	if dir == "" {
+		t.Error("expected non-empty data dir without XDG")
+	}
+	// Should not contain XDG path
+	if strings.Contains(dir, "xdg") {
+		t.Errorf("expected non-XDG path, got %s", dir)
+	}
+}
+
+// Save (SetupWizard): test write error
+func TestSetupWizardSaveWriteError(t *testing.T) {
+	wizard := NewSetupWizard()
+
+	// Write to a path with a null byte to trigger a WriteFile error
+	err := wizard.Save(string([]byte{0}))
+	if err == nil {
+		t.Error("expected error when saving to invalid path")
+	}
+}
+
+// ListDomains: test with subdirectories (should be skipped)
+func TestListDomainsWithSubdirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	domainsDir := dm.baseDir
+	// Create a subdirectory
+	if err := os.MkdirAll(filepath.Join(domainsDir, "subdir"), 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+	// Create a yaml file
+	os.WriteFile(filepath.Join(domainsDir, "example.com.yaml"), []byte("name: example.com"), 0644)
+
+	domains, err := dm.ListDomains()
+	if err != nil {
+		t.Fatalf("ListDomains failed: %v", err)
+	}
+
+	if len(domains) != 1 {
+		t.Errorf("expected 1 domain, got %d: %v", len(domains), domains)
+	}
+	if len(domains) > 0 && domains[0] != "example.com" {
+		t.Errorf("expected example.com, got %s", domains[0])
+	}
+}
+
+// ListDomains: test with non-NotExists error from ReadDir
+func TestListDomainsReadDirError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.ReadDir behaves differently on Windows for file paths")
+	}
+	// Create a DomainManager whose baseDir is a file, not a directory
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "domains") // "domains" is a file, not a dir
+	os.WriteFile(filePath, []byte("not a directory"), 0644)
+
+	dm := &DomainManager{baseDir: filePath}
+
+	_, err := dm.ListDomains()
+	if err == nil {
+		t.Error("expected error when ReadDir on a file")
+	}
+}
+
+// SaveDomain: test marshal error (not easily triggered via normal means,
+// but we can test the write error path)
+func TestSaveDomainWriteErrorPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict writes on Windows")
+	}
+	// Point the DomainManager at a read-only parent directory
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Make the domains directory read-only to trigger WriteFile error
+	os.Chmod(dm.baseDir, 0555)
+	defer os.Chmod(dm.baseDir, 0755) // restore for cleanup
+
+	settings := &DomainSettings{
+		Name:        "readonly.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	err := dm.SaveDomain(settings)
+	if err == nil {
+		t.Error("expected error when writing to read-only directory")
+	}
+}
+
+// CreateDomain: test SaveDomain error within CreateDomain
+func TestCreateDomainSaveError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict writes on Windows")
+	}
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Make the domains directory read-only
+	os.Chmod(dm.baseDir, 0555)
+	defer os.Chmod(dm.baseDir, 0755)
+
+	_, err := dm.CreateDomain("fail.com")
+	if err == nil {
+		t.Error("expected error when creating domain in read-only directory")
+	}
+}
+
+// ImportFromMainConfig: test SaveDomain error
+func TestImportFromMainConfigSaveError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Chmod does not restrict writes on Windows")
+	}
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Make the domains directory read-only to cause SaveDomain to fail
+	os.Chmod(dm.baseDir, 0555)
+	defer os.Chmod(dm.baseDir, 0755)
+
+	cfg := DefaultConfig()
+	cfg.Domains = []DomainConfig{
+		{
+			Name:          "import.com",
+			MaxAccounts:   10,
+			MaxMailboxSize: 1 * GB,
+			DKIM:          DomainDKIMConfig{Selector: "default"},
+		},
+	}
+
+	err := dm.ImportFromMainConfig(cfg)
+	if err == nil {
+		t.Error("expected error when importing domains to read-only directory")
+	}
+}
+
+// ImportFromMainConfig: test with domain that has empty DKIM selector (DKIM disabled)
+func TestImportFromMainConfigEmptyDKIMSelector(t *testing.T) {
+	tmpDir := t.TempDir()
+	dm := NewDomainManager(tmpDir)
+	if err := dm.Init(); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.Domains = []DomainConfig{
+		{
+			Name:          "nodkim.com",
+			MaxAccounts:   10,
+			MaxMailboxSize: 1 * GB,
+			DKIM:          DomainDKIMConfig{Selector: ""}, // empty selector
+		},
+	}
+
+	err := dm.ImportFromMainConfig(cfg)
+	if err != nil {
+		t.Fatalf("ImportFromMainConfig failed: %v", err)
+	}
+
+	settings, err := dm.LoadDomain("nodkim.com")
+	if err != nil {
+		t.Fatalf("LoadDomain failed: %v", err)
+	}
+	if settings.DKIM.Enabled {
+		t.Error("expected DKIM to be disabled when selector is empty")
+	}
+}
+
+// GetAllDomains: test when ListDomains returns an error
+func TestGetAllDomainsListError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.ReadDir behaves differently on Windows for file paths")
+	}
+	// Point DomainManager at a file instead of a directory
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "domains")
+	os.WriteFile(filePath, []byte("not a directory"), 0644)
+
+	dm := &DomainManager{baseDir: filePath}
+
+	_, err := dm.GetAllDomains()
+	if err == nil {
+		t.Error("expected error when GetAllDomains calls ListDomains on a file")
+	}
+}
+
+// loadSectionFromEnv: test with non-struct, non-ptr value (should return nil)
+func TestLoadSectionFromEnvNonStruct(t *testing.T) {
+	// Pass a non-struct value - should return nil
+	v := reflect.ValueOf("hello")
+	err := loadSectionFromEnv(v, "PREFIX_")
+	if err != nil {
+		t.Errorf("expected nil error for non-struct, got: %v", err)
+	}
+}
+
+// Size.UnmarshalYAML: test int64 branch (successful)
+func TestSizeUnmarshalYAMLInt64(t *testing.T) {
+	var size Size
+	err := size.UnmarshalYAML(func(v interface{}) error {
+		switch tv := v.(type) {
+		case *string:
+			return fmt.Errorf("not a string")
+		case *int64:
+			*tv = 1024
+			return nil
+		default:
+			return fmt.Errorf("unexpected type: %T", tv)
+		}
+	})
+
+	if err != nil {
+		t.Fatalf("UnmarshalYAML with int64 failed: %v", err)
+	}
+	if size != 1024 {
+		t.Errorf("expected size 1024, got %d", size)
+	}
+}
+
+// Duration.UnmarshalYAML: test int64 branch (successful)
+func TestDurationUnmarshalYAMLInt64(t *testing.T) {
+	var d Duration
+	err := d.UnmarshalYAML(func(v interface{}) error {
+		switch tv := v.(type) {
+		case *string:
+			return fmt.Errorf("not a string")
+		case *int64:
+			*tv = int64(5 * time.Minute)
+			return nil
+		default:
+			return fmt.Errorf("unexpected type: %T", tv)
+		}
+	})
+
+	if err != nil {
+		t.Fatalf("UnmarshalYAML with int64 failed: %v", err)
+	}
+	if time.Duration(d) != 5*time.Minute {
+		t.Errorf("expected 5m, got %v", time.Duration(d))
+	}
+}
+
+// ParseSize: test plain number fallback
+func TestParseSizePlainNumber(t *testing.T) {
+	size, err := ParseSize("2048")
+	if err != nil {
+		t.Fatalf("ParseSize plain number failed: %v", err)
+	}
+	if size != 2048 {
+		t.Errorf("expected 2048, got %d", size)
+	}
+}
+
+// ParseSize: test with just "B" suffix (bytes)
+func TestParseSizeBytesSuffix(t *testing.T) {
+	size, err := ParseSize("100B")
+	if err != nil {
+		t.Fatalf("ParseSize '100B' failed: %v", err)
+	}
+	if size != 100 {
+		t.Errorf("expected 100, got %d", size)
+	}
+}
+
+// ParseSize: test with unit suffixes K, M, G, T (without B)
+func TestParseSizeShortUnits(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected Size
+	}{
+		{"1K", KB},
+		{"1M", MB},
+		{"1G", GB},
+		{"1T", TB},
+	}
+
+	for _, tt := range tests {
+		got, err := ParseSize(tt.input)
+		if err != nil {
+			t.Errorf("ParseSize(%q) error: %v", tt.input, err)
+			continue
+		}
+		if got != tt.expected {
+			t.Errorf("ParseSize(%q) = %d, want %d", tt.input, got, tt.expected)
+		}
+	}
+}
+
+// askString with empty default
+func TestAskStringEmptyDefault(t *testing.T) {
+	input := "\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	result, err := wizard.askString("Enter value:", "")
+	if err != nil {
+		t.Fatalf("askString failed: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty string, got '%s'", result)
+	}
+}
+
+// askString with reader error
+func TestAskStringReaderError(t *testing.T) {
+	wizard := NewSetupWizard()
+	// Use a reader that immediately errors
+	wizard.reader = bufio.NewReader(strings.NewReader(""))
+
+	// Reading from empty reader should still work with default
+	result, err := wizard.askString("Enter value:", "default")
+	// The empty reader may or may not error, just verify it doesn't panic
+	_ = result
+	_ = err
+}
+
+// askBool with reader error
+func TestAskBoolReaderError(t *testing.T) {
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(""))
+
+	// Should return default when reader has no data
+	result := wizard.askBool("Enable?", true)
+	if !result {
+		t.Error("expected default true when reader fails")
+	}
+}
+
+// askInt with reader error
+func TestAskIntReaderError(t *testing.T) {
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(""))
+
+	// Should return default when reader has no data
+	result := wizard.askInt("Enter number:", 42)
+	if result != 42 {
+		t.Errorf("expected default 42, got %d", result)
+	}
+}
+
+// askChoice with reader error
+func TestAskChoiceReaderError(t *testing.T) {
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(""))
+
+	choices := []string{"a", "b"}
+	result, err := wizard.askChoice("Select:", choices, "a")
+	if err != nil {
+		t.Fatalf("askChoice failed: %v", err)
+	}
+	if result != "a" {
+		t.Errorf("expected default 'a', got '%s'", result)
+	}
+}
+
+// askChoice with invalid (non-numeric) input
+func TestAskChoiceNonNumericInput(t *testing.T) {
+	input := "abc\n"
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	choices := []string{"option1", "option2"}
+	result, err := wizard.askChoice("Select:", choices, "option1")
+	if err != nil {
+		t.Fatalf("askChoice failed: %v", err)
+	}
+	if result != "option1" {
+		t.Errorf("expected default 'option1', got '%s'", result)
+	}
+}
+
+// Load with non-existent file path (not empty string, but a path that doesn't exist)
+func TestLoadNonExistentFilePath(t *testing.T) {
+	cfg, err := Load("/nonexistent/path/config.yaml")
+	if err != nil {
+		t.Fatalf("Load with non-existent path should not error: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected non-nil config")
+	}
+	// Should have default values since file doesn't exist
+	if cfg.Server.Hostname != "localhost" {
+		t.Errorf("expected default hostname localhost, got %s", cfg.Server.Hostname)
+	}
+}
+
+// Load with env var overriding a Size field
+func TestLoadFromEnvSizeField(t *testing.T) {
+	os.Setenv("UMAILSERVER_SMTP_INBOUND_MAXMESSAGESIZE", "100MB")
+	defer os.Unsetenv("UMAILSERVER_SMTP_INBOUND_MAXMESSAGESIZE")
+
+	cfg := DefaultConfig()
+	err := loadFromEnv(cfg)
+	if err != nil {
+		t.Fatalf("loadFromEnv with Size field failed: %v", err)
+	}
+	if cfg.SMTP.Inbound.MaxMessageSize != 100*MB {
+		t.Errorf("expected 100MB, got %d", cfg.SMTP.Inbound.MaxMessageSize)
+	}
+}
+
+// Load with env var overriding a Duration field
+func TestLoadFromEnvDurationField(t *testing.T) {
+	os.Setenv("UMAILSERVER_SMTP_INBOUND_READTIMEOUT", "10m")
+	defer os.Unsetenv("UMAILSERVER_SMTP_INBOUND_READTIMEOUT")
+
+	cfg := DefaultConfig()
+	err := loadFromEnv(cfg)
+	if err != nil {
+		t.Fatalf("loadFromEnv with Duration field failed: %v", err)
+	}
+	if cfg.SMTP.Inbound.ReadTimeout != Duration(10*time.Minute) {
+		t.Errorf("expected 10m, got %v", cfg.SMTP.Inbound.ReadTimeout)
+	}
+}
+
+// Load with env var overriding a Duration field with invalid value
+func TestLoadFromEnvDurationFieldInvalid(t *testing.T) {
+	os.Setenv("UMAILSERVER_SMTP_INBOUND_READTIMEOUT", "bad_duration")
+	defer os.Unsetenv("UMAILSERVER_SMTP_INBOUND_READTIMEOUT")
+
+	cfg := DefaultConfig()
+	err := loadFromEnv(cfg)
+	if err == nil {
+		t.Error("expected error for invalid Duration env var")
+	}
+}
+
+// Test Validate with invalid quarantine threshold <= junk threshold
+func TestValidateQuarantineLessEqualJunk(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Spam.QuarantineThreshold = 3.0
+	cfg.Spam.JunkThreshold = 3.0
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error when quarantine <= junk threshold")
+	}
+}
+
+// Setup wizard Run with data dir creation error
+func TestSetupWizardRunDataDirError(t *testing.T) {
+	// Input with a null byte in the data directory path to trigger MkdirAll error
+	input := string([]byte{0}) + "\n"
+
+	wizard := NewSetupWizard()
+	wizard.reader = bufio.NewReader(strings.NewReader(input))
+
+	_, err := wizard.Run()
+	if err == nil {
+		t.Error("expected error when data directory creation fails")
 	}
 }

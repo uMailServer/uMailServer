@@ -1,0 +1,113 @@
+package auth
+
+import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
+	"fmt"
+	"math"
+	"net/url"
+	"strings"
+	"time"
+)
+
+const (
+	// TOTPDefaultPeriod is the default time step in seconds (30s per RFC 6238)
+	TOTPDefaultPeriod = 30
+	// TOTPDefaultDigits is the default number of digits (6 per RFC 6238)
+	TOTPDefaultDigits = 6
+	// TOTPSecretLength is the length of generated secrets in bytes
+	TOTPSecretLength = 20
+)
+
+// GenerateTOTPSecret generates a new random TOTP secret (base32-encoded)
+func GenerateTOTPSecret() (string, error) {
+	secret := make([]byte, TOTPSecretLength)
+	if _, err := rand.Read(secret); err != nil {
+		return "", fmt.Errorf("failed to generate TOTP secret: %w", err)
+	}
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret), nil
+}
+
+// GenerateTOTPUri generates the otpauth:// URI for QR code provisioning
+func GenerateTOTPUri(secret, account, issuer string) string {
+	v := url.Values{}
+	v.Set("secret", secret)
+	v.Set("issuer", issuer)
+	v.Set("algorithm", "SHA1")
+	v.Set("digits", fmt.Sprintf("%d", TOTPDefaultDigits))
+	v.Set("period", fmt.Sprintf("%d", TOTPDefaultPeriod))
+	return fmt.Sprintf("otpauth://totp/%s:%s?%s", issuer, url.PathEscape(account), v.Encode())
+}
+
+// ValidateTOTP validates a TOTP code against a secret at the current time.
+// It checks the current time step and one step before/after for clock drift.
+func ValidateTOTP(secret, code string) bool {
+	return ValidateTOTPAt(secret, code, time.Now())
+}
+
+// ValidateTOTPAt validates a TOTP code against a secret at a specific time.
+func ValidateTOTPAt(secret, code string, now time.Time) bool {
+	if len(code) != TOTPDefaultDigits {
+		return false
+	}
+
+	key, err := decodeTOTPSecret(secret)
+	if err != nil {
+		return false
+	}
+
+	timeStep := uint64(now.Unix()) / TOTPDefaultPeriod
+
+	// Check current, -1, and +1 time steps for clock drift tolerance
+	for _, offset := range []int64{-1, 0, 1} {
+		ts := uint64(int64(timeStep) + offset)
+		expected := computeTOTP(key, ts, TOTPDefaultDigits)
+		if expected == code {
+			return true
+		}
+	}
+
+	return false
+}
+
+// decodeTOTPSecret decodes a base32 TOTP secret to bytes
+func decodeTOTPSecret(secret string) ([]byte, error) {
+	secretUpper := strings.ToUpper(strings.TrimSpace(secret))
+	// Add padding if needed
+	switch len(secretUpper) % 8 {
+	case 2:
+		secretUpper += "======"
+	case 4:
+		secretUpper += "===="
+	case 5:
+		secretUpper += "==="
+	case 7:
+		secretUpper += "="
+	}
+	return base32.StdEncoding.DecodeString(secretUpper)
+}
+
+// computeTOTP computes a TOTP code for the given key and time step.
+func computeTOTP(key []byte, timeStep uint64, digits int) string {
+	// Encode time step as big-endian 8-byte array
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, timeStep)
+
+	// HMAC-SHA1
+	mac := hmac.New(sha1.New, key)
+	mac.Write(buf)
+	hash := mac.Sum(nil)
+
+	// Dynamic truncation (RFC 4226)
+	offset := hash[len(hash)-1] & 0x0f
+	code := binary.BigEndian.Uint32(hash[offset:offset+4]) & 0x7fffffff
+
+	// Modulo to get the desired number of digits
+	mod := uint32(math.Pow10(digits))
+	code = code % mod
+
+	return fmt.Sprintf(fmt.Sprintf("%%0%dd", digits), code)
+}

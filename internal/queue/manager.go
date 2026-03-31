@@ -1,10 +1,16 @@
 package queue
 
 import (
+	"bytes"
 	"context"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"math/rand"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"os"
 	"path/filepath"
@@ -12,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/store"
@@ -29,6 +36,10 @@ type Manager struct {
 	metrics     *metrics.SimpleMetrics
 	maxRetries  int
 	maxQueueSize int
+
+	// dialSMTP, if set, is used instead of net.DialTimeout for testing.
+	// It returns a net.Conn and is used by deliverToMX.
+	dialSMTP func(addr string) (net.Conn, error)
 }
 
 // QueueStats holds queue statistics
@@ -269,9 +280,30 @@ func (m *Manager) deliver(entry *db.QueueEntry) {
 
 // deliverToMX delivers a message to a specific MX server
 func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error {
+	// Sign message with DKIM if possible
+	signedMsg, err := m.signWithDKIM(from, message)
+	if err == nil && len(signedMsg) > 0 {
+		message = signedMsg
+	}
+
+	// Use VERP-encoded envelope sender for bounce tracking
+	envelopeSender := from
+	if at := strings.LastIndex(from, "@"); at >= 0 {
+		senderDomain := from[at+1:]
+		verpSender := EncodeVERP(senderDomain, to)
+		if verpSender != "" {
+			envelopeSender = verpSender
+		}
+	}
+
 	// Connect to MX server
 	addr := mx + ":25"
-	conn, err := net.DialTimeout("tcp", addr, 30*time.Second)
+	var conn net.Conn
+	if m.dialSMTP != nil {
+		conn, err = m.dialSMTP(addr)
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, 30*time.Second)
+	}
 	if err != nil {
 		return err
 	}
@@ -284,8 +316,17 @@ func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error 
 	}
 	defer client.Close()
 
-	// Set sender
-	if err := client.Mail(from); err != nil {
+	// Attempt STARTTLS
+	tlsConfig := &tls.Config{
+		ServerName: mx,
+	}
+	if err := client.StartTLS(tlsConfig); err != nil {
+		// STARTTLS failed — continue with plaintext
+		// Some servers don't support TLS
+	}
+
+	// Set sender (VERP-encoded for bounce tracking)
+	if err := client.Mail(envelopeSender); err != nil {
 		return err
 	}
 
@@ -349,43 +390,60 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 	}
 }
 
-// generateBounce generates a bounce message
+// generateBounce generates a bounce message and delivers it back to the sender
 func (m *Manager) generateBounce(entry *db.QueueEntry) {
 	// Read original message
-	_, err := readFile(entry.MessagePath)
+	originalMsg, err := readFile(entry.MessagePath)
 	if err != nil {
 		return
 	}
 
 	// Create bounce message
 	bounceMsg := fmt.Sprintf(
-		"From: MAILER-DAEMON@%s\r\n"+
-		"To: %s\r\n"+
-		"Subject: Delivery Status Notification (Failure)\r\n"+
-		"Content-Type: multipart/report; report-type=delivery-status; boundary=boundary\r\n"+
-		"\r\n"+
-		"--boundary\r\n"+
-		"Content-Type: text/plain\r\n"+
-		"\r\n"+
-		"Your message could not be delivered to: %s\r\n"+
-		"Error: %s\r\n"+
-		"\r\n"+
-		"--boundary\r\n"+
-		"Content-Type: message/delivery-status\r\n"+
-		"\r\n"+
-		"Action: failed\r\n"+
-		"Status: 5.0.0\r\n"+
-		"\r\n"+
-		"--boundary--\r\n",
-		"umailserver",
+		"From: MAILER-DAEMON@umailserver\r\n"+
+			"To: %s\r\n"+
+			"Subject: Delivery Status Notification (Failure)\r\n"+
+			"Content-Type: multipart/report; report-type=delivery-status; boundary=boundary\r\n"+
+			"Date: %s\r\n"+
+			"\r\n"+
+			"--boundary\r\n"+
+			"Content-Type: text/plain\r\n"+
+			"\r\n"+
+			"Your message could not be delivered to: %s\r\n"+
+			"Error: %s\r\n"+
+			"\r\n"+
+			"--boundary\r\n"+
+			"Content-Type: message/delivery-status\r\n"+
+			"\r\n"+
+			"Reporting-MTA: dns; umailserver\r\n"+
+			"Arrival-Date: %s\r\n"+
+			"\r\n"+
+			"Final-Recipient: rfc822; %s\r\n"+
+			"Action: failed\r\n"+
+			"Status: 5.0.0\r\n"+
+			"Diagnostic-Code: smtp; %s\r\n"+
+			"\r\n"+
+			"--boundary\r\n"+
+			"Content-Type: message/rfc822\r\n"+
+			"\r\n"+
+			"%s"+
+			"\r\n--boundary--\r\n",
 		entry.From,
+		time.Now().Format(time.RFC1123Z),
 		entry.To[0],
 		entry.LastError,
+		entry.CreatedAt.Format(time.RFC1123Z),
+		entry.To[0],
+		entry.LastError,
+		string(originalMsg),
 	)
 
-	// Store bounce in sender's inbox (simplified)
-	// In real implementation, this would deliver to the local mailbox
-	_ = bounceMsg
+	// Enqueue bounce as a new message back to the sender
+	if m.db != nil {
+		if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, []byte(bounceMsg)); enqueueErr != nil {
+			fmt.Printf("failed to enqueue bounce message: %v\n", enqueueErr)
+		}
+	}
 
 	// Clean up
 	deleteFile(entry.MessagePath)
@@ -482,4 +540,103 @@ func (r *Resolver) LookupMX(domain string) ([]string, error) {
 	}
 
 	return records, nil
+}
+
+// signWithDKIM signs an outgoing message with DKIM if the sender's domain has a DKIM key configured.
+func (m *Manager) signWithDKIM(from string, message []byte) ([]byte, error) {
+	if m.db == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+
+	// Extract sender domain
+	senderDomain := extractDomain(from)
+	if senderDomain == "" {
+		return nil, fmt.Errorf("cannot extract domain from sender: %s", from)
+	}
+
+	// Look up domain's DKIM key
+	domain, err := m.db.GetDomain(senderDomain)
+	if err != nil {
+		return nil, fmt.Errorf("domain %s not found: %w", senderDomain, err)
+	}
+	if domain.DKIMPrivateKey == "" || domain.DKIMSelector == "" {
+		return nil, fmt.Errorf("no DKIM key configured for domain %s", senderDomain)
+	}
+
+	// Parse private key
+	block, _ := pem.Decode([]byte(domain.DKIMPrivateKey))
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode DKIM private key PEM")
+	}
+
+	rsaKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		// Try PKCS8 as fallback
+		key, err8 := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err8 != nil {
+			return nil, fmt.Errorf("failed to parse DKIM private key: %w (pkcs1: %w)", err8, err)
+		}
+		var ok bool
+		rsaKey, ok = key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("DKIM private key is not RSA")
+		}
+	}
+
+	// Parse message headers and body
+	headers := parseMessageHeaders(message)
+	body := extractMessageBody(message)
+
+	// Create signer and sign
+	dnsResolver := &dkimDNSResolver{}
+	signer := auth.NewDKIMSigner(dnsResolver, rsaKey, senderDomain, domain.DKIMSelector)
+	signature, err := signer.Sign(headers, body)
+	if err != nil {
+		return nil, fmt.Errorf("DKIM signing failed: %w", err)
+	}
+
+	// Prepend DKIM-Signature header to the message
+	dkimHeader := signature + "\r\n"
+	signedMessage := append([]byte(dkimHeader), message...)
+	return signedMessage, nil
+}
+
+// parseMessageHeaders parses the headers from a raw email message into a map
+func parseMessageHeaders(message []byte) map[string][]string {
+	headers := make(map[string][]string)
+	reader := bytes.NewReader(message)
+	msg, err := mail.ReadMessage(reader)
+	if err != nil {
+		return headers
+	}
+	return msg.Header
+}
+
+// extractMessageBody extracts the body portion after the header separator
+func extractMessageBody(message []byte) []byte {
+	// Find the blank line separating headers from body
+	idx := bytes.Index(message, []byte("\r\n\r\n"))
+	if idx >= 0 {
+		return message[idx+4:]
+	}
+	idx = bytes.Index(message, []byte("\n\n"))
+	if idx >= 0 {
+		return message[idx+2:]
+	}
+	return nil
+}
+
+// dkimDNSResolver implements auth.DNSResolver for the queue package
+type dkimDNSResolver struct{}
+
+func (r *dkimDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	return net.LookupTXT(name)
+}
+
+func (r *dkimDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	return net.LookupIP(host)
+}
+
+func (r *dkimDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
+	return net.LookupMX(domain)
 }

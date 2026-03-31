@@ -1188,3 +1188,132 @@ func TestSessionEXPN(t *testing.T) {
 		t.Logf("EXPN response: %s", response)
 	}
 }
+
+// TestSetRateLimiter tests setting the rate limiter
+func TestSetRateLimiter(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	// Create a mock rate limiter
+	rl := &mockRateLimiter{}
+	server.SetRateLimiter(rl)
+	if server.rateLimiter == nil {
+		t.Error("expected rate limiter to be set")
+	}
+}
+
+type mockRateLimiter struct{}
+
+func (m *mockRateLimiter) Allow(key string, limitType string) bool {
+	return true
+}
+
+// TestSetPipeline tests setting the message processing pipeline
+func TestSetPipeline(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	pipeline := NewPipeline(nil)
+	server.SetPipeline(pipeline)
+	if server.pipeline == nil {
+		t.Error("expected pipeline to be set")
+	}
+}
+
+// TestGetIPFromAddr tests IP extraction from address strings
+func TestGetIPFromAddr(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"192.168.1.1:25", "192.168.1.1"},
+		{"[::1]:25", "::1"},
+		{"127.0.0.1:587", "127.0.0.1"},
+		{"invalid", "invalid"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		got := getIPFromAddr(tt.input)
+		if got != tt.want {
+			t.Errorf("getIPFromAddr(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestListenAndServeTLS tests TLS listener creation
+func TestListenAndServeTLS(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  false,
+	}
+	server := NewServer(config, nil)
+
+	// Test with nil TLS config should fail
+	err := server.ListenAndServeTLS("127.0.0.1:0", nil)
+	if err == nil {
+		t.Error("Expected error with nil TLS config")
+		server.Stop()
+	}
+}
+
+// TestListenAndServeInvalidAddr tests listening on an invalid address
+func TestListenAndServeInvalidAddr(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	// Use an invalid address that can't be bound
+	err := server.ListenAndServe("256.256.256.256:99999")
+	if err == nil {
+		t.Error("Expected error with invalid address")
+		server.Stop()
+	}
+}
+
+// TestDefaultLogger tests the default pipeline logger
+func TestDefaultLogger(t *testing.T) {
+	logger := &defaultLogger{}
+	// Just verify they don't panic
+	logger.Debug("test debug", "key", "value")
+	logger.Info("test info", "key", "value")
+	logger.Warn("test warn", "key", "value")
+	logger.Error("test error", "key", "value")
+}
+
+// TestTruncate tests the truncate helper function
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		input   string
+		maxLen  int
+		want    string
+	}{
+		{"short", 10, "short"},
+		{"exactly10!", 10, "exactly10!"},
+		{"this is a long string", 10, "this is a ..."},
+		{"", 10, ""},
+	}
+
+	for _, tt := range tests {
+		got := truncate(tt.input, tt.maxLen)
+		if got != tt.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+		}
+	}
+}
