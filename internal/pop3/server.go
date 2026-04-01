@@ -552,6 +552,7 @@ func (s *Session) sendTop(data []byte, lines int) {
 	if headerEnd == -1 {
 		// No headers found, send all
 		s.writer.Write(data)
+		s.WriteDataEnd()
 		return
 	}
 
