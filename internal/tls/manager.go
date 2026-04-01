@@ -80,6 +80,7 @@ func (m *Manager) setupAutocert() error {
 	}
 
 	m.certManager = &autocert.Manager{
+		Client:     &acme.Client{DirectoryURL: acmeEndpoint},
 		Cache:      autocert.DirCache(m.certDir),
 		Prompt:     autocert.AcceptTOS,
 		Email:      m.config.Email,

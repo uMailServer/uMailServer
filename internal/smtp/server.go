@@ -25,10 +25,11 @@ type Server struct {
 	logger      *slog.Logger
 
 	// Hooks for message processing
-	onAuth      func(username, password string) (bool, error)
-	onValidate  func(from string, to []string) error
-	onDeliver   func(from string, to []string, data []byte) error
-	pipeline    *Pipeline
+	onAuth        func(username, password string) (bool, error)
+	onValidate    func(from string, to []string) error
+	onDeliver     func(from string, to []string, data []byte) error
+	onGetUserSecret func(username string) (string, error) // Get user's shared secret for CRAM-MD5
+	pipeline      *Pipeline
 
 	// Rate limiting
 	rateLimiter ConnectionRateLimiter
@@ -53,6 +54,11 @@ type Config struct {
 	WriteTimeout   time.Duration
 	AllowInsecure  bool
 	TLSConfig      *tls.Config
+
+	// Submission mode settings
+	RequireAuth  bool // Reject MAIL FROM if not authenticated (submission mode)
+	RequireTLS   bool // Require TLS before AUTH
+	IsSubmission bool // Submission server mode (port 587/465)
 }
 
 // NewServer creates a new SMTP server
@@ -87,6 +93,11 @@ func (s *Server) SetDeliveryHandler(handler func(from string, to []string, data 
 // SetPipeline sets the message processing pipeline
 func (s *Server) SetPipeline(p *Pipeline) {
 	s.pipeline = p
+}
+
+// SetUserSecretHandler sets the handler for retrieving a user's shared secret for CRAM-MD5 auth
+func (s *Server) SetUserSecretHandler(handler func(username string) (string, error)) {
+	s.onGetUserSecret = handler
 }
 
 // ListenAndServe starts listening on the specified address
@@ -127,7 +138,9 @@ func (s *Server) Serve(listener net.Listener) error {
 		default:
 		}
 
-		listener.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second))
+		if tl, ok := listener.(interface{ SetDeadline(time.Time) error }); ok {
+			tl.SetDeadline(time.Now().Add(time.Second))
+		}
 		conn, err := listener.Accept()
 		if err != nil {
 			if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
@@ -242,17 +255,7 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-// IsRunning returns whether the server is running
-func (s *Server) IsRunning() bool {
-	return s.running
-}
 
-// ActiveConnections returns the number of active connections
-func (s *Server) ActiveConnections() int {
-	s.connMu.RLock()
-	defer s.connMu.RUnlock()
-	return len(s.connections)
-}
 
 // getIPFromAddr extracts IP from an address string
 func getIPFromAddr(addr string) string {
@@ -286,11 +289,3 @@ func ValidateEmail(email string) (string, error) {
 	return addr.Address, nil
 }
 
-// ExtractDomain extracts the domain from an email address
-func ExtractDomain(email string) string {
-	parts := strings.Split(email, "@")
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return ""
-}

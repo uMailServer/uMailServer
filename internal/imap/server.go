@@ -50,6 +50,9 @@ type Mailstore interface {
 	SearchMessages(user, mailbox string, criteria SearchCriteria) ([]uint32, error)
 	CopyMessages(user, sourceMailbox, destMailbox string, seqSet string) error
 	MoveMessages(user, sourceMailbox, destMailbox string, seqSet string) error
+
+	// Default mailbox provisioning
+	EnsureDefaultMailboxes(user string) error
 }
 
 // Config holds server configuration
@@ -170,8 +173,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	s.logger.Info("New IMAP session", "session", session.ID(), "remote", conn.RemoteAddr())
 
-	// Send greeting
-	session.WriteResponse("*", "OK IMAP4rev1 server ready")
+	// Send greeting with capability advertisement
+	caps := defaultCapabilities()
+	session.WriteResponse("*", "OK [CAPABILITY IMAP4rev2 IMAP4rev1 "+strings.Join(caps, " ")+"] uMailServer ready")
 
 	// Handle commands
 	session.Handle()
@@ -319,9 +323,13 @@ func generateSessionID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
+// Version is the server version string reported via the ID command.
+const Version = "0.1.0"
+
 // defaultCapabilities returns the default server capabilities
 func defaultCapabilities() []string {
 	return []string{
+		"IMAP4rev2",
 		"IMAP4rev1",
 		"STARTTLS",
 		"AUTH=PLAIN",
@@ -336,5 +344,6 @@ func defaultCapabilities() []string {
 		"LITERAL+",
 		"SASL-IR",
 		"ESEARCH",
+		"ID",
 	}
 }

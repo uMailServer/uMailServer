@@ -13,7 +13,8 @@ import (
 
 // Diagnostics runs various diagnostic checks
 type Diagnostics struct {
-	config *config.Config
+	config    *config.Config
+	tlsConfig *tls.Config // optional override for TLS verification (used by tests)
 }
 
 // NewDiagnostics creates new diagnostics
@@ -354,8 +355,15 @@ func (d *Diagnostics) checkSMTPTLS(hostname string) (*TLSCheckResult, error) {
 	defer client.Close()
 
 	// Try STARTTLS
-	tlsConfig := &tls.Config{
-		ServerName: hostname,
+	tlsConfig := d.tlsConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{
+			ServerName: hostname,
+		}
+	} else {
+		// Clone and set ServerName
+		tlsConfig = tlsConfig.Clone()
+		tlsConfig.ServerName = hostname
 	}
 
 	if err := client.StartTLS(tlsConfig); err != nil {
@@ -373,9 +381,17 @@ func (d *Diagnostics) checkSMTPTLS(hostname string) (*TLSCheckResult, error) {
 // checkIMAPTLS checks IMAP TLS
 func (d *Diagnostics) checkIMAPTLS(hostname string) (*TLSCheckResult, error) {
 	// Connect to IMAP server
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10*time.Second}, "tcp", fmt.Sprintf("%s:993", hostname), &tls.Config{
-		ServerName: hostname,
-	})
+	tlsConfig := d.tlsConfig
+	if tlsConfig == nil {
+		tlsConfig = &tls.Config{
+			ServerName: hostname,
+		}
+	} else {
+		tlsConfig = tlsConfig.Clone()
+		tlsConfig.ServerName = hostname
+	}
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10*time.Second}, "tcp", fmt.Sprintf("%s:993", hostname), tlsConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to IMAPS: %w", err)
 	}

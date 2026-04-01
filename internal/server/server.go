@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -12,9 +13,13 @@ import (
 	"syscall"
 
 	"github.com/umailserver/umailserver/internal/api"
+	"github.com/umailserver/umailserver/internal/auth"
+	"github.com/umailserver/umailserver/internal/av"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/imap"
+	"github.com/umailserver/umailserver/internal/mcp"
+	"github.com/umailserver/umailserver/internal/pop3"
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/search"
 	"github.com/umailserver/umailserver/internal/smtp"
@@ -37,6 +42,14 @@ type Server struct {
 	tlsManager    *tls.Manager
 	webhookMgr    *webhook.Manager
 	searchSvc     *search.Service
+	storageDB     *storage.Database
+	mailstore     *imap.BboltMailstore
+	pop3Server    *pop3.Server
+	mcpHTTPServer *http.Server
+
+	// Submission SMTP servers (ports 587/465)
+	submissionServer    *smtp.Server
+	submissionTLSServer *smtp.Server
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -111,6 +124,7 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	// Initialize search service
+	s.storageDB = storageDB
 	searchSvc := search.NewService(storageDB, msgStore, logger)
 	s.searchSvc = searchSvc
 
@@ -158,6 +172,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to create mailstore: %w", err)
 	}
+	s.mailstore = mailstore
 
 	// Start SMTP server
 	smtpAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Inbound.Bind, s.config.SMTP.Inbound.Port)
@@ -173,6 +188,45 @@ func (s *Server) Start() error {
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
 	smtpServer.SetAuthHandler(s.authenticate)
 	smtpServer.SetDeliveryHandler(s.deliverMessage)
+	smtpServer.SetUserSecretHandler(s.getUserSecret)
+
+	// Wire up the message processing pipeline
+	pipeline := smtp.NewPipeline(smtp.NewPipelineLogger(s.logger))
+
+	// Create DNS resolver for auth checks
+	resolver := smtp.NewNetDNSResolver()
+
+	// Auth pipeline stages (SPF, DKIM, DMARC)
+	spfChecker := auth.NewSPFChecker(resolver)
+	dkimVerifier := auth.NewDKIMVerifier(resolver)
+	dmarcEvaluator := auth.NewDMARCEvaluator(resolver)
+
+	pipeline.AddStage(smtp.NewAuthSPFStage(spfChecker, s.logger))
+	pipeline.AddStage(smtp.NewAuthDKIMStage(dkimVerifier, s.logger))
+	pipeline.AddStage(smtp.NewAuthDMARCStage(dmarcEvaluator, s.logger))
+
+	// Spam filtering stages
+	if s.config.Spam.Greylisting.Enabled {
+		pipeline.AddStage(smtp.NewGreylistStage())
+	}
+	if len(s.config.Spam.RBLServers) > 0 {
+		pipeline.AddStage(smtp.NewRBLStage(s.config.Spam.RBLServers))
+	}
+	pipeline.AddStage(smtp.NewHeuristicStage())
+	pipeline.AddStage(smtp.NewScoreStage(s.config.Spam.RejectThreshold, s.config.Spam.JunkThreshold))
+
+	// Antivirus scanning stage
+	if s.config.AV.Enabled {
+		avScanner := av.NewScanner(av.Config{
+			Enabled: s.config.AV.Enabled,
+			Addr:    s.config.AV.Addr,
+			Timeout: s.config.AV.Timeout.ToDuration(),
+			Action:  s.config.AV.Action,
+		})
+		pipeline.AddStage(smtp.NewAVStage(&avScannerAdapter{inner: avScanner}, s.config.AV.Action))
+	}
+
+	smtpServer.SetPipeline(pipeline)
 
 	// Start SMTP in background
 	go func() {
@@ -182,6 +236,65 @@ func (s *Server) Start() error {
 	}()
 	s.smtpServer = smtpServer
 	s.logger.Info("SMTP server started", "addr", smtpAddr)
+
+	// Start Submission SMTP server (port 587, STARTTLS)
+	if s.config.SMTP.Submission.Enabled {
+		submissionAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Submission.Bind, s.config.SMTP.Submission.Port)
+		submissionCfg := &smtp.Config{
+			Hostname:       s.config.Server.Hostname,
+			MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
+			MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
+			ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
+			WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+			TLSConfig:      s.tlsManager.GetTLSConfig(),
+			RequireAuth:    true,
+			RequireTLS:     true,
+			IsSubmission:   true,
+		}
+
+		submissionServer := smtp.NewServer(submissionCfg, s.logger)
+		submissionServer.SetAuthHandler(s.authenticate)
+		submissionServer.SetDeliveryHandler(s.deliverMessage)
+		submissionServer.SetUserSecretHandler(s.getUserSecret)
+
+		go func() {
+			if err := submissionServer.ListenAndServe(submissionAddr); err != nil {
+				s.logger.Error("Submission server error", "error", err)
+			}
+		}()
+		s.submissionServer = submissionServer
+		s.logger.Info("Submission server started", "addr", submissionAddr)
+	}
+
+	// Start Submission TLS SMTP server (port 465, implicit TLS)
+	if s.config.SMTP.SubmissionTLS.Enabled {
+		submissionTLSAddr := fmt.Sprintf("%s:%d", s.config.SMTP.SubmissionTLS.Bind, s.config.SMTP.SubmissionTLS.Port)
+		submissionTLSCfg := &smtp.Config{
+			Hostname:       s.config.Server.Hostname,
+			MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
+			MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
+			ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
+			WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+			TLSConfig:      s.tlsManager.GetTLSConfig(),
+			RequireAuth:    true,
+			RequireTLS:     false, // Already on TLS
+			IsSubmission:   true,
+		}
+
+		submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
+		submissionTLSServer.SetAuthHandler(s.authenticate)
+		submissionTLSServer.SetDeliveryHandler(s.deliverMessage)
+		submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
+
+		tlsConfig := s.tlsManager.GetTLSConfig()
+		go func() {
+			if err := submissionTLSServer.ListenAndServeTLS(submissionTLSAddr, tlsConfig); err != nil {
+				s.logger.Error("Submission TLS server error", "error", err)
+			}
+		}()
+		s.submissionTLSServer = submissionTLSServer
+		s.logger.Info("Submission TLS server started", "addr", submissionTLSAddr)
+	}
 
 	// Start IMAP server
 	imapAddr := fmt.Sprintf("%s:%d", s.config.IMAP.Bind, s.config.IMAP.Port)
@@ -199,6 +312,50 @@ func (s *Server) Start() error {
 	}
 	s.imapServer = imapServer
 	s.logger.Info("IMAP server started", "addr", imapAddr)
+
+	// Start POP3 server
+	if s.config.POP3.Enabled {
+		pop3Addr := fmt.Sprintf("%s:%d", s.config.POP3.Bind, s.config.POP3.Port)
+		pop3Adapter := &pop3MailstoreAdapter{
+			mailstore: mailstore,
+			msgStore:  s.msgStore,
+		}
+		pop3Server := pop3.NewServer(pop3Addr, pop3Adapter, s.logger)
+		pop3Server.SetAuthFunc(s.authenticate)
+
+		if s.tlsManager.IsEnabled() {
+			pop3Server.SetTLSConfig(&pop3.TLSConfig{
+				CertFile: s.config.TLS.CertFile,
+				KeyFile:  s.config.TLS.KeyFile,
+			})
+		}
+
+		if err := pop3Server.Start(); err != nil {
+			return fmt.Errorf("failed to start POP3 server: %w", err)
+		}
+		s.pop3Server = pop3Server
+		s.logger.Info("POP3 server started", "addr", pop3Addr)
+	}
+
+	// Start MCP server
+	if s.config.MCP.Enabled {
+		mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
+		mcpSrv := mcp.NewServer(s.database)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
+
+		s.mcpHTTPServer = &http.Server{
+			Addr:    mcpAddr,
+			Handler: mux,
+		}
+
+		go func() {
+			if err := s.mcpHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				s.logger.Error("MCP server error", "error", err)
+			}
+		}()
+		s.logger.Info("MCP server started", "addr", mcpAddr)
+	}
 
 	// Start HTTP API server
 	apiCfg := api.Config{
@@ -237,10 +394,36 @@ func (s *Server) Stop() error {
 		}
 	}
 
+	// Stop submission SMTP servers
+	if s.submissionServer != nil {
+		if err := s.submissionServer.Stop(); err != nil {
+			s.logger.Error("Failed to stop submission server", "error", err)
+		}
+	}
+	if s.submissionTLSServer != nil {
+		if err := s.submissionTLSServer.Stop(); err != nil {
+			s.logger.Error("Failed to stop submission TLS server", "error", err)
+		}
+	}
+
 	// Stop IMAP server
 	if s.imapServer != nil {
 		if err := s.imapServer.Stop(); err != nil {
 			s.logger.Error("Failed to stop IMAP server", "error", err)
+		}
+	}
+
+	// Stop POP3 server
+	if s.pop3Server != nil {
+		if err := s.pop3Server.Stop(); err != nil {
+			s.logger.Error("Failed to stop POP3 server", "error", err)
+		}
+	}
+
+	// Stop MCP server
+	if s.mcpHTTPServer != nil {
+		if err := s.mcpHTTPServer.Shutdown(s.ctx); err != nil {
+			s.logger.Error("Failed to stop MCP server", "error", err)
 		}
 	}
 
@@ -261,9 +444,19 @@ func (s *Server) Stop() error {
 		s.msgStore.Close()
 	}
 
+	// Close mailstore (IMAP bbolt database)
+	if s.mailstore != nil {
+		s.mailstore.Close()
+	}
+
 	// Close database
 	if s.database != nil {
 		s.database.Close()
+	}
+
+	// Close storage database
+	if s.storageDB != nil {
+		s.storageDB.Close()
 	}
 
 	s.logger.Info("uMailServer stopped")
@@ -303,6 +496,19 @@ func (s *Server) authenticate(username, password string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// getUserSecret returns the password hash for a user, used by CRAM-MD5 authentication
+func (s *Server) getUserSecret(username string) (string, error) {
+	user, domain := parseEmail(username)
+	account, err := s.database.GetAccount(domain, user)
+	if err != nil {
+		return "", err
+	}
+	if account == nil || !account.IsActive {
+		return "", fmt.Errorf("user not found or inactive")
+	}
+	return account.PasswordHash, nil
 }
 
 // deliverMessage delivers an incoming message
@@ -429,4 +635,95 @@ func (s *Server) GetDatabase() *db.DB {
 // GetQueue returns the queue manager
 func (s *Server) GetQueue() *queue.Manager {
 	return s.queue
+}
+
+// avScannerAdapter wraps an *av.Scanner to satisfy the smtp.AVScanner interface.
+// The two packages define structurally identical but distinct result types,
+// so a thin adapter is required.
+type avScannerAdapter struct {
+	inner *av.Scanner
+}
+
+func (a *avScannerAdapter) IsEnabled() bool { return a.inner.IsEnabled() }
+
+func (a *avScannerAdapter) Scan(data []byte) (*smtp.AVScanResult, error) {
+	res, err := a.inner.Scan(data)
+	if err != nil {
+		return nil, err
+	}
+	return &smtp.AVScanResult{
+		Infected: res.Infected,
+		Virus:    res.Virus,
+	}, nil
+}
+
+// pop3MailstoreAdapter adapts imap.BboltMailstore and storage.MessageStore
+// to satisfy the pop3.Mailstore interface for POP3 access.
+type pop3MailstoreAdapter struct {
+	mailstore *imap.BboltMailstore
+	msgStore  *storage.MessageStore
+}
+
+func (a *pop3MailstoreAdapter) Authenticate(username, password string) (bool, error) {
+	return a.mailstore.Authenticate(username, password)
+}
+
+func (a *pop3MailstoreAdapter) ListMessages(user string) ([]*pop3.Message, error) {
+	// Fetch messages from the INBOX mailbox
+	msgs, err := a.mailstore.FetchMessages(user, "INBOX", "1:*", []string{"RFC822.SIZE"})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*pop3.Message, 0, len(msgs))
+	for i, msg := range msgs {
+		result = append(result, &pop3.Message{
+			Index: i,
+			UID:   fmt.Sprintf("%d", msg.UID),
+			Size:  msg.Size,
+		})
+	}
+	return result, nil
+}
+
+func (a *pop3MailstoreAdapter) GetMessage(user string, index int) (*pop3.Message, error) {
+	msgs, err := a.mailstore.FetchMessages(user, "INBOX", fmt.Sprintf("%d", index+1), []string{"RFC822.SIZE"})
+	if err != nil || len(msgs) == 0 {
+		return nil, fmt.Errorf("message not found")
+	}
+	msg := msgs[0]
+	return &pop3.Message{
+		Index: index,
+		UID:   fmt.Sprintf("%d", msg.UID),
+		Size:  msg.Size,
+	}, nil
+}
+
+func (a *pop3MailstoreAdapter) GetMessageData(user string, index int) ([]byte, error) {
+	msgs, err := a.mailstore.FetchMessages(user, "INBOX", fmt.Sprintf("%d", index+1), []string{"RFC822"})
+	if err != nil || len(msgs) == 0 {
+		return nil, fmt.Errorf("message not found")
+	}
+	return msgs[0].Data, nil
+}
+
+func (a *pop3MailstoreAdapter) DeleteMessage(user string, index int) error {
+	seqSet := fmt.Sprintf("%d", index+1)
+	return a.mailstore.StoreFlags(user, "INBOX", seqSet, []string{"\\Deleted"}, true)
+}
+
+func (a *pop3MailstoreAdapter) GetMessageCount(user string) (int, error) {
+	msgs, err := a.ListMessages(user)
+	if err != nil {
+		return 0, err
+	}
+	return len(msgs), nil
+}
+
+func (a *pop3MailstoreAdapter) GetMessageSize(user string, index int) (int64, error) {
+	msg, err := a.GetMessage(user, index)
+	if err != nil {
+		return 0, err
+	}
+	return msg.Size, nil
 }

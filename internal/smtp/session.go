@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/umailserver/umailserver/internal/auth"
 )
 
 // SessionState represents the current state of an SMTP session
@@ -201,7 +202,11 @@ func (s *Session) handleEHLO(arg string) error {
 
 	// Only advertise AUTH after TLS or if insecure auth is allowed
 	if s.isTLS || s.server.config.AllowInsecure {
-		capabilities = append(capabilities, "AUTH PLAIN LOGIN")
+		authMechs := []string{"AUTH PLAIN LOGIN"}
+		if s.server.onGetUserSecret != nil {
+			authMechs = append(authMechs, "CRAM-MD5")
+		}
+		capabilities = append(capabilities, strings.Join(authMechs, " "))
 	}
 
 	return s.WriteMultiLineResponse(250, capabilities)
@@ -230,6 +235,11 @@ func (s *Session) handleMAIL(arg string) error {
 	// Must have greeted first
 	if s.state == StateNew {
 		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
+	}
+
+	// Submission mode: require authentication before MAIL FROM
+	if s.server.config.RequireAuth && !s.isAuth {
+		return s.WriteResponse(530, "5.7.0 Authentication required")
 	}
 
 	// Parse MAIL FROM:<address> [params]
@@ -662,6 +672,8 @@ func (s *Session) handleAUTH(arg string) error {
 		return s.handleAuthPLAIN(parts)
 	case "LOGIN":
 		return s.handleAuthLOGIN(parts)
+	case "CRAM-MD5":
+		return s.handleAuthCRAMMD5()
 	default:
 		return s.WriteResponse(504, "Unrecognized authentication type")
 	}
@@ -762,6 +774,43 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 		if err != nil || !ok {
 			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
+	}
+
+	s.isAuth = true
+	s.username = username
+
+	return s.WriteResponse(235, "Authentication successful")
+}
+
+// handleAuthCRAMMD5 handles CRAM-MD5 authentication (RFC 2195)
+func (s *Session) handleAuthCRAMMD5() error {
+	if s.server.onGetUserSecret == nil {
+		return s.WriteResponse(504, "5.5.4 Unrecognized authentication type")
+	}
+
+	// Generate challenge
+	_, challengeB64, err := auth.GenerateCRAMMD5Challenge()
+	if err != nil {
+		return s.WriteResponse(454, "4.7.0 Temporary authentication failure")
+	}
+
+	// Send challenge
+	if err := s.WriteResponse(334, challengeB64); err != nil {
+		return err
+	}
+
+	// Read client response
+	reader := bufio.NewReader(s.conn)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	response := strings.TrimSpace(line)
+
+	// Verify using the shared auth function
+	username, ok := auth.VerifyCRAMMD5(challengeB64, response, s.server.onGetUserSecret)
+	if !ok {
+		return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 	}
 
 	s.isAuth = true

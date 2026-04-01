@@ -700,3 +700,14 @@ func parseSeqNum(s string, maxSeq uint32) (uint32, error) {
 
 	return uint32(n), nil
 }
+
+// EnsureDefaultMailboxes creates default mailboxes (INBOX, Sent, Drafts, Junk, Trash, Archive)
+// for the given user if they do not already exist. Errors creating individual mailboxes
+// are silently ignored since the mailbox creation is idempotent.
+func (m *BboltMailstore) EnsureDefaultMailboxes(user string) error {
+	defaults := []string{"INBOX", "Sent", "Drafts", "Junk", "Trash", "Archive"}
+	for _, name := range defaults {
+		_ = m.CreateMailbox(user, name)
+	}
+	return nil
+}

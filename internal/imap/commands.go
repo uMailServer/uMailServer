@@ -2,6 +2,7 @@ package imap
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"strconv"
 	"strings"
@@ -95,6 +96,8 @@ func (s *Session) handleAuthenticated(command string, args []string, line string
 		return s.handleIdle()
 	case "ENABLE":
 		return s.handleEnable(args)
+	case "ID":
+		return s.handleID(args)
 	default:
 		s.WriteResponse(s.tag, "BAD Command not recognized")
 		return nil
@@ -154,6 +157,8 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 		return s.handleUID(args, line)
 	case "IDLE":
 		return s.handleIdle()
+	case "ID":
+		return s.handleID(args)
 	default:
 		s.WriteResponse(s.tag, "BAD Command not recognized")
 		return nil
@@ -226,7 +231,7 @@ func (s *Session) handleAuthenticate(args []string) error {
 
 	switch mechanism {
 	case "PLAIN":
-		return s.handleAuthPlain()
+		return s.handleAuthPlain(args[1:])
 	case "LOGIN":
 		return s.handleAuthLogin()
 	default:
@@ -235,17 +240,127 @@ func (s *Session) handleAuthenticate(args []string) error {
 	}
 }
 
-// handleAuthPlain handles PLAIN authentication
-func (s *Session) handleAuthPlain() error {
-	// For initial response (SASL-IR), client may send credentials with command
-	// Otherwise, we request credentials
-	s.WriteResponse(s.tag, "NO PLAIN not yet implemented")
-	return nil
+// handleAuthPlain handles PLAIN authentication (RFC 4616 with SASL-IR)
+func (s *Session) handleAuthPlain(args []string) error {
+	var credentials []byte
+	var err error
+
+	if len(args) >= 1 && args[0] != "" {
+		// SASL-IR: initial response provided with the AUTHENTICATE command
+		credentials, err = base64.StdEncoding.DecodeString(args[0])
+		if err != nil {
+			s.WriteResponse(s.tag, "NO Invalid base64 in AUTHENTICATE PLAIN")
+			return nil
+		}
+	} else {
+		// No initial response; send continuation request
+		s.WriteContinuation("")
+		line, err := s.readLine()
+		if err != nil {
+			return fmt.Errorf("failed to read PLAIN credentials: %w", err)
+		}
+		// Client may send "*" to cancel
+		if line == "*" {
+			s.WriteResponse(s.tag, "NO AUTHENTICATE cancelled")
+			return nil
+		}
+		credentials, err = base64.StdEncoding.DecodeString(line)
+		if err != nil {
+			s.WriteResponse(s.tag, "NO Invalid base64 in AUTHENTICATE PLAIN")
+			return nil
+		}
+	}
+
+	// PLAIN format: authzid\0authcid\0passwd
+	// We ignore authzid and use authcid as the username.
+	parts := strings.SplitN(string(credentials), "\x00", 3)
+	if len(parts) < 3 {
+		s.WriteResponse(s.tag, "NO Invalid PLAIN credentials")
+		return nil
+	}
+
+	username := parts[1]
+	password := parts[2]
+
+	return s.authenticateUser(username, password, "AUTHENTICATE completed", "AUTHENTICATE failed")
 }
 
-// handleAuthLogin handles LOGIN authentication
+// handleAuthLogin handles LOGIN authentication (multi-step SASL)
 func (s *Session) handleAuthLogin() error {
-	s.WriteResponse(s.tag, "NO LOGIN mechanism not yet implemented")
+	// Step 1: Send Username challenge (base64 of "Username:")
+	s.WriteContinuation("VXNlcm5hbWU6")
+
+	// Read username response
+	line, err := s.readLine()
+	if err != nil {
+		return fmt.Errorf("failed to read LOGIN username: %w", err)
+	}
+	if line == "*" {
+		s.WriteResponse(s.tag, "NO AUTHENTICATE cancelled")
+		return nil
+	}
+	usernameBytes, err := base64.StdEncoding.DecodeString(line)
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Invalid base64 username in AUTHENTICATE LOGIN")
+		return nil
+	}
+	username := string(usernameBytes)
+
+	// Step 2: Send Password challenge (base64 of "Password:")
+	s.WriteContinuation("UGFzc3dvcmQ6")
+
+	// Read password response
+	line, err = s.readLine()
+	if err != nil {
+		return fmt.Errorf("failed to read LOGIN password: %w", err)
+	}
+	if line == "*" {
+		s.WriteResponse(s.tag, "NO AUTHENTICATE cancelled")
+		return nil
+	}
+	passwordBytes, err := base64.StdEncoding.DecodeString(line)
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Invalid base64 password in AUTHENTICATE LOGIN")
+		return nil
+	}
+	password := string(passwordBytes)
+
+	return s.authenticateUser(username, password, "AUTHENTICATE completed", "AUTHENTICATE failed")
+}
+
+// authenticateUser is the shared authentication logic used by LOGIN,
+// AUTHENTICATE PLAIN, and AUTHENTICATE LOGIN.
+// okMsg is the human-readable text sent on success (e.g. "LOGIN completed").
+// failMsg is sent on authentication failure (e.g. "AUTHENTICATE failed").
+func (s *Session) authenticateUser(username, password, okMsg, failMsg string) error {
+	authenticated := false
+	if s.server.authFunc != nil {
+		auth, err := s.server.authFunc(username, password)
+		if err == nil && auth {
+			authenticated = true
+		}
+	} else if s.server.mailstore != nil {
+		auth, err := s.server.mailstore.Authenticate(username, password)
+		if err == nil && auth {
+			authenticated = true
+		}
+	}
+
+	if !authenticated {
+		s.WriteResponse(s.tag, "NO "+failMsg)
+		return nil
+	}
+
+	s.user = username
+	s.state = StateAuthenticated
+
+	// Auto-create default mailboxes after first successful authentication
+	if s.server.mailstore != nil {
+		// Best-effort: create INBOX if the mailstore supports it
+		_ = s.server.mailstore.CreateMailbox(s.user, "INBOX")
+	}
+
+	s.WriteResponse(s.tag, "OK "+okMsg)
 	return nil
 }
 
@@ -263,30 +378,7 @@ func (s *Session) handleLogin(args []string) error {
 	username = strings.Trim(username, "\"'")
 	password = strings.Trim(password, "\"'")
 
-	// Authenticate
-	authenticated := false
-	if s.server.authFunc != nil {
-		auth, err := s.server.authFunc(username, password)
-		if err == nil && auth {
-			authenticated = true
-		}
-	} else if s.server.mailstore != nil {
-		auth, err := s.server.mailstore.Authenticate(username, password)
-		if err == nil && auth {
-			authenticated = true
-		}
-	}
-
-	if !authenticated {
-		s.WriteResponse(s.tag, "NO Authentication failed")
-		return nil
-	}
-
-	s.user = username
-	s.state = StateAuthenticated
-
-	s.WriteResponse(s.tag, "OK LOGIN completed")
-	return nil
+	return s.authenticateUser(username, password, "LOGIN completed", "Authentication failed")
 }
 
 // SELECT command
@@ -758,14 +850,26 @@ func (s *Session) handleEnable(args []string) error {
 	return nil
 }
 
+// ID command (RFC 2971)
+func (s *Session) handleID(args []string) error {
+	// Client may send parenthesized list or NIL; we ignore client ID
+	_ = args
+	s.WriteData("* ID (\"name\" \"uMailServer\" \"version\" \"dev\")")
+	s.WriteResponse(s.tag, "OK ID completed")
+	return nil
+}
+
 // CHECK command
 func (s *Session) handleCheck() error {
 	s.WriteResponse(s.tag, "OK CHECK completed")
 	return nil
 }
 
-// CLOSE command
+// CLOSE command - RFC 3501: implicit EXPUNGE before deselecting
 func (s *Session) handleClose() error {
+	if s.selected != nil && s.server.mailstore != nil {
+		s.server.mailstore.Expunge(s.user, s.selected.Name)
+	}
 	s.selected = nil
 	s.state = StateAuthenticated
 	s.WriteResponse(s.tag, "OK CLOSE completed")
@@ -779,10 +883,25 @@ func (s *Session) handleExpunge() error {
 		return nil
 	}
 
-	err := s.server.mailstore.Expunge(s.user, s.selected.Name)
+	// Before expunging, find messages with \Deleted flag to report their
+	// sequence numbers via untagged EXPUNGE responses.
+	criteria := SearchCriteria{Deleted: true}
+	deletedSeqs, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, criteria)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
+	}
+
+	err = s.server.mailstore.Expunge(s.user, s.selected.Name)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	// Send untagged EXPUNGE responses in reverse order (highest seq first)
+	// so that subsequent sequence numbers remain valid during output.
+	for i := len(deletedSeqs) - 1; i >= 0; i-- {
+		s.WriteData(fmt.Sprintf("%d EXPUNGE", deletedSeqs[i]))
 	}
 
 	s.WriteResponse(s.tag, "OK EXPUNGE completed")
@@ -892,9 +1011,14 @@ func (s *Session) handleStore(args []string) error {
 		return nil
 	}
 
-	// If not silent, output updated flags
+	// If not silent, fetch updated messages and output FLAGS responses
 	if !strings.HasSuffix(operation, ".SILENT") {
-		// Would need to fetch and output updated messages
+		messages, fetchErr := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, []string{"FLAGS"})
+		if fetchErr == nil {
+			for _, msg := range messages {
+				s.WriteData(fmt.Sprintf("%d FETCH (FLAGS (%s))", msg.SeqNum, strings.Join(msg.Flags, " ")))
+			}
+		}
 	}
 
 	s.WriteResponse(s.tag, "OK STORE completed")
@@ -1117,11 +1241,22 @@ func formatFetchResponse(msg *Message, items []string) string {
 		case "BODY", "BODYSTRUCTURE":
 			parts = append(parts, fmt.Sprintf("BODYSTRUCTURE (\"TEXT\" \"PLAIN\" NIL NIL NIL \"7BIT\" %d 0)", msg.Size))
 		case "ENVELOPE":
+			fromLocal, fromDomain := splitAddress(msg.From)
+			toLocal, toDomain := splitAddress(msg.To)
 			parts = append(parts, fmt.Sprintf("ENVELOPE (\"%s\" \"%s\" ((\"%s\" NIL \"%s\" \"%s\")) NIL NIL ((\"%s\" NIL \"%s\" \"%s\")) NIL NIL NIL NIL)",
-				msg.Subject, msg.Date, msg.From, strings.Split(msg.From, "@")[0], strings.Split(msg.From, "@")[1],
-				msg.To, strings.Split(msg.To, "@")[0], strings.Split(msg.To, "@")[1]))
+				msg.Subject, msg.Date, msg.From, fromLocal, fromDomain,
+				msg.To, toLocal, toDomain))
 		}
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// splitAddress safely splits an email address into local and domain parts.
+// If the address contains no "@", the domain is returned as empty.
+func splitAddress(addr string) (local, domain string) {
+	if atIdx := strings.LastIndex(addr, "@"); atIdx >= 0 {
+		return addr[:atIdx], addr[atIdx+1:]
+	}
+	return addr, ""
 }
