@@ -80,6 +80,7 @@ func (a *UserAuthenticator) Authenticate(username, password string) (*UserData, 
 
 // AuthenticateWithTOTP performs full authentication including optional TOTP verification.
 // If the user has TOTP enabled, the totpCode parameter must contain a valid TOTP code.
+// TODO: Wire into admin panel and webmail login flow for 2FA support.
 func (a *UserAuthenticator) AuthenticateWithTOTP(username, password, totpCode string) (*UserData, error) {
 	user, err := a.Authenticate(username, password)
 	if err == nil {

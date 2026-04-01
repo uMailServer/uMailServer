@@ -1,5 +1,9 @@
 package auth
 
+// TODO: Wire TOTP 2FA into admin panel authentication flow.
+// GenerateTOTPUri and ValidateTOTPAt provide full TOTP provisioning and
+// verification. They need to be connected to the admin API login flow.
+
 import (
 	"crypto/hmac"
 	"crypto/rand"

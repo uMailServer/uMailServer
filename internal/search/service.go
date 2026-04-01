@@ -188,7 +188,9 @@ func (s *Service) BuildIndex(user string) error {
 	return nil
 }
 
-// IndexMessage adds a message to the search index
+// IndexMessage adds a message to the search index.
+// TODO: Wire into message delivery flow (server.go deliverMessage) so new
+// messages are indexed automatically on receipt.
 func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 	s.mu.RLock()
 	index, exists := s.indexes[user]
@@ -227,7 +229,8 @@ func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 	return nil
 }
 
-// RemoveMessage removes a message from the search index
+// RemoveMessage removes a message from the search index.
+// TODO: Wire into IMAP EXPUNGE and admin message deletion handlers.
 func (s *Service) RemoveMessage(user, folder string, uid uint32) {
 	s.mu.RLock()
 	index, exists := s.indexes[user]

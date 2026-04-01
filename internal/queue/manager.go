@@ -24,7 +24,11 @@ import (
 	"github.com/umailserver/umailserver/internal/store"
 )
 
-// Manager manages the outbound message queue
+// Manager manages the outbound message queue.
+//
+// Admin API methods (GetStats, SetMaxRetries, SetMaxQueueSize, FlushQueue, RetryEntry)
+// are implemented but not yet wired into the admin panel API endpoints.
+// TODO: Expose via /api/v1/admin/queue/* routes.
 type Manager struct {
 	db          *db.DB
 	store       *store.MaildirStore

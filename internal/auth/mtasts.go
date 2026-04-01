@@ -1,5 +1,9 @@
 package auth
 
+// TODO: Wire MTA-STS policy fetching and TLSRPT reporting into outbound SMTP.
+// MTA-STS (RFC 8461) and TLSRPT (RFC 8460) enable TLS policy enforcement and
+// failure reporting. The implementation exists here but is not yet integrated.
+
 import (
 	"context"
 	"crypto/sha256"

@@ -1,5 +1,9 @@
 package auth
 
+// TODO: Wire GenerateDKIMKeyPair and GetPublicKeyForDNS into admin CLI/panel.
+// These DKIM key management utilities are implemented but not yet exposed
+// through the domain setup CLI or admin panel.
+
 import (
 	"crypto"
 	"crypto/rand"

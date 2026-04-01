@@ -168,47 +168,9 @@ func TestStatusItemConsts(t *testing.T) {
 	}
 }
 
-func TestFetchItemConsts(t *testing.T) {
-	if FetchAll != "ALL" {
-		t.Errorf("expected FetchAll ALL, got %s", FetchAll)
-	}
-	if FetchFast != "FAST" {
-		t.Errorf("expected FetchFast FAST, got %s", FetchFast)
-	}
-	if FetchFull != "FULL" {
-		t.Errorf("expected FetchFull FULL, got %s", FetchFull)
-	}
-	if FetchBody != "BODY" {
-		t.Errorf("expected FetchBody BODY, got %s", FetchBody)
-	}
-	if FetchFlags != "FLAGS" {
-		t.Errorf("expected FetchFlags FLAGS, got %s", FetchFlags)
-	}
-	if FetchEnvelope != "ENVELOPE" {
-		t.Errorf("expected FetchEnvelope ENVELOPE, got %s", FetchEnvelope)
-	}
-	if FetchInternalDate != "INTERNALDATE" {
-		t.Errorf("expected FetchInternalDate INTERNALDATE, got %s", FetchInternalDate)
-	}
-	if FetchRFC822 != "RFC822" {
-		t.Errorf("expected FetchRFC822 RFC822, got %s", FetchRFC822)
-	}
-	if FetchUID != "UID" {
-		t.Errorf("expected FetchUID UID, got %s", FetchUID)
-	}
-}
 
-func TestStoreActionConsts(t *testing.T) {
-	if StoreAdd != 0 {
-		t.Errorf("expected StoreAdd 0, got %d", StoreAdd)
-	}
-	if StoreRemove != 1 {
-		t.Errorf("expected StoreRemove 1, got %d", StoreRemove)
-	}
-	if StoreReplace != 2 {
-		t.Errorf("expected StoreReplace 2, got %d", StoreReplace)
-	}
-}
+
+
 
 func TestSearchCriteriaNot(t *testing.T) {
 	inner := &SearchCriteria{Seen: true}

@@ -128,30 +128,4 @@ const (
 	StatusUnseen      StatusItem = "UNSEEN"
 )
 
-// FetchItem represents an item to fetch
-type FetchItem string
 
-const (
-	FetchAll           FetchItem = "ALL"
-	FetchFast          FetchItem = "FAST"
-	FetchFull          FetchItem = "FULL"
-	FetchBody          FetchItem = "BODY"
-	FetchBodyStructure FetchItem = "BODYSTRUCTURE"
-	FetchEnvelope      FetchItem = "ENVELOPE"
-	FetchFlags         FetchItem = "FLAGS"
-	FetchInternalDate  FetchItem = "INTERNALDATE"
-	FetchRFC822        FetchItem = "RFC822"
-	FetchRFC822Header  FetchItem = "RFC822.HEADER"
-	FetchRFC822Size    FetchItem = "RFC822.SIZE"
-	FetchRFC822Text    FetchItem = "RFC822.TEXT"
-	FetchUID           FetchItem = "UID"
-)
-
-// StoreAction represents the action for STORE command
-type StoreAction int
-
-const (
-	StoreAdd StoreAction = iota
-	StoreRemove
-	StoreReplace
-)

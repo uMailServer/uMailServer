@@ -1,5 +1,8 @@
 package config
 
+// TODO: Wire SetupWizard into cmd/umailserver first-run flow and CheckFirstRun/ detection.
+// The interactive wizard guides new admins through initial server setup.
+
 import (
 	"bufio"
 	"fmt"

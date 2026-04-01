@@ -22,6 +22,7 @@ type Scanner struct {
 	timeout     time.Duration
 	enabled     bool
 	action      string // "reject", "quarantine", "tag"
+	dial        func(network, addr string, timeout time.Duration) (net.Conn, error)
 }
 
 // Config holds virus scanner configuration
@@ -45,6 +46,9 @@ func NewScanner(cfg Config) *Scanner {
 		timeout: cfg.Timeout,
 		enabled: cfg.Enabled,
 		action:  cfg.Action,
+		dial: func(network, addr string, timeout time.Duration) (net.Conn, error) {
+			return net.DialTimeout(network, addr, timeout)
+		},
 	}
 }
 
@@ -64,7 +68,7 @@ func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 		return &ScanResult{Infected: false}, nil
 	}
 
-	conn, err := net.DialTimeout("tcp", s.addr, s.timeout)
+	conn, err := s.dial("tcp", s.addr, s.timeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to ClamAV at %s: %w", s.addr, err)
 	}
@@ -152,7 +156,7 @@ func (s *Scanner) ScanVersion() (string, error) {
 		return "", fmt.Errorf("scanner not enabled")
 	}
 
-	conn, err := net.DialTimeout("tcp", s.addr, s.timeout)
+	conn, err := s.dial("tcp", s.addr, s.timeout)
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to ClamAV: %w", err)
 	}
@@ -178,7 +182,7 @@ func (s *Scanner) Ping() error {
 		return fmt.Errorf("scanner not enabled")
 	}
 
-	conn, err := net.DialTimeout("tcp", s.addr, s.timeout)
+	conn, err := s.dial("tcp", s.addr, s.timeout)
 	if err != nil {
 		return fmt.Errorf("ClamAV not reachable at %s: %w", s.addr, err)
 	}

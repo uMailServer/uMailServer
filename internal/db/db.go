@@ -25,8 +25,8 @@ const (
 	BucketUIDNext      = "uidnext"
 	BucketMessageMeta  = "messagemeta"
 	BucketIndex        = "index"
-	BucketContacts     = "contacts"
 	BucketAliases      = "aliases"
+	BucketContacts     = "contacts"
 	BucketACL           = "acl"
 	BucketSubscriptions = "subscriptions"
 )
@@ -97,14 +97,6 @@ type SessionData struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// RateLimitData holds rate limiting counters
-type RateLimitData struct {
-	Key       string    `json:"key"` // ip:port or user@domain
-	Count     int       `json:"count"`
-	WindowStart time.Time `json:"window_start"`
-	LastRequest time.Time `json:"last_request"`
-}
-
 // BlockEntry holds blocklist entries
 type BlockEntry struct {
 	Key       string    `json:"key"` // IP or domain
@@ -113,31 +105,6 @@ type BlockEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
 	Source    string    `json:"source"` // manual, auto
-}
-
-// MessageMeta holds message metadata
-type MessageMeta struct {
-	UID         uint32    `json:"uid"`
-	Filename    string    `json:"filename"`
-	Folder      string    `json:"folder"`
-	Size        int64     `json:"size"`
-	Date        time.Time `json:"date"`
-	Flags       string    `json:"flags"`
-	From        string    `json:"from"`
-	To          []string  `json:"to"`
-	Subject     string    `json:"subject"`
-	MessageID   string    `json:"message_id"`
-	HasAttachment bool  `json:"has_attachment"`
-}
-
-// ContactData holds contact information
-type ContactData struct {
-	Email       string    `json:"email"`
-	Name        string    `json:"name"`
-	Domain      string    `json:"domain"`
-	User        string    `json:"user"`
-	CreatedAt   time.Time `json:"created_at"`
-	LastUsedAt  time.Time `json:"last_used_at"`
 }
 
 // AliasData holds email alias information
@@ -340,6 +307,15 @@ func AccountKey(domain, localPart string) string {
 	return fmt.Sprintf("%s/%s", domain, localPart)
 }
 
+// splitEmail splits an email address into localPart and domain
+func splitEmail(email string) (localPart, domain string) {
+	at := strings.LastIndex(email, "@")
+	if at == -1 {
+		return email, ""
+	}
+	return email[:at], email[at+1:]
+}
+
 // CreateAccount creates a new account
 func (d *DB) CreateAccount(account *AccountData) error {
 	if account.CreatedAt.IsZero() {
@@ -359,6 +335,20 @@ func (d *DB) GetAccount(domain, localPart string) (*AccountData, error) {
 		return nil, err
 	}
 	return &account, nil
+}
+
+// GetUserSecret returns the password hash for a user identified by email address.
+// This is used by CRAM-MD5 authentication where the shared secret is the plaintext
+// password (or a dedicated app secret). The password hash is returned so callers
+// can decide how to use it.
+func (d *DB) GetUserSecret(email string) (string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	localPart, domain := splitEmail(email)
+	account, err := d.GetAccount(domain, localPart)
+	if err != nil {
+		return "", err
+	}
+	return account.PasswordHash, nil
 }
 
 // UpdateAccount updates an existing account

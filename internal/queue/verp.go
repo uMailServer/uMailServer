@@ -46,10 +46,6 @@ func DecodeVERP(bounceAddr string) string {
 	return user + "@" + domain
 }
 
-// IsBounceAddress checks if an address is a VERP-encoded bounce address
-func IsBounceAddress(addr string) bool {
-	return DecodeVERP(addr) != ""
-}
 
 // splitEmail splits an email into user and domain parts
 func splitEmail(email string) (string, string) {

@@ -373,7 +373,8 @@ func parseFailureOptions(s string) []string {
 	return result
 }
 
-// GenerateDMARCReport generates a DMARC aggregate report
+// GenerateDMARCReport generates a DMARC aggregate report.
+// TODO: Wire into a DMARC aggregate report scheduler (RFC 7489) that sends reports to rua=mailto:dmarc@domain.
 func GenerateDMARCReport(domain string, records []DMARCReportRecord) string {
 	// This is a simplified report generator
 	// In production, this would generate XML reports per RFC 7489

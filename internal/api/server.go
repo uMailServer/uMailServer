@@ -1,7 +1,6 @@
 package api
 
 import (
-	_ "embed"
 	"context"
 	"encoding/json"
 	"fmt"

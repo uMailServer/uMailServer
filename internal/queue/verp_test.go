@@ -47,24 +47,7 @@ func TestDecodeVERP(t *testing.T) {
 	}
 }
 
-func TestIsBounceAddress(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected bool
-	}{
-		{"bounce-john=example.com@mail.example.com", true},
-		{"john@example.com", false},
-		{"bounce-invalid@mail.example.com", false},
-		{"", false},
-	}
 
-	for _, tt := range tests {
-		result := IsBounceAddress(tt.input)
-		if result != tt.expected {
-			t.Errorf("IsBounceAddress(%q) = %v, want %v", tt.input, result, tt.expected)
-		}
-	}
-}
 
 func TestVERPRoundTrip(t *testing.T) {
 	recipients := []string{
