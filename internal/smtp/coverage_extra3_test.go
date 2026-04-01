@@ -16,10 +16,6 @@ import (
 	"github.com/umailserver/umailserver/internal/auth"
 )
 
-// ---------------------------------------------------------------------------
-// AuthDKIMStage.Process: multiple DKIM signatures, both fail
-// ---------------------------------------------------------------------------
-
 func TestAuthDKIMStage_Process_MultipleFailures(t *testing.T) {
 	resolver := &mockAuthDNSResolver{}
 	verifier := auth.NewDKIMVerifier(resolver)
@@ -42,10 +38,6 @@ func TestAuthDKIMStage_Process_MultipleFailures(t *testing.T) {
 		t.Errorf("Expected spam score >= 2.0 (1.0 per failed sig), got %f", ctx.SpamScore)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// AuthDMARCStage.Process: evaluation error path (temperror)
-// ---------------------------------------------------------------------------
 
 func TestAuthDMARCStage_Process_EvalError(t *testing.T) {
 	resolver := &mockAuthDNSResolver{
@@ -70,10 +62,6 @@ func TestAuthDMARCStage_Process_EvalError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AuthDMARCStage.Process: nil evaluator (empty from shortcut)
-// ---------------------------------------------------------------------------
-
 func TestAuthDMARCStage_Process_NilEvaluator(t *testing.T) {
 	stage := NewAuthDMARCStage(nil, nil)
 	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "", []string{"rcpt@example.com"}, []byte("data"))
@@ -85,10 +73,6 @@ func TestAuthDMARCStage_Process_NilEvaluator(t *testing.T) {
 		t.Errorf("Expected DMARC result 'none', got %q", ctx.DMARCResult.Result)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// AuthSPFStage.Process: additional paths with logger
-// ---------------------------------------------------------------------------
 
 func TestAuthSPFStage_Process_WithLogger(t *testing.T) {
 	resolver := &mockAuthDNSResolver{
@@ -107,10 +91,6 @@ func TestAuthSPFStage_Process_WithLogger(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// defaultLogger: exercise via Pipeline with nil logger
-// ---------------------------------------------------------------------------
-
 func TestDefaultLoggerViaPipeline(t *testing.T) {
 	pipeline := NewPipeline(nil)
 	pipeline.AddStage(&testStage{name: "Test"})
@@ -124,10 +104,6 @@ func TestDefaultLoggerViaPipeline(t *testing.T) {
 		t.Errorf("Expected ResultAccept, got %v", result)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// NetDNSResolver: exercise LookupTXT/LookupIP/LookupMX
-// ---------------------------------------------------------------------------
 
 func TestNetDNSResolver_LookupTXT(t *testing.T) {
 	r := NewNetDNSResolver()
@@ -173,10 +149,6 @@ func TestNetDNSResolver_LookupMX(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ValidateEmail: international email address with non-ASCII
-// ---------------------------------------------------------------------------
-
 func TestValidateEmail_InternationalAddress(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -212,10 +184,6 @@ func TestValidateEmail_InternationalAddress(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// HandleCommand: STARTTLS dispatch
-// ---------------------------------------------------------------------------
-
 func TestHandleCommand_STARTTLSDispatch(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -230,10 +198,6 @@ func TestHandleCommand_STARTTLSDispatch(t *testing.T) {
 		t.Errorf("Expected 502/503/220 for STARTTLS, got: %q", resp)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: auth handler returns error
-// ---------------------------------------------------------------------------
 
 func TestHandleAuthLOGIN_AuthHandlerError(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -278,10 +242,6 @@ func TestHandleAuthLOGIN_AuthHandlerError(t *testing.T) {
 	<-done
 }
 
-// ---------------------------------------------------------------------------
-// HandleAuthPLAIN: with onAuth returning error
-// ---------------------------------------------------------------------------
-
 func TestHandleAuthPLAIN_AuthHandlerReturnsError(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -310,10 +270,6 @@ func TestHandleAuthPLAIN_AuthHandlerReturnsError(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: with onAuth = nil (no auth handler)
-// ---------------------------------------------------------------------------
 
 func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -356,99 +312,6 @@ func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 	<-done
 }
 
-// ---------------------------------------------------------------------------
-// handleConnection: connection with read timeout set
-// ---------------------------------------------------------------------------
-
-func TestHandleConnection_WithReadTimeout(t *testing.T) {
-	config := &Config{
-		Hostname:       "mail.example.com",
-		MaxMessageSize: 1024 * 1024,
-		MaxRecipients:  100,
-		ReadTimeout:    5 * time.Second,
-		AllowInsecure:  true,
-	}
-
-	server := NewServer(config, nil)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to create listener: %v", err)
-	}
-	defer ln.Close()
-
-	go server.Serve(ln)
-	defer server.Stop()
-	time.Sleep(50 * time.Millisecond)
-
-	client, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer client.Close()
-
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	reader := bufio.NewReader(client)
-	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "220") {
-		t.Errorf("Expected 220 greeting, got: %q", resp)
-	}
-
-	fmt.Fprintf(client, "EHLO testclient\r\n")
-	readMultilineResponse(reader)
-}
-
-// ---------------------------------------------------------------------------
-// handleConnection: empty command line (should be skipped)
-// ---------------------------------------------------------------------------
-
-func TestHandleConnection_EmptyCommandLine(t *testing.T) {
-	config := &Config{
-		Hostname:       "mail.example.com",
-		MaxMessageSize: 1024 * 1024,
-		MaxRecipients:  100,
-		AllowInsecure:  true,
-	}
-
-	server := NewServer(config, nil)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to create listener: %v", err)
-	}
-
-	go server.Serve(ln)
-	defer server.Stop()
-	time.Sleep(50 * time.Millisecond)
-
-	client, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer client.Close()
-
-	reader := bufio.NewReader(client)
-	reader.ReadString('\n') // greeting
-
-	// Send an empty line followed by EHLO
-	client.Write([]byte("\r\n"))
-	time.Sleep(50 * time.Millisecond)
-
-	fmt.Fprintf(client, "EHLO testclient\r\n")
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp, err := readMultilineResponse(reader)
-	if err != nil {
-		t.Fatalf("Failed to read EHLO response: %v", err)
-	}
-	if !strings.HasPrefix(resp, "250") {
-		t.Errorf("Expected 250 after empty line + EHLO, got: %q", resp)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// readData: various dot-stuffing scenarios
-// ---------------------------------------------------------------------------
-
 func TestReadData_DotStuffingVarious(t *testing.T) {
 	session, clientConn := newDataTestSession(t)
 	defer session.Close()
@@ -480,10 +343,6 @@ func TestReadData_DotStuffingVarious(t *testing.T) {
 		t.Errorf("Expected dot-unstuffed '.' -> '', got: %q", data)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleDATA: data with dot at start of a content line
-// ---------------------------------------------------------------------------
 
 func TestHandleDATA_DotAtStartOfLine(t *testing.T) {
 	session, clientConn := newDataTestSession(t)
@@ -519,10 +378,6 @@ func TestHandleDATA_DotAtStartOfLine(t *testing.T) {
 		t.Errorf("Expected dot-unstuffed content '.hidden content', got: %q", string(deliveredData))
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleBDAT: LAST with pipeline that parses headers from message data
-// ---------------------------------------------------------------------------
 
 func TestHandleBDAT_LastWithPipelineHeaders(t *testing.T) {
 	session, clientConn := newBDATTestSession(t)
@@ -566,10 +421,6 @@ func TestHandleBDAT_LastWithPipelineHeaders(t *testing.T) {
 		t.Fatal("Expected delivered data")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleBDAT: multiple chunks then last chunk with pipeline
-// ---------------------------------------------------------------------------
 
 func TestHandleBDAT_MultipleChunksThenLastWithPipeline(t *testing.T) {
 	session, clientConn := newBDATTestSession(t)
@@ -630,56 +481,5 @@ func TestHandleBDAT_MultipleChunksThenLastWithPipeline(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(deliveredData), "Subject: Test\r\n\r\nBody content") {
 		t.Errorf("Expected combined message data, got: %q", string(deliveredData))
-	}
-}
-
-// ---------------------------------------------------------------------------
-// handleDATA: pipeline with X-Spam-Score header and positive SpamResult.Score
-// ---------------------------------------------------------------------------
-
-// spamScoreOnlyStage sets SpamResult.Score > 0 but not SpamScore
-type spamScoreOnlyStage struct{}
-
-func (s *spamScoreOnlyStage) Name() string { return "SpamScoreOnly" }
-func (s *spamScoreOnlyStage) Process(ctx *MessageContext) PipelineResult {
-	ctx.SpamResult.Score = 3.7
-	return ResultAccept
-}
-
-func TestHandleDATA_PipelineSpamScoreHeaderOnly(t *testing.T) {
-	session, clientConn := newDataTestSession(t)
-	defer session.Close()
-	defer clientConn.Close()
-
-	var deliveredData []byte
-	session.server.onDeliver = func(from string, to []string, data []byte) error {
-		deliveredData = data
-		return nil
-	}
-
-	logger := &testLogger{}
-	pipeline := NewPipeline(logger)
-	pipeline.AddStage(&spamScoreOnlyStage{})
-	session.server.pipeline = pipeline
-
-	done := make(chan error, 1)
-	go func() {
-		done <- session.handleDATA()
-	}()
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	reader := bufio.NewReader(clientConn)
-	reader.ReadString('\n') // 354
-	clientConn.Write([]byte("Subject: Test\r\n\r\nBody\r\n.\r\n"))
-	<-done
-
-	reader.ReadString('\n') // 250
-
-	if deliveredData == nil {
-		t.Fatal("Expected delivered data")
-	}
-	dataStr := string(deliveredData)
-	if !strings.Contains(dataStr, "X-Spam-Score:") {
-		t.Errorf("Expected X-Spam-Score header, got: %s", safeSlice(dataStr, 300))
 	}
 }

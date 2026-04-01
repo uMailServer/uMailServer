@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,112 +10,12 @@ import (
 	"time"
 )
 
-// TestCreateDomainSaveErrorWindows tests the error branch in CreateDomain
-// where SaveDomain fails after creating the settings object.
-func TestCreateDomainSaveErrorWindows(t *testing.T) {
-	tmpDir := t.TempDir()
-	dm := NewDomainManager(tmpDir)
-	if err := dm.Init(); err != nil {
-		t.Fatalf("Init failed: %v", err)
-	}
+type errorReader struct{}
 
-	// Use a null byte in the file path to cause WriteFile to fail.
-	// Override the baseDir to an invalid path.
-	dm.baseDir = string([]byte{0})
-
-	_, err := dm.CreateDomain("fail.com")
-	if err == nil {
-		t.Error("expected error when CreateDomain cannot write file")
-	}
+func (e *errorReader) Read(p []byte) (int, error) {
+	return 0, os.ErrClosed
 }
 
-// TestSaveDomainMarshalError is a conceptual test -- the yaml.Marshal
-// shouldn't fail with valid data but we cover the error return path.
-func TestSaveDomainWriteFailure(t *testing.T) {
-	tmpDir := t.TempDir()
-	dm := NewDomainManager(tmpDir)
-	dm.Init()
-
-	settings := &DomainSettings{
-		Name:        "writetest.com",
-		MaxAccounts: 10,
-		IsActive:    true,
-	}
-
-	// Point baseDir at a path containing null bytes so os.WriteFile fails
-	dm.baseDir = string([]byte{0}) + "/invalid"
-	err := dm.SaveDomain(settings)
-	if err == nil {
-		t.Error("expected error when SaveDomain writes to invalid path")
-	}
-}
-
-// TestListDomainsReadDirNonNotExistsError covers the branch where
-// os.ReadDir returns a non-IsNotExist error (e.g. the path is a file).
-func TestListDomainsReadDirNonNotExistsError(t *testing.T) {
-	// On Windows, os.ReadDir on a file may not error, so skip
-	if os.PathSeparator == '\\' {
-		t.Skip("os.ReadDir on a file behaves differently on Windows")
-	}
-	tmpDir := t.TempDir()
-	// Create a file where the domains directory is expected
-	filePath := filepath.Join(tmpDir, "domains")
-	os.WriteFile(filePath, []byte("not a dir"), 0644)
-
-	dm := &DomainManager{baseDir: filePath}
-
-	_, err := dm.ListDomains()
-	if err == nil {
-		t.Error("expected error when ReadDir on a file")
-	}
-}
-
-// TestGetAllDomainsLoadDomainError covers the branch where ListDomains
-// returns an error in GetAllDomains.
-func TestGetAllDomainsListDomainsError(t *testing.T) {
-	if os.PathSeparator == '\\' {
-		t.Skip("os.ReadDir on a file behaves differently on Windows")
-	}
-	tmpDir := t.TempDir()
-	filePath := filepath.Join(tmpDir, "domains")
-	os.WriteFile(filePath, []byte("not a dir"), 0644)
-
-	dm := &DomainManager{baseDir: filePath}
-
-	_, err := dm.GetAllDomains()
-	if err == nil {
-		t.Error("expected error when ListDomains fails in GetAllDomains")
-	}
-}
-
-// TestImportFromMainConfigSaveError covers the error branch in ImportFromMainConfig
-// where SaveDomain fails.
-func TestImportFromMainConfigSaveDomainError(t *testing.T) {
-	tmpDir := t.TempDir()
-	dm := NewDomainManager(tmpDir)
-	dm.Init()
-
-	cfg := DefaultConfig()
-	cfg.Domains = []DomainConfig{
-		{
-			Name:          "import.com",
-			MaxAccounts:   10,
-			MaxMailboxSize: 1 * GB,
-			DKIM:          DomainDKIMConfig{Selector: "sel"},
-		},
-	}
-
-	// Make baseDir unwritable
-	dm.baseDir = string([]byte{0}) + "/invalid"
-
-	err := dm.ImportFromMainConfig(cfg)
-	if err == nil {
-		t.Error("expected error when SaveDomain fails in ImportFromMainConfig")
-	}
-}
-
-// TestSetupWizardRunHostnameError covers the error branch in Run()
-// where askString for hostname returns an error.
 func TestSetupWizardRunHostnameError(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -133,7 +32,6 @@ func TestSetupWizardRunHostnameError(t *testing.T) {
 	}
 }
 
-// TestSetupWizardRunDataDirMkdirError covers the MkdirAll error path.
 func TestSetupWizardRunDataDirMkdirError(t *testing.T) {
 	// Provide a data directory with null byte
 	input := string([]byte{0}) + "\n"
@@ -147,8 +45,6 @@ func TestSetupWizardRunDataDirMkdirError(t *testing.T) {
 	}
 }
 
-// TestSetupWizardRunSMTPPortBranch tests that POP3 and admin port branches are covered
-// when enabled.
 func TestSetupWizardRunPOP3Enabled(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -187,7 +83,6 @@ func TestSetupWizardRunPOP3Enabled(t *testing.T) {
 	}
 }
 
-// TestSetupWizardRunACMEDisabled tests the non-ACME branch.
 func TestSetupWizardRunACMEDisabled(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -215,7 +110,6 @@ func TestSetupWizardRunACMEDisabled(t *testing.T) {
 	}
 }
 
-// TestSetupWizardRunSpamEnabled covers the spam configuration branch.
 func TestSetupWizardRunSpamEnabled(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -251,7 +145,6 @@ func TestSetupWizardRunSpamEnabled(t *testing.T) {
 	}
 }
 
-// TestSetupWizardSaveError covers Save() returning an error.
 func TestSetupWizardSaveError(t *testing.T) {
 	wizard := NewSetupWizard()
 	wizard.Config.Server.DataDir = string([]byte{0})
@@ -263,7 +156,6 @@ func TestSetupWizardSaveError(t *testing.T) {
 	}
 }
 
-// TestGetDefaultDataDirFallback covers the fallback when UserHomeDir fails.
 func TestGetDefaultDataDirFallback(t *testing.T) {
 	// Save original
 	origXDG := os.Getenv("XDG_DATA_HOME")
@@ -278,7 +170,6 @@ func TestGetDefaultDataDirFallback(t *testing.T) {
 	}
 }
 
-// TestParseSizeDefaultCase tests the default switch case for unknown units.
 func TestParseSizeDefaultCase(t *testing.T) {
 	// The regex `^(\d+(?:\.\d+)?)\s*([KMGT]B?|B?)$` matches things like "1PB"
 	// but PB is not in the switch. However, "P" or "PB" won't match the regex
@@ -291,7 +182,6 @@ func TestParseSizeDefaultCase(t *testing.T) {
 	}
 }
 
-// TestParseSizeFloatError tests the branch where ParseFloat fails.
 func TestParseSizeFloatError(t *testing.T) {
 	// This is hard to trigger because the regex validates the number format
 	// Just verify that valid float values work
@@ -304,7 +194,6 @@ func TestParseSizeFloatError(t *testing.T) {
 	}
 }
 
-// TestLoadSectionFromEnvCantSet covers the !field.CanSet() branch.
 func TestLoadSectionFromEnvCantSet(t *testing.T) {
 	// Create a struct with an unexported field
 	type myStruct struct {
@@ -320,7 +209,6 @@ func TestLoadSectionFromEnvCantSet(t *testing.T) {
 	}
 }
 
-// TestLoadSectionFromEnvRecursive tests the recursive call for nested structs.
 func TestLoadSectionFromEnvRecursive(t *testing.T) {
 	os.Setenv("UMAILSERVER_SERVER_HOSTNAME", "recursive.example.com")
 	os.Setenv("UMAILSERVER_SERVER_DATADIR", "/test/data")
@@ -340,7 +228,6 @@ func TestLoadSectionFromEnvRecursive(t *testing.T) {
 	}
 }
 
-// TestSetupWizardRunFormatChoice tests the log format choice branch.
 func TestSetupWizardRunFormatChoice(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -372,7 +259,6 @@ func TestSetupWizardRunFormatChoice(t *testing.T) {
 	}
 }
 
-// TestSetupWizardRunEnsureDataDirError covers the EnsureDataDir error path.
 func TestSetupWizardRunEnsureDataDirError(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -404,7 +290,6 @@ func TestSetupWizardRunEnsureDataDirError(t *testing.T) {
 	_ = cfg
 }
 
-// TestSetupWizardRunWithACMEEmail tests the ACME email branch.
 func TestSetupWizardRunWithACMEEmail(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -437,7 +322,6 @@ func TestSetupWizardRunWithACMEEmail(t *testing.T) {
 	}
 }
 
-// TestSetupWizardSaveAndVerifyConfig tests that Save writes valid YAML.
 func TestSetupWizardSaveAndVerifyConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	wizard := NewSetupWizard()
@@ -461,7 +345,6 @@ func TestSetupWizardSaveAndVerifyConfig(t *testing.T) {
 	}
 }
 
-// TestAskStringWithReaderError tests askString when reader returns error.
 func TestAskStringWithReaderError(t *testing.T) {
 	wizard := NewSetupWizard()
 	// Use a reader that will error
@@ -473,14 +356,6 @@ func TestAskStringWithReaderError(t *testing.T) {
 	}
 }
 
-// errorReader is a reader that always returns an error.
-type errorReader struct{}
-
-func (r *errorReader) Read(p []byte) (int, error) {
-	return 0, fmt.Errorf("read error")
-}
-
-// TestRunDataDirQuestionError tests Run when askString for data dir fails.
 func TestRunDataDirQuestionError(t *testing.T) {
 	wizard := NewSetupWizard()
 	wizard.reader = bufio.NewReader(&errorReader{})
@@ -491,7 +366,6 @@ func TestRunDataDirQuestionError(t *testing.T) {
 	}
 }
 
-// TestSetupWizardRunWithACMEEmptyEmail tests ACME with empty email input.
 func TestSetupWizardRunWithACMEEmptyEmail(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -521,7 +395,6 @@ func TestSetupWizardRunWithACMEEmptyEmail(t *testing.T) {
 	}
 }
 
-// TestSizeStringBytes tests the default branch of Size.String() for non-exact sizes.
 func TestSizeStringBytes(t *testing.T) {
 	s := Size(1536) // 1.5KB, not exact
 	result := s.String()
@@ -530,7 +403,6 @@ func TestSizeStringBytes(t *testing.T) {
 	}
 }
 
-// TestParseSizeEmptyString tests ParseSize with empty string.
 func TestParseSizeEmptyString(t *testing.T) {
 	size, err := ParseSize("")
 	if err != nil {
@@ -541,7 +413,6 @@ func TestParseSizeEmptyString(t *testing.T) {
 	}
 }
 
-// TestParseSizeJustNumber tests ParseSize with a plain number.
 func TestParseSizeJustNumber(t *testing.T) {
 	size, err := ParseSize("4096")
 	if err != nil {
@@ -552,7 +423,6 @@ func TestParseSizeJustNumber(t *testing.T) {
 	}
 }
 
-// TestDurationParseViaEnv tests that Duration can be set via env with nanoseconds.
 func TestDurationParseViaEnv(t *testing.T) {
 	os.Setenv("UMAILSERVER_SPAM_GREYLISTING_DELAY", "300000000000") // 5m in ns
 	defer os.Unsetenv("UMAILSERVER_SPAM_GREYLISTING_DELAY")
@@ -567,7 +437,6 @@ func TestDurationParseViaEnv(t *testing.T) {
 	}
 }
 
-// TestValidateInboundSMTPDisabled tests that validation passes when SMTP inbound is disabled.
 func TestValidateInboundSMTPDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SMTP.Inbound.Enabled = false
@@ -578,7 +447,6 @@ func TestValidateInboundSMTPDisabled(t *testing.T) {
 	}
 }
 
-// TestValidateSubmissionDisabled tests that validation passes when SMTP submission is disabled.
 func TestValidateSubmissionDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.SMTP.Submission.Enabled = false
@@ -589,7 +457,6 @@ func TestValidateSubmissionDisabled(t *testing.T) {
 	}
 }
 
-// TestValidateIMAPDisabled tests that validation passes when IMAP is disabled.
 func TestValidateIMAPDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.IMAP.Enabled = false
@@ -600,7 +467,6 @@ func TestValidateIMAPDisabled(t *testing.T) {
 	}
 }
 
-// TestParseSizeWithSpaces tests ParseSize with spaces.
 func TestParseSizeWithSpaces(t *testing.T) {
 	size, err := ParseSize("  5GB  ")
 	if err != nil {
@@ -611,7 +477,6 @@ func TestParseSizeWithSpaces(t *testing.T) {
 	}
 }
 
-// TestParseSizeLowercase tests ParseSize with lowercase input.
 func TestParseSizeLowercase(t *testing.T) {
 	size, err := ParseSize("5gb")
 	if err != nil {

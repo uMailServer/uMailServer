@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"

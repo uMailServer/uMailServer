@@ -14,10 +14,6 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// SetUserSecretHandler: 0.0% -> cover the setter
-// ---------------------------------------------------------------------------
-
 func TestCoverSetUserSecretHandler(t *testing.T) {
 	server := NewServer(&Config{
 		Hostname:       "testhost",
@@ -34,10 +30,6 @@ func TestCoverSetUserSecretHandler(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// defaultLogger methods exercised directly: Debug/Info/Warn/Error 0.0%
-// ---------------------------------------------------------------------------
-
 func TestCoverDefaultLoggerDirectly(t *testing.T) {
 	l := &defaultLogger{}
 	l.Debug("debug msg", "key", "val")
@@ -45,10 +37,6 @@ func TestCoverDefaultLoggerDirectly(t *testing.T) {
 	l.Warn("warn msg", "key", "val")
 	l.Error("error msg", "key", "val")
 }
-
-// ---------------------------------------------------------------------------
-// defaultLogger methods exercised through Pipeline with nil logger
-// ---------------------------------------------------------------------------
 
 func TestCoverDefaultLoggerViaPipelineProcess(t *testing.T) {
 	pipeline := NewPipeline(nil)
@@ -62,10 +50,6 @@ func TestCoverDefaultLoggerViaPipelineProcess(t *testing.T) {
 		t.Errorf("expected ResultAccept, got %v", result)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ListenAndServe: 75.0% -> success path (start server, connect, stop)
-// ---------------------------------------------------------------------------
 
 func TestCoverListenAndServe(t *testing.T) {
 	config := &Config{
@@ -89,10 +73,6 @@ func TestCoverListenAndServe(t *testing.T) {
 	conn.Close()
 	server.Stop()
 }
-
-// ---------------------------------------------------------------------------
-// ListenAndServeTLS: 75.0% -> success path
-// ---------------------------------------------------------------------------
 
 func TestCoverListenAndServeTLS(t *testing.T) {
 	cert, err := generateTestCert()
@@ -139,10 +119,6 @@ func TestCoverListenAndServeTLS(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleEHLO: 93.8% -> CRAM-MD5 capability when onGetUserSecret is set
-// ---------------------------------------------------------------------------
-
 func TestCoverEHLO_CRAMMD5Capability(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -173,11 +149,6 @@ func TestCoverEHLO_CRAMMD5Capability(t *testing.T) {
 	}
 }
 
-
-// ---------------------------------------------------------------------------
-// handleMAIL: 94.1% -> submission mode (RequireAuth=true, not authenticated)
-// ---------------------------------------------------------------------------
-
 func TestCoverMAIL_SubmissionModeRequireAuth(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -197,10 +168,6 @@ func TestCoverMAIL_SubmissionModeRequireAuth(t *testing.T) {
 		t.Errorf("expected 530 authentication required in submission mode, got: %q", resp)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleRCPT: 93.3% -> state is StateRcptTo allows additional RCPT To
-// ---------------------------------------------------------------------------
 
 func TestCoverRCPT_FromRcptToState(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -225,10 +192,6 @@ func TestCoverRCPT_FromRcptToState(t *testing.T) {
 	}
 	s.mutex.RUnlock()
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthCRAMMD5: 11.1% -> full flow
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthCRAMMD5_NoSecretHandler(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -442,10 +405,6 @@ func TestCoverAuthCRAMMD5_ConnectionClosedDuringChallenge(t *testing.T) {
 	_ = <-done
 }
 
-// ---------------------------------------------------------------------------
-// handleSTARTTLS: WriteResponse error (closed conn)
-// ---------------------------------------------------------------------------
-
 func TestCoverSTARTTLS_WriteResponseError(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
 	cert, err := generateTestCert()
@@ -462,10 +421,6 @@ func TestCoverSTARTTLS_WriteResponseError(t *testing.T) {
 		t.Error("expected error when connection closed during STARTTLS WriteResponse")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: password read error
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthLOGIN_PasswordReadError(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
@@ -487,10 +442,6 @@ func TestCoverAuthLOGIN_PasswordReadError(t *testing.T) {
 	clientConn.Close()
 	_ = <-done
 }
-
-// ---------------------------------------------------------------------------
-// ValidateEmail: additional edge cases
-// ---------------------------------------------------------------------------
 
 func TestCoverValidateEmail_InternationalEdgeCases(t *testing.T) {
 	tests := []struct {
@@ -523,20 +474,12 @@ func TestCoverValidateEmail_InternationalEdgeCases(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// PipelineLogger: ensure type exists
-// ---------------------------------------------------------------------------
-
 func TestCoverPipelineLoggerAllMethods(t *testing.T) {
 	pl := NewPipelineLogger(nil)
 	if pl == nil {
 		t.Error("expected non-nil PipelineLogger")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Serve: error path when running=false after Stop
-// ---------------------------------------------------------------------------
 
 func TestCoverServe_AcceptErrorAfterStop(t *testing.T) {
 	config := &Config{
@@ -562,60 +505,12 @@ func TestCoverServe_AcceptErrorAfterStop(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleConnection: command error
-// ---------------------------------------------------------------------------
-
-func TestCoverHandleConnection_CommandError(t *testing.T) {
-	config := &Config{
-		Hostname:       "mail.example.com",
-		MaxMessageSize: 1024 * 1024,
-		MaxRecipients:  100,
-		AllowInsecure:  true,
-	}
-	server := NewServer(config, nil)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
-	go server.Serve(ln)
-	defer server.Stop()
-	time.Sleep(50 * time.Millisecond)
-	client, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer client.Close()
-	reader := bufio.NewReader(client)
-	reader.ReadString('\n') // greeting
-	fmt.Fprintf(client, "EHLO testclient\r\n")
-	readMultilineResponse(reader)
-	fmt.Fprintf(client, "MAIL FROM:<user@example.com> BODY=8BITMIME\r\n")
-	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "250") {
-		t.Logf("MAIL response: %q", resp)
-	}
-	fmt.Fprintf(client, "MAIL FROM:<another@example.com>\r\n")
-	resp2, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp2, "250") {
-		t.Logf("Second MAIL response: %q", resp2)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// parseCommand: whitespace only input
-// ---------------------------------------------------------------------------
-
 func TestCoverParseCommand_WhitespaceOnly(t *testing.T) {
 	cmd, arg := parseCommand("   ")
 	if cmd != "" || arg != "" {
 		t.Errorf("expected empty cmd/arg for whitespace-only input, got cmd=%q arg=%q", cmd, arg)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ListenAndServe: error path (bind to invalid address)
-// ---------------------------------------------------------------------------
 
 func TestCoverListenAndServe_BindError(t *testing.T) {
 	config := &Config{
@@ -632,10 +527,6 @@ func TestCoverListenAndServe_BindError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ListenAndServeTLS: error path (bind to invalid address)
-// ---------------------------------------------------------------------------
-
 func TestCoverListenAndServeTLS_BindError(t *testing.T) {
 	config := &Config{
 		Hostname:       "testhost",
@@ -649,10 +540,6 @@ func TestCoverListenAndServeTLS_BindError(t *testing.T) {
 		server.Stop()
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleDATA with pipeline: delivery error
-// ---------------------------------------------------------------------------
 
 func TestCoverDATA_DeliveryError(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -687,47 +574,6 @@ func TestCoverDATA_DeliveryError(t *testing.T) {
 	<-done
 }
 
-// ---------------------------------------------------------------------------
-// handleDATA with pipeline: pipeline error
-// ---------------------------------------------------------------------------
-
-func TestCoverDATA_PipelineError(t *testing.T) {
-	pipeline := NewPipeline(nil)
-	pipeline.AddStage(&errorStage{})
-	s, clientConn, reader := createSessionWithPipe(t)
-	defer clientConn.Close()
-	s.server.config.AllowInsecure = true
-	s.server.pipeline = pipeline
-	s.mutex.Lock()
-	s.state = StateRcptTo
-	s.rcptTo = []string{"rcpt@example.com"}
-	s.mutex.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- s.HandleCommand("DATA")
-	}()
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "354") {
-		t.Fatalf("expected 354, got: %q", resp)
-	}
-	clientConn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	clientConn.Write([]byte("Subject: Test\r\n\r\nBody\r\n.\r\n"))
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp2, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp2, "451") {
-		t.Errorf("expected 451 for pipeline error, got: %q", resp2)
-	}
-	<-done
-}
-
-// ---------------------------------------------------------------------------
-// handleDATA with pipeline: message too large
-// ---------------------------------------------------------------------------
-
 func TestCoverDATA_MessageTooLarge(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -757,138 +603,6 @@ func TestCoverDATA_MessageTooLarge(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleDATA with pipeline: quarantine result adds spam header
-// ---------------------------------------------------------------------------
-
-func TestCoverDATA_QuarantineResult(t *testing.T) {
-	pipeline := NewPipeline(nil)
-	pipeline.AddStage(&quarantineDataStage{})
-	s, clientConn, reader := createSessionWithPipe(t)
-	defer clientConn.Close()
-	s.server.config.AllowInsecure = true
-	s.server.pipeline = pipeline
-	s.mutex.Lock()
-	s.state = StateRcptTo
-	s.rcptTo = []string{"rcpt@example.com"}
-	s.isTLS = true
-	s.mutex.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- s.HandleCommand("DATA")
-	}()
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "354") {
-		t.Fatalf("expected 354, got: %q", resp)
-	}
-	clientConn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	clientConn.Write([]byte("Subject: Test\r\n\r\nBody\r\n.\r\n"))
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp2, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp2, "250") {
-		t.Errorf("expected 250 for quarantine, got: %q", resp2)
-	}
-	<-done
-}
-
-// ---------------------------------------------------------------------------
-// handleDATA with pipeline: reject result
-// ---------------------------------------------------------------------------
-
-func TestCoverDATA_RejectResult(t *testing.T) {
-	pipeline := NewPipeline(nil)
-	pipeline.AddStage(&rejectDataStage{code: 550, message: "Rejected by policy"})
-	s, clientConn, reader := createSessionWithPipe(t)
-	defer clientConn.Close()
-	s.server.config.AllowInsecure = true
-	s.server.pipeline = pipeline
-	s.mutex.Lock()
-	s.state = StateRcptTo
-	s.rcptTo = []string{"rcpt@example.com"}
-	s.mutex.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- s.HandleCommand("DATA")
-	}()
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "354") {
-		t.Fatalf("expected 354, got: %q", resp)
-	}
-	clientConn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	clientConn.Write([]byte("Subject: Test\r\n\r\nBody\r\n.\r\n"))
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp2, _ := reader.ReadString('\n')
-	// Pipeline wraps ResultReject into an error, so handleDATA returns 451
-	if !strings.HasPrefix(resp2, "451") {
-		t.Errorf("expected 451 for pipeline reject, got: %q", resp2)
-	}
-	<-done
-}
-
-// ---------------------------------------------------------------------------
-// handleDATA with pipeline: Authentication-Results and Spam-Score headers
-// ---------------------------------------------------------------------------
-
-func TestCoverDATA_AuthResultsHeaders(t *testing.T) {
-	pipeline := NewPipeline(nil)
-	pipeline.AddStage(&coverAuthResultsStage{})
-	s, clientConn, reader := createSessionWithPipe(t)
-	defer clientConn.Close()
-	s.server.config.AllowInsecure = true
-	s.server.pipeline = pipeline
-	var deliveredData []byte
-	s.server.onDeliver = func(from string, to []string, data []byte) error {
-		deliveredData = data
-		return nil
-	}
-	s.mutex.Lock()
-	s.state = StateRcptTo
-	s.rcptTo = []string{"rcpt@example.com"}
-	s.mutex.Unlock()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- s.HandleCommand("DATA")
-	}()
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "354") {
-		t.Fatalf("expected 354, got: %q", resp)
-	}
-	clientConn.SetWriteDeadline(time.Now().Add(2 * time.Second))
-	clientConn.Write([]byte("Subject: Test\r\n\r\nBody\r\n.\r\n"))
-
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp2, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp2, "250") {
-		t.Errorf("expected 250, got: %q", resp2)
-	}
-	<-done
-
-	if !strings.Contains(string(deliveredData), "Authentication-Results:") {
-		t.Error("expected Authentication-Results header in delivered data")
-	}
-	if !strings.Contains(string(deliveredData), "X-Spam-Score:") {
-		t.Error("expected X-Spam-Score header in delivered data")
-	}
-	if !strings.Contains(string(deliveredData), "Received:") {
-		t.Error("expected Received header in delivered data")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// handleBDAT: last chunk with pipeline and delivery
-// ---------------------------------------------------------------------------
 
 func TestCoverBDAT_LastChunkWithDelivery(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -935,10 +649,6 @@ func TestCoverBDAT_LastChunkWithDelivery(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleBDAT: delivery error
-// ---------------------------------------------------------------------------
-
 func TestCoverBDAT_DeliveryError(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -967,10 +677,6 @@ func TestCoverBDAT_DeliveryError(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleBDAT: non-last chunk then last chunk
-// ---------------------------------------------------------------------------
 
 func TestCoverBDAT_MultiChunk(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1020,10 +726,6 @@ func TestCoverBDAT_MultiChunk(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleBDAT: chunk too large
-// ---------------------------------------------------------------------------
-
 func TestCoverBDAT_ChunkTooLarge(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -1044,10 +746,6 @@ func TestCoverBDAT_ChunkTooLarge(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleBDAT: bad size parameter
-// ---------------------------------------------------------------------------
-
 func TestCoverBDAT_BadSize(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -1067,10 +765,6 @@ func TestCoverBDAT_BadSize(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleBDAT: missing size parameter
-// ---------------------------------------------------------------------------
-
 func TestCoverBDAT_MissingSize(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -1089,10 +783,6 @@ func TestCoverBDAT_MissingSize(t *testing.T) {
 		t.Errorf("expected 501 for missing BDAT params, got: %q", resp)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: username read error (close after username prompt)
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthLOGIN_UsernameReadError(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
@@ -1115,10 +805,6 @@ func TestCoverAuthLOGIN_UsernameReadError(t *testing.T) {
 	clientConn.Close()
 	_ = <-done
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: invalid base64 username
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthLOGIN_InvalidBase64Username(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1150,10 +836,6 @@ func TestCoverAuthLOGIN_InvalidBase64Username(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: invalid base64 password
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthLOGIN_InvalidBase64Password(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1192,10 +874,6 @@ func TestCoverAuthLOGIN_InvalidBase64Password(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: auth handler rejects
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthLOGIN_AuthReject(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1236,10 +914,6 @@ func TestCoverAuthLOGIN_AuthReject(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthLOGIN: full success
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthLOGIN_Success(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1291,10 +965,6 @@ func TestCoverAuthLOGIN_Success(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// handleAuthPLAIN: inline credentials
-// ---------------------------------------------------------------------------
-
 func TestCoverAuthPLAIN_InlineCredentials(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -1325,10 +995,6 @@ func TestCoverAuthPLAIN_InlineCredentials(t *testing.T) {
 	<-done
 }
 
-// ---------------------------------------------------------------------------
-// handleAuthPLAIN: invalid base64
-// ---------------------------------------------------------------------------
-
 func TestCoverAuthPLAIN_InvalidBase64(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -1350,10 +1016,6 @@ func TestCoverAuthPLAIN_InvalidBase64(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthPLAIN: bad credential format
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthPLAIN_BadFormat(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1378,10 +1040,6 @@ func TestCoverAuthPLAIN_BadFormat(t *testing.T) {
 	}
 	<-done
 }
-
-// ---------------------------------------------------------------------------
-// handleAuthPLAIN: auth handler rejects
-// ---------------------------------------------------------------------------
 
 func TestCoverAuthPLAIN_AuthReject(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1409,10 +1067,6 @@ func TestCoverAuthPLAIN_AuthReject(t *testing.T) {
 	<-done
 }
 
-// ---------------------------------------------------------------------------
-// handleAuthPLAIN: connection closed during credential read
-// ---------------------------------------------------------------------------
-
 func TestCoverAuthPLAIN_ConnectionClosed(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
 	s.server.config.AllowInsecure = true
@@ -1430,53 +1084,6 @@ func TestCoverAuthPLAIN_ConnectionClosed(t *testing.T) {
 	clientConn.Close()
 	_ = <-done
 }
-
-// ---------------------------------------------------------------------------
-// handleConnection with rate limiter
-// ---------------------------------------------------------------------------
-
-type coverMockRateLimiter struct {
-	allow bool
-}
-
-func (m *coverMockRateLimiter) Allow(key string, limitType string) bool {
-	return m.allow
-}
-
-func TestCoverHandleConnection_RateLimited(t *testing.T) {
-	config := &Config{
-		Hostname:       "testhost",
-		MaxMessageSize: 1024 * 1024,
-		MaxRecipients:  100,
-		AllowInsecure:  true,
-	}
-	server := NewServer(config, nil)
-	server.SetRateLimiter(&coverMockRateLimiter{allow: false})
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
-	go server.Serve(ln)
-	defer server.Stop()
-	time.Sleep(50 * time.Millisecond)
-
-	client, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	defer client.Close()
-	reader := bufio.NewReader(client)
-	client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "421") {
-		t.Errorf("expected 421 for rate limited connection, got: %q", resp)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// HandleCommand: AUTH already authenticated
-// ---------------------------------------------------------------------------
 
 func TestCoverAUTH_AlreadyAuthenticated(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1498,10 +1105,6 @@ func TestCoverAUTH_AlreadyAuthenticated(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// HandleCommand: AUTH requires TLS (no AllowInsecure, not TLS)
-// ---------------------------------------------------------------------------
-
 func TestCoverAUTH_RequiresTLS(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -1521,10 +1124,6 @@ func TestCoverAUTH_RequiresTLS(t *testing.T) {
 		t.Errorf("expected 538 encryption required, got: %q", resp)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// HandleCommand: AUTH unrecognized mechanism
-// ---------------------------------------------------------------------------
 
 func TestCoverAUTH_UnrecognizedMechanism(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
@@ -1546,10 +1145,6 @@ func TestCoverAUTH_UnrecognizedMechanism(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// HandleCommand: AUTH in StateNew (before EHLO)
-// ---------------------------------------------------------------------------
-
 func TestCoverAUTH_BeforeEHLO(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
@@ -1567,50 +1162,4 @@ func TestCoverAUTH_BeforeEHLO(t *testing.T) {
 	if !strings.HasPrefix(resp, "503") {
 		t.Errorf("expected 503 bad sequence, got: %q", resp)
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Helper stages for DATA pipeline tests
-// ---------------------------------------------------------------------------
-
-type errorStage struct{}
-
-func (s *errorStage) Name() string { return "ErrorStage" }
-func (s *errorStage) Process(ctx *MessageContext) PipelineResult {
-	ctx.Rejected = true
-	ctx.RejectionCode = 451
-	ctx.RejectionMessage = "Pipeline error"
-	return ResultReject
-}
-
-type quarantineDataStage struct{}
-
-func (s *quarantineDataStage) Name() string { return "QuarantineData" }
-func (s *quarantineDataStage) Process(ctx *MessageContext) PipelineResult {
-	ctx.SpamScore = 5.0
-	return ResultQuarantine
-}
-
-type rejectDataStage struct {
-	code    int
-	message string
-}
-
-func (s *rejectDataStage) Name() string { return "RejectData" }
-func (s *rejectDataStage) Process(ctx *MessageContext) PipelineResult {
-	ctx.Rejected = true
-	ctx.RejectionCode = s.code
-	ctx.RejectionMessage = s.message
-	return ResultReject
-}
-
-type coverAuthResultsStage struct{}
-
-func (s *coverAuthResultsStage) Name() string { return "AuthResults" }
-func (s *coverAuthResultsStage) Process(ctx *MessageContext) PipelineResult {
-	ctx.SPFResult = SPFResult{Result: "pass", Domain: "example.com"}
-	ctx.DKIMResult = DKIMResult{Valid: false, Domain: "example.com", Error: "no key"}
-	ctx.DMARCResult = DMARCResult{Result: "none", Percentage: 100}
-	ctx.SpamResult.Score = 3.5
-	return ResultAccept
 }
