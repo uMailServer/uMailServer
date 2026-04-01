@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMessageContext(t *testing.T) {
@@ -744,4 +745,279 @@ type quarantineTestStage struct{}
 func (s *quarantineTestStage) Name() string { return "QuarantineTest" }
 func (s *quarantineTestStage) Process(ctx *MessageContext) PipelineResult {
 	return ResultQuarantine
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline error path: reject with custom code and message set on context
+// ---------------------------------------------------------------------------
+
+func TestPipeline_RejectWithCustomCodeAndMessage(t *testing.T) {
+	logger := &testLogger{}
+	pipeline := NewPipeline(logger)
+	pipeline.AddStage(&customRejectStage{
+		code:    421,
+		message: "Rate limit exceeded",
+	})
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result, err := pipeline.Process(ctx)
+
+	if err == nil {
+		t.Fatal("Expected error for rejected message")
+	}
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject, got %v", result)
+	}
+	if ctx.RejectionCode != 421 {
+		t.Errorf("Expected rejection code 421, got %d", ctx.RejectionCode)
+	}
+	if ctx.RejectionMessage != "Rate limit exceeded" {
+		t.Errorf("Expected rejection message 'Rate limit exceeded', got %q", ctx.RejectionMessage)
+	}
+	if !strings.Contains(err.Error(), "Rate limit exceeded") {
+		t.Errorf("Expected error to contain 'Rate limit exceeded', got %q", err.Error())
+	}
+}
+
+type customRejectStage struct {
+	code    int
+	message string
+}
+
+func (s *customRejectStage) Name() string { return "CustomReject" }
+func (s *customRejectStage) Process(ctx *MessageContext) PipelineResult {
+	ctx.Rejected = true
+	ctx.RejectionCode = s.code
+	ctx.RejectionMessage = s.message
+	return ResultReject
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline with multiple stages: accept then reject
+// ---------------------------------------------------------------------------
+
+func TestPipeline_MultipleStages_RejectAfterAccept(t *testing.T) {
+	logger := &testLogger{}
+	pipeline := NewPipeline(logger)
+	pipeline.AddStage(&testStage{name: "First"})
+	pipeline.AddStage(&rejectStage{})
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result, err := pipeline.Process(ctx)
+
+	if err == nil {
+		t.Fatal("Expected error for rejected message")
+	}
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject, got %v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline with multiple stages: accept then quarantine then accept
+// ---------------------------------------------------------------------------
+
+func TestPipeline_MultipleStages_QuarantineThenAccept(t *testing.T) {
+	logger := &testLogger{}
+	pipeline := NewPipeline(logger)
+	pipeline.AddStage(&quarantineTestStage{})
+	pipeline.AddStage(&testStage{name: "AfterQuarantine"})
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result, err := pipeline.Process(ctx)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if result != ResultQuarantine {
+		t.Errorf("Expected ResultQuarantine, got %v", result)
+	}
+	if !ctx.Quarantine {
+		t.Error("Expected Quarantine flag to be set")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline: accept then quarantine (quarantine followed by more stages)
+// ---------------------------------------------------------------------------
+
+func TestPipeline_Quarantine_ContinuesThroughStages(t *testing.T) {
+	logger := &testLogger{}
+	pipeline := NewPipeline(logger)
+
+	// Track which stages ran
+	var stagesRan []string
+	pipeline.AddStage(&trackingStage{name: "Before", stages: &stagesRan})
+	pipeline.AddStage(&quarantineTestStage{})
+	pipeline.AddStage(&trackingStage{name: "After", stages: &stagesRan})
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result, err := pipeline.Process(ctx)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if result != ResultQuarantine {
+		t.Errorf("Expected ResultQuarantine, got %v", result)
+	}
+	// Both stages should have run (quarantine doesn't stop the pipeline)
+	if len(stagesRan) != 2 || stagesRan[0] != "Before" || stagesRan[1] != "After" {
+		t.Errorf("Expected stages [Before, After], got %v", stagesRan)
+	}
+}
+
+type trackingStage struct {
+	name   string
+	stages *[]string
+}
+
+func (s *trackingStage) Name() string { return s.name }
+func (s *trackingStage) Process(ctx *MessageContext) PipelineResult {
+	*s.stages = append(*s.stages, s.name)
+	return ResultAccept
+}
+
+// ---------------------------------------------------------------------------
+// Rate limit stage: window expiry resets count
+// ---------------------------------------------------------------------------
+
+func TestRateLimitStage_WindowExpiry(t *testing.T) {
+	stage := NewRateLimitStage()
+	ip := net.ParseIP("10.0.0.1")
+
+	// Send 30 messages to reach the limit
+	for i := 0; i < 30; i++ {
+		ctx := NewMessageContext(ip, "s@example.com", []string{"r@example.com"}, []byte("data"))
+		stage.Process(ctx)
+	}
+
+	// Manually expire the window by manipulating the limiter
+	key := ip.String()
+	limiter := stage.limits[key]
+	limiter.window = time.Now().Add(-2 * time.Minute) // Set window to 2 minutes ago
+
+	// Next message should be accepted (new window)
+	ctx := NewMessageContext(ip, "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept after window expiry, got %v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GreylistStage: allowed entry is always accepted
+// ---------------------------------------------------------------------------
+
+func TestGreylistStage_AllowedEntryAccepted(t *testing.T) {
+	stage := NewGreylistStage()
+	ip := net.ParseIP("192.168.1.100")
+
+	// Create the entry and set it as allowed with a past firstSeen
+	key := fmt.Sprintf("%s:%s:%s", ip.String(), "s@example.com", "r@example.com")
+	stage.greylist[key] = &greylistEntry{
+		firstSeen: time.Now().Add(-10 * time.Minute),
+		allowed:   true,
+	}
+
+	ctx := NewMessageContext(ip, "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for allowed greylist entry, got %v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GreylistStage: entry becomes allowed after waiting long enough
+// ---------------------------------------------------------------------------
+
+func TestGreylistStage_EntryBecomesAllowed(t *testing.T) {
+	stage := NewGreylistStage()
+	ip := net.ParseIP("192.168.1.101")
+
+	// Create entry with firstSeen 6 minutes ago (past the 5-min window)
+	key := fmt.Sprintf("%s:%s:%s", ip.String(), "s@example.com", "r@example.com")
+	stage.greylist[key] = &greylistEntry{
+		firstSeen: time.Now().Add(-6 * time.Minute),
+		allowed:   false,
+	}
+
+	ctx := NewMessageContext(ip, "s@example.com", []string{"r@example.com"}, []byte("data"))
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept after greylist window passed, got %v", result)
+	}
+
+	// Verify the entry is now marked as allowed
+	if !stage.greylist[key].allowed {
+		t.Error("Expected greylist entry to be marked as allowed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HeuristicStage: all rules trigger (missing message-id)
+// ---------------------------------------------------------------------------
+
+func TestHeuristicStage_MissingMessageID(t *testing.T) {
+	stage := NewHeuristicStage()
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	// Set subject and date to avoid those rules firing
+	ctx.Headers["Subject"] = []string{"Normal subject"}
+	ctx.Headers["Date"] = []string{"Mon, 01 Jan 2024 00:00:00 +0000"}
+	// No Message-Id or Message-ID header
+
+	stage.Process(ctx)
+	// Only MISSING_MESSAGE_ID should fire
+	found := false
+	for _, reason := range ctx.SpamResult.Reasons {
+		if reason == "MISSING_MESSAGE_ID" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected MISSING_MESSAGE_ID rule to fire, got reasons: %v", ctx.SpamResult.Reasons)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HeuristicStage: short subject does not trigger all-caps rule
+// ---------------------------------------------------------------------------
+
+func TestHeuristicStage_ShortSubjectNotAllCaps(t *testing.T) {
+	stage := NewHeuristicStage()
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	ctx.Headers["Subject"] = []string{"ABC"} // Only 3 chars, below the > 5 threshold
+
+	initialScore := ctx.SpamScore
+	stage.Process(ctx)
+	allCapsFired := false
+	for _, reason := range ctx.SpamResult.Reasons {
+		if reason == "ALL_CAPS_SUBJECT" {
+			allCapsFired = true
+		}
+	}
+	if allCapsFired {
+		t.Errorf("ALL_CAPS_SUBJECT should not fire for short subject (<=5 chars), initial=%f final=%f", initialScore, ctx.SpamScore)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HeuristicStage: empty subject slice triggers EMPTY_SUBJECT but not ALL_CAPS
+// ---------------------------------------------------------------------------
+
+func TestHeuristicStage_EmptySubjectSlice(t *testing.T) {
+	stage := NewHeuristicStage()
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "s@example.com", []string{"r@example.com"}, []byte("data"))
+	ctx.Headers["Subject"] = []string{} // Empty slice
+
+	stage.Process(ctx)
+	emptyFired := false
+	for _, reason := range ctx.SpamResult.Reasons {
+		if reason == "EMPTY_SUBJECT" {
+			emptyFired = true
+		}
+	}
+	if !emptyFired {
+		t.Error("Expected EMPTY_SUBJECT to fire for empty subject slice")
+	}
 }

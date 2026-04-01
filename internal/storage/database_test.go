@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"go.etcd.io/bbolt"
 )
 
 func setupTestDB(t *testing.T) *Database {
@@ -593,4 +595,778 @@ func TestDatabaseAuthenticateUserDifferentCredentials(t *testing.T) {
 func init() {
 	// Ensure the test binary can access os package
 	_ = os.ModeDir
+}
+
+// setupRealDB creates a bbolt-backed database for testing
+func setupRealDB(t *testing.T) *Database {
+	t.Helper()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "real.db")
+	database, err := OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if database.bolt == nil {
+		t.Fatal("Expected bbolt DB to be initialized")
+	}
+	return database
+}
+
+func TestBboltCreateAndGetMailbox(t *testing.T) {
+	db := setupRealDB(t)
+
+	err := db.CreateMailbox("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("CreateMailbox failed: %v", err)
+	}
+
+	mb, err := db.GetMailbox("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetMailbox failed: %v", err)
+	}
+	if mb.Name != "INBOX" {
+		t.Errorf("Expected INBOX, got %s", mb.Name)
+	}
+	if mb.UIDValidity == 0 {
+		t.Error("Expected non-zero UIDValidity")
+	}
+	if mb.UIDNext == 0 {
+		t.Error("Expected non-zero UIDNext")
+	}
+}
+
+func TestBboltCreateMailboxTwice(t *testing.T) {
+	db := setupRealDB(t)
+
+	err := db.CreateMailbox("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("First CreateMailbox failed: %v", err)
+	}
+	err = db.CreateMailbox("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("Second CreateMailbox failed: %v", err)
+	}
+}
+
+func TestBboltDeleteMailbox(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.CreateMailbox("user1", "TestBox")
+	err := db.DeleteMailbox("user1", "TestBox")
+	if err != nil {
+		t.Errorf("DeleteMailbox failed: %v", err)
+	}
+}
+
+func TestBboltRenameMailbox(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.CreateMailbox("user1", "OldBox")
+	err := db.RenameMailbox("user1", "OldBox", "NewBox")
+	if err != nil {
+		t.Errorf("RenameMailbox failed: %v", err)
+	}
+
+	mb, err := db.GetMailbox("user1", "NewBox")
+	if err != nil {
+		t.Fatalf("GetMailbox after rename failed: %v", err)
+	}
+	if mb.Name != "NewBox" {
+		t.Errorf("Expected NewBox, got %s", mb.Name)
+	}
+}
+
+func TestBboltRenameNonexistentMailbox(t *testing.T) {
+	db := setupRealDB(t)
+
+	err := db.RenameMailbox("user1", "NoBox", "NewBox")
+	if err != nil {
+		t.Errorf("RenameMailbox of nonexistent should not error: %v", err)
+	}
+}
+
+func TestBboltListMailboxes(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.CreateMailbox("user1", "INBOX")
+	db.CreateMailbox("user1", "Sent")
+	db.CreateMailbox("user1", "Trash")
+
+	list, err := db.ListMailboxes("user1")
+	if err != nil {
+		t.Fatalf("ListMailboxes failed: %v", err)
+	}
+	if len(list) < 3 {
+		t.Errorf("Expected at least 3 mailboxes, got %d: %v", len(list), list)
+	}
+}
+
+func TestBboltListMailboxesNoMailboxes(t *testing.T) {
+	db := setupRealDB(t)
+
+	list, err := db.ListMailboxes("nobody")
+	if err != nil {
+		t.Fatalf("ListMailboxes failed: %v", err)
+	}
+	if len(list) == 0 {
+		t.Error("Expected at least INBOX as default")
+	}
+}
+
+func TestBboltGetMailboxCounts(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.CreateMailbox("user1", "INBOX")
+
+	// Store messages
+	db.StoreMessageMetadata("user1", "INBOX", 1, &MessageMetadata{
+		UID:   1,
+		Flags: []string{"\\Recent"},
+		Size:  100,
+	})
+	db.StoreMessageMetadata("user1", "INBOX", 2, &MessageMetadata{
+		UID:   2,
+		Flags: []string{"\\Seen"},
+		Size:  200,
+	})
+	db.StoreMessageMetadata("user1", "INBOX", 3, &MessageMetadata{
+		UID:   3,
+		Flags: []string{"\\Recent"},
+		Size:  300,
+	})
+
+	exists, recent, unseen, err := db.GetMailboxCounts("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetMailboxCounts failed: %v", err)
+	}
+	if exists != 3 {
+		t.Errorf("Expected 3 exists, got %d", exists)
+	}
+	if recent != 2 {
+		t.Errorf("Expected 2 recent, got %d", recent)
+	}
+	if unseen != 2 {
+		t.Errorf("Expected 2 unseen, got %d", unseen)
+	}
+}
+
+func TestBboltGetMailboxCountsEmpty(t *testing.T) {
+	db := setupRealDB(t)
+
+	exists, recent, unseen, err := db.GetMailboxCounts("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetMailboxCounts failed: %v", err)
+	}
+	if exists != 0 || recent != 0 || unseen != 0 {
+		t.Errorf("Expected all zeros, got exists=%d recent=%d unseen=%d", exists, recent, unseen)
+	}
+}
+
+func TestBboltGetNextUID(t *testing.T) {
+	db := setupRealDB(t)
+
+	uid1, err := db.GetNextUID("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetNextUID failed: %v", err)
+	}
+	uid2, err := db.GetNextUID("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetNextUID failed: %v", err)
+	}
+	if uid2 <= uid1 {
+		t.Errorf("Expected uid2 > uid1, got uid1=%d uid2=%d", uid1, uid2)
+	}
+}
+
+func TestBboltGetNextUIDNewMailbox(t *testing.T) {
+	db := setupRealDB(t)
+
+	uid, err := db.GetNextUID("user1", "NewBox")
+	if err != nil {
+		t.Fatalf("GetNextUID for new mailbox failed: %v", err)
+	}
+	if uid != 1 {
+		t.Errorf("Expected first UID to be 1, got %d", uid)
+	}
+}
+
+func TestBboltStoreAndGetMessageMetadata(t *testing.T) {
+	db := setupRealDB(t)
+
+	meta := &MessageMetadata{
+		MessageID:    "msg123",
+		UID:          1,
+		Flags:        []string{"\\Seen", "\\Recent"},
+		InternalDate: time.Now(),
+		Size:         1024,
+		Subject:      "Test Subject",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		From:         "from@test.com",
+		To:           "to@test.com",
+	}
+
+	err := db.StoreMessageMetadata("user1", "INBOX", 1, meta)
+	if err != nil {
+		t.Fatalf("StoreMessageMetadata failed: %v", err)
+	}
+
+	got, err := db.GetMessageMetadata("user1", "INBOX", 1)
+	if err != nil {
+		t.Fatalf("GetMessageMetadata failed: %v", err)
+	}
+	if got.MessageID != "msg123" {
+		t.Errorf("Expected MessageID msg123, got %s", got.MessageID)
+	}
+	if got.Subject != "Test Subject" {
+		t.Errorf("Expected Subject 'Test Subject', got %s", got.Subject)
+	}
+	if got.Size != 1024 {
+		t.Errorf("Expected Size 1024, got %d", got.Size)
+	}
+	if len(got.Flags) != 2 {
+		t.Errorf("Expected 2 flags, got %d", len(got.Flags))
+	}
+}
+
+func TestBboltGetMessageUIDs(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.StoreMessageMetadata("user1", "INBOX", 1, &MessageMetadata{UID: 1})
+	db.StoreMessageMetadata("user1", "INBOX", 2, &MessageMetadata{UID: 2})
+	db.StoreMessageMetadata("user1", "INBOX", 3, &MessageMetadata{UID: 3})
+
+	uids, err := db.GetMessageUIDs("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetMessageUIDs failed: %v", err)
+	}
+	if len(uids) != 3 {
+		t.Errorf("Expected 3 UIDs, got %d: %v", len(uids), uids)
+	}
+}
+
+func TestBboltGetMessageUIDsEmpty(t *testing.T) {
+	db := setupRealDB(t)
+
+	uids, err := db.GetMessageUIDs("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetMessageUIDs failed: %v", err)
+	}
+	if len(uids) != 0 {
+		t.Errorf("Expected 0 UIDs, got %d", len(uids))
+	}
+	if uids == nil {
+		t.Error("Expected non-nil slice")
+	}
+}
+
+func TestBboltGetMessageMetadataNotFound(t *testing.T) {
+	db := setupRealDB(t)
+
+	meta, err := db.GetMessageMetadata("user1", "INBOX", 999)
+	if err != nil {
+		t.Fatalf("GetMessageMetadata for non-existent should not error: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("Expected non-nil metadata")
+	}
+	if meta.UID != 0 {
+		t.Errorf("Expected empty metadata, got UID %d", meta.UID)
+	}
+}
+
+func TestBboltUpdateMessageMetadata(t *testing.T) {
+	db := setupRealDB(t)
+
+	// Store original
+	db.StoreMessageMetadata("user1", "INBOX", 1, &MessageMetadata{
+		UID:     1,
+		Flags:   []string{"\\Seen"},
+		Subject: "Original",
+	})
+
+	// Update
+	err := db.UpdateMessageMetadata("user1", "INBOX", 1, &MessageMetadata{
+		UID:     1,
+		Flags:   []string{"\\Seen", "\\Flagged"},
+		Subject: "Updated",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMessageMetadata failed: %v", err)
+	}
+
+	got, err := db.GetMessageMetadata("user1", "INBOX", 1)
+	if err != nil {
+		t.Fatalf("GetMessageMetadata failed: %v", err)
+	}
+	if got.Subject != "Updated" {
+		t.Errorf("Expected 'Updated', got %s", got.Subject)
+	}
+	if len(got.Flags) != 2 {
+		t.Errorf("Expected 2 flags, got %d", len(got.Flags))
+	}
+}
+
+func TestBboltDeleteMessage(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.StoreMessageMetadata("user1", "INBOX", 1, &MessageMetadata{UID: 1})
+
+	err := db.DeleteMessage("user1", "INBOX", 1)
+	if err != nil {
+		t.Fatalf("DeleteMessage failed: %v", err)
+	}
+
+	uids, _ := db.GetMessageUIDs("user1", "INBOX")
+	if len(uids) != 0 {
+		t.Errorf("Expected 0 UIDs after delete, got %d", len(uids))
+	}
+}
+
+func TestBboltDeleteMessageNonexistent(t *testing.T) {
+	db := setupRealDB(t)
+
+	err := db.DeleteMessage("user1", "INBOX", 999)
+	if err != nil {
+		t.Errorf("DeleteMessage for non-existent should not error: %v", err)
+	}
+}
+
+func TestBboltRenameMailboxWithMessages(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.CreateMailbox("user1", "Old")
+	db.StoreMessageMetadata("user1", "Old", 1, &MessageMetadata{
+		UID:     1,
+		Subject: "Test",
+		Flags:   []string{"\\Seen"},
+	})
+
+	err := db.RenameMailbox("user1", "Old", "New")
+	if err != nil {
+		t.Fatalf("RenameMailbox failed: %v", err)
+	}
+
+	// Verify messages in new mailbox
+	uids, _ := db.GetMessageUIDs("user1", "New")
+	if len(uids) != 1 {
+		t.Errorf("Expected 1 UID in new mailbox, got %d", len(uids))
+	}
+
+	// Verify old mailbox is gone
+	uidsOld, _ := db.GetMessageUIDs("user1", "Old")
+	if len(uidsOld) != 0 {
+		t.Errorf("Expected 0 UIDs in old mailbox, got %d", len(uidsOld))
+	}
+}
+
+func TestBboltGetMailboxCountsBadData(t *testing.T) {
+	db := setupRealDB(t)
+
+	// Store invalid JSON to test error handling
+	db.bolt.Update(func(tx *bbolt.Tx) error {
+		b, _ := tx.CreateBucketIfNotExists([]byte(messagesBucket("user1", "INBOX")))
+		b.Put(itob(1), []byte("invalid json"))
+		return nil
+	})
+
+	exists, _, _, err := db.GetMailboxCounts("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetMailboxCounts failed: %v", err)
+	}
+	// Invalid message should be skipped
+	if exists != 0 {
+		t.Errorf("Expected 0 exists for invalid data, got %d", exists)
+	}
+}
+
+func TestBboltRenameMailboxNoSourceMessages(t *testing.T) {
+	db := setupRealDB(t)
+
+	db.CreateMailbox("user1", "Old")
+
+	err := db.RenameMailbox("user1", "Old", "New")
+	if err != nil {
+		t.Errorf("RenameMailbox with no source messages failed: %v", err)
+	}
+}
+
+// --- Nil database (db.bolt == nil) tests ---
+
+func TestNilDatabaseGetMailbox(t *testing.T) {
+	db := &Database{path: "fake"}
+	mb, err := db.GetMailbox("user", "INBOX")
+	if err != nil {
+		t.Fatalf("Nil DB GetMailbox should not error: %v", err)
+	}
+	if mb.Name != "INBOX" {
+		t.Errorf("Expected INBOX, got %s", mb.Name)
+	}
+	if mb.UIDValidity != 1 || mb.UIDNext != 1 {
+		t.Errorf("Expected defaults (1,1), got (%d,%d)", mb.UIDValidity, mb.UIDNext)
+	}
+}
+
+func TestNilDatabaseCreateMailbox(t *testing.T) {
+	db := &Database{path: "fake"}
+	err := db.CreateMailbox("user", "INBOX")
+	if err != nil {
+		t.Errorf("Nil DB CreateMailbox should return nil: %v", err)
+	}
+}
+
+func TestNilDatabaseDeleteMailbox(t *testing.T) {
+	db := &Database{path: "fake"}
+	err := db.DeleteMailbox("user", "INBOX")
+	if err != nil {
+		t.Errorf("Nil DB DeleteMailbox should return nil: %v", err)
+	}
+}
+
+func TestNilDatabaseGetNextUID(t *testing.T) {
+	db := &Database{path: "fake"}
+	uid, err := db.GetNextUID("user", "INBOX")
+	if err != nil {
+		t.Errorf("Nil DB GetNextUID should not error: %v", err)
+	}
+	if uid != 1 {
+		t.Errorf("Expected UID 1, got %d", uid)
+	}
+}
+
+func TestNilDatabaseGetMessageUIDs(t *testing.T) {
+	db := &Database{path: "fake"}
+	uids, err := db.GetMessageUIDs("user", "INBOX")
+	if err != nil {
+		t.Errorf("Nil DB GetMessageUIDs should not error: %v", err)
+	}
+	if len(uids) != 0 {
+		t.Errorf("Expected empty slice, got %v", uids)
+	}
+}
+
+func TestNilDatabaseGetMessageMetadata(t *testing.T) {
+	db := &Database{path: "fake"}
+	meta, err := db.GetMessageMetadata("user", "INBOX", 1)
+	if err != nil {
+		t.Errorf("Nil DB GetMessageMetadata should not error: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("Expected non-nil metadata")
+	}
+	if meta.UID != 0 {
+		t.Errorf("Expected zero UID, got %d", meta.UID)
+	}
+}
+
+func TestNilDatabaseStoreMessageMetadata(t *testing.T) {
+	db := &Database{path: "fake"}
+	err := db.StoreMessageMetadata("user", "INBOX", 1, &MessageMetadata{UID: 1})
+	if err != nil {
+		t.Errorf("Nil DB StoreMessageMetadata should return nil: %v", err)
+	}
+}
+
+func TestNilDatabaseDeleteMessage(t *testing.T) {
+	db := &Database{path: "fake"}
+	err := db.DeleteMessage("user", "INBOX", 1)
+	if err != nil {
+		t.Errorf("Nil DB DeleteMessage should return nil: %v", err)
+	}
+}
+
+func TestNilDatabaseRenameMailbox(t *testing.T) {
+	db := &Database{path: "fake"}
+	err := db.RenameMailbox("user", "Old", "New")
+	if err != nil {
+		t.Errorf("Nil DB RenameMailbox should return nil: %v", err)
+	}
+}
+
+func TestNilDatabaseListMailboxes(t *testing.T) {
+	db := &Database{path: "fake"}
+	list, err := db.ListMailboxes("user")
+	if err != nil {
+		t.Errorf("Nil DB ListMailboxes should not error: %v", err)
+	}
+	if len(list) != 1 || list[0] != "INBOX" {
+		t.Errorf("Expected [INBOX], got %v", list)
+	}
+}
+
+func TestNilDatabaseGetMailboxCounts(t *testing.T) {
+	db := &Database{path: "fake"}
+	exists, recent, unseen, err := db.GetMailboxCounts("user", "INBOX")
+	if err != nil {
+		t.Errorf("Nil DB GetMailboxCounts should not error: %v", err)
+	}
+	if exists != 0 || recent != 0 || unseen != 0 {
+		t.Errorf("Expected all zeros, got %d %d %d", exists, recent, unseen)
+	}
+}
+
+func TestNilDatabaseAuthenticateUser(t *testing.T) {
+	db := &Database{path: "fake"}
+	ok, err := db.AuthenticateUser("user", "pass")
+	if err != nil {
+		t.Errorf("Nil DB AuthenticateUser should not error: %v", err)
+	}
+	if !ok {
+		t.Error("Expected true from stub")
+	}
+}
+
+func TestNilDatabaseClose(t *testing.T) {
+	db := &Database{path: "fake"}
+	err := db.Close()
+	if err != nil {
+		t.Errorf("Nil DB Close should return nil: %v", err)
+	}
+}
+
+// --- Closed database (db.bolt set but closed) error path tests ---
+
+func TestClosedDBGetMailboxError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	_, err := db.GetMailbox("user", "INBOX")
+	if err == nil {
+		t.Error("Expected error from GetMailbox on closed DB")
+	}
+}
+
+func TestClosedDBCreateMailboxError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	err := db.CreateMailbox("user", "INBOX")
+	if err == nil {
+		t.Error("Expected error from CreateMailbox on closed DB")
+	}
+}
+
+func TestClosedDBDeleteMailboxError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	err := db.DeleteMailbox("user", "INBOX")
+	if err == nil {
+		t.Error("Expected error from DeleteMailbox on closed DB")
+	}
+}
+
+func TestClosedDBGetNextUIDError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	_, err := db.GetNextUID("user", "INBOX")
+	if err == nil {
+		t.Error("Expected error from GetNextUID on closed DB")
+	}
+}
+
+func TestClosedDBStoreMessageMetadataError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	err := db.StoreMessageMetadata("user", "INBOX", 1, &MessageMetadata{UID: 1})
+	if err == nil {
+		t.Error("Expected error from StoreMessageMetadata on closed DB")
+	}
+}
+
+func TestClosedDBDeleteMessageError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	err := db.DeleteMessage("user", "INBOX", 1)
+	if err == nil {
+		t.Error("Expected error from DeleteMessage on closed DB")
+	}
+}
+
+func TestClosedDBGetMessageUIDsError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	_, err := db.GetMessageUIDs("user", "INBOX")
+	if err == nil {
+		t.Error("Expected error from GetMessageUIDs on closed DB")
+	}
+}
+
+func TestClosedDBGetMessageMetadataError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	_, err := db.GetMessageMetadata("user", "INBOX", 1)
+	if err == nil {
+		t.Error("Expected error from GetMessageMetadata on closed DB")
+	}
+}
+
+func TestClosedDBListMailboxesError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	_, err := db.ListMailboxes("user")
+	if err == nil {
+		t.Error("Expected error from ListMailboxes on closed DB")
+	}
+}
+
+func TestClosedDBGetMailboxCountsError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	_, _, _, err := db.GetMailboxCounts("user", "INBOX")
+	if err == nil {
+		t.Error("Expected error from GetMailboxCounts on closed DB")
+	}
+}
+
+func TestClosedDBRenameMailboxError(t *testing.T) {
+	db := setupRealDB(t)
+	db.Close()
+
+	err := db.RenameMailbox("user", "Old", "New")
+	if err == nil {
+		t.Error("Expected error from RenameMailbox on closed DB")
+	}
+}
+
+// --- StoreMessageMetadata / GetMessageMetadata round-trip with all fields ---
+
+func TestBboltMetadataRoundTripAllFields(t *testing.T) {
+	db := setupRealDB(t)
+
+	now := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
+	meta := &MessageMetadata{
+		MessageID:    "<unique-id@example.com>",
+		UID:          42,
+		Flags:        []string{"\\Seen", "\\Flagged", "\\Draft"},
+		InternalDate: now,
+		Size:         4096,
+		Subject:      "Important: Q3 Review",
+		Date:         "Sat, 15 Jun 2024 10:30:00 +0000",
+		From:         "alice@example.com",
+		To:           "bob@example.com, carol@example.com",
+	}
+
+	err := db.StoreMessageMetadata("user1", "INBOX", 42, meta)
+	if err != nil {
+		t.Fatalf("StoreMessageMetadata failed: %v", err)
+	}
+
+	got, err := db.GetMessageMetadata("user1", "INBOX", 42)
+	if err != nil {
+		t.Fatalf("GetMessageMetadata failed: %v", err)
+	}
+
+	if got.MessageID != meta.MessageID {
+		t.Errorf("MessageID = %q, want %q", got.MessageID, meta.MessageID)
+	}
+	if got.UID != meta.UID {
+		t.Errorf("UID = %d, want %d", got.UID, meta.UID)
+	}
+	if got.Subject != meta.Subject {
+		t.Errorf("Subject = %q, want %q", got.Subject, meta.Subject)
+	}
+	if got.Size != meta.Size {
+		t.Errorf("Size = %d, want %d", got.Size, meta.Size)
+	}
+	if got.From != meta.From {
+		t.Errorf("From = %q, want %q", got.From, meta.From)
+	}
+	if got.To != meta.To {
+		t.Errorf("To = %q, want %q", got.To, meta.To)
+	}
+	if got.Date != meta.Date {
+		t.Errorf("Date = %q, want %q", got.Date, meta.Date)
+	}
+	if len(got.Flags) != len(meta.Flags) {
+		t.Errorf("Flags len = %d, want %d", len(got.Flags), len(meta.Flags))
+	}
+	if !got.InternalDate.Equal(meta.InternalDate) {
+		t.Errorf("InternalDate = %v, want %v", got.InternalDate, meta.InternalDate)
+	}
+}
+
+// --- GetMessageMetadata for non-existent mailbox and non-existent message ---
+
+func TestBboltGetMessageMetadataNonExistentMailbox(t *testing.T) {
+	db := setupRealDB(t)
+
+	meta, err := db.GetMessageMetadata("user1", "NoMailbox", 1)
+	if err != nil {
+		t.Fatalf("GetMessageMetadata for non-existent mailbox should not error: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("Expected non-nil metadata")
+	}
+	if meta.UID != 0 {
+		t.Errorf("Expected zero UID for non-existent mailbox, got %d", meta.UID)
+	}
+}
+
+// --- GetMessageUIDs for empty mailbox (bucket exists but no messages) ---
+
+func TestBboltGetMessageUIDsEmptyBucket(t *testing.T) {
+	db := setupRealDB(t)
+
+	// Create the mailbox and its message bucket (by storing and deleting a message)
+	db.StoreMessageMetadata("user1", "INBOX", 1, &MessageMetadata{UID: 1})
+	db.DeleteMessage("user1", "INBOX", 1)
+
+	uids, err := db.GetMessageUIDs("user1", "INBOX")
+	if err != nil {
+		t.Fatalf("GetMessageUIDs on empty bucket failed: %v", err)
+	}
+	if len(uids) != 0 {
+		t.Errorf("Expected 0 UIDs in empty bucket, got %d", len(uids))
+	}
+	if uids == nil {
+		t.Error("Expected non-nil slice")
+	}
+}
+
+// --- DeleteMessage for non-existent bucket ---
+
+func TestBboltDeleteMessageNonExistentBucket(t *testing.T) {
+	db := setupRealDB(t)
+
+	// No mailbox/messages created, so the messages bucket does not exist
+	err := db.DeleteMessage("user1", "NoMailbox", 1)
+	if err != nil {
+		t.Errorf("DeleteMessage on non-existent bucket should not error: %v", err)
+	}
+}
+
+// --- GetMailbox for non-existent mailbox bucket returns defaults ---
+
+func TestBboltGetMailboxNonExistent(t *testing.T) {
+	db := setupRealDB(t)
+
+	mb, err := db.GetMailbox("user1", "NoBox")
+	if err != nil {
+		t.Fatalf("GetMailbox for non-existent should not error: %v", err)
+	}
+	if mb.Name != "NoBox" {
+		t.Errorf("Expected NoBox, got %s", mb.Name)
+	}
+	if mb.UIDValidity != 1 || mb.UIDNext != 1 {
+		t.Errorf("Expected defaults (1,1), got (%d,%d)", mb.UIDValidity, mb.UIDNext)
+	}
+}
+
+// --- DeleteMailbox for non-existent mailbox ---
+
+func TestBboltDeleteMailboxNonExistent(t *testing.T) {
+	db := setupRealDB(t)
+
+	err := db.DeleteMailbox("user1", "GhostBox")
+	if err != nil {
+		t.Errorf("DeleteMailbox for non-existent should not error: %v", err)
+	}
 }

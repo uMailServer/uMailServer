@@ -164,7 +164,7 @@ func TestCoverageHandleSelectedAllCommands(t *testing.T) {
 			}()
 
 			// Drain all responses from the client side.
-			_ = drainConn(client, 2*time.Second)
+			_ = drainConn(client, 200*time.Millisecond)
 
 			err := <-cmdDone
 			if err != nil {
@@ -238,7 +238,7 @@ func TestCoverageHandleStartTLSAlreadyActive(t *testing.T) {
 		done <- session.handleStartTLS()
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "BAD") {
 		t.Errorf("expected BAD for already active TLS, got: %s", resp)
 	}
@@ -681,6 +681,10 @@ func (f *failingMailstore) FetchMessages(user, mailbox string, seqSet string, it
 	return f.mockMailstore.FetchMessages(user, mailbox, seqSet, items)
 }
 
+func (f *failingMailstore) EnsureDefaultMailboxes(user string) error {
+	return nil
+}
+
 func setupSessionWithFailingStore(t *testing.T, state State, user string, selected *Mailbox) (net.Conn, *Session) {
 	t.Helper()
 	client, srv := net.Pipe()
@@ -707,7 +711,7 @@ func TestCoverageHandleCreate_Error(t *testing.T) {
 		done <- session.handleCommand("A001 CREATE TestFolder")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -720,7 +724,7 @@ func TestCoverageHandleCreate_NilMailstore(t *testing.T) {
 		done <- session.handleCommand("A001 CREATE TestFolder")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -735,7 +739,7 @@ func TestCoverageHandleDelete_INBOX(t *testing.T) {
 		done <- session.handleCommand("A001 DELETE INBOX")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "NO") {
 		t.Errorf("Expected NO for DELETE INBOX, got: %s", resp)
 	}
@@ -754,7 +758,7 @@ func TestCoverageHandleDelete_Error(t *testing.T) {
 		done <- session.handleCommand("A001 DELETE SomeFolder")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -767,7 +771,7 @@ func TestCoverageHandleDelete_Selected(t *testing.T) {
 		done <- session.handleCommand("A001 DELETE INBOX")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -785,7 +789,7 @@ func TestCoverageHandleRename_Error(t *testing.T) {
 		done <- session.handleCommand("A001 RENAME OldName NewName")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -798,7 +802,7 @@ func TestCoverageHandleRename_MissingArgs(t *testing.T) {
 		done <- session.handleCommand("A001 RENAME OnlyOneArg")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "BAD") {
 		t.Logf("RENAME with one arg: %s", resp)
 	}
@@ -819,7 +823,7 @@ func TestCoverageHandleList_Error(t *testing.T) {
 		done <- session.handleCommand("A001 LIST \"\" *")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -837,7 +841,7 @@ func TestCoverageHandleSelect_Error(t *testing.T) {
 		done <- session.handleCommand("A001 SELECT INBOX")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -853,7 +857,7 @@ func TestCoverageHandleExamine_Error(t *testing.T) {
 		done <- session.handleCommand("A001 EXAMINE INBOX")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -873,11 +877,11 @@ func TestCoverageHandleAppend_Error(t *testing.T) {
 
 	// Read continuation
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "+", 2*time.Second); ok {
+	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); ok {
 		client.Write([]byte("0123456789\r\n"))
 	}
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -890,7 +894,7 @@ func TestCoverageHandleAppend_MissingArgs(t *testing.T) {
 		done <- session.handleCommand("A001 APPEND")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -905,7 +909,7 @@ func TestCoverageHandleCopy_NoSelected(t *testing.T) {
 		done <- session.handleCommand("A001 COPY 1 Sent")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -918,7 +922,7 @@ func TestCoverageHandleMove_NoSelected(t *testing.T) {
 		done <- session.handleCommand("A001 MOVE 1 Trash")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -936,7 +940,7 @@ func TestCoverageHandleCopy_Error(t *testing.T) {
 		done <- session.handleCommand("A001 COPY 1 Sent")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -952,7 +956,7 @@ func TestCoverageHandleMove_Error(t *testing.T) {
 		done <- session.handleCommand("A001 MOVE 1 Trash")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -970,7 +974,7 @@ func TestCoverageHandleSearch_Error(t *testing.T) {
 		done <- session.handleCommand("A001 SEARCH ALL")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -988,7 +992,7 @@ func TestCoverageHandleFetch_Error(t *testing.T) {
 		done <- session.handleCommand("A001 FETCH 1:* FLAGS")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -1006,7 +1010,7 @@ func TestCoverageHandleStore_Error(t *testing.T) {
 		done <- session.handleCommand("A001 STORE 1 +FLAGS (\\Seen)")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -1024,7 +1028,7 @@ func TestCoverageHandleExpunge_Error(t *testing.T) {
 		done <- session.handleCommand("A001 EXPUNGE")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -1039,7 +1043,7 @@ func TestCoverageHandleClose(t *testing.T) {
 		done <- session.handleCommand("A001 CLOSE")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -1052,7 +1056,7 @@ func TestCoverageHandleCheck(t *testing.T) {
 		done <- session.handleCommand("A001 CHECK")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 
@@ -1070,7 +1074,7 @@ func TestCoverageHandleLSUB_Error(t *testing.T) {
 		done <- session.handleCommand("A001 LSUB \"\" *")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	_ = <-done
 }
 

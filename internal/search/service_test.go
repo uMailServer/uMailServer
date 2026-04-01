@@ -725,6 +725,7 @@ func TestServiceSearchWithDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
+		defer database.Close()
 
 	svc := NewService(database, nil, nil)
 
@@ -814,6 +815,7 @@ func TestServiceBuildIndexWithDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
+		defer database.Close()
 
 	svc := NewService(database, nil, nil)
 
@@ -840,6 +842,7 @@ func TestServiceIndexMessageNoIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
+		defer database.Close()
 
 	svc := NewService(database, nil, nil)
 

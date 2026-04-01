@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestMaildirStore(t *testing.T) {
@@ -75,13 +76,14 @@ func TestMaildirStore(t *testing.T) {
 		maildir := store.userMaildirPath(domain, user)
 		os.RemoveAll(maildir)
 
-		// Deliver some messages
+		// Deliver some messages (sleep between deliveries to ensure unique filenames)
 		for i := 0; i < 3; i++ {
 			msg := []byte("Subject: Message " + string(rune('0'+i)) + "\r\n\r\nBody")
 			_, err := store.Deliver(domain, user, folder, msg)
 			if err != nil {
 				t.Fatalf("Deliver failed: %v", err)
 			}
+			time.Sleep(1 * time.Millisecond)
 		}
 
 		messages, err := store.List(domain, user, folder)
@@ -366,7 +368,8 @@ func TestMessageCount(t *testing.T) {
 		t.Errorf("Expected 1 message, got %d", count)
 	}
 
-	// Deliver another message
+	// Deliver another message (sleep to ensure unique filename)
+	time.Sleep(1 * time.Millisecond)
 	_, err = store.Deliver(domain, user, "INBOX", msg)
 	if err != nil {
 		t.Fatalf("Deliver failed: %v", err)

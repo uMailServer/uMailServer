@@ -17,7 +17,7 @@ func TestCoverageHandleStatus_AllItems(t *testing.T) {
 		done <- session.handleCommand("A001 STATUS INBOX (MESSAGES RECENT UIDNEXT UIDVALIDITY UNSEEN)")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "MESSAGES") {
 		t.Errorf("Expected MESSAGES in status response, got: %s", resp)
 	}
@@ -33,7 +33,7 @@ func TestCoverageHandleStatus_NoArgs(t *testing.T) {
 		done <- session.handleCommand("A001 STATUS")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "BAD") {
 		t.Errorf("Expected BAD for STATUS without args, got: %s", resp)
 	}
@@ -117,7 +117,7 @@ func TestCoverageHandleLogin2_Success(t *testing.T) {
 		done <- session.handleCommand("A001 LOGIN test password")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "OK") {
 		t.Errorf("Expected OK for LOGIN, got: %s", resp)
 	}
@@ -133,7 +133,7 @@ func TestCoverageHandleLogin2_Failure(t *testing.T) {
 		done <- session.handleCommand("A001 LOGIN wrong wrongpass")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "NO") {
 		t.Errorf("Expected NO for bad LOGIN, got: %s", resp)
 	}
@@ -149,7 +149,7 @@ func TestCoverageHandleLogin2_MissingArgs(t *testing.T) {
 		done <- session.handleCommand("A001 LOGIN")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "BAD") {
 		t.Errorf("Expected BAD for LOGIN without args, got: %s", resp)
 	}
@@ -168,7 +168,7 @@ func TestCoverageHandleAuthPlain2_ViaCommand(t *testing.T) {
 		done <- session.handleCommand("A001 AUTHENTICATE PLAIN dGVzdAB0ZXN0AHBhc3N3b3Jk")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -184,14 +184,14 @@ func TestCoverageHandleAuthLogin2_ViaCommand(t *testing.T) {
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "+", 2*time.Second); ok {
+	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); ok {
 		client.Write([]byte("dGVzdA==\r\n")) // base64("test")
 	}
-	if _, ok := waitForLine(lines, "+", 2*time.Second); ok {
+	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); ok {
 		client.Write([]byte("cGFzc3dvcmQ=\r\n")) // base64("password")
 	}
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-authDone
 }
 
@@ -206,7 +206,7 @@ func TestCoverageHandleLogout2_ViaCommand(t *testing.T) {
 		done <- session.handleCommand("A001 LOGOUT")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "BYE") {
 		t.Errorf("Expected BYE in LOGOUT response, got: %s", resp)
 	}
@@ -224,7 +224,7 @@ func TestCoverageHandleCapability2_Authenticated(t *testing.T) {
 		done <- session.handleCommand("A001 CAPABILITY")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "CAPABILITY") {
 		t.Errorf("Expected CAPABILITY response, got: %s", resp)
 	}
@@ -242,7 +242,7 @@ func TestCoverageHandleNoop2_Authenticated(t *testing.T) {
 		done <- session.handleCommand("A001 NOOP")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "OK") {
 		t.Errorf("Expected OK for NOOP, got: %s", resp)
 	}
@@ -260,7 +260,7 @@ func TestCoverageHandleNamespace2_Authenticated(t *testing.T) {
 		done <- session.handleCommand("A001 NAMESPACE")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "NAMESPACE") {
 		t.Errorf("Expected NAMESPACE response, got: %s", resp)
 	}
@@ -276,7 +276,7 @@ func TestCoverageHandleEnable2(t *testing.T) {
 		done <- session.handleCommand("A001 ENABLE CONDSTORE")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "ENABLED") {
 		t.Errorf("Expected ENABLED response, got: %s", resp)
 	}
@@ -294,7 +294,7 @@ func TestCoverageHandleSubscribe2_NilMailstore(t *testing.T) {
 		done <- session.handleCommand("A001 SUBSCRIBE INBOX")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -307,7 +307,7 @@ func TestCoverageHandleUnsubscribe2_NilMailstore(t *testing.T) {
 		done <- session.handleCommand("A001 UNSUBSCRIBE INBOX")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -322,7 +322,7 @@ func TestCoverageHandleDelete2_NilMailstoreAuth(t *testing.T) {
 		done <- session.handleCommand("A001 DELETE SomeFolder")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -335,7 +335,7 @@ func TestCoverageHandleCreate2_NilMailstoreAuth(t *testing.T) {
 		done <- session.handleCommand("A001 CREATE TestFolder")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -348,7 +348,7 @@ func TestCoverageHandleRename2_NilMailstoreAuth(t *testing.T) {
 		done <- session.handleCommand("A001 RENAME OldName NewName")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -363,7 +363,7 @@ func TestCoverageHandleSelect2_NilMailstore(t *testing.T) {
 		done <- session.handleCommand("A001 SELECT INBOX")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -376,7 +376,7 @@ func TestCoverageHandleExamine2_NilMailstore(t *testing.T) {
 		done <- session.handleCommand("A001 EXAMINE INBOX")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -392,11 +392,11 @@ func TestCoverageHandleAppend2_WithFlags(t *testing.T) {
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "+", 2*time.Second); ok {
+	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); ok {
 		client.Write([]byte("Hello, World!\r\n"))
 	}
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -412,11 +412,11 @@ func TestCoverageHandleAppend2_WithDate(t *testing.T) {
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "+", 2*time.Second); ok {
+	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); ok {
 		client.Write([]byte("Hello\r\n"))
 	}
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -431,7 +431,7 @@ func TestCoverageHandleList2_StarPattern(t *testing.T) {
 		done <- session.handleCommand("A001 LIST \"\" *")
 	}()
 
-	resp := drainConn(client, 2*time.Second)
+	resp := drainConn(client, 200*time.Millisecond)
 	if !strings.Contains(resp, "LIST") {
 		t.Errorf("Expected LIST response, got: %s", resp)
 	}
@@ -447,7 +447,7 @@ func TestCoverageHandleList2_PercentPattern(t *testing.T) {
 		done <- session.handleCommand("A001 LIST \"\" %")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -463,7 +463,7 @@ func TestCoverageHandleLsub2_Pattern(t *testing.T) {
 	}()
 
 	// handleLsub delegates to handleList, so response contains LIST not LSUB
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -478,7 +478,7 @@ func TestCoverageHandleSearch2_FlagCriteria(t *testing.T) {
 		done <- session.handleCommand("A001 SEARCH SEEN UNSEEN FLAGGED UNFLAGGED DELETED UNDELETED ANSWERED UNANSWERED")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -491,7 +491,7 @@ func TestCoverageHandleSearch2_DateCriteria(t *testing.T) {
 		done <- session.handleCommand("A001 SEARCH SINCE 01-Jan-2024 BEFORE 01-Feb-2024 ON 15-Jan-2024")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -504,7 +504,7 @@ func TestCoverageHandleSearch2_SizeCriteria(t *testing.T) {
 		done <- session.handleCommand("A001 SEARCH LARGER 100 SMALLER 10000")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -517,7 +517,7 @@ func TestCoverageHandleSearch2_FromSubjectTo(t *testing.T) {
 		done <- session.handleCommand("A001 SEARCH FROM alice SUBJECT test TO bob")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -530,7 +530,7 @@ func TestCoverageHandleSearch2_NotOr(t *testing.T) {
 		done <- session.handleCommand("A001 SEARCH NOT SEEN OR SEEN FLAGGED")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -545,7 +545,7 @@ func TestCoverageHandleFetch2_ParenthesizedItems(t *testing.T) {
 		done <- session.handleCommand("A001 FETCH 1 (FLAGS UID RFC822.SIZE)")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -560,7 +560,7 @@ func TestCoverageHandleUIDFetch2_Flags(t *testing.T) {
 		done <- session.handleCommand("A001 UID FETCH 1:* (FLAGS)")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -575,7 +575,7 @@ func TestCoverageHandleStore2_RemoveFlags(t *testing.T) {
 		done <- session.handleCommand("A001 STORE 1 -FLAGS (\\Seen)")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
 
@@ -588,6 +588,6 @@ func TestCoverageHandleStore2_FlagsSilent(t *testing.T) {
 		done <- session.handleCommand("A001 STORE 1 +FLAGS.SILENT (\\Seen)")
 	}()
 
-	_ = drainConn(client, 2*time.Second)
+	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }

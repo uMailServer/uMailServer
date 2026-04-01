@@ -3,6 +3,7 @@ package smtp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -580,4 +581,520 @@ func TestNewPipelineLogger(t *testing.T) {
 	if pl.logger != logger {
 		t.Error("Expected logger to be set")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Additional AuthSPFStage.Process tests for coverage
+// ---------------------------------------------------------------------------
+
+func TestAuthSPFStage_Process_Extra(t *testing.T) {
+	t.Run("SPF permerror increases spam score", func(t *testing.T) {
+		// redirect to a domain with no SPF record causes permerror
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"example.com":   {"v=spf1 redirect=nodomain.example.com"},
+				// nodomain.example.com has no SPF record -> "Invalid redirect" permerror
+			},
+		}
+		checker := auth.NewSPFChecker(resolver)
+		stage := NewAuthSPFStage(checker, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.SPFResult.Result != "permerror" {
+			t.Errorf("Expected SPF result 'permerror', got %q", ctx.SPFResult.Result)
+		}
+		if ctx.SpamScore < 0.4 {
+			t.Errorf("Expected spam score >= 0.4 for SPF permerror, got %f", ctx.SpamScore)
+		}
+	})
+
+	t.Run("SPF neutral result no spam score change", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"example.com": {"v=spf1 ?all"},
+			},
+		}
+		checker := auth.NewSPFChecker(resolver)
+		stage := NewAuthSPFStage(checker, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.SpamScore != 0 {
+			t.Errorf("Expected spam score 0 for SPF neutral, got %f", ctx.SpamScore)
+		}
+		if ctx.SPFResult.Result != "neutral" {
+			t.Errorf("Expected SPF result 'neutral', got %q", ctx.SPFResult.Result)
+		}
+	})
+
+	t.Run("SPF with logger debug output", func(t *testing.T) {
+		var buf bytes.Buffer
+		handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+		logger := slog.New(handler)
+
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"example.com": {"v=spf1 ip4:1.2.3.4 -all"},
+			},
+		}
+		checker := auth.NewSPFChecker(resolver)
+		stage := NewAuthSPFStage(checker, logger)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		output := buf.String()
+		if output == "" {
+			t.Error("Expected debug log output, got empty string")
+		}
+	})
+
+	t.Run("SPF pass with nil logger does not panic", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"example.com": {"v=spf1 ip4:1.2.3.4 -all"},
+			},
+		}
+		checker := auth.NewSPFChecker(resolver)
+		stage := NewAuthSPFStage(checker, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.SPFResult.Result != "pass" {
+			t.Errorf("Expected SPF result 'pass', got %q", ctx.SPFResult.Result)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Additional AuthDKIMStage.Process tests for coverage
+// ---------------------------------------------------------------------------
+
+func TestAuthDKIMStage_Process_Extra(t *testing.T) {
+	t.Run("DKIM verification error with logger", func(t *testing.T) {
+		var buf bytes.Buffer
+		handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+		logger := slog.New(handler)
+
+		resolver := &mockAuthDNSResolver{}
+		verifier := auth.NewDKIMVerifier(resolver)
+		stage := NewAuthDKIMStage(verifier, logger)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.Headers["DKIM-Signature"] = []string{"v=1; d=example.com; s=default; a=rsa-sha256; bh=abc; b=xyz; h=from:to"}
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		output := buf.String()
+		if output == "" {
+			t.Error("Expected debug log output for DKIM error, got empty string")
+		}
+	})
+
+	t.Run("DKIM multiple signatures all fail", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{}
+		verifier := auth.NewDKIMVerifier(resolver)
+		stage := NewAuthDKIMStage(verifier, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.Headers["DKIM-Signature"] = []string{
+			"v=1; d=example.com; s=sel1; a=rsa-sha256; bh=abc; b=xyz; h=from:to",
+			"v=1; d=example.com; s=sel2; a=rsa-sha256; bh=def; b=uvw; h=from:to",
+		}
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.DKIMResult.Valid {
+			t.Error("Expected DKIM valid=false when all signatures fail")
+		}
+		// Each failed signature should add 1.0 to spam score
+		if ctx.SpamScore < 1.5 {
+			t.Errorf("Expected spam score >= 1.5 for two failed DKIM signatures, got %f", ctx.SpamScore)
+		}
+	})
+
+	t.Run("DKIM fallback to Dkim-Signature only", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{}
+		verifier := auth.NewDKIMVerifier(resolver)
+		stage := NewAuthDKIMStage(verifier, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		// Only set Dkim-Signature (not DKIM-Signature), verify it reads the fallback
+		ctx.Headers["Dkim-Signature"] = []string{"v=1; d=example.com; s=default; a=rsa-sha256; bh=abc; b=xyz; h=from:to"}
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		// DKIM should not be valid (no DNS key), but the header was read
+		if ctx.DKIMResult.Valid {
+			t.Error("Expected DKIM valid=false with unverifiable signature")
+		}
+		if ctx.DKIMResult.Error == "" {
+			t.Error("Expected an error message for failed DKIM verification")
+		}
+	})
+
+	t.Run("DKIM with DKIM-Signature takes priority over Dkim-Signature", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{}
+		verifier := auth.NewDKIMVerifier(resolver)
+		stage := NewAuthDKIMStage(verifier, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.Headers["DKIM-Signature"] = []string{"v=1; d=example.com; s=default; a=rsa-sha256; bh=abc; b=xyz; h=from:to"}
+		ctx.Headers["Dkim-Signature"] = []string{"v=1; d=other.com; s=default; a=rsa-sha256; bh=abc; b=xyz; h=from:to"}
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		// Should process DKIM-Signature (the canonical header), not Dkim-Signature
+		if ctx.DKIMResult.Domain != "example.com" {
+			t.Errorf("Expected domain 'example.com' from DKIM-Signature, got %q", ctx.DKIMResult.Domain)
+		}
+	})
+
+	t.Run("DKIM unsupported algorithm", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{}
+		verifier := auth.NewDKIMVerifier(resolver)
+		stage := NewAuthDKIMStage(verifier, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.Headers["DKIM-Signature"] = []string{"v=1; d=example.com; s=default; a=rsa-sha1; bh=abc; b=xyz; h=from:to"}
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.DKIMResult.Valid {
+			t.Error("Expected DKIM valid=false for unsupported algorithm")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Additional AuthDMARCStage.Process tests for coverage
+// ---------------------------------------------------------------------------
+
+func TestAuthDMARCStage_Process_Extra(t *testing.T) {
+	t.Run("DMARC temporary DNS error", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtErr: map[string]error{
+				"_dmarc.example.com": fmt.Errorf("DNS timeout temporary failure"),
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "pass", Domain: "example.com"}
+		ctx.DKIMResult = DKIMResult{Valid: true, Domain: "example.com"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.DMARCResult.Result != "temperror" {
+			t.Errorf("Expected DMARC result 'temperror', got %q", ctx.DMARCResult.Result)
+		}
+	})
+
+	t.Run("DMARC DNS error with logger", func(t *testing.T) {
+		var buf bytes.Buffer
+		handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+		logger := slog.New(handler)
+
+		resolver := &mockAuthDNSResolver{
+			txtErr: map[string]error{
+				"_dmarc.example.com": fmt.Errorf("DNS timeout temporary failure"),
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, logger)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "pass", Domain: "example.com"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		// The DMARC evaluator wraps DNS errors into DMARCTempError result,
+		// which the stage maps to "temperror" in DMARCResult.
+		if ctx.DMARCResult.Result != "temperror" {
+			t.Errorf("Expected DMARC result 'temperror', got %q", ctx.DMARCResult.Result)
+		}
+	})
+
+	t.Run("DMARC reject policy with logger", func(t *testing.T) {
+		var buf bytes.Buffer
+		handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+		logger := slog.New(handler)
+
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=reject;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, logger)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "fail", Domain: "other.com"}
+		ctx.DKIMResult = DKIMResult{Valid: false, Error: "no signature"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultReject {
+			t.Errorf("Expected ResultReject, got %v", result)
+		}
+		output := buf.String()
+		if output == "" {
+			t.Error("Expected info log output for DMARC reject, got empty string")
+		}
+	})
+
+	t.Run("DMARC quarantine policy with logger", func(t *testing.T) {
+		var buf bytes.Buffer
+		handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+		logger := slog.New(handler)
+
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=quarantine;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, logger)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "fail", Domain: "other.com"}
+		ctx.DKIMResult = DKIMResult{Valid: false, Error: "failed"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept (quarantine), got %v", result)
+		}
+		if !ctx.Quarantine {
+			t.Error("Expected Quarantine=true")
+		}
+		output := buf.String()
+		if output == "" {
+			t.Error("Expected info log output for DMARC quarantine, got empty string")
+		}
+	})
+
+	t.Run("DMARC none policy no rejection no quarantine", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=none;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "fail", Domain: "other.com"}
+		ctx.DKIMResult = DKIMResult{Valid: false, Error: "failed"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.Rejected {
+			t.Error("Expected Rejected=false for none policy")
+		}
+		if ctx.Quarantine {
+			t.Error("Expected Quarantine=false for none policy")
+		}
+	})
+
+	t.Run("DMARC with SPF pass and DKIM pass both aligned", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=reject;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "pass", Domain: "example.com"}
+		ctx.DKIMResult = DKIMResult{Valid: true, Domain: "example.com", Selector: "default"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.DMARCResult.Result != "pass" {
+			t.Errorf("Expected DMARC result 'pass', got %q", ctx.DMARCResult.Result)
+		}
+	})
+
+	t.Run("DMARC with SPF temperror result", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=reject;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "temperror", Domain: "other.com"}
+		ctx.DKIMResult = DKIMResult{Valid: false, Error: "failed"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultReject {
+			t.Errorf("Expected ResultReject, got %v", result)
+		}
+	})
+
+	t.Run("DMARC with SPF permerror result", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=reject;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "permerror", Domain: "other.com"}
+		ctx.DKIMResult = DKIMResult{Valid: false, Error: "failed"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultReject {
+			t.Errorf("Expected ResultReject, got %v", result)
+		}
+	})
+
+	t.Run("DMARC with DKIM no signature no error", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=quarantine;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "fail", Domain: "other.com"}
+		// DKIMResult with no error and not valid -> DKIMNone
+		ctx.DKIMResult = DKIMResult{Valid: false}
+
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept (quarantine), got %v", result)
+		}
+		if !ctx.Quarantine {
+			t.Error("Expected Quarantine=true")
+		}
+	})
+
+	t.Run("DMARC reject sets correct rejection message", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=reject;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "fail", Domain: "other.com"}
+		ctx.DKIMResult = DKIMResult{Valid: false, Error: "no signature"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultReject {
+			t.Errorf("Expected ResultReject, got %v", result)
+		}
+		if !ctx.Rejected {
+			t.Error("Expected Rejected=true")
+		}
+		if ctx.RejectionCode != 550 {
+			t.Errorf("Expected rejection code 550, got %d", ctx.RejectionCode)
+		}
+		if ctx.RejectionMessage == "" {
+			t.Error("Expected non-empty rejection message")
+		}
+		if ctx.SpamScore < 2.5 {
+			t.Errorf("Expected spam score >= 2.5 for DMARC reject, got %f", ctx.SpamScore)
+		}
+	})
+
+	t.Run("DMARC pass with SPF aligned result fields", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=reject;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "pass", Domain: "example.com"}
+		// No DKIM -> DKIMNone
+
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.DMARCResult.Result != "pass" {
+			t.Errorf("Expected DMARC result 'pass', got %q", ctx.DMARCResult.Result)
+		}
+		if ctx.DMARCResult.Percentage != 100 {
+			t.Errorf("Expected DMARC percentage 100, got %d", ctx.DMARCResult.Percentage)
+		}
+	})
+
+	t.Run("DMARC with DKIM softfail maps correctly", func(t *testing.T) {
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"_dmarc.example.com": {"v=DMARC1; p=reject;"},
+			},
+		}
+		evaluator := auth.NewDMARCEvaluator(resolver)
+		stage := NewAuthDMARCStage(evaluator, nil)
+
+		ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		ctx.SPFResult = SPFResult{Result: "softfail", Domain: "other.com"}
+		ctx.DKIMResult = DKIMResult{Valid: false, Error: "verification failed"}
+
+		result := stage.Process(ctx)
+
+		if result != ResultReject {
+			t.Errorf("Expected ResultReject, got %v", result)
+		}
+	})
 }

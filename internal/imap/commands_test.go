@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"net"
 	"strings"
 	"testing"
@@ -936,24 +937,31 @@ func TestHandleAuthenticate(t *testing.T) {
 }
 
 func TestHandleAuthenticatePlain(t *testing.T) {
+	// Test AUTHENTICATE PLAIN with SASL-IR (initial response) and bad credentials
 	mock := newMockConn("")
 	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
 	session := NewSession(mock, server)
 	session.tag = "A1"
 
-	err := session.handleAuthenticate([]string{"PLAIN"})
+	creds := base64.StdEncoding.EncodeToString([]byte("\x00user\x00wrongpass"))
+	err := session.handleAuthenticate([]string{"PLAIN", creds})
 	if err != nil {
 		t.Errorf("handleAuthenticate PLAIN failed: %v", err)
 	}
 
 	written := mock.Written()
 	if !strings.Contains(written, "NO") {
-		t.Errorf("expected NO response for unimplemented PLAIN, got: %s", written)
+		t.Errorf("expected NO response for failed PLAIN auth, got: %s", written)
 	}
 }
 
 func TestHandleAuthenticateLogin(t *testing.T) {
-	mock := newMockConn("")
+	// Test AUTHENTICATE LOGIN with bad credentials
+	username := base64.StdEncoding.EncodeToString([]byte("user"))
+	password := base64.StdEncoding.EncodeToString([]byte("wrongpass"))
+	input := username + "\r\n" + password + "\r\n"
+
+	mock := newMockConn(input)
 	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
 	session := NewSession(mock, server)
 	session.tag = "A1"
@@ -965,7 +973,7 @@ func TestHandleAuthenticateLogin(t *testing.T) {
 
 	written := mock.Written()
 	if !strings.Contains(written, "NO") {
-		t.Errorf("expected NO response for unimplemented LOGIN mechanism, got: %s", written)
+		t.Errorf("expected NO response for failed LOGIN auth, got: %s", written)
 	}
 }
 
@@ -987,12 +995,17 @@ func TestHandleAuthenticateUnknown(t *testing.T) {
 }
 
 func TestHandleAuthPlain(t *testing.T) {
+	// Test SASL-IR path with invalid credentials (no authFunc set, mailstore returns false)
 	mock := newMockConn("")
 	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
 	session := NewSession(mock, server)
 	session.tag = "A1"
 
-	err := session.handleAuthPlain()
+	// base64 of "\x00user\x00pass" = AHoAHHBhc3M= ... let's compute properly
+	// \x00 + "testuser" + \x00 + "testpass"
+	creds := base64.StdEncoding.EncodeToString([]byte("\x00testuser\x00testpass"))
+
+	err := session.handleAuthPlain([]string{creds})
 	if err != nil {
 		t.Errorf("handleAuthPlain failed: %v", err)
 	}
@@ -1003,9 +1016,73 @@ func TestHandleAuthPlain(t *testing.T) {
 	}
 }
 
-func TestHandleAuthLogin(t *testing.T) {
+func TestHandleAuthPlainWithAuth(t *testing.T) {
+	// Test SASL-IR path with valid credentials
 	mock := newMockConn("")
 	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	server.SetAuthFunc(func(user, pass string) (bool, error) {
+		return user == "testuser" && pass == "testpass", nil
+	})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	creds := base64.StdEncoding.EncodeToString([]byte("\x00testuser\x00testpass"))
+
+	err := session.handleAuthPlain([]string{creds})
+	if err != nil {
+		t.Errorf("handleAuthPlain failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+	if session.user != "testuser" {
+		t.Errorf("expected user 'testuser', got: %s", session.user)
+	}
+	if session.state != StateAuthenticated {
+		t.Errorf("expected StateAuthenticated, got: %v", session.state)
+	}
+}
+
+func TestHandleAuthLogin(t *testing.T) {
+	// Provide username and password responses as base64 lines for the mock reader
+	username := base64.StdEncoding.EncodeToString([]byte("testuser"))
+	password := base64.StdEncoding.EncodeToString([]byte("testpass"))
+	input := username + "\r\n" + password + "\r\n"
+
+	mock := newMockConn(input)
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	server.SetAuthFunc(func(user, pass string) (bool, error) {
+		return user == "testuser" && pass == "testpass", nil
+	})
+	session := NewSession(mock, server)
+	session.tag = "A1"
+
+	err := session.handleAuthLogin()
+	if err != nil {
+		t.Errorf("handleAuthLogin failed: %v", err)
+	}
+
+	written := mock.Written()
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
+	}
+	if session.user != "testuser" {
+		t.Errorf("expected user 'testuser', got: %s", session.user)
+	}
+}
+
+func TestHandleAuthLoginFailure(t *testing.T) {
+	username := base64.StdEncoding.EncodeToString([]byte("testuser"))
+	password := base64.StdEncoding.EncodeToString([]byte("wrongpass"))
+	input := username + "\r\n" + password + "\r\n"
+
+	mock := newMockConn(input)
+	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
+	server.SetAuthFunc(func(user, pass string) (bool, error) {
+		return false, nil
+	})
 	session := NewSession(mock, server)
 	session.tag = "A1"
 
@@ -2480,8 +2557,8 @@ func TestHandleNotAuthenticatedCommands(t *testing.T) {
 		{
 			name:     "AUTHENTICATE",
 			command:  "AUTHENTICATE",
-			args:     []string{"PLAIN"},
-			fullLine: "A1 AUTHENTICATE PLAIN",
+			args:     []string{"PLAIN", base64.StdEncoding.EncodeToString([]byte("\x00user\x00pass"))},
+			fullLine: "A1 AUTHENTICATE PLAIN " + base64.StdEncoding.EncodeToString([]byte("\x00user\x00pass")),
 		},
 	}
 
@@ -2624,8 +2701,12 @@ func TestHandleCommandWithUnknownCommand(t *testing.T) {
 }
 
 func TestHandleCommandWithContinuation(t *testing.T) {
-	// Test command that expects continuation (like AUTHENTICATE)
-	mock := newMockConn("")
+	// Test AUTHENTICATE LOGIN with full round-trip
+	username := base64.StdEncoding.EncodeToString([]byte("user"))
+	password := base64.StdEncoding.EncodeToString([]byte("pass"))
+	input := username + "\r\n" + password + "\r\n"
+
+	mock := newMockConn(input)
 	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
 	server.SetAuthFunc(func(u, p string) (bool, error) {
 		return true, nil
@@ -2634,16 +2715,18 @@ func TestHandleCommandWithContinuation(t *testing.T) {
 	session.state = StateNotAuthenticated
 	session.tag = "A1"
 
-	// Test AUTHENTICATE LOGIN which expects continuation
 	err := session.handleCommand("A1 AUTHENTICATE LOGIN")
 	if err != nil {
 		t.Errorf("handleCommand failed: %v", err)
 	}
 
 	written := mock.Written()
-	// Should ask for continuation with +
+	// Should contain continuation request (+) and OK
 	if !strings.Contains(written, "+") {
-		t.Logf("expected continuation request (+), got: %s", written)
+		t.Errorf("expected continuation request (+), got: %s", written)
+	}
+	if !strings.Contains(written, "OK") {
+		t.Errorf("expected OK response, got: %s", written)
 	}
 }
 

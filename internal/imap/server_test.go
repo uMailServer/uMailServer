@@ -64,6 +64,10 @@ func (m *mockMailstore) MoveMessages(user, sourceMailbox, destMailbox string, se
 	return nil
 }
 
+func (m *mockMailstore) EnsureDefaultMailboxes(user string) error {
+	return nil
+}
+
 func TestNewServer(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	config := &Config{
