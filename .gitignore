@@ -14,7 +14,13 @@ dist/
 # Output
 coverage.out
 coverage.html
+*_cov.html
+*_cover.html
 *.out
+
+# Test artifacts
+timeout
+sys.stdout.buffer
 
 # Go
 vendor/
