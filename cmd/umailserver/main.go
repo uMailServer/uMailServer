@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/cli"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
@@ -446,17 +447,34 @@ func cmdDomain(args []string) {
 			os.Exit(1)
 		}
 		domainName := args[1]
+
+		// Generate DKIM key pair
+		privKey, _, err := auth.GenerateDKIMKeyPair(2048)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to generate DKIM key: %v\n", err)
+			os.Exit(1)
+		}
+		dkimPublicKey := auth.GetPublicKeyForDNS(privKey)
+		dkimPrivateKeyPEM := string(pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(privKey),
+		}))
+
 		if err := database.CreateDomain(&db.DomainData{
-			Name:        domainName,
-			MaxAccounts: 100,
-			IsActive:    true,
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+			Name:           domainName,
+			MaxAccounts:    100,
+			IsActive:       true,
+			DKIMSelector:   "default",
+			DKIMPublicKey:  dkimPublicKey,
+			DKIMPrivateKey: dkimPrivateKeyPEM,
+			CreatedAt:      time.Now(),
+			UpdatedAt:      time.Now(),
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to create domain: %v\n", err)
 			os.Exit(1)
 		}
 		fmt.Printf("✓ Domain created: %s\n", domainName)
+		fmt.Printf("✓ DKIM key generated (selector: default)\n")
 
 	case "list":
 		domains, err := database.ListDomains()
@@ -502,12 +520,16 @@ func cmdDomain(args []string) {
 		fmt.Printf("%s.    IN    TXT    \"v=spf1 mx ~all\"\n\n", domain.Name)
 
 		fmt.Println("# DKIM Record (default._domainkey):")
-		fmt.Printf("default._domainkey.%s.    IN    TXT    \"v=DKIM1; k=rsa; p=<YOUR_DKIM_KEY>\"\n\n", domain.Name)
+		dkimKey := domain.DKIMPublicKey
+		if dkimKey == "" {
+			dkimKey = "<GENERATE_WITH: umailserver domain add>"
+		}
+		fmt.Printf("default._domainkey.%s.    IN    TXT    \"v=DKIM1; k=rsa; p=%s\"\n\n", domain.Name, dkimKey)
 
 		fmt.Println("# DMARC Record:")
 		fmt.Printf("_dmarc.%s.    IN    TXT    \"v=DMARC1; p=quarantine; rua=mailto:dmarc@%s\"\n\n", domain.Name, domain.Name)
 
-		fmt.Println("Replace <YOUR_SERVER_IP> and <YOUR_DKIM_KEY> with actual values.")
+		fmt.Println("Replace <YOUR_SERVER_IP> with your actual server IP.")
 
 	case "delete":
 		if len(args) < 2 {

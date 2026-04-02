@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/auth"
@@ -602,7 +604,28 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 		return fmt.Errorf("quota exceeded for user: %s", email)
 	}
 
-	// Store message
+	// Handle mail forwarding (before storing, so we skip local store if not keeping copy)
+	if account.ForwardTo != "" {
+		forwardTargets := strings.Split(account.ForwardTo, ",")
+		for _, fwd := range forwardTargets {
+			fwd = strings.TrimSpace(fwd)
+			if fwd == "" {
+				continue
+			}
+			if s.queue != nil {
+				s.queue.Enqueue(email, []string{fwd}, data)
+			}
+		}
+		if !account.ForwardKeepCopy {
+			s.logger.Debug("Message forwarded (no local copy)",
+				"to", email,
+				"from", from,
+			)
+			return nil
+		}
+	}
+
+	// Store message locally
 	messageID, err := s.msgStore.StoreMessage(email, data)
 	if err != nil {
 		return fmt.Errorf("failed to store message: %w", err)
@@ -618,28 +641,30 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 		"message_id", messageID,
 	)
 
-	// Handle mail forwarding
-	if account.ForwardTo != "" {
-		forwardTargets := strings.Split(account.ForwardTo, ",")
-		for _, fwd := range forwardTargets {
-			fwd = strings.TrimSpace(fwd)
-			if fwd == "" {
-				continue
+	// Store metadata and index message for search
+	if s.storageDB != nil {
+		uid, uidErr := s.storageDB.GetNextUID(email, "INBOX")
+		if uidErr == nil {
+			subject, fromAddr, toAddr, dateStr := parseBasicHeaders(data)
+			meta := &storage.MessageMetadata{
+				MessageID:    messageID,
+				UID:          uid,
+				Flags:        []string{"\\Recent"},
+				InternalDate: time.Now(),
+				Size:         int64(len(data)),
+				Subject:      subject,
+				Date:         dateStr,
+				From:         fromAddr,
+				To:           toAddr,
 			}
-			if s.queue != nil {
-				s.queue.Enqueue(email, []string{fwd}, data)
-			}
-		}
-		if !account.ForwardKeepCopy {
-			return nil
-		}
-	}
+			_ = s.storageDB.StoreMessageMetadata(email, "INBOX", uid, meta)
 
-	// Index message for search
-	if s.searchSvc != nil {
-		go func() {
-			_ = s.searchSvc.IndexMessage(email, "INBOX", 1) // TODO: get actual UID
-		}()
+			if s.searchSvc != nil {
+				go func() {
+					_ = s.searchSvc.IndexMessage(email, "INBOX", uid)
+				}()
+			}
+		}
 	}
 
 	// Trigger webhook for mail received
@@ -772,4 +797,17 @@ func (a *pop3MailstoreAdapter) GetMessageSize(user string, index int) (int64, er
 		return 0, err
 	}
 	return msg.Size, nil
+}
+
+// parseBasicHeaders extracts subject, from, to, date from raw message data.
+func parseBasicHeaders(data []byte) (subject, from, to, date string) {
+	msg, err := mail.ReadMessage(strings.NewReader(string(data)))
+	if err != nil {
+		return "", "", "", ""
+	}
+	subject = msg.Header.Get("Subject")
+	from = msg.Header.Get("From")
+	to = msg.Header.Get("To")
+	date = msg.Header.Get("Date")
+	return
 }
