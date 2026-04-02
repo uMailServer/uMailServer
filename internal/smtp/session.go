@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"errors"
 	"bytes"
 	"crypto/tls"
 	"encoding/base64"
@@ -318,6 +319,9 @@ func (s *Session) handleDATA() error {
 	// Read message data
 	data, err := s.readData()
 	if err != nil {
+		if errors.Is(err, errMessageTooLarge) {
+			return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
+		}
 		return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 	}
 
@@ -455,6 +459,9 @@ func (s *Session) handleDATA() error {
 	return s.WriteResponse(250, "OK")
 }
 
+// errMessageTooLarge is returned by readData when the message exceeds the size limit
+var errMessageTooLarge = errors.New("message too large")
+
 // readData reads the email message data from the connection
 func (s *Session) readData() ([]byte, error) {
 	reader := bufio.NewReader(s.conn)
@@ -481,6 +488,11 @@ func (s *Session) readData() ([]byte, error) {
 		}
 
 		data = append(data, line...)
+
+		// Check accumulated size during read to prevent memory exhaustion
+		if int64(len(data)) > s.server.config.MaxMessageSize {
+			return nil, fmt.Errorf("%w: message exceeds maximum size of %d bytes", errMessageTooLarge, s.server.config.MaxMessageSize)
+		}
 	}
 
 	return data, nil
