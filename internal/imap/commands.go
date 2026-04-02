@@ -763,7 +763,6 @@ func (s *Session) handleIdle() error {
 			GetNotificationHub().Unsubscribe(s.user, s.idleNotifyChan)
 			s.idleNotifyChan = nil
 		}
-		close(s.idleStop)
 	}()
 
 	// Send continuation response
@@ -787,16 +786,34 @@ func (s *Session) handleIdle() error {
 		}
 	}()
 
+	// idleCleanup ensures the DONE-reading goroutine exits by forcing
+	// a read deadline on the connection, then waits for it to finish.
+	idleCleanup := func() {
+		select {
+		case <-s.idleStop:
+		default:
+			close(s.idleStop)
+		}
+		s.conn.SetReadDeadline(time.Now())
+		// Wait for goroutine with timeout to avoid deadlock
+		select {
+		case <-doneChan:
+		case <-time.After(5 * time.Second):
+		}
+	}
+
 	// Wait for either DONE or notifications
 	for {
 		select {
 		case <-doneChan:
 			s.WriteResponse(s.tag, "OK IDLE terminated")
+			idleCleanup()
 			return nil
 
 		case notification, ok := <-s.idleNotifyChan:
 			if !ok {
 				s.WriteResponse(s.tag, "OK IDLE terminated")
+				idleCleanup()
 				return nil
 			}
 

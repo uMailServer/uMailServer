@@ -122,14 +122,19 @@ func (s *Session) WriteMultiLineResponse(code int, lines []string) error {
 		s.conn.SetWriteDeadline(time.Now().Add(s.server.config.WriteTimeout))
 	}
 
+	var firstErr error
 	for i, line := range lines {
+		var err error
 		if i < len(lines)-1 {
-			fmt.Fprintf(s.conn, "%d-%s\r\n", code, line)
+			_, err = fmt.Fprintf(s.conn, "%d-%s\r\n", code, line)
 		} else {
-			fmt.Fprintf(s.conn, "%d %s\r\n", code, line)
+			_, err = fmt.Fprintf(s.conn, "%d %s\r\n", code, line)
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // Close closes the session connection
@@ -526,8 +531,8 @@ func (s *Session) handleBDAT(arg string) error {
 		s.bdatBuffer = &bytes.Buffer{}
 	}
 
-	// Check total size
-	if int64(size) > s.server.config.MaxMessageSize {
+	// Check cumulative size against limit
+	if int64(s.bdatBuffer.Len()+size) > s.server.config.MaxMessageSize {
 		s.bdatBuffer = nil
 		s.resetTransaction()
 		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")

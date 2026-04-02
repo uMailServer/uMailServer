@@ -134,8 +134,10 @@ func (s *Server) router() http.Handler {
 	// Health check
 	mux.HandleFunc("/health", s.handleHealth)
 
-	// Metrics endpoint
-	mux.HandleFunc("/metrics", metrics.Get().HTTPHandler)
+	// Metrics endpoint (admin only)
+	mux.HandleFunc("/metrics", s.authMiddleware(s.adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		metrics.Get().HTTPHandler(w, r)
+	}))).ServeHTTP)
 
 	// SSE endpoint for real-time updates
 	mux.HandleFunc("/api/v1/events", s.sseServer.Handler())
@@ -162,11 +164,11 @@ func (s *Server) router() http.Handler {
 	api.HandleFunc("/api/v1/queue", s.adminMiddleware(http.HandlerFunc(s.handleQueue)).ServeHTTP)
 	api.HandleFunc("/api/v1/queue/", s.adminMiddleware(http.HandlerFunc(s.handleQueueDetail)).ServeHTTP)
 
-	// Metrics
-	api.HandleFunc("/api/v1/metrics", s.handleMetrics)
+	// Metrics (admin only)
+	api.HandleFunc("/api/v1/metrics", s.adminMiddleware(http.HandlerFunc(s.handleMetrics)).ServeHTTP)
 
-	// Stats
-	api.HandleFunc("/api/v1/stats", s.handleStats)
+	// Stats (admin only)
+	api.HandleFunc("/api/v1/stats", s.adminMiddleware(http.HandlerFunc(s.handleStats)).ServeHTTP)
 
 	// Search
 	api.HandleFunc("/api/v1/search", s.handleSearch)

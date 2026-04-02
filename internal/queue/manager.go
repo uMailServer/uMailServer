@@ -145,7 +145,11 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 		}
 
 		if err := m.db.Enqueue(entry); err != nil {
-			// Clean up message file on failure
+			// Roll back entries already created for this message
+			for j := 0; j < i; j++ {
+				rollbackID := fmt.Sprintf("%s-%d", baseID, j)
+				m.db.Dequeue(rollbackID)
+			}
 			deleteFile(messagePath)
 			return "", fmt.Errorf("failed to enqueue: %w", err)
 		}
@@ -393,8 +397,8 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 	entry.Status = "delivered"
 	m.db.UpdateQueueEntry(entry)
 
-	// Clean up message file
-	deleteFile(entry.MessagePath)
+	// Only delete message file when no other entries reference it
+	m.deleteMessageFileIfUnreferenced(entry.MessagePath)
 }
 
 // handleDeliveryFailure handles delivery failure with exponential backoff and jitter
@@ -478,8 +482,12 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 		}
 	}
 
-	// Clean up
-	deleteFile(entry.MessagePath)
+	// Only delete message file when no other entries reference it
+	if m.db != nil {
+		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+	} else {
+		deleteFile(entry.MessagePath)
+	}
 }
 
 // Retry delays for exponential backoff
@@ -585,6 +593,37 @@ func readFile(path string) ([]byte, error) {
 
 func deleteFile(path string) {
 	os.Remove(path)
+}
+
+// countMessageRefs counts how many queue entries still reference the given
+// message file path. Used to avoid deleting a shared .msg file while other
+// recipients still need it.
+func (m *Manager) countMessageRefs(messagePath string) int {
+	count := 0
+	m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var entry db.QueueEntry
+		if err := json.Unmarshal(value, &entry); err != nil {
+			return nil
+		}
+		if entry.MessagePath == messagePath {
+			// Final-state entries (delivered/bounced) no longer need the file
+			if entry.Status != "delivered" && entry.Status != "bounced" {
+				count++
+			}
+		}
+		return nil
+	})
+	return count
+}
+
+// deleteMessageFileIfUnreferenced removes the message file only when no queue
+// entries reference it anymore. Returns true if the file was deleted.
+func (m *Manager) deleteMessageFileIfUnreferenced(messagePath string) bool {
+	if m.countMessageRefs(messagePath) == 0 {
+		os.Remove(messagePath)
+		return true
+	}
+	return false
 }
 
 // LookupMX looks up MX records for a domain
