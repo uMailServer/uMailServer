@@ -686,14 +686,18 @@ func (s *Session) handleAppend(args []string, line string) error {
 		literalEnd := strings.Index(line[literalStart:], "}")
 		if literalEnd > 0 {
 			sizeStr := line[literalStart+1 : literalStart+literalEnd]
-			size, _ := strconv.Atoi(sizeStr)
+			size, err := strconv.Atoi(sizeStr)
+			if err != nil {
+				s.WriteResponse(s.tag, "BAD Invalid literal size")
+				return nil
+			}
 
 			// Request the literal
 			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", size))
 
 			// Read the message data
 			data := make([]byte, size)
-			_, err := s.reader.Read(data)
+			_, err = s.reader.Read(data)
 			if err != nil {
 				s.WriteResponse(s.tag, "NO Failed to read message data")
 				return err

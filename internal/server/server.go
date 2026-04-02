@@ -553,7 +553,10 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 		}
 
 		// Resolve alias if the recipient is not a direct account
-		target, _ := s.database.ResolveAlias(domain, user)
+		target, aliasErr := s.database.ResolveAlias(domain, user)
+			if aliasErr != nil {
+				s.logger.Debug("Alias resolution failed, trying direct delivery", "domain", domain, "user", user, "error", aliasErr)
+			}
 		if target != "" {
 			tUser, tDomain := parseEmail(target)
 			if tUser != "" && tDomain != "" {
@@ -626,7 +629,9 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 				continue
 			}
 			if s.queue != nil {
-				s.queue.Enqueue(email, []string{fwd}, data)
+				if _, err := s.queue.Enqueue(email, []string{fwd}, data); err != nil {
+					s.logger.Error("Failed to enqueue forwarded message", "from", email, "to", fwd, "error", err)
+				}
 			}
 		}
 		if !account.ForwardKeepCopy {
@@ -646,7 +651,9 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 
 	// Update quota
 	account.QuotaUsed += int64(len(data))
-	s.database.UpdateAccount(account)
+	if err := s.database.UpdateAccount(account); err != nil {
+		s.logger.Error("Failed to update quota", "email", email, "error", err)
+	}
 
 	s.logger.Debug("Message delivered",
 		"to", email,
@@ -670,11 +677,15 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 				From:         fromAddr,
 				To:           toAddr,
 			}
-			_ = s.storageDB.StoreMessageMetadata(email, "INBOX", uid, meta)
+			if err := s.storageDB.StoreMessageMetadata(email, "INBOX", uid, meta); err != nil {
+					s.logger.Error("Failed to store message metadata", "email", email, "uid", uid, "error", err)
+				}
 
 			if s.searchSvc != nil {
 				go func() {
-					_ = s.searchSvc.IndexMessage(email, "INBOX", uid)
+					if idxErr := s.searchSvc.IndexMessage(email, "INBOX", uid); idxErr != nil {
+						s.logger.Error("Failed to index message for search", "email", email, "uid", uid, "error", idxErr)
+					}
 				}()
 			}
 		}

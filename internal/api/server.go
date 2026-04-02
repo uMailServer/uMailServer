@@ -749,13 +749,17 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 		accounts, err = s.db.ListAccountsByDomain(domain)
 	} else {
 		// Get all accounts from all domains
-		domains, err := s.db.ListDomains()
-		if err != nil {
+		domains, listErr := s.db.ListDomains()
+		if listErr != nil {
 			s.sendError(w, http.StatusInternalServerError, "failed to list accounts")
 			return
 		}
 		for _, d := range domains {
-			domainAccounts, _ := s.db.ListAccountsByDomain(d.Name)
+			domainAccounts, accErr := s.db.ListAccountsByDomain(d.Name)
+			if accErr != nil {
+				s.sendError(w, http.StatusInternalServerError, "failed to list accounts for domain")
+				return
+			}
 			accounts = append(accounts, domainAccounts...)
 		}
 	}
