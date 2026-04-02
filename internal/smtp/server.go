@@ -25,6 +25,7 @@ type Server struct {
 	connMu      sync.RWMutex
 	running     atomic.Bool
 	shutdown    chan struct{}
+	stopOnce    sync.Once
 	logger      *slog.Logger
 
 	// Hooks for message processing
@@ -250,7 +251,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 // Stop gracefully shuts down the server
 func (s *Server) Stop() error {
 	s.running.Store(false)
-	close(s.shutdown)
+	s.stopOnce.Do(func() {
+		close(s.shutdown)
+	})
 
 	// Close all listeners
 	for _, ln := range s.listeners {

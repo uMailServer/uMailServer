@@ -38,6 +38,7 @@ type Manager struct {
 	resolver     *Resolver
 	running      atomic.Bool
 	shutdown     chan struct{}
+	stopOnce     sync.Once
 	mu           sync.RWMutex
 	metrics      *metrics.SimpleMetrics
 	maxRetries   int
@@ -92,7 +93,7 @@ func (m *Manager) Stop() {
 		return
 	}
 	m.running.Store(false)
-	close(m.shutdown)
+	m.stopOnce.Do(func() { close(m.shutdown) })
 }
 
 // Enqueue adds a message to the outbound queue
@@ -224,16 +225,36 @@ func (m *Manager) processQueue(ctx context.Context) {
 	}
 }
 
-// processPendingEntries processes pending queue entries
+// processPendingEntries processes pending queue entries with bounded concurrency
 func (m *Manager) processPendingEntries() {
 	entries, err := m.db.GetPendingQueue(time.Now())
 	if err != nil {
 		return
 	}
 
+	// Limit concurrent deliveries
+	sem := make(chan struct{}, 20)
+	var wg sync.WaitGroup
+
 	for _, entry := range entries {
-		go m.deliver(entry)
+		select {
+		case <-m.shutdown:
+			wg.Wait()
+			return
+		default:
+		}
+
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(e *db.QueueEntry) {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+			m.deliver(e)
+		}(entry)
 	}
+	wg.Wait()
 }
 
 // deliver attempts to deliver a message
