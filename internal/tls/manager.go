@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/acme"
@@ -25,6 +26,7 @@ type Manager struct {
 	logger      *slog.Logger
 	certManager *autocert.Manager
 	certCache   map[string]*tls.Certificate
+	certMu      sync.RWMutex
 	certDir     string
 }
 
@@ -114,10 +116,13 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 
 // getManualCertificate loads a certificate from file
 func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, error) {
-	// Check cache first
+	// Check cache first (read lock)
+	m.certMu.RLock()
 	if cert, ok := m.certCache[serverName]; ok {
+		m.certMu.RUnlock()
 		return cert, nil
 	}
+	m.certMu.RUnlock()
 
 	// Determine cert paths
 	certPath := m.config.CertFile
@@ -146,8 +151,10 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 		return nil, fmt.Errorf("failed to load certificate: %w", err)
 	}
 
-	// Cache certificate
+	// Cache certificate (write lock)
+	m.certMu.Lock()
 	m.certCache[serverName] = &cert
+	m.certMu.Unlock()
 
 	return &cert, nil
 }

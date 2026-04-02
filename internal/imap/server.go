@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
@@ -23,7 +24,7 @@ type Server struct {
 	sessions   map[string]*Session
 	sessionsMu sync.RWMutex
 	shutdown   chan struct{}
-	running    bool
+	running    atomic.Bool
 
 	// Authentication
 	authFunc func(username, password string) (bool, error)
@@ -102,7 +103,7 @@ func (s *Server) Start() error {
 	}
 
 	s.listeners = append(s.listeners, listener)
-	s.running = true
+	s.running.Store(true)
 
 	s.logger.Info("IMAP server started", "addr", s.addr)
 
@@ -123,7 +124,7 @@ func (s *Server) StartTLS() error {
 	}
 
 	s.listeners = append(s.listeners, listener)
-	s.running = true
+	s.running.Store(true)
 
 	s.logger.Info("IMAP server started with TLS", "addr", s.addr)
 
@@ -134,7 +135,7 @@ func (s *Server) StartTLS() error {
 
 // Stop stops the IMAP server
 func (s *Server) Stop() error {
-	s.running = false
+	s.running.Store(false)
 	close(s.shutdown)
 
 	for _, listener := range s.listeners {
@@ -164,7 +165,7 @@ func (s *Server) acceptLoop(listener net.Listener) {
 
 		conn, err := listener.Accept()
 		if err != nil {
-			if s.running {
+			if s.running.Load() {
 				s.logger.Error("Failed to accept connection", "error", err)
 			}
 			continue

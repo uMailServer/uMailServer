@@ -120,7 +120,7 @@ func TestServerNotStarted(t *testing.T) {
 	mailstore := &mockMailstore{}
 	server := NewServer(config, mailstore)
 
-	if server.running {
+	if server.running.Load() {
 		t.Error("expected server to not be running initially")
 	}
 }
@@ -377,7 +377,7 @@ func TestServerStartStop(t *testing.T) {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 
-	if !server.running {
+	if !server.running.Load() {
 		t.Error("expected server to be running")
 	}
 
@@ -387,7 +387,7 @@ func TestServerStartStop(t *testing.T) {
 		t.Fatalf("Failed to stop server: %v", err)
 	}
 
-	if server.running {
+	if server.running.Load() {
 		t.Error("expected server to be stopped")
 	}
 }
@@ -430,7 +430,7 @@ eW1lYW5pbmdmdWxhbmR0aGF0d2lsbHN0YW5kdXB0b3N0dWZmIT7FehQdRp6YysM=
 		t.Fatalf("Failed to start TLS server: %v", err)
 	}
 
-	if !server.running {
+	if !server.running.Load() {
 		t.Error("expected TLS server to be running")
 	}
 
@@ -1309,7 +1309,7 @@ func TestAcceptLoopShutdown(t *testing.T) {
 
 	// Initialize shutdown channel
 	s.shutdown = make(chan struct{})
-	s.running = true
+	s.running.Store(true)
 
 	// Start acceptLoop
 	done := make(chan bool)

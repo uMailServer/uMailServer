@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/auth"
@@ -35,7 +36,7 @@ type Manager struct {
 	store        *store.MaildirStore
 	dataDir      string
 	resolver     *Resolver
-	running      bool
+	running      atomic.Bool
 	shutdown     chan struct{}
 	mu           sync.RWMutex
 	metrics      *metrics.SimpleMetrics
@@ -76,10 +77,10 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string) *Manager {
 
 // Start starts the queue manager
 func (m *Manager) Start(ctx context.Context) {
-	if m.running {
+	if m.running.Load() {
 		return
 	}
-	m.running = true
+	m.running.Store(true)
 
 	// Start queue processor
 	go m.processQueue(ctx)
@@ -87,10 +88,10 @@ func (m *Manager) Start(ctx context.Context) {
 
 // Stop stops the queue manager
 func (m *Manager) Stop() {
-	if !m.running {
+	if !m.running.Load() {
 		return
 	}
-	m.running = false
+	m.running.Store(false)
 	close(m.shutdown)
 }
 

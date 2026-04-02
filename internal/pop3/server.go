@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -21,7 +22,7 @@ type Server struct {
 	sessions   map[string]*Session
 	sessionsMu sync.RWMutex
 	shutdown   chan struct{}
-	running    bool
+	running    atomic.Bool
 
 	authFunc  func(username, password string) (bool, error)
 	mailstore Mailstore
@@ -106,7 +107,7 @@ func (s *Server) Start() error {
 	}
 
 	s.listener = listener
-	s.running = true
+	s.running.Store(true)
 
 	s.logger.Info("POP3 server started", "addr", s.addr)
 
@@ -117,7 +118,7 @@ func (s *Server) Start() error {
 
 // Stop stops the POP3 server
 func (s *Server) Stop() error {
-	s.running = false
+	s.running.Store(false)
 	close(s.shutdown)
 
 	if s.listener != nil {
@@ -147,7 +148,7 @@ func (s *Server) acceptLoop() {
 
 		conn, err := s.listener.Accept()
 		if err != nil {
-			if s.running {
+			if s.running.Load() {
 				s.logger.Error("Failed to accept connection", "error", err)
 			}
 			continue

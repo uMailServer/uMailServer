@@ -718,7 +718,7 @@ func TestServerAcceptLoop_AcceptError(t *testing.T) {
 	_ = addr
 	server.listeners = append(server.listeners, listener2)
 	server.shutdown = make(chan struct{})
-	server.running = true
+	server.running.Store(true)
 
 	// Close the listener to force accept error
 	listener2.Close()

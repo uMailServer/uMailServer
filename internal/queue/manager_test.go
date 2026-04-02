@@ -78,12 +78,12 @@ func TestManager(t *testing.T) {
 		defer cancel()
 
 		manager.Start(ctx)
-		if !manager.running {
+		if !manager.running.Load() {
 			t.Error("Expected manager to be running")
 		}
 
 		manager.Stop()
-		if manager.running {
+		if manager.running.Load() {
 			t.Error("Expected manager to be stopped")
 		}
 	})
@@ -439,13 +439,13 @@ func TestManagerDoubleStart(t *testing.T) {
 
 	// Start first time
 	manager.Start(ctx)
-	if !manager.running {
+	if !manager.running.Load() {
 		t.Error("expected manager to be running after first start")
 	}
 
 	// Start again - should not panic or create issues
 	manager.Start(ctx)
-	if !manager.running {
+	if !manager.running.Load() {
 		t.Error("expected manager to still be running")
 	}
 
@@ -471,7 +471,7 @@ func TestManagerDoubleStop(t *testing.T) {
 
 	// Stop again - should not panic
 	manager.Stop()
-	if manager.running {
+	if manager.running.Load() {
 		t.Error("expected manager to be stopped")
 	}
 }
@@ -1023,13 +1023,13 @@ func TestManagerStartStop(t *testing.T) {
 	defer cancel()
 
 	manager.Start(ctx)
-	if !manager.running {
+	if !manager.running.Load() {
 		t.Error("expected manager to be running after Start")
 	}
 
 	// Test Stop
 	manager.Stop()
-	if manager.running {
+	if manager.running.Load() {
 		t.Error("expected manager to be stopped after Stop")
 	}
 }

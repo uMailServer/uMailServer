@@ -9,6 +9,7 @@ import (
 	"net/mail"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
@@ -22,7 +23,7 @@ type Server struct {
 	listeners   []net.Listener
 	connections map[string]*Session
 	connMu      sync.RWMutex
-	running     bool
+	running     atomic.Bool
 	shutdown    chan struct{}
 	logger      *slog.Logger
 
@@ -126,7 +127,7 @@ func (s *Server) ListenAndServeTLS(addr string, tlsConfig *tls.Config) error {
 func (s *Server) Serve(listener net.Listener) error {
 	s.listener = listener
 	s.listeners = append(s.listeners, listener)
-	s.running = true
+	s.running.Store(true)
 
 	s.logger.Info("SMTP server listening",
 		slog.String("address", listener.Addr().String()),
@@ -148,7 +149,7 @@ func (s *Server) Serve(listener net.Listener) error {
 			if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
 				continue
 			}
-			if s.running {
+			if s.running.Load() {
 				s.logger.Error("accept error", slog.Any("error", err))
 			}
 			continue
@@ -247,7 +248,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 // Stop gracefully shuts down the server
 func (s *Server) Stop() error {
-	s.running = false
+	s.running.Store(false)
 	close(s.shutdown)
 
 	// Close all listeners
