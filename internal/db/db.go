@@ -13,22 +13,15 @@ import (
 
 // Bucket names
 const (
-	BucketAccounts      = "accounts"
-	BucketDomains       = "domains"
-	BucketQueue         = "queue"
-	BucketSessions      = "sessions"
-	BucketRateLimits    = "ratelimits"
-	BucketSpam          = "spam"
-	BucketBlocklist     = "blocklist"
-	BucketMetrics       = "metrics"
-	BucketUIDValidity   = "uidvalidity"
-	BucketUIDNext       = "uidnext"
-	BucketMessageMeta   = "messagemeta"
-	BucketIndex         = "index"
-	BucketAliases       = "aliases"
-	BucketContacts      = "contacts"
-	BucketACL           = "acl"
-	BucketSubscriptions = "subscriptions"
+	BucketAccounts   = "accounts"
+	BucketDomains    = "domains"
+	BucketQueue      = "queue"
+	BucketSpam       = "spam"
+	BucketMetrics    = "metrics"
+	BucketMessageMeta = "messagemeta"
+	BucketIndex      = "index"
+	BucketAliases    = "aliases"
+	BucketContacts   = "contacts"
 )
 
 // DB wraps bbolt database
@@ -86,27 +79,6 @@ type QueueEntry struct {
 	Status      string    `json:"status"` // pending, sending, failed, delivered
 }
 
-// SessionData holds active session information
-type SessionData struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"` // smtp, imap, http
-	User      string    `json:"user"`
-	Domain    string    `json:"domain"`
-	RemoteIP  string    `json:"remote_ip"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-// BlockEntry holds blocklist entries
-type BlockEntry struct {
-	Key       string    `json:"key"`  // IP or domain
-	Type      string    `json:"type"` // ip, domain
-	Reason    string    `json:"reason"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
-	Source    string    `json:"source"` // manual, auto
-}
-
 // AliasData holds email alias information
 type AliasData struct {
 	Alias     string    `json:"alias"`  // alias@domain
@@ -147,30 +119,18 @@ func (d *DB) Close() error {
 	return d.bolt.Close()
 }
 
-// BoltDB returns the underlying bbolt database (for internal use only)
-func (d *DB) BoltDB() *bbolt.DB {
-	return d.bolt
-}
-
 // initBuckets creates all required buckets
 func (d *DB) initBuckets() error {
 	buckets := []string{
 		BucketAccounts,
 		BucketDomains,
 		BucketQueue,
-		BucketSessions,
-		BucketRateLimits,
 		BucketSpam,
-		BucketBlocklist,
 		BucketMetrics,
-		BucketUIDValidity,
-		BucketUIDNext,
 		BucketMessageMeta,
 		BucketIndex,
 		BucketContacts,
 		BucketAliases,
-		BucketACL,
-		BucketSubscriptions,
 	}
 
 	return d.bolt.Update(func(tx *bbolt.Tx) error {
@@ -225,42 +185,6 @@ func (d *DB) Delete(bucket string, key string) error {
 		}
 		return b.Delete([]byte(key))
 	})
-}
-
-// Exists checks if a key exists in a bucket
-func (d *DB) Exists(bucket string, key string) bool {
-	var exists bool
-	err := d.bolt.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return fmt.Errorf("bucket not found: %s", bucket)
-		}
-		exists = b.Get([]byte(key)) != nil
-		return nil
-	})
-	if err != nil {
-		return false
-	}
-	return exists
-}
-
-// ListKeys returns all keys in a bucket
-func (d *DB) ListKeys(bucket string) ([]string, error) {
-	var keys []string
-	err := d.bolt.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return fmt.Errorf("bucket not found: %s", bucket)
-		}
-
-		c := b.Cursor()
-		for k, _ := c.First(); k != nil; k, _ = c.Next() {
-			keys = append(keys, string(k))
-		}
-		return nil
-	})
-
-	return keys, err
 }
 
 // ForEach iterates over all entries in a bucket
@@ -335,20 +259,6 @@ func (d *DB) GetAccount(domain, localPart string) (*AccountData, error) {
 		return nil, err
 	}
 	return &account, nil
-}
-
-// GetUserSecret returns the password hash for a user identified by email address.
-// This is used by CRAM-MD5 authentication where the shared secret is the plaintext
-// password (or a dedicated app secret). The password hash is returned so callers
-// can decide how to use it.
-func (d *DB) GetUserSecret(email string) (string, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	localPart, domain := splitEmail(email)
-	account, err := d.GetAccount(domain, localPart)
-	if err != nil {
-		return "", err
-	}
-	return account.PasswordHash, nil
 }
 
 // UpdateAccount updates an existing account
@@ -477,118 +387,6 @@ func (d *DB) GetPendingQueue(now time.Time) ([]*QueueEntry, error) {
 	return entries, err
 }
 
-// --- UID Operations (for IMAP) ---
-
-// GetUIDValidity returns the UID validity for a folder
-func (d *DB) GetUIDValidity(domain, user, folder string) (uint32, error) {
-	key := fmt.Sprintf("%s/%s/%s", domain, user, folder)
-	var validity uint32
-
-	err := d.Get(BucketUIDValidity, key, &validity)
-	if err != nil {
-		// Generate new validity
-		validity = uint32(time.Now().Unix())
-		if err := d.Put(BucketUIDValidity, key, validity); err != nil {
-			return 0, err
-		}
-	}
-
-	return validity, nil
-}
-
-// GetUIDNext returns the next UID for a folder
-func (d *DB) GetUIDNext(domain, user, folder string) (uint32, error) {
-	key := fmt.Sprintf("%s/%s/%s", domain, user, folder)
-	var next uint32
-
-	err := d.Get(BucketUIDNext, key, &next)
-	if err != nil {
-		next = 1
-	}
-
-	// Increment and store
-	next++
-	if err := d.Put(BucketUIDNext, key, next); err != nil {
-		return 0, err
-	}
-
-	return next, nil
-}
-
-// --- Session Operations ---
-
-// CreateSession creates a new session
-func (d *DB) CreateSession(session *SessionData) error {
-	if session.CreatedAt.IsZero() {
-		session.CreatedAt = time.Now()
-	}
-	return d.Put(BucketSessions, session.ID, session)
-}
-
-// GetSession retrieves a session
-func (d *DB) GetSession(id string) (*SessionData, error) {
-	var session SessionData
-	if err := d.Get(BucketSessions, id, &session); err != nil {
-		return nil, err
-	}
-	return &session, nil
-}
-
-// DeleteSession removes a session
-func (d *DB) DeleteSession(id string) error {
-	return d.Delete(BucketSessions, id)
-}
-
-// --- Blocklist Operations ---
-
-// BlockIP adds an IP to the blocklist
-func (d *DB) BlockIP(ip string, reason, source string, duration time.Duration) error {
-	entry := BlockEntry{
-		Key:       ip,
-		Type:      "ip",
-		Reason:    reason,
-		CreatedAt: time.Now(),
-		Source:    source,
-	}
-
-	if duration > 0 {
-		entry.ExpiresAt = time.Now().Add(duration)
-	}
-
-	return d.Put(BucketBlocklist, ip, entry)
-}
-
-// IsBlocked checks if an IP is blocked
-func (d *DB) IsBlocked(ip string) (bool, *BlockEntry) {
-	var entry BlockEntry
-	if err := d.Get(BucketBlocklist, ip, &entry); err != nil {
-		return false, nil
-	}
-
-	// Check if expired
-	if !entry.ExpiresAt.IsZero() && entry.ExpiresAt.Before(time.Now()) {
-		// Auto-unblock
-		d.Delete(BucketBlocklist, ip)
-		return false, nil
-	}
-
-	return true, &entry
-}
-
-// Unblock removes an IP from the blocklist
-func (d *DB) Unblock(ip string) error {
-	return d.Delete(BucketBlocklist, ip)
-}
-
-// CreateAlias stores a new alias
-func (d *DB) CreateAlias(alias *AliasData) error {
-	if alias.CreatedAt.IsZero() {
-		alias.CreatedAt = time.Now()
-	}
-	key := alias.Domain + ":" + strings.ToLower(strings.Split(alias.Alias, "@")[0])
-	return d.Put(BucketAliases, key, alias)
-}
-
 // GetAlias retrieves an alias by domain and local part
 func (d *DB) GetAlias(domain, localPart string) (*AliasData, error) {
 	key := domain + ":" + strings.ToLower(localPart)
@@ -597,33 +395,6 @@ func (d *DB) GetAlias(domain, localPart string) (*AliasData, error) {
 		return nil, err
 	}
 	return &alias, nil
-}
-
-// UpdateAlias updates an existing alias
-func (d *DB) UpdateAlias(alias *AliasData) error {
-	key := alias.Domain + ":" + strings.ToLower(strings.Split(alias.Alias, "@")[0])
-	return d.Put(BucketAliases, key, alias)
-}
-
-// DeleteAlias removes an alias
-func (d *DB) DeleteAlias(domain, localPart string) error {
-	key := domain + ":" + strings.ToLower(localPart)
-	return d.Delete(BucketAliases, key)
-}
-
-// ListAliasesByDomain returns all aliases for a domain
-func (d *DB) ListAliasesByDomain(domain string) ([]*AliasData, error) {
-	prefix := domain + ":"
-	var aliases []*AliasData
-	err := d.ForEachPrefix(BucketAliases, prefix, func(key string, value []byte) error {
-		var alias AliasData
-		if err := json.Unmarshal(value, &alias); err != nil {
-			return nil
-		}
-		aliases = append(aliases, &alias)
-		return nil
-	})
-	return aliases, err
 }
 
 // ResolveAlias resolves an alias to its target address
@@ -638,87 +409,3 @@ func (d *DB) ResolveAlias(domain, localPart string) (string, error) {
 	return alias.Target, nil
 }
 
-// --- ACL operations (RFC 4314) ---
-
-// ACLData represents an ACL entry for a mailbox
-type ACLData struct {
-	Mailbox    string   `json:"mailbox"`
-	Identifier string   `json:"identifier"`
-	Rights     []string `json:"rights"`
-}
-
-// SetMailboxACL sets ACL rights for an identifier on a mailbox
-func (d *DB) SetMailboxACL(user, mailbox, identifier string, rights []string) error {
-	key := fmt.Sprintf("%s/%s/%s", strings.ToLower(user), mailbox, identifier)
-	entry := &ACLData{
-		Mailbox:    mailbox,
-		Identifier: identifier,
-		Rights:     rights,
-	}
-	return d.Put(BucketACL, key, entry)
-}
-
-// ACLEntry is a lightweight ACL entry returned by GetMailboxACL
-type ACLEntry struct {
-	Identifier string
-	Rights     []string
-}
-
-// GetMailboxACL returns all ACL entries for a mailbox
-func (d *DB) GetMailboxACL(user, mailbox string) ([]*ACLEntry, error) {
-	prefix := fmt.Sprintf("%s/%s/", strings.ToLower(user), mailbox)
-	var entries []*ACLEntry
-	err := d.ForEachPrefix(BucketACL, prefix, func(key string, value []byte) error {
-		var data ACLData
-		if err := json.Unmarshal(value, &data); err != nil {
-			return nil
-		}
-		entries = append(entries, &ACLEntry{
-			Identifier: data.Identifier,
-			Rights:     data.Rights,
-		})
-		return nil
-	})
-	return entries, err
-}
-
-// DeleteMailboxACL removes ACL rights for an identifier on a mailbox
-func (d *DB) DeleteMailboxACL(user, mailbox, identifier string) error {
-	key := fmt.Sprintf("%s/%s/%s", strings.ToLower(user), mailbox, identifier)
-	return d.Delete(BucketACL, key)
-}
-
-// --- Subscription operations ---
-
-// Subscribe stores a mailbox subscription for a user
-func (d *DB) Subscribe(user, mailbox string) error {
-	key := fmt.Sprintf("%s/%s", strings.ToLower(user), mailbox)
-	return d.Put(BucketSubscriptions, key, true)
-}
-
-// Unsubscribe removes a mailbox subscription for a user
-func (d *DB) Unsubscribe(user, mailbox string) error {
-	key := fmt.Sprintf("%s/%s", strings.ToLower(user), mailbox)
-	return d.Delete(BucketSubscriptions, key)
-}
-
-// IsSubscribed checks if a user is subscribed to a mailbox
-func (d *DB) IsSubscribed(user, mailbox string) (bool, error) {
-	key := fmt.Sprintf("%s/%s", strings.ToLower(user), mailbox)
-	return d.Exists(BucketSubscriptions, key), nil
-}
-
-// ListSubscriptions returns all subscribed mailboxes for a user
-func (d *DB) ListSubscriptions(user string) ([]string, error) {
-	prefix := strings.ToLower(user) + "/"
-	var mailboxes []string
-	err := d.ForEachPrefix(BucketSubscriptions, prefix, func(key string, value []byte) error {
-		// key is "user/mailbox", extract mailbox part
-		parts := strings.SplitN(key, "/", 2)
-		if len(parts) == 2 {
-			mailboxes = append(mailboxes, parts[1])
-		}
-		return nil
-	})
-	return mailboxes, err
-}

@@ -343,9 +343,6 @@ func generateSessionID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-// Version is the server version string reported via the ID command.
-const Version = "0.1.0"
-
 // defaultCapabilities returns the default server capabilities
 func defaultCapabilities() []string {
 	return []string{

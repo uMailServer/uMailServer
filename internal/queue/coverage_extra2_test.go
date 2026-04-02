@@ -292,19 +292,3 @@ func TestDeliverFullWithFakeServer(t *testing.T) {
 	}
 }
 
-// TestDecodeVERPNoAt tests DecodeVERP with no @ in the address after the prefix.
-func TestDecodeVERPNoAt(t *testing.T) {
-	result := DecodeVERP("bounce-user=domain.com")
-	if result != "" {
-		t.Errorf("expected empty string for VERP address with no @, got %q", result)
-	}
-}
-
-// TestDecodeVERPNoEquals tests DecodeVERP with no = in the user part.
-func TestDecodeVERPNoEqualsExplicit(t *testing.T) {
-	// "bounce-user@domain.com" - has @ but user part has no =
-	result := DecodeVERP("bounce-user@domain.com")
-	if result != "" {
-		t.Errorf("expected empty string for VERP with no = in user part, got %q", result)
-	}
-}

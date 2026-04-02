@@ -373,38 +373,3 @@ func parseFailureOptions(s string) []string {
 	return result
 }
 
-// GenerateDMARCReport generates a DMARC aggregate report.
-// TODO: Wire into a DMARC aggregate report scheduler (RFC 7489) that sends reports to rua=mailto:dmarc@domain.
-func GenerateDMARCReport(domain string, records []DMARCReportRecord) string {
-	// This is a simplified report generator
-	// In production, this would generate XML reports per RFC 7489
-
-	report := fmt.Sprintf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n")
-	report += fmt.Sprintf("<feedback>\r\n")
-	report += fmt.Sprintf("  <report_metadata>\r\n")
-	report += fmt.Sprintf("    <org_name>uMailServer</org_name>\r\n")
-	report += fmt.Sprintf("    <email>postmaster@%s</email>\r\n", domain)
-	report += fmt.Sprintf("    <report_id>%d</report_id>\r\n", time.Now().Unix())
-	report += fmt.Sprintf("    <date_range>\r\n")
-	report += fmt.Sprintf("      <begin>%d</begin>\r\n", time.Now().Add(-24*time.Hour).Unix())
-	report += fmt.Sprintf("      <end>%d</end>\r\n", time.Now().Unix())
-	report += fmt.Sprintf("    </date_range>\r\n")
-	report += fmt.Sprintf("  </report_metadata>\r\n")
-	report += fmt.Sprintf("  <policy_published>\r\n")
-	report += fmt.Sprintf("    <domain>%s</domain>\r\n", domain)
-	report += fmt.Sprintf("  </policy_published>\r\n")
-	report += fmt.Sprintf("</feedback>\r\n")
-
-	return report
-}
-
-// DMARCReportRecord represents a single record in a DMARC report
-type DMARCReportRecord struct {
-	SourceIP    string
-	Count       int
-	PolicyEval  string
-	Disposition string
-	SPFResult   string
-	DKIMResult  string
-	HeaderFrom  string
-}
