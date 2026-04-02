@@ -15,12 +15,12 @@ type SPFResult int
 
 const (
 	SPFNone      SPFResult = iota // No SPF record found
-	SPFNeutral             // Neutral result
-	SPFPass                // SPF check passed
-	SPFFail                // SPF check failed (hard fail)
-	SPFSoftFail            // SPF check failed (soft fail)
-	SPFTempError           // Temporary error
-	SPFPermError           // Permanent error
+	SPFNeutral                    // Neutral result
+	SPFPass                       // SPF check passed
+	SPFFail                       // SPF check failed (hard fail)
+	SPFSoftFail                   // SPF check failed (soft fail)
+	SPFTempError                  // Temporary error
+	SPFPermError                  // Permanent error
 )
 
 func (r SPFResult) String() string {

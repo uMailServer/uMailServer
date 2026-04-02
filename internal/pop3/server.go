@@ -23,8 +23,8 @@ type Server struct {
 	shutdown   chan struct{}
 	running    bool
 
-	authFunc    func(username, password string) (bool, error)
-	mailstore   Mailstore
+	authFunc  func(username, password string) (bool, error)
+	mailstore Mailstore
 }
 
 // TLSConfig holds TLS configuration

@@ -16,10 +16,10 @@ type Document struct {
 
 // Index provides full-text search capabilities
 type Index struct {
-	mu        sync.RWMutex
-	docs      map[string]*Document
-	tokens    map[string]map[string]int // token -> docID -> frequency
-	docCount  int
+	mu       sync.RWMutex
+	docs     map[string]*Document
+	tokens   map[string]map[string]int // token -> docID -> frequency
+	docCount int
 }
 
 // NewIndex creates a new search index

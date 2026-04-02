@@ -94,12 +94,12 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Initialize TLS manager
 	tlsConfig := tls.Config{
-		AutoTLS:     cfg.TLS.ACME.Enabled,
-		Email:       cfg.TLS.ACME.Email,
-		Domains:     []string{cfg.Server.Hostname},
-		UseStaging:  cfg.TLS.ACME.Provider == "letsencrypt-staging",
-		CertFile:    cfg.TLS.CertFile,
-		KeyFile:     cfg.TLS.KeyFile,
+		AutoTLS:    cfg.TLS.ACME.Enabled,
+		Email:      cfg.TLS.ACME.Email,
+		Domains:    []string{cfg.Server.Hostname},
+		UseStaging: cfg.TLS.ACME.Provider == "letsencrypt-staging",
+		CertFile:   cfg.TLS.CertFile,
+		KeyFile:    cfg.TLS.KeyFile,
 	}
 
 	tlsManager, err := tls.NewManager(tlsConfig, logger)

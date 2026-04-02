@@ -31,11 +31,11 @@ const (
 
 // MTASTSPolicy represents a parsed MTA-STS policy
 type MTASTSPolicy struct {
-	Version string       // Must be "STSv1"
-	Mode    MTASTSMode   // enforce, testing, or none
-	MX      []string     // List of MX patterns
-	MaxAge  int          // Policy max age in seconds
-	Raw     string       // Raw policy text
+	Version string     // Must be "STSv1"
+	Mode    MTASTSMode // enforce, testing, or none
+	MX      []string   // List of MX patterns
+	MaxAge  int        // Policy max age in seconds
+	Raw     string     // Raw policy text
 }
 
 // MTASTSRecord represents the DNS TXT record
@@ -54,9 +54,9 @@ type MTASTSCacheEntry struct {
 
 // MTASTSValidator handles MTA-STS policy validation
 type MTASTSValidator struct {
-	resolver DNSResolver
-	cache    map[string]*MTASTSCacheEntry
-	cacheMu  sync.RWMutex
+	resolver   DNSResolver
+	cache      map[string]*MTASTSCacheEntry
+	cacheMu    sync.RWMutex
 	httpClient *http.Client
 }
 
@@ -366,11 +366,11 @@ func (v *MTASTSValidator) ClearCache() {
 
 // MTASTSReport represents an MTA-STS TLSRPT report
 type MTASTSReport struct {
-	OrganizationName string                       `json:"organization-name"`
-	DateRange        MTASTSDateRange              `json:"date-range"`
-	ContactInfo      string                       `json:"contact-info"`
-	ReportID         string                       `json:"report-id"`
-	Policies         []MTASTSPolicyReport         `json:"policies"`
+	OrganizationName string               `json:"organization-name"`
+	DateRange        MTASTSDateRange      `json:"date-range"`
+	ContactInfo      string               `json:"contact-info"`
+	ReportID         string               `json:"report-id"`
+	Policies         []MTASTSPolicyReport `json:"policies"`
 }
 
 // MTASTSDateRange represents the date range for a report
@@ -381,16 +381,16 @@ type MTASTSDateRange struct {
 
 // MTASTSPolicyReport represents policy-specific report data
 type MTASTSPolicyReport struct {
-	Policy        MTASTSPolicyDetails           `json:"policy"`
-	Summary       MTASTSSummary                 `json:"summary"`
-	FailureDetails []MTASTSFailureDetails       `json:"failure-details"`
+	Policy         MTASTSPolicyDetails    `json:"policy"`
+	Summary        MTASTSSummary          `json:"summary"`
+	FailureDetails []MTASTSFailureDetails `json:"failure-details"`
 }
 
 // MTASTSPolicyDetails represents policy details in a report
 type MTASTSPolicyDetails struct {
-	PolicyType string   `json:"policy-type"`
-	PolicyString string `json:"policy-string,omitempty"`
-	PolicyDomain string `json:"policy-domain"`
+	PolicyType   string   `json:"policy-type"`
+	PolicyString string   `json:"policy-string,omitempty"`
+	PolicyDomain string   `json:"policy-domain"`
 	MXHostnames  []string `json:"mx-hostnames,omitempty"`
 }
 
@@ -402,12 +402,12 @@ type MTASTSSummary struct {
 
 // MTASTSFailureDetails represents detailed failure information
 type MTASTSFailureDetails struct {
-	ResultType       string `json:"result-type"`
-	SendingMTAIP     string `json:"sending-mta-ip,omitempty"`
-	ReceivingMXHelo  string `json:"receiving-mx-helo,omitempty"`
-	ReceivingMXAlias string `json:"receiving-mx-alias,omitempty"`
-	ReceivingIPAddress string `json:"receiving-ip-address,omitempty"`
-	FailedSessionCount int   `json:"failed-session-count"`
+	ResultType            string `json:"result-type"`
+	SendingMTAIP          string `json:"sending-mta-ip,omitempty"`
+	ReceivingMXHelo       string `json:"receiving-mx-helo,omitempty"`
+	ReceivingMXAlias      string `json:"receiving-mx-alias,omitempty"`
+	ReceivingIPAddress    string `json:"receiving-ip-address,omitempty"`
+	FailedSessionCount    int    `json:"failed-session-count"`
 	AdditionalInformation string `json:"additional-information,omitempty"`
 }
 

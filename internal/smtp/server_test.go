@@ -59,9 +59,9 @@ func TestServer(t *testing.T) {
 
 func TestParseCommand(t *testing.T) {
 	tests := []struct {
-		input    string
-		wantCmd  string
-		wantArg  string
+		input   string
+		wantCmd string
+		wantArg string
 	}{
 		{"EHLO example.com", "EHLO", "example.com"},
 		{"MAIL FROM:<test@example.com>", "MAIL", "FROM:<test@example.com>"},
@@ -421,9 +421,9 @@ func TestDefaultLogger(t *testing.T) {
 
 func TestTruncate(t *testing.T) {
 	tests := []struct {
-		input   string
-		maxLen  int
-		want    string
+		input  string
+		maxLen int
+		want   string
 	}{
 		{"short", 10, "short"},
 		{"exactly10!", 10, "exactly10!"},

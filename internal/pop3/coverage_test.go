@@ -1,6 +1,7 @@
 package pop3
 
-import (	"testing"
+import (
+	"testing"
 )
 
 func TestBboltStoreListMessages_EmptyUser(t *testing.T) {

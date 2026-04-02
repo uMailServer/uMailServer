@@ -38,14 +38,14 @@ var webmailHTML = []byte(`<!DOCTYPE html>
 
 // Server represents the admin API server
 type Server struct {
-	db          *db.DB
-	logger      *slog.Logger
-	config      Config
-	mcpServer   *mcp.Server
-	sseServer   *websocket.SSEServer
-	searchSvc   *search.Service
-	msgStore    *storage.MessageStore
-	httpServer  *http.Server
+	db         *db.DB
+	logger     *slog.Logger
+	config     Config
+	mcpServer  *mcp.Server
+	sseServer  *websocket.SSEServer
+	searchSvc  *search.Service
+	msgStore   *storage.MessageStore
+	httpServer *http.Server
 }
 
 // Config holds API server configuration

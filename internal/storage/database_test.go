@@ -116,9 +116,9 @@ func TestDatabaseGetMailbox(t *testing.T) {
 	database := setupTestDB(t)
 
 	tests := []struct {
-		name     string
-		user     string
-		mailbox  string
+		name    string
+		user    string
+		mailbox string
 	}{
 		{"INBOX", "user@example.com", "INBOX"},
 		{"custom mailbox", "user@example.com", "Archive"},

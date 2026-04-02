@@ -46,7 +46,6 @@ func DecodeVERP(bounceAddr string) string {
 	return user + "@" + domain
 }
 
-
 // splitEmail splits an email into user and domain parts
 func splitEmail(email string) (string, string) {
 	at := strings.LastIndex(email, "@")

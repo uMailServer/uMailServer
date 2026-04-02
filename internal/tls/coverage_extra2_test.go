@@ -379,7 +379,7 @@ func TestGetCertificateStatus_WithExpiringAndValidCerts(t *testing.T) {
 
 	for _, status := range statuses {
 		if !status.Valid {
-		t.Errorf("expected %s to not be valid yet (no key file)", status.Domain)
+			t.Errorf("expected %s to not be valid yet (no key file)", status.Domain)
 		}
 	}
 }

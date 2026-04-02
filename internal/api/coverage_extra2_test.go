@@ -220,14 +220,14 @@ func TestRetryQueueEntry_Success2(t *testing.T) {
 	server := NewServer(database, nil, Config{})
 
 	entry := &db.QueueEntry{
-		ID:        "retry-s2",
-		From:      "s@test.com",
-		To:        []string{"r@test.com"},
-		Status:    "failed",
+		ID:         "retry-s2",
+		From:       "s@test.com",
+		To:         []string{"r@test.com"},
+		Status:     "failed",
 		RetryCount: 3,
-		LastError: "conn refused",
-		NextRetry: time.Now().Add(1 * time.Hour),
-		CreatedAt: time.Now(),
+		LastError:  "conn refused",
+		NextRetry:  time.Now().Add(1 * time.Hour),
+		CreatedAt:  time.Now(),
 	}
 	if err := database.Enqueue(entry); err != nil {
 		t.Fatalf("enqueue: %v", err)

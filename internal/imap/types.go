@@ -62,21 +62,21 @@ type BodyStructure struct {
 	Description string
 	Encoding    string
 	Size        int64
-	Lines       int64 // for text/* types
+	Lines       int64            // for text/* types
 	Parts       []*BodyStructure // for multipart
 }
 
 // SearchCriteria represents IMAP SEARCH criteria (RFC 3501)
 type SearchCriteria struct {
 	// Keywords
-	All       bool
-	Answered  bool
-	Deleted   bool
-	Flagged   bool
-	New       bool
-	Old       bool
-	Recent    bool
-	Seen      bool
+	All        bool
+	Answered   bool
+	Deleted    bool
+	Flagged    bool
+	New        bool
+	Old        bool
+	Recent     bool
+	Seen       bool
 	Unanswered bool
 	Undeleted  bool
 	Unflagged  bool
@@ -101,9 +101,9 @@ type SearchCriteria struct {
 	Header map[string]string
 
 	// Date searches
-	Before    time.Time
-	On        time.Time
-	Since     time.Time
+	Before     time.Time
+	On         time.Time
+	Since      time.Time
 	SentBefore time.Time
 	SentOn     time.Time
 	SentSince  time.Time
@@ -127,5 +127,3 @@ const (
 	StatusUIDValidity StatusItem = "UIDVALIDITY"
 	StatusUnseen      StatusItem = "UNSEEN"
 )
-
-

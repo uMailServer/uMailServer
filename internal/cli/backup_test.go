@@ -17,8 +17,8 @@ import (
 func TestNewBackupManager(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   t.TempDir(),
-			Hostname:  "test.example.com",
+			DataDir:  t.TempDir(),
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -35,8 +35,8 @@ func TestBackupManagerListBackups(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -74,8 +74,8 @@ func TestBackupManagerListBackupsEmptyDir(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -94,8 +94,8 @@ func TestBackupManagerListBackupsEmptyDir(t *testing.T) {
 func TestBackupManagerListBackupsNonExistentDir(t *testing.T) {
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   t.TempDir(),
-			Hostname:  "test.example.com",
+			DataDir:  t.TempDir(),
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -367,8 +367,8 @@ func TestBackupManagerBackup(t *testing.T) {
 	backupDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -412,8 +412,8 @@ func TestBackupManagerBackupNoConfigDir(t *testing.T) {
 	backupDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -432,8 +432,8 @@ func TestBackupManagerRestoreInvalidBackup(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -450,8 +450,8 @@ func TestBackupManagerRestoreNotGzip(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -667,8 +667,8 @@ func TestBackupManagerBackupWithData(t *testing.T) {
 	backupDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -722,8 +722,8 @@ func TestBackupManagerBackupCreatesDirectory(t *testing.T) {
 	backupDir := filepath.Join(tempDir, "backups", "subdir")
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -749,8 +749,8 @@ func TestBackupManagerRestoreMissingManifest(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -1059,8 +1059,8 @@ func TestBackupManagerRestoreWithValidBackup(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -1119,8 +1119,8 @@ func TestBackupManagerRestoreWithEmptyManifest(t *testing.T) {
 	tempDir := t.TempDir()
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			DataDir:   tempDir,
-			Hostname:  "test.example.com",
+			DataDir:  tempDir,
+			Hostname: "test.example.com",
 		},
 	}
 
@@ -1293,11 +1293,11 @@ func TestMigrationManagerImportMessageWithFlags(t *testing.T) {
 
 	// Test with various flag combinations
 	flagTests := []string{
-		"1234567890.1:2,S",    // Seen
-		"1234567890.2:2,SR",   // Seen + Replied
-		"1234567890.3:2,SF",   // Seen + Flagged
-		"1234567890.4:2,ST",   // Seen + Deleted
-		"1234567890.5:2,SD",   // Seen + Draft
+		"1234567890.1:2,S",     // Seen
+		"1234567890.2:2,SR",    // Seen + Replied
+		"1234567890.3:2,SF",    // Seen + Flagged
+		"1234567890.4:2,ST",    // Seen + Deleted
+		"1234567890.5:2,SD",    // Seen + Draft
 		"1234567890.6:2,SRFTD", // All flags
 		"1234567890.7",         // No flags
 	}

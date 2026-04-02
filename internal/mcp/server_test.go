@@ -413,7 +413,7 @@ func TestToolListAccountsAll(t *testing.T) {
 		"id":      11,
 		"method":  "tools/call",
 		"params": map[string]interface{}{
-			"name": "list_accounts",
+			"name":      "list_accounts",
 			"arguments": map[string]interface{}{},
 		},
 	}

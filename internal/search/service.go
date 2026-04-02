@@ -12,12 +12,12 @@ import (
 
 // Service provides message search functionality
 type Service struct {
-	index     *Index
-	logger    *slog.Logger
-	db        *storage.Database
-	msgStore  *storage.MessageStore
-	mu        sync.RWMutex
-	indexes   map[string]*Index // user -> index
+	index    *Index
+	logger   *slog.Logger
+	db       *storage.Database
+	msgStore *storage.MessageStore
+	mu       sync.RWMutex
+	indexes  map[string]*Index // user -> index
 }
 
 // NewService creates a new search service
@@ -37,26 +37,26 @@ func NewService(database *storage.Database, msgStore *storage.MessageStore, logg
 
 // MessageSearchResult represents a message search result
 type MessageSearchResult struct {
-	UID       uint32 `json:"uid"`
-	Folder    string `json:"folder"`
-	From      string `json:"from"`
-	To        string `json:"to"`
-	Subject   string `json:"subject"`
-	Preview   string `json:"preview"`
-	Date      string `json:"date"`
-	Score     float64 `json:"score"`
-	HasAttachment bool `json:"has_attachment"`
+	UID           uint32  `json:"uid"`
+	Folder        string  `json:"folder"`
+	From          string  `json:"from"`
+	To            string  `json:"to"`
+	Subject       string  `json:"subject"`
+	Preview       string  `json:"preview"`
+	Date          string  `json:"date"`
+	Score         float64 `json:"score"`
+	HasAttachment bool    `json:"has_attachment"`
 }
 
 // MessageSearchOptions contains search options
 type MessageSearchOptions struct {
-	User       string
-	Folder     string // empty for all folders
-	Query      string
-	Limit      int
-	Offset     int
-	DateFrom   string
-	DateTo     string
+	User          string
+	Folder        string // empty for all folders
+	Query         string
+	Limit         int
+	Offset        int
+	DateFrom      string
+	DateTo        string
 	HasAttachment bool
 }
 

@@ -558,9 +558,9 @@ func (m *mockDNSResolverErr) LookupTXT(domain string) ([]string, error) {
 
 // mockAVScanner is a controllable mock for AVScanner
 type mockAVScanner struct {
-	enabled  bool
-	result   *AVScanResult
-	scanErr  error
+	enabled bool
+	result  *AVScanResult
+	scanErr error
 }
 
 func (m *mockAVScanner) IsEnabled() bool { return m.enabled }

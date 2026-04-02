@@ -8,18 +8,18 @@ import (
 
 func TestParseMTASTSRecord(t *testing.T) {
 	tests := []struct {
-		name       string
-		record     string
+		name        string
+		record      string
 		wantVersion string
-		wantID     string
-		wantErr    bool
+		wantID      string
+		wantErr     bool
 	}{
 		{
-			name:       "valid record",
-			record:     "v=STSv1; id=abc123",
+			name:        "valid record",
+			record:      "v=STSv1; id=abc123",
 			wantVersion: "STSv1",
-			wantID:     "abc123",
-			wantErr:    false,
+			wantID:      "abc123",
+			wantErr:     false,
 		},
 		{
 			name:    "missing version",
@@ -343,7 +343,7 @@ func TestMTASTSModeValues(t *testing.T) {
 func TestGenerateTLSRPT(t *testing.T) {
 	failures := []MTASTSFailureDetails{
 		{
-			ResultType:       "certificate-host-mismatch",
+			ResultType:         "certificate-host-mismatch",
 			FailedSessionCount: 5,
 		},
 	}

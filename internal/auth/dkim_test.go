@@ -261,18 +261,18 @@ func TestCanonicalizeBodyRelaxed(t *testing.T) {
 
 func TestCanonicalizeHeaderSimple(t *testing.T) {
 	tests := []struct {
-		name   string
-		value  string
+		name     string
+		value    string
 		expected string
 	}{
 		{
-			name:   "simple header",
-			value:  "test@example.com",
+			name:     "simple header",
+			value:    "test@example.com",
 			expected: "from: test@example.com\r\n",
 		},
 		{
-			name:   "header with continuation",
-			value:  "test@example.com\r\n  continuation",
+			name:     "header with continuation",
+			value:    "test@example.com\r\n  continuation",
 			expected: "from: test@example.com\r\n  continuation\r\n",
 		},
 	}
@@ -289,33 +289,33 @@ func TestCanonicalizeHeaderSimple(t *testing.T) {
 
 func TestCanonicalizeHeaderRelaxed(t *testing.T) {
 	tests := []struct {
-		name    string
-		header  string
-		value   string
+		name     string
+		header   string
+		value    string
 		expected string
 	}{
 		{
-			name:    "simple header",
-			header:  "From",
-			value:   "test@example.com",
+			name:     "simple header",
+			header:   "From",
+			value:    "test@example.com",
 			expected: "from:test@example.com\r\n",
 		},
 		{
-			name:    "header with extra whitespace",
-			header:  "From",
-			value:   "test@example.com",
+			name:     "header with extra whitespace",
+			header:   "From",
+			value:    "test@example.com",
 			expected: "from:test@example.com\r\n",
 		},
 		{
-			name:    "continuation unfolded",
-			header:  "Subject",
-			value:   "Hello\r\n World",
+			name:     "continuation unfolded",
+			header:   "Subject",
+			value:    "Hello\r\n World",
 			expected: "subject:Hello World\r\n",
 		},
 		{
-			name:    "lowercase header name",
-			header:  "CONTENT-TYPE",
-			value:   "text/plain",
+			name:     "lowercase header name",
+			header:   "CONTENT-TYPE",
+			value:    "text/plain",
 			expected: "content-type:text/plain\r\n",
 		},
 	}
@@ -916,7 +916,6 @@ func TestDKIMVerifyPublicKeyNotFound(t *testing.T) {
 		t.Errorf("Expected 'public key not found' error, got: %v", err)
 	}
 }
-
 
 // --- NEW TESTS ADDED FOR COVERAGE IMPROVEMENT ---
 

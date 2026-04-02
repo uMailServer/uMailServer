@@ -33,10 +33,10 @@ func TestDecodeVERP(t *testing.T) {
 		{"bounce-a+b=c.d@mx.net", "a+b@c.d"},
 		{"bounce-UPPER=EXAMPLE.COM@mx.test", "UPPER@EXAMPLE.COM"},
 		{"Bounce-john=example.com@mail.example.com", "john@example.com"}, // case-insensitive prefix
-		{"john@example.com", ""},                   // not a bounce address
-		{"bounce-invalid@mail.example.com", ""},    // missing = sign
-		{"bounce-user@domain.com@mail.com", ""},    // missing = in user part (has @)
-		{"", ""},                                   // empty
+		{"john@example.com", ""},                                         // not a bounce address
+		{"bounce-invalid@mail.example.com", ""},                          // missing = sign
+		{"bounce-user@domain.com@mail.com", ""},                          // missing = in user part (has @)
+		{"", ""},                                                         // empty
 	}
 
 	for _, tt := range tests {
@@ -46,8 +46,6 @@ func TestDecodeVERP(t *testing.T) {
 		}
 	}
 }
-
-
 
 func TestVERPRoundTrip(t *testing.T) {
 	recipients := []string{

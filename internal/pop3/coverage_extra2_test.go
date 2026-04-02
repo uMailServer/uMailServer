@@ -1,9 +1,10 @@
 package pop3
 
-import (	"os"
+import (
+	"github.com/umailserver/umailserver/internal/storage"
+	"os"
 	"path/filepath"
 	"testing"
-	"github.com/umailserver/umailserver/internal/storage"
 )
 
 func TestBboltStore_GetMessageDataBothFail(t *testing.T) {

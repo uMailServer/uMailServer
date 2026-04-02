@@ -477,8 +477,8 @@ func TestEvaluateIP4(t *testing.T) {
 	checker := NewSPFChecker(nil)
 
 	tests := []struct {
-		ip      string
-		value   string
+		ip       string
+		value    string
 		expected bool
 	}{
 		{"192.168.1.1", "192.168.1.1", true},
@@ -501,8 +501,8 @@ func TestEvaluateIP6(t *testing.T) {
 	checker := NewSPFChecker(nil)
 
 	tests := []struct {
-		ip      string
-		value   string
+		ip       string
+		value    string
 		expected bool
 	}{
 		{"2001:db8::1", "2001:db8::1", true},

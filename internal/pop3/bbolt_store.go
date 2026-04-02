@@ -9,8 +9,8 @@ import (
 
 // BboltStore adapts the storage.Database and MessageStore to the POP3 Mailstore interface
 type BboltStore struct {
-	db        *storage.Database
-	msgStore  *storage.MessageStore
+	db       *storage.Database
+	msgStore *storage.MessageStore
 }
 
 // NewBboltStore creates a new bbolt-backed POP3 store

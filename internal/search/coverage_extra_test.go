@@ -935,8 +935,8 @@ func TestSortResultsReverseOrder(t *testing.T) {
 	for i := 0; i < n; i++ {
 		// Insert in ascending order so sort must fully reverse
 		results[i] = SearchResult{
-			DocID:  fmt.Sprintf("doc%d", i),
-			Score:  float64(i),
+			DocID: fmt.Sprintf("doc%d", i),
+			Score: float64(i),
 		}
 	}
 	sortResults(results)

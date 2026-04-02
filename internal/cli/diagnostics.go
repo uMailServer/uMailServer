@@ -36,12 +36,12 @@ type DNSCheckResult struct {
 
 // TLSCheckResult holds TLS check results
 type TLSCheckResult struct {
-	Protocol   string `json:"protocol"`
-	Cipher     string `json:"cipher"`
-	Version    string `json:"version"`
-	Valid      bool   `json:"valid"`
-	Expiry     string `json:"expiry"`
-	Message    string `json:"message"`
+	Protocol string `json:"protocol"`
+	Cipher   string `json:"cipher"`
+	Version  string `json:"version"`
+	Valid    bool   `json:"valid"`
+	Expiry   string `json:"expiry"`
+	Message  string `json:"message"`
 }
 
 // CheckDNS checks DNS records for a domain
@@ -391,7 +391,7 @@ func (d *Diagnostics) checkIMAPTLS(hostname string) (*TLSCheckResult, error) {
 		tlsConfig.ServerName = hostname
 	}
 
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10*time.Second}, "tcp", fmt.Sprintf("%s:993", hostname), tlsConfig)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", fmt.Sprintf("%s:993", hostname), tlsConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to IMAPS: %w", err)
 	}

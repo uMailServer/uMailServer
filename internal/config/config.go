@@ -40,18 +40,18 @@ type ServerConfig struct {
 
 // TLSConfig holds TLS and certificate settings
 type TLSConfig struct {
-	ACME      ACMEConfig `yaml:"acme"`
-	CertFile  string     `yaml:"cert_file"`  // Manual cert path
-	KeyFile   string     `yaml:"key_file"`   // Manual key path
-	MinVersion string    `yaml:"min_version"` // "1.2" or "1.3"
+	ACME       ACMEConfig `yaml:"acme"`
+	CertFile   string     `yaml:"cert_file"`   // Manual cert path
+	KeyFile    string     `yaml:"key_file"`    // Manual key path
+	MinVersion string     `yaml:"min_version"` // "1.2" or "1.3"
 }
 
 // ACMEConfig holds Let's Encrypt settings
 type ACMEConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Email     string `yaml:"email"`
-	Provider  string `yaml:"provider"`  // letsencrypt, letsencrypt-staging
-	Challenge string `yaml:"challenge"` // http-01, dns-01
+	Enabled     bool   `yaml:"enabled"`
+	Email       string `yaml:"email"`
+	Provider    string `yaml:"provider"`               // letsencrypt, letsencrypt-staging
+	Challenge   string `yaml:"challenge"`              // http-01, dns-01
 	DNSProvider string `yaml:"dns_provider,omitempty"` // cloudflare, route53, etc.
 }
 
@@ -64,30 +64,30 @@ type SMTPConfig struct {
 
 // InboundSMTPConfig holds MX/inbound SMTP settings
 type InboundSMTPConfig struct {
-	Enabled       bool     `yaml:"enabled"`
-	Port          int      `yaml:"port"`
-	Bind          string   `yaml:"bind"`
-	MaxMessageSize Size    `yaml:"max_message_size"`
-	MaxRecipients int      `yaml:"max_recipients"`
-	ReadTimeout   Duration `yaml:"read_timeout"`
-	WriteTimeout  Duration `yaml:"write_timeout"`
+	Enabled        bool     `yaml:"enabled"`
+	Port           int      `yaml:"port"`
+	Bind           string   `yaml:"bind"`
+	MaxMessageSize Size     `yaml:"max_message_size"`
+	MaxRecipients  int      `yaml:"max_recipients"`
+	ReadTimeout    Duration `yaml:"read_timeout"`
+	WriteTimeout   Duration `yaml:"write_timeout"`
 }
 
 // SubmissionSMTPConfig holds authenticated submission settings (STARTTLS)
 type SubmissionSMTPConfig struct {
-	Enabled     bool `yaml:"enabled"`
-	Port        int  `yaml:"port"`
+	Enabled     bool   `yaml:"enabled"`
+	Port        int    `yaml:"port"`
 	Bind        string `yaml:"bind"`
-	RequireAuth bool `yaml:"require_auth"`
-	RequireTLS  bool `yaml:"require_tls"`
+	RequireAuth bool   `yaml:"require_auth"`
+	RequireTLS  bool   `yaml:"require_tls"`
 }
 
 // SubmissionTLSConfig holds implicit TLS submission settings
 type SubmissionTLSConfig struct {
-	Enabled     bool `yaml:"enabled"`
-	Port        int  `yaml:"port"`
+	Enabled     bool   `yaml:"enabled"`
+	Port        int    `yaml:"port"`
 	Bind        string `yaml:"bind"`
-	RequireAuth bool `yaml:"require_auth"`
+	RequireAuth bool   `yaml:"require_auth"`
 }
 
 // IMAPConfig holds IMAP server settings
@@ -147,18 +147,18 @@ type GreylistingConfig struct {
 
 // AVConfig holds antivirus scanning settings
 type AVConfig struct {
-	Enabled bool          `yaml:"enabled"`
-	Addr    string        `yaml:"addr"`     // ClamAV address (e.g., "127.0.0.1:3310")
-	Timeout Duration      `yaml:"timeout"`
-	Action  string        `yaml:"action"`   // "reject", "quarantine", "tag"
+	Enabled bool     `yaml:"enabled"`
+	Addr    string   `yaml:"addr"` // ClamAV address (e.g., "127.0.0.1:3310")
+	Timeout Duration `yaml:"timeout"`
+	Action  string   `yaml:"action"` // "reject", "quarantine", "tag"
 }
 
 // SecurityConfig holds security settings
 type SecurityConfig struct {
-	MaxLoginAttempts int              `yaml:"max_login_attempts"`
-	LockoutDuration  Duration         `yaml:"lockout_duration"`
-	RateLimit        RateLimitConfig  `yaml:"rate_limit"`
-	JWTSecret        string           `yaml:"jwt_secret"`
+	MaxLoginAttempts int             `yaml:"max_login_attempts"`
+	LockoutDuration  Duration        `yaml:"lockout_duration"`
+	RateLimit        RateLimitConfig `yaml:"rate_limit"`
+	JWTSecret        string          `yaml:"jwt_secret"`
 }
 
 // RateLimitConfig holds rate limiting settings
@@ -179,10 +179,10 @@ type MCPConfig struct {
 
 // DomainConfig holds per-domain settings
 type DomainConfig struct {
-	Name          string           `yaml:"name"`
-	MaxAccounts   int              `yaml:"max_accounts"`
-	MaxMailboxSize Size            `yaml:"max_mailbox_size"`
-	DKIM          DomainDKIMConfig `yaml:"dkim"`
+	Name           string           `yaml:"name"`
+	MaxAccounts    int              `yaml:"max_accounts"`
+	MaxMailboxSize Size             `yaml:"max_mailbox_size"`
+	DKIM           DomainDKIMConfig `yaml:"dkim"`
 }
 
 // DomainDKIMConfig holds DKIM settings for a domain

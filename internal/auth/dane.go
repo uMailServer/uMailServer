@@ -21,10 +21,10 @@ import (
 type DANEResult int
 
 const (
-	DANENone     DANEResult = iota // No TLSA record found
-	DANEValidated                  // DANE validation passed
-	DANEFailed                     // DANE validation failed
-	DANEUnusable                   // TLSA record unusable (unsupported parameters)
+	DANENone      DANEResult = iota // No TLSA record found
+	DANEValidated                   // DANE validation passed
+	DANEFailed                      // DANE validation failed
+	DANEUnusable                    // TLSA record unusable (unsupported parameters)
 )
 
 func (r DANEResult) String() string {
@@ -46,10 +46,10 @@ func (r DANEResult) String() string {
 type TLSAUsage byte
 
 const (
-	TLSAUsagePKITAAncillary TLSAUsage = iota // 0: PKIX TA (not used in DANE)
-	TLSAUsagePKITEEAncillary TLSAUsage = 1   // 1: PKIX EE (not used in DANE)
-	TLSAUsageDANETA          TLSAUsage = 2   // 2: DANE TA
-	TLSAUsageDANEEE          TLSAUsage = 3   // 3: DANE EE
+	TLSAUsagePKITAAncillary  TLSAUsage = iota // 0: PKIX TA (not used in DANE)
+	TLSAUsagePKITEEAncillary TLSAUsage = 1    // 1: PKIX EE (not used in DANE)
+	TLSAUsageDANETA          TLSAUsage = 2    // 2: DANE TA
+	TLSAUsageDANEEE          TLSAUsage = 3    // 3: DANE EE
 )
 
 // TLSASelector represents the TLSA selector field
@@ -64,9 +64,9 @@ const (
 type TLSAMatchingType byte
 
 const (
-	TLSAMatchingTypeFull    TLSAMatchingType = iota // 0: Exact match
-	TLSAMatchingTypeSHA256  TLSAMatchingType = 1    // 1: SHA-256
-	TLSAMatchingTypeSHA512  TLSAMatchingType = 2    // 2: SHA-512
+	TLSAMatchingTypeFull   TLSAMatchingType = iota // 0: Exact match
+	TLSAMatchingTypeSHA256 TLSAMatchingType = 1    // 1: SHA-256
+	TLSAMatchingTypeSHA512 TLSAMatchingType = 2    // 2: SHA-512
 )
 
 // TLSARecord represents a TLSA DNS record

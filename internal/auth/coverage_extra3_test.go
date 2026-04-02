@@ -118,7 +118,7 @@ func TestFetchPolicyFile_Success_Cov3(t *testing.T) {
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 	}
 
 	policy, err := validator.fetchPolicyFile(context.Background(), "example.com")
@@ -141,7 +141,7 @@ func TestFetchPolicyFile_HTTPError_Cov3(t *testing.T) {
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 500, body: "error"},
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 	}
 
 	policy, err := validator.fetchPolicyFile(context.Background(), "example.com")
@@ -177,7 +177,7 @@ func TestFetchPolicyFile_InvalidPolicy_Cov3(t *testing.T) {
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 	}
 
 	policy, err := validator.fetchPolicyFile(context.Background(), "example.com")
@@ -243,7 +243,7 @@ func TestFetchPolicy_PolicyIDMismatch_Cov3(t *testing.T) {
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 	}
 
 	policy, err := validator.fetchPolicy(context.Background(), "example.com")
@@ -264,7 +264,7 @@ func TestFetchPolicy_Success_Cov3(t *testing.T) {
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 	}
 
 	policy, err := validator.fetchPolicy(context.Background(), "example.com")
@@ -1051,7 +1051,7 @@ func TestFetchPolicyFile_LargeBody_Cov3(t *testing.T) {
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: largeBody},
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 	}
 
 	// Should handle large body (truncated at 64KB by LimitReader)

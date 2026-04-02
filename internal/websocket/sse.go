@@ -110,8 +110,8 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 
 		// Send initial connection event
 		s.sendEvent(client, "connected", map[string]interface{}{
-			"user":     user,
-			"is_admin": isAdmin,
+			"user":      user,
+			"is_admin":  isAdmin,
 			"timestamp": time.Now().Unix(),
 		})
 
@@ -151,10 +151,10 @@ func (s *SSEServer) handleNotification(client *SSEClient, notification imap.Mail
 	switch notification.Type {
 	case imap.NotificationNewMessage:
 		s.sendEvent(client, "new_mail", map[string]interface{}{
-			"folder":     notification.Mailbox,
-			"uid":        notification.MessageUID,
-			"seq_num":    notification.SeqNum,
-			"timestamp":  time.Now().Unix(),
+			"folder":    notification.Mailbox,
+			"uid":       notification.MessageUID,
+			"seq_num":   notification.SeqNum,
+			"timestamp": time.Now().Unix(),
 		})
 
 	case imap.NotificationExpunge:

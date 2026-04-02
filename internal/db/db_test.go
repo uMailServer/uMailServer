@@ -68,11 +68,11 @@ func TestDB(t *testing.T) {
 
 	t.Run("DomainOperations", func(t *testing.T) {
 		domain := &DomainData{
-			Name:          "example.com",
-			MaxAccounts:   100,
+			Name:           "example.com",
+			MaxAccounts:    100,
 			MaxMailboxSize: 5 * 1024 * 1024 * 1024,
-			DKIMSelector:  "default",
-			IsActive:      true,
+			DKIMSelector:   "default",
+			IsActive:       true,
 		}
 
 		// Create
@@ -150,10 +150,10 @@ func TestDB(t *testing.T) {
 
 	t.Run("SessionOperations", func(t *testing.T) {
 		session := &SessionData{
-			ID:     "session-123",
-			Type:   "imap",
-			User:   "test@example.com",
-			Domain: "example.com",
+			ID:       "session-123",
+			Type:     "imap",
+			User:     "test@example.com",
+			Domain:   "example.com",
 			RemoteIP: "192.168.1.1",
 		}
 
@@ -346,11 +346,11 @@ func TestUpdateDomain(t *testing.T) {
 
 	// Create a domain
 	domain := &DomainData{
-		Name:          "update-test.com",
-		MaxAccounts:   100,
+		Name:           "update-test.com",
+		MaxAccounts:    100,
 		MaxMailboxSize: 5 * 1024 * 1024 * 1024,
-		DKIMSelector:  "default",
-		IsActive:      true,
+		DKIMSelector:   "default",
+		IsActive:       true,
 	}
 
 	if err := db.CreateDomain(domain); err != nil {

@@ -1091,4 +1091,3 @@ func TestListMailboxes_ExactMatch(t *testing.T) {
 		t.Errorf("expected [INBOX], got %v", list)
 	}
 }
-

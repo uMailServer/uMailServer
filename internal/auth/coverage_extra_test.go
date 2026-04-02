@@ -874,8 +874,8 @@ func TestExtractInstanceEdgeCases(t *testing.T) {
 		{"i=", 0},
 		{"i=;", 0},
 		{"cv=none; i=1", 0}, // i= not at start
-		{"i=1", 0},           // no semicolon - extractInstance requires semicolon
-		{"I=1; cv=none", 0},  // uppercase I
+		{"i=1", 0},          // no semicolon - extractInstance requires semicolon
+		{"I=1; cv=none", 0}, // uppercase I
 	}
 
 	for _, tt := range tests {

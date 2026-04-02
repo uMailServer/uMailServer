@@ -76,8 +76,8 @@ func TestMapDKIMResult(t *testing.T) {
 			expected: auth.DKIMNone,
 		},
 		{
-			name: "valid with empty domain",
-			input: DKIMResult{Valid: true},
+			name:     "valid with empty domain",
+			input:    DKIMResult{Valid: true},
 			expected: auth.DKIMPass,
 		},
 	}
@@ -592,7 +592,7 @@ func TestAuthSPFStage_Process_Extra(t *testing.T) {
 		// redirect to a domain with no SPF record causes permerror
 		resolver := &mockAuthDNSResolver{
 			txtRecords: map[string][]string{
-				"example.com":   {"v=spf1 redirect=nodomain.example.com"},
+				"example.com": {"v=spf1 redirect=nodomain.example.com"},
 				// nodomain.example.com has no SPF record -> "Invalid redirect" permerror
 			},
 		}

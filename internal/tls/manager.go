@@ -21,23 +21,23 @@ import (
 
 // Manager handles TLS certificate management
 type Manager struct {
-	config     Config
-	logger     *slog.Logger
+	config      Config
+	logger      *slog.Logger
 	certManager *autocert.Manager
-	certCache  map[string]*tls.Certificate
-	certDir    string
+	certCache   map[string]*tls.Certificate
+	certDir     string
 }
 
 // Config holds TLS manager configuration
 type Config struct {
-	Enabled     bool
-	AutoTLS     bool
-	CertFile    string
-	KeyFile     string
-	Email       string
-	Domains     []string
+	Enabled      bool
+	AutoTLS      bool
+	CertFile     string
+	KeyFile      string
+	Email        string
+	Domains      []string
 	ACMEEndpoint string
-	UseStaging  bool
+	UseStaging   bool
 }
 
 // NewManager creates a new TLS certificate manager

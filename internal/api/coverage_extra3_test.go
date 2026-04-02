@@ -322,12 +322,12 @@ func TestRetryQueueEntry_ClosedDB_Cov3(t *testing.T) {
 	server := NewServer(database, nil, Config{})
 
 	entry := &db.QueueEntry{
-		ID:        "retry-clsd",
-		From:      "s@t.com",
-		To:        []string{"r@t.com"},
-		Status:    "failed",
+		ID:         "retry-clsd",
+		From:       "s@t.com",
+		To:         []string{"r@t.com"},
+		Status:     "failed",
 		RetryCount: 1,
-		NextRetry: time.Now().Add(-1 * time.Hour),
+		NextRetry:  time.Now().Add(-1 * time.Hour),
 	}
 	if err := database.Enqueue(entry); err != nil {
 		t.Fatalf("enqueue: %v", err)

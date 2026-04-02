@@ -41,9 +41,9 @@ func TestParseLogLevel(t *testing.T) {
 
 func TestParseEmail(t *testing.T) {
 	tests := []struct {
-		email       string
-		wantUser    string
-		wantDomain  string
+		email      string
+		wantUser   string
+		wantDomain string
 	}{
 		{"user@example.com", "user", "example.com"},
 		{"test.user@sub.domain.com", "test.user", "sub.domain.com"},
@@ -406,8 +406,8 @@ func TestServerStopWithoutStart(t *testing.T) {
 
 func TestParseEmailVariations(t *testing.T) {
 	tests := []struct {
-		email         string
-		expectedUser  string
+		email          string
+		expectedUser   string
 		expectedDomain string
 	}{
 		{"user@example.com", "user", "example.com"},
@@ -462,7 +462,6 @@ func TestParseEmailSpecialCases(t *testing.T) {
 		t.Errorf("expected domain 'example.com', got %q", domain)
 	}
 }
-
 
 func TestServerConfigFields(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -2221,11 +2220,11 @@ func TestDeliverMessage_TableDriven(t *testing.T) {
 			wantErr:      false,
 		},
 		{
-			name:         "unknown domain triggers relay",
-			setupDomain:  false,
-			setupUser:    false,
-			recipient:    "user@unknown.com",
-			wantErr:      false,
+			name:        "unknown domain triggers relay",
+			setupDomain: false,
+			setupUser:   false,
+			recipient:   "user@unknown.com",
+			wantErr:     false,
 		},
 		{
 			name:         "local domain no user",
@@ -2683,46 +2682,46 @@ func TestStop_AfterFullStart(t *testing.T) {
 // to ensure 100% branch coverage.
 func TestParseEmail_EdgeCases(t *testing.T) {
 	tests := []struct {
-		name        string
-		email       string
-		wantUser    string
-		wantDomain  string
+		name       string
+		email      string
+		wantUser   string
+		wantDomain string
 	}{
 		{
-			name:        "single character user and domain",
-			email:       "a@b",
-			wantUser:    "a",
-			wantDomain:  "b",
+			name:       "single character user and domain",
+			email:      "a@b",
+			wantUser:   "a",
+			wantDomain: "b",
 		},
 		{
-			name:        "whitespace only",
-			email:       "   ",
-			wantUser:    "   ",
-			wantDomain:  "",
+			name:       "whitespace only",
+			email:      "   ",
+			wantUser:   "   ",
+			wantDomain: "",
 		},
 		{
-			name:        "tab character",
-			email:       "\t",
-			wantUser:    "\t",
-			wantDomain:  "",
+			name:       "tab character",
+			email:      "\t",
+			wantUser:   "\t",
+			wantDomain: "",
 		},
 		{
-			name:        "unicode user",
-			email:       "user@例え.jp",
-			wantUser:    "user",
-			wantDomain:  "例え.jp",
+			name:       "unicode user",
+			email:      "user@例え.jp",
+			wantUser:   "user",
+			wantDomain: "例え.jp",
 		},
 		{
-			name:        "domain with trailing @",
-			email:       "user@domain.com@",
-			wantUser:    "user@domain.com",
-			wantDomain:  "",
+			name:       "domain with trailing @",
+			email:      "user@domain.com@",
+			wantUser:   "user@domain.com",
+			wantDomain: "",
 		},
 		{
-			name:        "consecutive @ signs",
-			email:       "a@@b.com",
-			wantUser:    "a@",
-			wantDomain:  "b.com",
+			name:       "consecutive @ signs",
+			email:      "a@@b.com",
+			wantUser:   "a@",
+			wantDomain: "b.com",
 		},
 	}
 

@@ -101,9 +101,9 @@ type Tool struct {
 }
 
 type ToolSchema struct {
-	Type       string                      `json:"type"`
+	Type       string                    `json:"type"`
 	Properties map[string]SchemaProperty `json:"properties"`
-	Required   []string                    `json:"required"`
+	Required   []string                  `json:"required"`
 }
 
 type SchemaProperty struct {

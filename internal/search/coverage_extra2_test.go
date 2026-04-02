@@ -147,7 +147,7 @@ func TestIndexMessage_WithMsgStoreAndContent(t *testing.T) {
 	results, err := svc.Search(MessageSearchOptions{
 		User:  user,
 		Query: "quarterly report",
-		Limit:  10,
+		Limit: 10,
 	})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -186,17 +186,17 @@ func TestBuildIndex_ManyFoldersManyMessages(t *testing.T) {
 			t.Fatalf("CreateMailbox %s: %v", folder, err)
 		}
 		for uid := uint32(1); uid <= 3; uid++ {
-			 meta := &storage.MessageMetadata{
+			meta := &storage.MessageMetadata{
 				MessageID: fmt.Sprintf("msg-%s-%d", folder, uid),
 				UID:       uid,
-			 Subject:   fmt.Sprintf("Subject in %s #%d", folder, uid),
-			 From:      fmt.Sprintf("sender%d@example.com", uid),
-                To:        "recv@example.com",
-                Date:      "2025-01-15",
-            }
-            if err := database.StoreMessageMetadata(user, folder, uid, meta); err != nil {
-                t.Fatalf("StoreMessageMetadata %s/%d: %v", folder, uid, err)
-            }
+				Subject:   fmt.Sprintf("Subject in %s #%d", folder, uid),
+				From:      fmt.Sprintf("sender%d@example.com", uid),
+				To:        "recv@example.com",
+				Date:      "2025-01-15",
+			}
+			if err := database.StoreMessageMetadata(user, folder, uid, meta); err != nil {
+				t.Fatalf("StoreMessageMetadata %s/%d: %v", folder, uid, err)
+			}
 		}
 	}
 

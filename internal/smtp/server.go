@@ -25,11 +25,11 @@ type Server struct {
 	logger      *slog.Logger
 
 	// Hooks for message processing
-	onAuth        func(username, password string) (bool, error)
-	onValidate    func(from string, to []string) error
-	onDeliver     func(from string, to []string, data []byte) error
+	onAuth          func(username, password string) (bool, error)
+	onValidate      func(from string, to []string) error
+	onDeliver       func(from string, to []string, data []byte) error
 	onGetUserSecret func(username string) (string, error) // Get user's shared secret for CRAM-MD5
-	pipeline      *Pipeline
+	pipeline        *Pipeline
 
 	// Rate limiting
 	rateLimiter ConnectionRateLimiter
@@ -255,8 +255,6 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-
-
 // getIPFromAddr extracts IP from an address string
 func getIPFromAddr(addr string) string {
 	host, _, err := net.SplitHostPort(addr)
@@ -288,4 +286,3 @@ func ValidateEmail(email string) (string, error) {
 	}
 	return addr.Address, nil
 }
-

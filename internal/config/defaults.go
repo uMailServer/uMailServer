@@ -20,20 +20,20 @@ func DefaultConfig() *Config {
 		},
 		SMTP: SMTPConfig{
 			Inbound: InboundSMTPConfig{
-				Enabled:         true,
-				Port:            25,
-				Bind:            "0.0.0.0",
-				MaxMessageSize:  Size(50 * 1024 * 1024), // 50MB
-				MaxRecipients:   100,
-				ReadTimeout:     Duration(5 * time.Minute),
-				WriteTimeout:    Duration(5 * time.Minute),
+				Enabled:        true,
+				Port:           25,
+				Bind:           "0.0.0.0",
+				MaxMessageSize: Size(50 * 1024 * 1024), // 50MB
+				MaxRecipients:  100,
+				ReadTimeout:    Duration(5 * time.Minute),
+				WriteTimeout:   Duration(5 * time.Minute),
 			},
 			Submission: SubmissionSMTPConfig{
-				Enabled:      true,
-				Port:         587,
-				Bind:         "0.0.0.0",
-				RequireAuth:  true,
-				RequireTLS:   true,
+				Enabled:     true,
+				Port:        587,
+				Bind:        "0.0.0.0",
+				RequireAuth: true,
+				RequireTLS:  true,
 			},
 			SubmissionTLS: SubmissionTLSConfig{
 				Enabled:     true,
@@ -56,10 +56,10 @@ func DefaultConfig() *Config {
 			Bind:    "0.0.0.0",
 		},
 		HTTP: HTTPConfig{
-			Enabled:   true,
-			Port:      443,
-			HTTPPort:  80,
-			Bind:      "0.0.0.0",
+			Enabled:  true,
+			Port:     443,
+			HTTPPort: 80,
+			Bind:     "0.0.0.0",
 		},
 		Admin: AdminConfig{
 			Enabled: true,
@@ -72,8 +72,8 @@ func DefaultConfig() *Config {
 			JunkThreshold:       3.0,
 			QuarantineThreshold: 6.0,
 			Bayesian: BayesianConfig{
-				Enabled:    true,
-				AutoTrain:  true,
+				Enabled:   true,
+				AutoTrain: true,
 			},
 			Greylisting: GreylistingConfig{
 				Enabled: true,

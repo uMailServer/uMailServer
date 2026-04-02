@@ -17,11 +17,11 @@ type MaildirStore struct {
 
 // MessageInfo holds metadata about a message
 type MessageInfo struct {
-	Filename     string
-	Size         int64
-	ModTime      time.Time
-	Flags        string
-	UID          uint32
+	Filename string
+	Size     int64
+	ModTime  time.Time
+	Flags    string
+	UID      uint32
 }
 
 // flagSeparator returns the platform-compatible flag separator

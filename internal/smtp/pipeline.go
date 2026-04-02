@@ -10,33 +10,33 @@ import (
 // MessageContext holds the context for a message being processed
 type MessageContext struct {
 	// Connection info
-	RemoteIP   net.IP
-	RemoteHost string
-	TLS        bool
+	RemoteIP      net.IP
+	RemoteHost    string
+	TLS           bool
 	Authenticated bool
-	Username   string
+	Username      string
 
 	// Envelope
-	From       string
-	To         []string
-	MessageID  string
+	From      string
+	To        []string
+	MessageID string
 
 	// Message data
-	Data       []byte
-	Headers    map[string][]string
+	Data    []byte
+	Headers map[string][]string
 
 	// Processing results
-	SpamScore  float64
-	SpamResult SpamResult
-	DKIMResult DKIMResult
-	SPFResult  SPFResult
+	SpamScore   float64
+	SpamResult  SpamResult
+	DKIMResult  DKIMResult
+	SPFResult   SPFResult
 	DMARCResult DMARCResult
 
 	// Flags
-	Rejected   bool
-	RejectionCode int
+	Rejected         bool
+	RejectionCode    int
 	RejectionMessage string
-	Quarantine bool
+	Quarantine       bool
 
 	// Metadata
 	ReceivedAt time.Time
@@ -45,23 +45,23 @@ type MessageContext struct {
 
 // SpamResult holds spam check results
 type SpamResult struct {
-	Score    float64
-	Verdict  string // inbox, junk, quarantine, reject
-	Reasons  []string
+	Score   float64
+	Verdict string // inbox, junk, quarantine, reject
+	Reasons []string
 }
 
 // DKIMResult holds DKIM verification results
 type DKIMResult struct {
-	Valid      bool
-	Domain     string
-	Selector   string
-	Error      string
+	Valid    bool
+	Domain   string
+	Selector string
+	Error    string
 }
 
 // SPFResult holds SPF check results
 type SPFResult struct {
-	Result     string // pass, fail, softfail, neutral, none, temperror, permerror
-	Domain     string
+	Result      string // pass, fail, softfail, neutral, none, temperror, permerror
+	Domain      string
 	Explanation string
 }
 
@@ -186,8 +186,8 @@ type RateLimitStage struct {
 }
 
 type rateLimiter struct {
-	count   int
-	window  time.Time
+	count  int
+	window time.Time
 }
 
 // NewRateLimitStage creates a new rate limit stage

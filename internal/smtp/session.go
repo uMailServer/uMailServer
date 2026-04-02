@@ -35,11 +35,11 @@ const (
 
 // Session represents an SMTP client session
 type Session struct {
-	id       string
-	conn     net.Conn
-	server   *Server
-	state    SessionState
-	mutex    sync.RWMutex
+	id     string
+	conn   net.Conn
+	server *Server
+	state  SessionState
+	mutex  sync.RWMutex
 
 	// Session data
 	helloDomain string
@@ -48,10 +48,10 @@ type Session struct {
 	username    string
 
 	// Message data
-	mailFrom    string
-	rcptTo      []string
-	data        []byte
-	bdatBuffer  *bytes.Buffer
+	mailFrom   string
+	rcptTo     []string
+	data       []byte
+	bdatBuffer *bytes.Buffer
 }
 
 // NewSession creates a new SMTP session
@@ -330,7 +330,7 @@ func (s *Session) handleDATA() error {
 	// Run message through pipeline if configured
 	if s.server.pipeline != nil {
 		remoteIP := net.ParseIP("")
-	 if parts := strings.SplitN(s.conn.RemoteAddr().String(), ":", 2); len(parts) > 0 {
+		if parts := strings.SplitN(s.conn.RemoteAddr().String(), ":", 2); len(parts) > 0 {
 			remoteIP = net.ParseIP(parts[0])
 		}
 

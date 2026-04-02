@@ -17,8 +17,8 @@ import (
 
 func TestParseEmail(t *testing.T) {
 	tests := []struct {
-		input         string
-		expectedUser  string
+		input          string
+		expectedUser   string
 		expectedDomain string
 	}{
 		{"user@example.com", "user", "example.com"},
@@ -1002,8 +1002,8 @@ func TestHandleSearchInvalidLimitOffset(t *testing.T) {
 
 func TestParseEmailVariations(t *testing.T) {
 	tests := []struct {
-		input         string
-		expectedUser  string
+		input          string
+		expectedUser   string
 		expectedDomain string
 	}{
 		{"user@example.com", "user", "example.com"},
@@ -1638,9 +1638,9 @@ func TestAuthMiddlewareDifferentHeaders(t *testing.T) {
 	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
 
 	tests := []struct {
-		name          string
-		authHeader    string
-		expectedCode  int
+		name         string
+		authHeader   string
+		expectedCode int
 	}{
 		{"empty header", "", http.StatusUnauthorized},
 		{"no bearer prefix", "just-a-token", http.StatusUnauthorized},

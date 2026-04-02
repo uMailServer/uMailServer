@@ -798,7 +798,7 @@ func TestGetPendingQueueMixedStatuses(t *testing.T) {
 	if err := database.Enqueue(&QueueEntry{
 		ID: "pending-past", Status: "pending",
 		NextRetry: now.Add(-1 * time.Hour),
-		From: "a@b.com", To: []string{"c@d.com"},
+		From:      "a@b.com", To: []string{"c@d.com"},
 	}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -807,7 +807,7 @@ func TestGetPendingQueueMixedStatuses(t *testing.T) {
 	if err := database.Enqueue(&QueueEntry{
 		ID: "pending-future", Status: "pending",
 		NextRetry: now.Add(1 * time.Hour),
-		From: "a@b.com", To: []string{"c@d.com"},
+		From:      "a@b.com", To: []string{"c@d.com"},
 	}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -816,7 +816,7 @@ func TestGetPendingQueueMixedStatuses(t *testing.T) {
 	if err := database.Enqueue(&QueueEntry{
 		ID: "delivered-past", Status: "delivered",
 		NextRetry: now.Add(-1 * time.Hour),
-		From: "a@b.com", To: []string{"c@d.com"},
+		From:      "a@b.com", To: []string{"c@d.com"},
 	}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -825,7 +825,7 @@ func TestGetPendingQueueMixedStatuses(t *testing.T) {
 	if err := database.Enqueue(&QueueEntry{
 		ID: "sending-past", Status: "sending",
 		NextRetry: now.Add(-1 * time.Hour),
-		From: "a@b.com", To: []string{"c@d.com"},
+		From:      "a@b.com", To: []string{"c@d.com"},
 	}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

@@ -611,11 +611,11 @@ func TestHandleStats_WithData(t *testing.T) {
 	}
 	for i := 0; i < 5; i++ {
 		if err := database.CreateAccount(&db.AccountData{
-			Email:      "u" + string(rune('0'+i)) + "@stats.com",
-			LocalPart:  "u" + string(rune('0'+i)),
-			Domain:     "stats.com",
+			Email:        "u" + string(rune('0'+i)) + "@stats.com",
+			LocalPart:    "u" + string(rune('0'+i)),
+			Domain:       "stats.com",
 			PasswordHash: "h",
-			IsActive:   true,
+			IsActive:     true,
 		}); err != nil {
 			t.Fatalf("create account %d: %v", i, err)
 		}

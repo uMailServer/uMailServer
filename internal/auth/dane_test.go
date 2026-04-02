@@ -3,10 +3,10 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"crypto/sha256"
 	"encoding/hex"
 	"math/big"
 	"testing"
@@ -54,20 +54,20 @@ func TestParseTLSARecord(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		data       string
-		wantUsage  TLSAUsage
+		name         string
+		data         string
+		wantUsage    TLSAUsage
 		wantSelector TLSASelector
-		wantMatch  TLSAMatchingType
-		wantErr    bool
+		wantMatch    TLSAMatchingType
+		wantErr      bool
 	}{
 		{
-			name:       "valid record - text format",
-			data:       "3 1 1 " + hex.EncodeToString(hash),
-			wantUsage:  TLSAUsageDANEEE,
+			name:         "valid record - text format",
+			data:         "3 1 1 " + hex.EncodeToString(hash),
+			wantUsage:    TLSAUsageDANEEE,
 			wantSelector: TLSASelectorSPKI,
-			wantMatch:  TLSAMatchingTypeSHA256,
-			wantErr:    false,
+			wantMatch:    TLSAMatchingTypeSHA256,
+			wantErr:      false,
 		},
 		{
 			name:    "too short",
@@ -115,9 +115,9 @@ func TestParseTLSAHex(t *testing.T) {
 	// Create a TLSA record in hex format
 	// Usage: 3, Selector: 1, MatchingType: 1, Data: 32 bytes SHA-256 hash
 	data := make([]byte, 35) // 3 header bytes + 32 hash bytes
-	data[0] = 3  // DANE-EE
-	data[1] = 1  // SPKI
-	data[2] = 1  // SHA-256
+	data[0] = 3              // DANE-EE
+	data[1] = 1              // SPKI
+	data[2] = 1              // SHA-256
 	for i := 3; i < 35; i++ {
 		data[i] = byte(i)
 	}
@@ -235,11 +235,11 @@ func generateTestCert(t *testing.T) *x509.Certificate {
 		Subject: pkix.Name{
 			Organization: []string{"Test"},
 		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:              []string{"example.com"},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:    []string{"example.com"},
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
@@ -647,7 +647,6 @@ func TestGetPolicyWithNonDANEUsages(t *testing.T) {
 		t.Errorf("Expected 0 valid DANE records, got %d", policy.ValidRecords)
 	}
 }
-
 
 // --- Additional coverage tests ---
 

@@ -18,19 +18,19 @@ type ScanResult struct {
 
 // Scanner scans messages for viruses
 type Scanner struct {
-	addr        string
-	timeout     time.Duration
-	enabled     bool
-	action      string // "reject", "quarantine", "tag"
-	dial        func(network, addr string, timeout time.Duration) (net.Conn, error)
+	addr    string
+	timeout time.Duration
+	enabled bool
+	action  string // "reject", "quarantine", "tag"
+	dial    func(network, addr string, timeout time.Duration) (net.Conn, error)
 }
 
 // Config holds virus scanner configuration
 type Config struct {
 	Enabled bool          `yaml:"enabled" json:"enabled"`
-	Addr    string        `yaml:"addr" json:"addr"`        // ClamAV address (e.g., "127.0.0.1:3310" or "/var/run/clamav/clamd.ctl")
-	Timeout time.Duration `yaml:"timeout" json:"timeout"`   // Scan timeout
-	Action  string        `yaml:"action" json:"action"`     // "reject", "quarantine", "tag"
+	Addr    string        `yaml:"addr" json:"addr"`       // ClamAV address (e.g., "127.0.0.1:3310" or "/var/run/clamav/clamd.ctl")
+	Timeout time.Duration `yaml:"timeout" json:"timeout"` // Scan timeout
+	Action  string        `yaml:"action" json:"action"`   // "reject", "quarantine", "tag"
 }
 
 // NewScanner creates a new virus scanner

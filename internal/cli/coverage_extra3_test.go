@@ -151,7 +151,7 @@ func TestCoverImportMessageStoreErrorBlockedPath(t *testing.T) {
 	err = mm.importMessage(msgFile)
 	if err != nil {
 		if strings.Contains(err.Error(), "failed to store message") {
-		t.Log("Covered StoreMessage error path (lines 242-244)")
+			t.Log("Covered StoreMessage error path (lines 242-244)")
 		}
 		t.Logf("importMessage error: %v", err)
 	}
@@ -159,4 +159,3 @@ func TestCoverImportMessageStoreErrorBlockedPath(t *testing.T) {
 	// Clean up block
 	os.Remove(userBlockPath)
 }
-

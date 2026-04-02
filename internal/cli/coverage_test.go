@@ -286,7 +286,7 @@ func TestImportMessageFlagCombinations(t *testing.T) {
 		"1234.5:2,D",     // Draft
 		"1234.6:2,SRFTD", // All flags
 		"1234.7:2,",      // Empty flags
-		"1234.8",          // No flags section
+		"1234.8",         // No flags section
 	}
 
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")

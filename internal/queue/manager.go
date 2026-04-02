@@ -30,15 +30,15 @@ import (
 // are implemented but not yet wired into the admin panel API endpoints.
 // TODO: Expose via /api/v1/admin/queue/* routes.
 type Manager struct {
-	db          *db.DB
-	store       *store.MaildirStore
-	dataDir     string
-	resolver    *Resolver
-	running     bool
-	shutdown    chan struct{}
-	mu          sync.RWMutex
-	metrics     *metrics.SimpleMetrics
-	maxRetries  int
+	db           *db.DB
+	store        *store.MaildirStore
+	dataDir      string
+	resolver     *Resolver
+	running      bool
+	shutdown     chan struct{}
+	mu           sync.RWMutex
+	metrics      *metrics.SimpleMetrics
+	maxRetries   int
 	maxQueueSize int
 
 	// dialSMTP, if set, is used instead of net.DialTimeout for testing.

@@ -100,11 +100,11 @@ func TestManagerIsAutoTLS(t *testing.T) {
 
 func TestConfigDefaults(t *testing.T) {
 	config := Config{
-		Enabled:     true,
-		AutoTLS:     true,
-		Email:       "admin@example.com",
-		Domains:     []string{"example.com", "mail.example.com"},
-		UseStaging:  true,
+		Enabled:    true,
+		AutoTLS:    true,
+		Email:      "admin@example.com",
+		Domains:    []string{"example.com", "mail.example.com"},
+		UseStaging: true,
 	}
 
 	if config.Email != "admin@example.com" {
@@ -1311,4 +1311,3 @@ func generateTestCertAndKey(t *testing.T, domain string) (certPEM []byte, keyPEM
 
 	return certPEM, keyPEM
 }
-

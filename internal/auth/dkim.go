@@ -52,23 +52,23 @@ type DKIMSignature struct {
 	Domain         string
 	Selector       string
 	Algorithm      string
-	Canonicalize   string // c= header/body canonicalization
-	HeaderCanon    string // simple or relaxed
-	BodyCanon      string // simple or relaxed
-	QueryMethod    string // q= query method
-	Timestamp      int64  // t= timestamp
-	Expiration     int64  // x= expiration
-	SignedHeaders  []string // h= signed header fields
-	BodyHash       string // bh= body hash
-	Signature      string // b= signature
-	BodyLength     int    // l= body length limit (-1 if not specified)
+	Canonicalize   string            // c= header/body canonicalization
+	HeaderCanon    string            // simple or relaxed
+	BodyCanon      string            // simple or relaxed
+	QueryMethod    string            // q= query method
+	Timestamp      int64             // t= timestamp
+	Expiration     int64             // x= expiration
+	SignedHeaders  []string          // h= signed header fields
+	BodyHash       string            // bh= body hash
+	Signature      string            // b= signature
+	BodyLength     int               // l= body length limit (-1 if not specified)
 	CopiedHeaders  map[string]string // z= copied headers
-	OriginalHeader string // Original header value for verification
+	OriginalHeader string            // Original header value for verification
 }
 
 // DKIMSigner handles DKIM signing and verification
 type DKIMSigner struct {
-	resolver DNSResolver
+	resolver   DNSResolver
 	privateKey *rsa.PrivateKey
 	domain     string
 	selector   string

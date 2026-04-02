@@ -15,10 +15,10 @@ type DMARCResult int
 
 const (
 	DMARCNone      DMARCResult = iota // No DMARC record
-	DMARCPass                        // DMARC check passed
-	DMARCFail                        // DMARC check failed
-	DMARCPermError                   // Permanent error
-	DMARCTempError                   // Temporary error
+	DMARCPass                         // DMARC check passed
+	DMARCFail                         // DMARC check failed
+	DMARCPermError                    // Permanent error
+	DMARCTempError                    // Temporary error
 )
 
 func (r DMARCResult) String() string {
@@ -400,11 +400,11 @@ func GenerateDMARCReport(domain string, records []DMARCReportRecord) string {
 
 // DMARCReportRecord represents a single record in a DMARC report
 type DMARCReportRecord struct {
-	SourceIP   string
-	Count      int
-	PolicyEval string
+	SourceIP    string
+	Count       int
+	PolicyEval  string
 	Disposition string
-	SPFResult  string
-	DKIMResult string
-	HeaderFrom string
+	SPFResult   string
+	DKIMResult  string
+	HeaderFrom  string
 }

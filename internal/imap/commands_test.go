@@ -1695,16 +1695,16 @@ func TestHandleUIDExpunge(t *testing.T) {
 
 func TestFormatFetchResponse(t *testing.T) {
 	msg := &Message{
-		UID:           123,
-		SeqNum:        1,
-		Flags:         []string{"\\Seen", "\\Answered"},
-		Size:          1024,
-		InternalDate:  time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
-		Subject:       "Test Subject",
-		From:          "sender@example.com",
-		To:            "recipient@example.com",
-		Date:          "15-Jan-2024 10:30:00 +0000",
-		Data:          []byte("Test message body"),
+		UID:          123,
+		SeqNum:       1,
+		Flags:        []string{"\\Seen", "\\Answered"},
+		Size:         1024,
+		InternalDate: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+		Subject:      "Test Subject",
+		From:         "sender@example.com",
+		To:           "recipient@example.com",
+		Date:         "15-Jan-2024 10:30:00 +0000",
+		Data:         []byte("Test message body"),
 	}
 
 	tests := []struct {
@@ -2772,8 +2772,8 @@ func TestParseSearchCriteriaAllVariations(t *testing.T) {
 			name: "NEW",
 			args: []string{"NEW"},
 			expected: SearchCriteria{
-				All:  true,
-				New:  true,
+				All: true,
+				New: true,
 			},
 		},
 		{
@@ -2876,8 +2876,8 @@ func TestParseSearchCriteriaAllVariations(t *testing.T) {
 			name: "BCC",
 			args: []string{"BCC", "bcc@example.com"},
 			expected: SearchCriteria{
-				All:  true,
-				Bcc:  "bcc@example.com",
+				All: true,
+				Bcc: "bcc@example.com",
 			},
 		},
 		{

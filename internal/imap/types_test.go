@@ -168,10 +168,6 @@ func TestStatusItemConsts(t *testing.T) {
 	}
 }
 
-
-
-
-
 func TestSearchCriteriaNot(t *testing.T) {
 	inner := &SearchCriteria{Seen: true}
 	criteria := &SearchCriteria{

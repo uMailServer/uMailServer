@@ -12,11 +12,6 @@ import (
 	"github.com/umailserver/umailserver/internal/imap"
 )
 
-
-
-
-
-
 // TestSSEHandler_ClientStopChannel covers the client.stop case in SSE Handler
 // (sse.go:131-135). This happens when a new client for the same user replaces
 // an existing one, causing the old client's stop channel to close.
@@ -219,10 +214,10 @@ func TestSSEHandler_ClientStopTriggeredDuringConnection(t *testing.T) {
 // the SSE handler to cover line 138 (s.handleNotification call).
 func TestSSEHandler_FullNotificationFlow(t *testing.T) {
 	notificationTypes := []struct {
-		name       string
-		notifType  imap.NotificationType
-		wantEvent  string
-		mailbox    string
+		name      string
+		notifType imap.NotificationType
+		wantEvent string
+		mailbox   string
 	}{
 		{
 			name:      "NewMessage",

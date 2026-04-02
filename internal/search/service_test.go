@@ -174,10 +174,10 @@ func TestTokenize(t *testing.T) {
 
 func TestParseDocID(t *testing.T) {
 	tests := []struct {
-		docID         string
+		docID          string
 		expectedFolder string
-		expectedUID   uint32
-		expectError   bool
+		expectedUID    uint32
+		expectError    bool
 	}{
 		{"INBOX:1", "INBOX", 1, false},
 		{"Sent:100", "Sent", 100, false},
@@ -209,8 +209,8 @@ func TestParseDocID(t *testing.T) {
 
 func TestGeneratePreview(t *testing.T) {
 	tests := []struct {
-		content string
-		maxLen  int
+		content     string
+		maxLen      int
 		expectedLen int
 	}{
 		{"Hello World", 20, 11},
@@ -530,8 +530,8 @@ func TestServiceSearchWithAttachmentFilter(t *testing.T) {
 		ID:      "INBOX:1",
 		Content: "hello world",
 		Fields: map[string]string{
-			"subject":         "Test",
-			"has_attachment":  "true",
+			"subject":        "Test",
+			"has_attachment": "true",
 		},
 	}
 	idx.Add(doc)
@@ -725,7 +725,7 @@ func TestServiceSearchWithDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-		defer database.Close()
+	defer database.Close()
 
 	svc := NewService(database, nil, nil)
 
@@ -815,7 +815,7 @@ func TestServiceBuildIndexWithDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-		defer database.Close()
+	defer database.Close()
 
 	svc := NewService(database, nil, nil)
 
@@ -842,7 +842,7 @@ func TestServiceIndexMessageNoIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-		defer database.Close()
+	defer database.Close()
 
 	svc := NewService(database, nil, nil)
 
@@ -871,13 +871,13 @@ func TestParseDocIDEdgeCases(t *testing.T) {
 		docID   string
 		wantErr bool
 	}{
-		{":", true},                   // empty folder, empty uid
-		{":0", false},                 // empty folder, uid 0
-		{"INBOX:", true},              // empty uid
-		{"INBOX:0", false},            // uid 0
-		{"INBOX:4294967295", false},    // max uint32
-		{"INBOX:4294967296", true},     // overflow uint32
-		{"INBOX:-1", true},            // negative
+		{":", true},                 // empty folder, empty uid
+		{":0", false},               // empty folder, uid 0
+		{"INBOX:", true},            // empty uid
+		{"INBOX:0", false},          // uid 0
+		{"INBOX:4294967295", false}, // max uint32
+		{"INBOX:4294967296", true},  // overflow uint32
+		{"INBOX:-1", true},          // negative
 	}
 
 	for _, tc := range tests {
@@ -942,7 +942,7 @@ func TestStripHTMLComplex(t *testing.T) {
 		{"<html><head><title>Test</title></head><body><p>Hello</p></body></html>", "TestHello"},
 		{"<div class=\"test\">Content</div>", "Content"},
 		{"<a href=\"http://example.com\">Link</a>", "Link"},
-		{"<br/>", ""},   // self-closing tag stripped
+		{"<br/>", ""},      // self-closing tag stripped
 		{"<>text", "text"}, // empty tag
 		{"<script>alert('xss')</script>", "alert('xss')"},
 		{"no tags here", "no tags here"},
@@ -1075,13 +1075,13 @@ func TestTokenizeEdgeCases(t *testing.T) {
 		input    string
 		expected int // number of tokens
 	}{
-		{"   ", 0},                      // whitespace only
-		{"!!!???", 0},                    // punctuation only
-		{"a", 0},                         // single stop word
-		{"Go", 1},                        // single non-stop word
-		{"hello123world", 1},             // alphanumeric runs
-		{"café résumé", 2},               // unicode letters
-		{"test123", 1},                   // mixed letters/numbers
+		{"   ", 0},           // whitespace only
+		{"!!!???", 0},        // punctuation only
+		{"a", 0},             // single stop word
+		{"Go", 1},            // single non-stop word
+		{"hello123world", 1}, // alphanumeric runs
+		{"café résumé", 2},   // unicode letters
+		{"test123", 1},       // mixed letters/numbers
 	}
 
 	for _, tc := range tests {

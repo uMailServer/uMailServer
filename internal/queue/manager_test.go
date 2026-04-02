@@ -757,7 +757,6 @@ func TestManagerRetryEntry(t *testing.T) {
 	}
 }
 
-
 func TestGenerateID(t *testing.T) {
 	id1 := generateID()
 	id2 := generateID()
@@ -992,7 +991,6 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 }
 
-
 func TestDeleteFileSilent(t *testing.T) {
 	// Should not panic when deleting non-existent file
 	deleteFile("/non/existent/file.txt")
@@ -1035,7 +1033,6 @@ func TestManagerStartStop(t *testing.T) {
 		t.Error("expected manager to be stopped after Stop")
 	}
 }
-
 
 func TestQueueStatsFields(t *testing.T) {
 	stats := &QueueStats{
@@ -2323,13 +2320,13 @@ func generateTestTLSCert(t *testing.T) tls.Certificate {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
-		DNSNames:              []string{"127.0.0.1", "localhost"},
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"127.0.0.1", "localhost"},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {

@@ -200,7 +200,7 @@ func (p *Parser) parseSearchCriteria(criteria *SearchCriteria) (*SearchCriteria,
 		}
 
 		// Read next token
-			token := p.readToken()
+		token := p.readToken()
 		tokenUpper := strings.ToUpper(token)
 
 		switch tokenUpper {

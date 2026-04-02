@@ -17,11 +17,11 @@ type Server struct {
 	tlsConfig *tls.Config
 	logger    *slog.Logger
 
-	listeners   []net.Listener
-	sessions    map[string]*Session
-	sessionsMu  sync.RWMutex
-	shutdown    chan struct{}
-	running     bool
+	listeners  []net.Listener
+	sessions   map[string]*Session
+	sessionsMu sync.RWMutex
+	shutdown   chan struct{}
+	running    bool
 
 	// Authentication
 	authFunc func(username, password string) (bool, error)
@@ -200,7 +200,7 @@ type Session struct {
 	selected *Mailbox
 
 	// TLS
-	tlsConn *tls.Conn
+	tlsConn   *tls.Conn
 	tlsActive bool
 
 	// Capabilities

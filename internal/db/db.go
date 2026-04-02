@@ -13,20 +13,20 @@ import (
 
 // Bucket names
 const (
-	BucketAccounts     = "accounts"
-	BucketDomains      = "domains"
-	BucketQueue        = "queue"
-	BucketSessions     = "sessions"
-	BucketRateLimits   = "ratelimits"
-	BucketSpam         = "spam"
-	BucketBlocklist    = "blocklist"
-	BucketMetrics      = "metrics"
-	BucketUIDValidity  = "uidvalidity"
-	BucketUIDNext      = "uidnext"
-	BucketMessageMeta  = "messagemeta"
-	BucketIndex        = "index"
-	BucketAliases      = "aliases"
-	BucketContacts     = "contacts"
+	BucketAccounts      = "accounts"
+	BucketDomains       = "domains"
+	BucketQueue         = "queue"
+	BucketSessions      = "sessions"
+	BucketRateLimits    = "ratelimits"
+	BucketSpam          = "spam"
+	BucketBlocklist     = "blocklist"
+	BucketMetrics       = "metrics"
+	BucketUIDValidity   = "uidvalidity"
+	BucketUIDNext       = "uidnext"
+	BucketMessageMeta   = "messagemeta"
+	BucketIndex         = "index"
+	BucketAliases       = "aliases"
+	BucketContacts      = "contacts"
 	BucketACL           = "acl"
 	BucketSubscriptions = "subscriptions"
 )
@@ -38,39 +38,39 @@ type DB struct {
 
 // AccountData holds account information
 type AccountData struct {
-	Email          string    `json:"email"`
-	LocalPart      string    `json:"local_part"`
-	Domain         string    `json:"domain"`
-	PasswordHash   string    `json:"password_hash"`
-	TOTPSecret     string    `json:"totp_secret,omitempty"`
-	TOTPEnabled    bool      `json:"totp_enabled"`
-	QuotaUsed      int64     `json:"quota_used"`
-	QuotaLimit     int64     `json:"quota_limit"`
-	MaxMessageSize int64     `json:"max_message_size"`
-	ForwardTo      string    `json:"forward_to,omitempty"`
-	ForwardKeepCopy bool      `json:"forward_keep_copy"`
-	SieveScript    string `json:"sieve_script,omitempty"`
-	VacationSettings string `json:"vacation_settings,omitempty"`
-	IsAdmin        bool      `json:"is_admin"`
-	IsActive       bool      `json:"is_active"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	LastLoginAt    time.Time `json:"last_login_at,omitempty"`
+	Email            string    `json:"email"`
+	LocalPart        string    `json:"local_part"`
+	Domain           string    `json:"domain"`
+	PasswordHash     string    `json:"password_hash"`
+	TOTPSecret       string    `json:"totp_secret,omitempty"`
+	TOTPEnabled      bool      `json:"totp_enabled"`
+	QuotaUsed        int64     `json:"quota_used"`
+	QuotaLimit       int64     `json:"quota_limit"`
+	MaxMessageSize   int64     `json:"max_message_size"`
+	ForwardTo        string    `json:"forward_to,omitempty"`
+	ForwardKeepCopy  bool      `json:"forward_keep_copy"`
+	SieveScript      string    `json:"sieve_script,omitempty"`
+	VacationSettings string    `json:"vacation_settings,omitempty"`
+	IsAdmin          bool      `json:"is_admin"`
+	IsActive         bool      `json:"is_active"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	LastLoginAt      time.Time `json:"last_login_at,omitempty"`
 }
 
 // DomainData holds domain information
 type DomainData struct {
-	Name          string            `json:"name"`
-	MaxAccounts   int               `json:"max_accounts"`
-	MaxMailboxSize int64            `json:"max_mailbox_size"`
-	DKIMSelector  string            `json:"dkim_selector"`
-	DKIMPublicKey string            `json:"dkim_public_key,omitempty"`
-	DKIMPrivateKey string           `json:"dkim_private_key,omitempty"`
-	Settings      map[string]string `json:"settings,omitempty"`
+	Name           string            `json:"name"`
+	MaxAccounts    int               `json:"max_accounts"`
+	MaxMailboxSize int64             `json:"max_mailbox_size"`
+	DKIMSelector   string            `json:"dkim_selector"`
+	DKIMPublicKey  string            `json:"dkim_public_key,omitempty"`
+	DKIMPrivateKey string            `json:"dkim_private_key,omitempty"`
+	Settings       map[string]string `json:"settings,omitempty"`
 	CatchAllTarget string            `json:"catch_all_target,omitempty"`
-	IsActive      bool              `json:"is_active"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	IsActive       bool              `json:"is_active"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 // QueueEntry holds message queue information
@@ -99,7 +99,7 @@ type SessionData struct {
 
 // BlockEntry holds blocklist entries
 type BlockEntry struct {
-	Key       string    `json:"key"` // IP or domain
+	Key       string    `json:"key"`  // IP or domain
 	Type      string    `json:"type"` // ip, domain
 	Reason    string    `json:"reason"`
 	CreatedAt time.Time `json:"created_at"`
@@ -109,11 +109,11 @@ type BlockEntry struct {
 
 // AliasData holds email alias information
 type AliasData struct {
-	Alias       string    `json:"alias"`       // alias@domain
-	Target      string    `json:"target"`      // user@domain
-	Domain      string    `json:"domain"`
-	IsActive    bool      `json:"is_active"`
-	CreatedAt   time.Time `json:"created_at"`
+	Alias     string    `json:"alias"`  // alias@domain
+	Target    string    `json:"target"` // user@domain
+	Domain    string    `json:"domain"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Open opens or creates the database
