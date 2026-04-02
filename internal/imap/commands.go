@@ -228,6 +228,11 @@ func (s *Session) handleAuthenticate(args []string) error {
 		return nil
 	}
 
+	if !s.tlsActive {
+		s.WriteResponse(s.tag, "NO TLS required for authentication")
+		return nil
+	}
+
 	mechanism := strings.ToUpper(args[0])
 
 	switch mechanism {
@@ -369,6 +374,11 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 func (s *Session) handleLogin(args []string) error {
 	if len(args) < 2 {
 		s.WriteResponse(s.tag, "BAD Missing username or password")
+		return nil
+	}
+
+	if !s.tlsActive {
+		s.WriteResponse(s.tag, "NO LOGIN requires TLS - use STARTTLS first")
 		return nil
 	}
 

@@ -141,6 +141,7 @@ func TestHandleLoginSuccess(t *testing.T) {
 	server := NewServer(&Config{Addr: ":1143"}, &mockMailstore{})
 	session := NewSession(mock, server)
 	session.tag = "A1"
+	session.tlsActive = true
 
 	err := session.handleLogin([]string{"test", "password"})
 	if err != nil {
@@ -2201,6 +2202,7 @@ func TestHandleAuthenticatedSubscribeUnsubscribe(t *testing.T) {
 	session.state = StateAuthenticated
 	session.user = "test"
 	session.tag = "A1"
+	session.tlsActive = true
 
 	err = session.handleAuthenticated("UNSUBSCRIBE", []string{"INBOX"}, "A1 UNSUBSCRIBE INBOX")
 	if err != nil {
@@ -2714,6 +2716,7 @@ func TestHandleCommandWithContinuation(t *testing.T) {
 	session := NewSession(mock, server)
 	session.state = StateNotAuthenticated
 	session.tag = "A1"
+	session.tlsActive = true
 
 	err := session.handleCommand("A1 AUTHENTICATE LOGIN")
 	if err != nil {

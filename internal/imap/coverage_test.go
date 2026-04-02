@@ -58,6 +58,7 @@ func setupSessionWithPipe(t *testing.T, state State, user string, selected *Mail
 	session.state = state
 	session.user = user
 	session.selected = selected
+	session.tlsActive = true
 	return client, session
 }
 
@@ -694,6 +695,7 @@ func setupSessionWithFailingStore(t *testing.T, state State, user string, select
 	session.state = state
 	session.user = user
 	session.selected = selected
+	session.tlsActive = true
 	return client, session
 }
 

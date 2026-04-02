@@ -20,11 +20,9 @@ func setupSessionWithPipeRaw(t *testing.T, state State, user string, selected *M
 	session.state = state
 	session.user = user
 	session.selected = selected
+	session.tlsActive = true
 	return client, session
 }
-
-// =======================================================================
-// handleID: 0.0% -> cover via handleCommand in both authenticated and
 // selected states.
 // =======================================================================
 
