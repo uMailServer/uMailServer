@@ -303,15 +303,18 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 }
 
 // checkLoginRateLimit returns true if the IP is allowed to attempt login.
-// Allows 5 attempts per minute per IP; blocks for 5 minutes after that.
+// Allows 5 attempts per 5-minute window per IP; blocks after that.
 func (s *Server) checkLoginRateLimit(ip string) bool {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 
+	if s.loginAttempts == nil {
+		s.loginAttempts = make(map[string]*loginAttempt)
+	}
+
 	now := time.Now()
 	attempt, exists := s.loginAttempts[ip]
 	if !exists || now.Sub(attempt.lastSeen) > 5*time.Minute {
-		s.loginAttempts = make(map[string]*loginAttempt)
 		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
 		return true
 	}
@@ -329,10 +332,13 @@ func (s *Server) recordLoginFailure(ip string) {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
 
+	if s.loginAttempts == nil {
+		s.loginAttempts = make(map[string]*loginAttempt)
+	}
+
 	now := time.Now()
 	attempt, exists := s.loginAttempts[ip]
 	if !exists {
-		s.loginAttempts = make(map[string]*loginAttempt)
 		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
 		return
 	}
