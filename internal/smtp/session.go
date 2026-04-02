@@ -331,9 +331,9 @@ func (s *Session) handleDATA() error {
 
 	// Run message through pipeline if configured
 	if s.server.pipeline != nil {
-		remoteIP := net.ParseIP("")
-		if parts := strings.SplitN(s.conn.RemoteAddr().String(), ":", 2); len(parts) > 0 {
-			remoteIP = net.ParseIP(parts[0])
+		var remoteIP net.IP
+		if host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String()); err == nil {
+			remoteIP = net.ParseIP(host)
 		}
 
 		ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)
@@ -546,9 +546,9 @@ func (s *Session) handleBDAT(arg string) error {
 
 		// Run through pipeline if configured
 		if s.server.pipeline != nil {
-			remoteIP := net.ParseIP("")
-			if parts := strings.SplitN(s.conn.RemoteAddr().String(), ":", 2); len(parts) > 0 {
-				remoteIP = net.ParseIP(parts[0])
+			var remoteIP net.IP
+			if host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String()); err == nil {
+				remoteIP = net.ParseIP(host)
 			}
 
 			ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)
