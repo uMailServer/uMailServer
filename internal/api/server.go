@@ -414,18 +414,143 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) {
-	email := strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/")
+	suffix := strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/")
 
+	// Handle TOTP 2FA sub-paths
+	if strings.HasSuffix(suffix, "/totp/setup") {
+		email := suffix[:len(suffix)-len("/totp/setup")]
+		s.handleTOTPSetup(w, r, email)
+		return
+	}
+	if strings.HasSuffix(suffix, "/totp/disable") {
+		email := suffix[:len(suffix)-len("/totp/disable")]
+		s.handleTOTPDisable(w, r, email)
+		return
+	}
+	if strings.HasSuffix(suffix, "/totp/verify") {
+		email := suffix[:len(suffix)-len("/totp/verify")]
+		s.handleTOTPVerify(w, r, email)
+		return
+	}
+
+	// Regular account detail
 	switch r.Method {
 	case http.MethodGet:
-		s.getAccount(w, r, email)
+		s.getAccount(w, r, suffix)
 	case http.MethodPut:
-		s.updateAccount(w, r, email)
+		s.updateAccount(w, r, suffix)
 	case http.MethodDelete:
-		s.deleteAccount(w, r, email)
+		s.deleteAccount(w, r, suffix)
 	default:
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// TOTP 2FA handlers
+
+func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email string) {
+	if r.Method != http.MethodPost {
+		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	user, domain := parseEmail(email)
+	account, err := s.db.GetAccount(domain, user)
+	if err != nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	secret, err := auth.GenerateTOTPSecret()
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to generate TOTP secret")
+		return
+	}
+
+	// Store secret but don't enable yet — user must verify first
+	account.TOTPSecret = secret
+	account.UpdatedAt = time.Now()
+	if err := s.db.UpdateAccount(account); err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to save TOTP secret")
+		return
+	}
+
+	uri := auth.GenerateTOTPUri(secret, email, "uMailServer")
+
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"secret": secret,
+		"uri":    uri,
+	})
+}
+
+func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email string) {
+	if r.Method != http.MethodPost {
+		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	user, domain := parseEmail(email)
+	account, err := s.db.GetAccount(domain, user)
+	if err != nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	if account.TOTPSecret == "" {
+		s.sendError(w, http.StatusBadRequest, "TOTP not set up — call /totp/setup first")
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if !auth.ValidateTOTP(account.TOTPSecret, req.Code) {
+		s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
+		return
+	}
+
+	// Code verified — enable TOTP
+	account.TOTPEnabled = true
+	account.UpdatedAt = time.Now()
+	if err := s.db.UpdateAccount(account); err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to enable TOTP")
+		return
+	}
+
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled": true,
+	})
+}
+
+func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email string) {
+	if r.Method != http.MethodPost {
+		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	user, domain := parseEmail(email)
+	account, err := s.db.GetAccount(domain, user)
+	if err != nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	account.TOTPSecret = ""
+	account.TOTPEnabled = false
+	account.UpdatedAt = time.Now()
+	if err := s.db.UpdateAccount(account); err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to disable TOTP")
+		return
+	}
+
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled": false,
+	})
 }
 
 func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
