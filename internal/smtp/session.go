@@ -41,6 +41,7 @@ type Session struct {
 	server *Server
 	state  SessionState
 	mutex  sync.RWMutex
+	reader *bufio.Reader // set by server's command loop; reset after STARTTLS
 
 	// Session data
 	helloDomain string
@@ -854,6 +855,11 @@ func (s *Session) handleSTARTTLS() error {
 
 	s.conn = tlsConn
 	s.isTLS = true
+
+	// Reset the buffered reader to wrap the new TLS connection
+	if s.reader != nil {
+		s.reader.Reset(tlsConn)
+	}
 
 	// Reset state after TLS upgrade
 	s.state = StateNew

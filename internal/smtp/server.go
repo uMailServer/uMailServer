@@ -211,6 +211,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// Handle commands
 	reader := bufio.NewReader(conn)
+	session.reader = reader
 	for {
 		if s.config.ReadTimeout > 0 {
 			conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout))
