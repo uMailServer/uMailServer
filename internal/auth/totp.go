@@ -1,8 +1,8 @@
 package auth
 
-// TODO: Wire TOTP 2FA into admin panel authentication flow.
-// GenerateTOTPUri and ValidateTOTPAt provide full TOTP provisioning and
-// verification. They need to be connected to the admin API login flow.
+// TOTP 2FA is wired into the API login flow (internal/api/server.go handleLogin)
+// when account.TOTPEnabled is true. GenerateTOTPUri and ValidateTOTPAt provide
+// full TOTP provisioning and verification.
 
 import (
 	"crypto/hmac"

@@ -1,6 +1,6 @@
 package config
 
-// TODO: Wire SetupWizard into cmd/umailserver first-run flow and CheckFirstRun/ detection.
+// NOTE: SetupWizard is wired into cmdServe first-run flow (cmd/umailserver/main.go:117).
 // The interactive wizard guides new admins through initial server setup.
 
 import (
