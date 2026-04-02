@@ -178,7 +178,26 @@ func (s *Server) Start() error {
 	}
 	s.mailstore = mailstore
 
-	// Start SMTP server
+	s.startSMTP()
+
+	if err := s.startIMAP(mailstore); err != nil {
+		return err
+	}
+
+	if err := s.startPOP3(mailstore); err != nil {
+		return err
+	}
+
+	s.startMCP()
+	s.startAPI()
+
+	return nil
+}
+
+// startSMTP creates and starts the inbound SMTP server with the message
+// processing pipeline, plus the optional submission (587) and
+// submission-TLS (465) servers.
+func (s *Server) startSMTP() {
 	smtpAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Inbound.Bind, s.config.SMTP.Inbound.Port)
 	smtpCfg := &smtp.Config{
 		Hostname:       s.config.Server.Hostname,
@@ -232,7 +251,6 @@ func (s *Server) Start() error {
 
 	smtpServer.SetPipeline(pipeline)
 
-	// Start SMTP in background
 	go func() {
 		if err := smtpServer.ListenAndServe(smtpAddr); err != nil {
 			s.logger.Error("SMTP server error", "error", err)
@@ -241,7 +259,7 @@ func (s *Server) Start() error {
 	s.smtpServer = smtpServer
 	s.logger.Info("SMTP server started", "addr", smtpAddr)
 
-	// Start Submission SMTP server (port 587, STARTTLS)
+	// Submission SMTP server (port 587, STARTTLS)
 	if s.config.SMTP.Submission.Enabled {
 		submissionAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Submission.Bind, s.config.SMTP.Submission.Port)
 		submissionCfg := &smtp.Config{
@@ -270,7 +288,7 @@ func (s *Server) Start() error {
 		s.logger.Info("Submission server started", "addr", submissionAddr)
 	}
 
-	// Start Submission TLS SMTP server (port 465, implicit TLS)
+	// Submission TLS SMTP server (port 465, implicit TLS)
 	if s.config.SMTP.SubmissionTLS.Enabled {
 		submissionTLSAddr := fmt.Sprintf("%s:%d", s.config.SMTP.SubmissionTLS.Bind, s.config.SMTP.SubmissionTLS.Port)
 		submissionTLSCfg := &smtp.Config{
@@ -299,8 +317,10 @@ func (s *Server) Start() error {
 		s.submissionTLSServer = submissionTLSServer
 		s.logger.Info("Submission TLS server started", "addr", submissionTLSAddr)
 	}
+}
 
-	// Start IMAP server
+// startIMAP creates and starts the IMAP server.
+func (s *Server) startIMAP(mailstore *imap.BboltMailstore) error {
 	imapAddr := fmt.Sprintf("%s:%d", s.config.IMAP.Bind, s.config.IMAP.Port)
 	imapCfg := &imap.Config{
 		Addr:      imapAddr,
@@ -310,66 +330,78 @@ func (s *Server) Start() error {
 
 	imapServer := imap.NewServer(imapCfg, mailstore)
 	imapServer.SetAuthFunc(s.authenticate)
-		if s.searchSvc != nil {
-			imapServer.SetOnExpunge(func(user, mailbox string, uid uint32) {
-				s.searchSvc.RemoveMessage(user, mailbox, uid)
-			})
-		}
+	if s.searchSvc != nil {
+		imapServer.SetOnExpunge(func(user, mailbox string, uid uint32) {
+			s.searchSvc.RemoveMessage(user, mailbox, uid)
+		})
+	}
 
 	if err := imapServer.Start(); err != nil {
 		return fmt.Errorf("failed to start IMAP server: %w", err)
 	}
 	s.imapServer = imapServer
 	s.logger.Info("IMAP server started", "addr", imapAddr)
+	return nil
+}
 
-	// Start POP3 server
-	if s.config.POP3.Enabled {
-		pop3Addr := fmt.Sprintf("%s:%d", s.config.POP3.Bind, s.config.POP3.Port)
-		pop3Adapter := &pop3MailstoreAdapter{
-			mailstore: mailstore,
-			msgStore:  s.msgStore,
-		}
-		pop3Server := pop3.NewServer(pop3Addr, pop3Adapter, s.logger)
-		pop3Server.SetAuthFunc(s.authenticate)
-
-		if s.tlsManager.IsEnabled() {
-			pop3Server.SetTLSConfig(&pop3.TLSConfig{
-				CertFile: s.config.TLS.CertFile,
-				KeyFile:  s.config.TLS.KeyFile,
-			})
-		}
-
-		if err := pop3Server.Start(); err != nil {
-			return fmt.Errorf("failed to start POP3 server: %w", err)
-		}
-		s.pop3Server = pop3Server
-		s.logger.Info("POP3 server started", "addr", pop3Addr)
+// startPOP3 creates and starts the POP3 server (if enabled).
+func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
+	if !s.config.POP3.Enabled {
+		return nil
 	}
 
-	// Start MCP server
-	if s.config.MCP.Enabled {
-		mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
-		mcpSrv := mcp.NewServer(s.database)
-		if len(s.config.HTTP.CorsOrigins) > 0 {
-			mcpSrv.SetCorsOrigin(strings.Join(s.config.HTTP.CorsOrigins, ","))
-		}
-		mux := http.NewServeMux()
-		mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
+	pop3Addr := fmt.Sprintf("%s:%d", s.config.POP3.Bind, s.config.POP3.Port)
+	pop3Adapter := &pop3MailstoreAdapter{
+		mailstore: mailstore,
+		msgStore:  s.msgStore,
+	}
+	pop3Server := pop3.NewServer(pop3Addr, pop3Adapter, s.logger)
+	pop3Server.SetAuthFunc(s.authenticate)
 
-		s.mcpHTTPServer = &http.Server{
-			Addr:    mcpAddr,
-			Handler: mux,
-		}
-
-		go func() {
-			if err := s.mcpHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				s.logger.Error("MCP server error", "error", err)
-			}
-		}()
-		s.logger.Info("MCP server started", "addr", mcpAddr)
+	if s.tlsManager.IsEnabled() {
+		pop3Server.SetTLSConfig(&pop3.TLSConfig{
+			CertFile: s.config.TLS.CertFile,
+			KeyFile:  s.config.TLS.KeyFile,
+		})
 	}
 
-	// Start HTTP API server
+	if err := pop3Server.Start(); err != nil {
+		return fmt.Errorf("failed to start POP3 server: %w", err)
+	}
+	s.pop3Server = pop3Server
+	s.logger.Info("POP3 server started", "addr", pop3Addr)
+	return nil
+}
+
+// startMCP creates and starts the MCP server (if enabled).
+func (s *Server) startMCP() {
+	if !s.config.MCP.Enabled {
+		return
+	}
+
+	mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
+	mcpSrv := mcp.NewServer(s.database)
+	if len(s.config.HTTP.CorsOrigins) > 0 {
+		mcpSrv.SetCorsOrigin(strings.Join(s.config.HTTP.CorsOrigins, ","))
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
+
+	s.mcpHTTPServer = &http.Server{
+		Addr:    mcpAddr,
+		Handler: mux,
+	}
+
+	go func() {
+		if err := s.mcpHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("MCP server error", "error", err)
+		}
+	}()
+	s.logger.Info("MCP server started", "addr", mcpAddr)
+}
+
+// startAPI creates and starts the admin HTTP API server.
+func (s *Server) startAPI() {
 	apiCfg := api.Config{
 		Addr:        fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
 		JWTSecret:   s.config.Security.JWTSecret,
@@ -387,9 +419,9 @@ func (s *Server) Start() error {
 		}
 	}()
 	s.logger.Info("API server started", "addr", apiCfg.Addr)
-
-	return nil
 }
+
+
 
 // Stop gracefully stops all server components
 func (s *Server) Stop() error {
