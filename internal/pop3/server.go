@@ -223,7 +223,7 @@ func (s *Session) Handle() {
 			continue
 		}
 
-		s.server.logger.Debug("POP3 command", "session", s.id, "line", line)
+		s.server.logger.Debug("POP3 command", "session", s.id, "line", truncateCommand(line, 80))
 
 		if err := s.handleCommand(line); err != nil {
 			return
@@ -282,6 +282,14 @@ func (s *Session) handleCommand(line string) error {
 	}
 
 	return nil
+}
+
+// truncateCommand truncates a command for safe logging.
+func truncateCommand(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 // handleAuthorizationCommand handles commands in AUTHORIZATION state

@@ -703,6 +703,13 @@ func (s *Session) handleAppend(args []string, line string) error {
 				return nil
 			}
 
+			// Limit APPEND message size to 50MB
+			const maxAppendSize = 50 * 1024 * 1024
+			if size > maxAppendSize {
+				s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
+				return nil
+			}
+
 			// Request the literal
 			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", size))
 

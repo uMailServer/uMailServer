@@ -299,7 +299,7 @@ func (s *Session) Handle() {
 			continue
 		}
 
-		s.server.logger.Debug("IMAP command", "session", s.id, "line", line)
+		s.server.logger.Debug("IMAP command", "session", s.id, "line", truncateCommand(line, 80))
 
 		err = s.handleCommand(line)
 		if err != nil {
@@ -366,4 +366,12 @@ func defaultCapabilities() []string {
 		"ESEARCH",
 		"ID",
 	}
+}
+
+// truncateCommand truncates a command line for safe logging.
+func truncateCommand(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
