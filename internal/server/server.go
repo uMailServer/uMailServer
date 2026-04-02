@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -349,6 +350,9 @@ func (s *Server) Start() error {
 	if s.config.MCP.Enabled {
 		mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
 		mcpSrv := mcp.NewServer(s.database)
+		if len(s.config.HTTP.CorsOrigins) > 0 {
+			mcpSrv.SetCorsOrigin(strings.Join(s.config.HTTP.CorsOrigins, ","))
+		}
 		mux := http.NewServeMux()
 		mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
 
@@ -367,8 +371,9 @@ func (s *Server) Start() error {
 
 	// Start HTTP API server
 	apiCfg := api.Config{
-		Addr:      fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
-		JWTSecret: s.config.Security.JWTSecret,
+		Addr:        fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
+		JWTSecret:   s.config.Security.JWTSecret,
+		CorsOrigins: s.config.HTTP.CorsOrigins,
 	}
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
 	s.apiServer.SetSearchService(s.searchSvc)
@@ -688,6 +693,11 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 	// Track delivery metric
 	metrics.Get().DeliverySuccess()
 
+	// Send vacation auto-reply if configured
+	if account.VacationSettings != "" && s.queue != nil {
+		go s.sendVacationReply(email, from, account.VacationSettings)
+	}
+
 	return nil
 }
 
@@ -806,6 +816,53 @@ func (a *pop3MailstoreAdapter) GetMessageSize(user string, index int) (int64, er
 	}
 	return msg.Size, nil
 }
+
+
+// sendVacationReply generates and enqueues an auto-reply message.
+func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON string) {
+	senderLower := strings.ToLower(senderEmail)
+	for _, prefix := range []string{"mailer-daemon@", "postmaster@", "noreply@", "no-reply@", "bounce@"} {
+		if strings.HasPrefix(senderLower, prefix) {
+			return
+		}
+	}
+
+	var settings struct {
+		Enabled   bool   `json:"enabled"`
+		Message   string `json:"message"`
+		StartDate string `json:"start_date"`
+		EndDate   string `json:"end_date"`
+	}
+	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil || !settings.Enabled {
+		return
+	}
+
+	now := time.Now()
+	if settings.StartDate != "" {
+		if start, err := time.Parse("2006-01-02", settings.StartDate); err == nil && now.Before(start) {
+			return
+		}
+	}
+	if settings.EndDate != "" {
+		if end, err := time.Parse("2006-01-02", settings.EndDate); err == nil && now.After(end.Add(24*time.Hour)) {
+			return
+		}
+	}
+
+	autoReply := "From: " + recipientEmail + "\r\n" +
+		"To: " + senderEmail + "\r\n" +
+		"Subject: Auto: Out of Office\r\n" +
+		"Auto-Submitted: auto-replied\r\n" +
+		"Precedence: bulk\r\n" +
+		"Date: " + now.Format(time.RFC1123Z) + "\r\n" +
+		"\r\n" +
+		settings.Message
+
+	if _, err := s.queue.Enqueue(recipientEmail, []string{senderEmail}, []byte(autoReply)); err != nil {
+		s.logger.Error("Failed to enqueue vacation reply", "error", err)
+	}
+}
+
 
 // parseBasicHeaders extracts subject, from, to, date from raw message data.
 func parseBasicHeaders(data []byte) (subject, from, to, date string) {

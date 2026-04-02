@@ -19,6 +19,7 @@ import (
 	"github.com/umailserver/umailserver/internal/server"
 	"github.com/umailserver/umailserver/internal/storage"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/term"
 )
 
 var (
@@ -415,7 +416,15 @@ func generateDKIMKey(keyPath string) error {
 }
 
 func readPassword() string {
-	// Simple password reader (cross-platform)
+	fd := int(os.Stdin.Fd())
+	if state, err := term.MakeRaw(fd); err == nil {
+		defer term.Restore(fd, state)
+		if pw, err := term.ReadPassword(fd); err == nil {
+			fmt.Println()
+			return string(pw)
+		}
+	}
+	// Fallback for non-terminal contexts
 	var password string
 	fmt.Scanln(&password)
 	return password

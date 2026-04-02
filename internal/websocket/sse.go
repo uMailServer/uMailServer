@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,10 +14,11 @@ import (
 
 // SSEServer provides Server-Sent Events for real-time updates
 type SSEServer struct {
-	logger    *slog.Logger
-	clients   map[string]*SSEClient // user -> client
-	clientsMu sync.RWMutex
-	authFunc  func(token string) (user string, isAdmin bool, err error)
+	logger     *slog.Logger
+	clients    map[string]*SSEClient // user -> client
+	clientsMu  sync.RWMutex
+	authFunc   func(token string) (user string, isAdmin bool, err error)
+	corsOrigin string
 }
 
 // SSEClient represents an SSE connection
@@ -42,6 +44,12 @@ func NewSSEServer(logger *slog.Logger) *SSEServer {
 // SetAuthFunc sets the authentication function
 func (s *SSEServer) SetAuthFunc(fn func(token string) (user string, isAdmin bool, err error)) {
 	s.authFunc = fn
+}
+
+// SetCorsOrigin sets the allowed CORS origin(s). Multiple origins are comma-separated.
+// If empty, defaults to "*" (allow all).
+func (s *SSEServer) SetCorsOrigin(origin string) {
+	s.corsOrigin = origin
 }
 
 // Handler returns the HTTP handler for SSE connections
@@ -80,7 +88,19 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := s.corsOrigin
+		if origin == "" {
+			origin = "*"
+		}
+		if reqOrigin := r.Header.Get("Origin"); origin != "*" && reqOrigin != "" {
+			for _, o := range strings.Split(origin, ",") {
+				if strings.TrimSpace(o) == reqOrigin {
+					origin = reqOrigin
+					break
+				}
+			}
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {

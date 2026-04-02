@@ -10,8 +10,9 @@ import (
 
 // Server implements MCP (Model Context Protocol)
 type Server struct {
-	db      *db.DB
-	version string
+	db         *db.DB
+	version    string
+	corsOrigin string
 }
 
 // NewServer creates MCP server
@@ -22,10 +23,19 @@ func NewServer(database *db.DB) *Server {
 	}
 }
 
+// SetCorsOrigin sets the allowed CORS origin(s).
+func (s *Server) SetCorsOrigin(origin string) {
+	s.corsOrigin = origin
+}
+
 // HandleHTTP handles MCP requests
 func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	origin := s.corsOrigin
+	if origin == "" {
+		origin = "*"
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 

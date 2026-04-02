@@ -58,6 +58,7 @@ type Config struct {
 	Addr        string
 	JWTSecret   string
 	TokenExpiry time.Duration
+	CorsOrigins []string
 }
 
 // NewServer creates a new admin API server
@@ -67,6 +68,9 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	}
 
 	sseServer := websocket.NewSSEServer(logger)
+	if len(config.CorsOrigins) > 0 {
+		sseServer.SetCorsOrigin(strings.Join(config.CorsOrigins, ","))
+	}
 	sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) {
 		parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -186,7 +190,21 @@ func (s *Server) Stop() error {
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		allowed := ""
+		if len(s.config.CorsOrigins) > 0 {
+			for _, o := range s.config.CorsOrigins {
+				if o == origin || o == "*" {
+					allowed = o
+					break
+				}
+			}
+		} else {
+			allowed = "*"
+		}
+		if allowed != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowed)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 

@@ -109,10 +109,11 @@ type POP3Config struct {
 
 // HTTPConfig holds HTTP server settings
 type HTTPConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Port     int    `yaml:"port"`
-	HTTPPort int    `yaml:"http_port"`
-	Bind     string `yaml:"bind"`
+	Enabled     bool     `yaml:"enabled"`
+	Port        int      `yaml:"port"`
+	HTTPPort    int      `yaml:"http_port"`
+	Bind        string   `yaml:"bind"`
+	CorsOrigins []string `yaml:"cors_origins"`
 }
 
 // AdminConfig holds admin panel settings
