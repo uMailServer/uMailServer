@@ -73,7 +73,7 @@ func TestMaildirStore(t *testing.T) {
 
 	t.Run("List", func(t *testing.T) {
 		// Clear existing messages
-		maildir := store.userMaildirPath(domain, user)
+		maildir, _ := store.userMaildirPath(domain, user)
 		os.RemoveAll(maildir)
 
 		// Deliver some messages (sleep between deliveries to ensure unique filenames)
@@ -276,7 +276,7 @@ func TestMaildirStore(t *testing.T) {
 
 	t.Run("Quota", func(t *testing.T) {
 		// Clear existing messages
-		maildir := store.userMaildirPath(domain, user)
+		maildir, _ := store.userMaildirPath(domain, user)
 		os.RemoveAll(maildir)
 
 		// Deliver some messages
@@ -741,7 +741,7 @@ func TestListWithSubdirectories(t *testing.T) {
 	tmpDir := t.TempDir()
 	store := NewMaildirStore(tmpDir)
 
-	maildir := store.userMaildirPath("example.com", "testuser")
+	maildir, _ := store.userMaildirPath("example.com", "testuser")
 	// Create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
 		os.MkdirAll(filepath.Join(maildir, sub), 0755)
@@ -792,7 +792,7 @@ func TestFolderPathInbox(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			path := store.folderPath("example.com", "testuser", tc.folder)
-			expected := store.userMaildirPath("example.com", "testuser")
+			expected, _ := store.userMaildirPath("example.com", "testuser")
 			if path != expected {
 				t.Errorf("folderPath(%q) = %q, want %q", tc.folder, path, expected)
 			}
@@ -805,7 +805,8 @@ func TestFolderPathCustom(t *testing.T) {
 	store := NewMaildirStore(tmpDir)
 
 	path := store.folderPath("example.com", "testuser", "Archive")
-	expected := filepath.Join(store.userMaildirPath("example.com", "testuser"), ".Archive")
+	userPath, _ := store.userMaildirPath("example.com", "testuser")
+	expected := filepath.Join(userPath, ".Archive")
 	if path != expected {
 		t.Errorf("folderPath(Archive) = %q, want %q", path, expected)
 	}

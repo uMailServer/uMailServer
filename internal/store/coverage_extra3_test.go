@@ -27,7 +27,7 @@ func TestDeliver_CreatesNewDirectory(t *testing.T) {
 	}
 
 	// Verify full directory structure was created
-	maildir := s.userMaildirPath(domain, user)
+	maildir, _ := s.userMaildirPath(domain, user)
 	for _, sub := range []string{"tmp", "new", "cur"} {
 		p := filepath.Join(maildir, sub)
 		st, err := os.Stat(p)
@@ -125,7 +125,7 @@ func TestDeliverWithFlags_EmptyFlags_Cov3(t *testing.T) {
 	}
 
 	// File should be in cur/ without flag suffix
-	maildir := s.userMaildirPath("example.com", "testuser")
+	maildir, _ := s.userMaildirPath("example.com", "testuser")
 	curPath := filepath.Join(maildir, "cur", fn)
 	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		t.Errorf("file not found in cur/: %s", curPath)
@@ -157,7 +157,7 @@ func TestDeliverWithFlags_MultipleFlags_Cov3(t *testing.T) {
 	}
 
 	// Verify file is in cur/
-	maildir := s.userMaildirPath("example.com", "testuser")
+	maildir, _ := s.userMaildirPath("example.com", "testuser")
 	curPath := filepath.Join(maildir, "cur", fn)
 	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		t.Errorf("file not found in cur/: %s", curPath)
@@ -176,7 +176,7 @@ func TestDeliverWithFlags_ToSubfolder_Cov3(t *testing.T) {
 	}
 
 	// Verify file exists in the subfolder's cur/
-	maildir := s.userMaildirPath("example.com", "testuser")
+	maildir, _ := s.userMaildirPath("example.com", "testuser")
 	curPath := filepath.Join(maildir, ".Archive", "cur", fn)
 	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		t.Errorf("file not found in subfolder cur/: %s", curPath)
@@ -204,7 +204,7 @@ func TestDeliver_SyncAndRename(t *testing.T) {
 	}
 
 	// Verify tmp file is gone
-	maildir := s.userMaildirPath("example.com", "testuser")
+	maildir, _ := s.userMaildirPath("example.com", "testuser")
 	tmpPath := filepath.Join(maildir, "tmp", fn)
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
 		t.Error("tmp file should not exist after successful rename")
@@ -320,7 +320,7 @@ func TestList_WithSubdirectories(t *testing.T) {
 	s.ensureFolder("example.com", "testuser", "INBOX")
 
 	// Create a subdirectory inside new/
-	maildir := s.userMaildirPath("example.com", "testuser")
+	maildir, _ := s.userMaildirPath("example.com", "testuser")
 	newPath := filepath.Join(maildir, "new")
 	os.MkdirAll(newPath+"/subdir", 0755)
 
@@ -422,7 +422,7 @@ func TestDeliverWithFlags_DifferentUsers(t *testing.T) {
 		}
 
 		// Verify file is in cur/
-		maildir := s.userMaildirPath(u.domain, u.user)
+		maildir, _ := s.userMaildirPath(u.domain, u.user)
 		curPath := filepath.Join(maildir, "cur", fn)
 		if _, err := os.Stat(curPath); os.IsNotExist(err) {
 			t.Errorf("file not found in cur/ for %s@%s: %s", u.user, u.domain, curPath)
@@ -445,7 +445,7 @@ func TestDeliver_ToSubfolder_Cov3(t *testing.T) {
 	}
 
 	// Verify file is in the Sent folder's new/
-	maildir := s.userMaildirPath("example.com", "testuser")
+	maildir, _ := s.userMaildirPath("example.com", "testuser")
 	newPath := filepath.Join(maildir, ".Sent", "new", fn)
 	data, err := os.ReadFile(newPath)
 	if err != nil {

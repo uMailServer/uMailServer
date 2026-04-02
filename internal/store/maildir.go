@@ -61,14 +61,31 @@ func NewMaildirStore(baseDir string) *MaildirStore {
 	}
 }
 
-// userMaildirPath returns the path to a user's Maildir
-func (s *MaildirStore) userMaildirPath(domain, user string) string {
-	return filepath.Join(s.baseDir, "domains", domain, "users", user, "Maildir")
+// validatePathParts checks that domain and user don't contain path traversal sequences.
+func validatePathParts(domain, user string) error {
+	for _, s := range []string{domain, user} {
+		if s == "" || s == ".." || strings.ContainsAny(s, "/\\") {
+			return fmt.Errorf("invalid path component: %q", s)
+		}
+	}
+	return nil
+}
+
+// userMaildirPath returns the path to a user's Maildir.
+// It validates domain and user to prevent path traversal.
+func (s *MaildirStore) userMaildirPath(domain, user string) (string, error) {
+	if err := validatePathParts(domain, user); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.baseDir, "domains", domain, "users", user, "Maildir"), nil
 }
 
 // folderPath returns the path to a specific folder within a user's Maildir
 func (s *MaildirStore) folderPath(domain, user, folder string) string {
-	maildir := s.userMaildirPath(domain, user)
+	maildir, err := s.userMaildirPath(domain, user)
+	if err != nil {
+		return ""
+	}
 	if folder == "" || folder == "INBOX" {
 		return maildir
 	}
@@ -408,7 +425,10 @@ func (s *MaildirStore) RenameFolder(domain, user, oldName, newName string) error
 
 // ListFolders returns all folders for a user
 func (s *MaildirStore) ListFolders(domain, user string) ([]string, error) {
-	maildir := s.userMaildirPath(domain, user)
+	maildir, err := s.userMaildirPath(domain, user)
+	if err != nil {
+		return nil, err
+	}
 
 	var folders []string
 
@@ -442,7 +462,10 @@ func (s *MaildirStore) ListFolders(domain, user string) ([]string, error) {
 
 // Quota returns current usage and limit for a user
 func (s *MaildirStore) Quota(domain, user string) (used int64, limit int64, err error) {
-	maildir := s.userMaildirPath(domain, user)
+	maildir, err := s.userMaildirPath(domain, user)
+	if err != nil {
+		return 0, 0, err
+	}
 
 	// Walk the directory tree and sum file sizes
 	err = filepath.Walk(maildir, func(path string, info os.FileInfo, err error) error {

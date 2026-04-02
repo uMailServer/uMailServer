@@ -29,7 +29,7 @@ func TestListFolders_SkipsFiles(t *testing.T) {
 	store.CreateFolder(domain, user, "Archive")
 
 	// Place regular files in the maildir root -- these should be skipped
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	os.WriteFile(filepath.Join(maildir, "regularfile.txt"), []byte("test"), 0644)
 	os.WriteFile(filepath.Join(maildir, ".dotfile"), []byte("test"), 0644)
 
@@ -109,7 +109,7 @@ func TestSetFlags_MkdirAllFailure(t *testing.T) {
 	// Remove the cur/ directory and replace it with a regular file.
 	// This causes MkdirAll("cur/") to fail, and the stat for "cur/filename"
 	// also fails, so the message is found in new/ with subdir="new".
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	curDir := filepath.Join(maildir, "cur")
 	os.RemoveAll(curDir)
 	os.WriteFile(curDir, []byte("blocker"), 0644)
@@ -140,7 +140,7 @@ func TestQuota_WalkErrorNonNotExist(t *testing.T) {
 		store.Deliver(domain, user, "Archive", msg)
 
 		// Lock the Archive subfolder exclusively to cause Walk to fail
-		maildir := store.userMaildirPath(domain, user)
+		maildir, _ := store.userMaildirPath(domain, user)
 		archiveDir := filepath.Join(maildir, ".Archive")
 		p, err := syscall.UTF16PtrFromString(archiveDir)
 		if err != nil {
@@ -179,7 +179,7 @@ func TestQuota_WalkErrorNonNotExist(t *testing.T) {
 		}
 
 		// Replace the maildir root with a file to cause Walk to error
-		maildir := store.userMaildirPath(domain, user)
+		maildir, _ := store.userMaildirPath(domain, user)
 		os.RemoveAll(maildir)
 		os.WriteFile(maildir, []byte("not a directory"), 0644)
 
@@ -207,7 +207,7 @@ func TestQuota_SkipsInaccessibleFiles(t *testing.T) {
 		t.Fatalf("Deliver failed: %v", err)
 	}
 
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	newDir := filepath.Join(maildir, "new")
 
 	if runtime.GOOS == "windows" {

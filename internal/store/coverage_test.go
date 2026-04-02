@@ -19,7 +19,7 @@ func TestDeliver_RenameFailure(t *testing.T) {
 
 	domain := "example.com"
 	user := "testuser"
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
@@ -70,7 +70,7 @@ func TestDeliverWithFlags_RenameFailure(t *testing.T) {
 
 	domain := "example.com"
 	user := "testuser"
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
@@ -127,7 +127,7 @@ func TestDeliver_OpenFailure(t *testing.T) {
 
 	domain := "example.com"
 	user := "testuser"
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
@@ -201,7 +201,7 @@ func TestMessageCount_ListError(t *testing.T) {
 
 	domain := "example.com"
 	user := "testuser"
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
@@ -287,7 +287,7 @@ func TestFetch_ReadFileError(t *testing.T) {
 	}
 
 	// The file is in new/. Lock it exclusively.
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	filePath := filepath.Join(maildir, "new", fn)
 	p, err := syscall.UTF16PtrFromString(filePath)
 	if err != nil {
@@ -333,7 +333,7 @@ func TestFetchReader_OpenError(t *testing.T) {
 	}
 
 	// The file is in new/. Lock it exclusively.
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	filePath := filepath.Join(maildir, "new", fn)
 	p, err := syscall.UTF16PtrFromString(filePath)
 	if err != nil {
@@ -375,7 +375,7 @@ func TestSetFlags_RenameFailure(t *testing.T) {
 	}
 
 	// Lock the cur/ directory exclusively so rename from new/ to cur/ fails
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	curDir := filepath.Join(maildir, "cur")
 
 	if runtime.GOOS == "windows" {
@@ -425,7 +425,7 @@ func TestMove_RenameFailure(t *testing.T) {
 	}
 
 	// Create the destination folder structure
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	destPath := store.folderPath(domain, user, "Archive")
 	for _, sub := range []string{"tmp", "new", "cur"} {
 		os.MkdirAll(filepath.Join(destPath, sub), 0755)
@@ -485,7 +485,7 @@ func TestListFolders_ReadDirError(t *testing.T) {
 	store.CreateFolder(domain, user, "Archive")
 
 	// Lock the maildir directory exclusively
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	p, err := syscall.UTF16PtrFromString(maildir)
 	if err != nil {
 		t.Fatalf("UTF16PtrFromString: %v", err)
@@ -532,7 +532,7 @@ func TestQuota_WalkError(t *testing.T) {
 	}
 
 	// Lock the new/ directory exclusively so Walk fails trying to read entries
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	newDir := filepath.Join(maildir, "new")
 	p, err := syscall.UTF16PtrFromString(newDir)
 	if err != nil {
@@ -569,7 +569,7 @@ func TestDeliver_EnsureFolderFailure(t *testing.T) {
 	// Create a file where the maildir base directory would go, preventing folder creation
 	domain := "example.com"
 	user := "testuser"
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	os.MkdirAll(filepath.Dir(maildir), 0755)
 	// Create a file at the Maildir path to cause MkdirAll to fail
 	os.WriteFile(maildir, []byte("blocker"), 0644)
@@ -587,7 +587,7 @@ func TestDeliverWithFlags_EnsureFolderFailure(t *testing.T) {
 
 	domain := "example.com"
 	user := "testuser"
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	os.MkdirAll(filepath.Dir(maildir), 0755)
 	os.WriteFile(maildir, []byte("blocker"), 0644)
 
@@ -607,7 +607,7 @@ func TestDeliver_WriteFileFails(t *testing.T) {
 	user := "testuser"
 
 	// Create the maildir structure ourselves, but make tmp a file
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	for _, sub := range []string{"new", "cur"} {
 		os.MkdirAll(filepath.Join(maildir, sub), 0755)
 	}
@@ -629,7 +629,7 @@ func TestDeliverWithFlags_WriteFileFails(t *testing.T) {
 	domain := "example.com"
 	user := "testuser"
 
-	maildir := store.userMaildirPath(domain, user)
+	maildir, _ := store.userMaildirPath(domain, user)
 	for _, sub := range []string{"new", "cur"} {
 		os.MkdirAll(filepath.Join(maildir, sub), 0755)
 	}

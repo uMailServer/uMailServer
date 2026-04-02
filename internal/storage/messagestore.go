@@ -3,10 +3,24 @@ package storage
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+// errInvalidPath is returned when a user-provided path component contains
+// path separators or traversal sequences.
+var errInvalidPath = errors.New("invalid path component: contains separator or traversal")
+
+// validatePathComponent checks that s does not contain path separators or "..".
+func validatePathComponent(s string) error {
+	if s == "" || s == ".." || strings.ContainsAny(s, "/\\") {
+		return errInvalidPath
+	}
+	return nil
+}
 
 // MessageStore handles storage of raw message data
 type MessageStore struct {
@@ -29,6 +43,9 @@ func (s *MessageStore) Close() error {
 
 // StoreMessage stores a message and returns its ID
 func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
+	if err := validatePathComponent(user); err != nil {
+		return "", err
+	}
 	// Generate message ID from content hash
 	hash := sha256.Sum256(data)
 	messageID := hex.EncodeToString(hash[:])
@@ -60,6 +77,9 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 
 // ReadMessage reads a message by ID
 func (s *MessageStore) ReadMessage(user, messageID string) ([]byte, error) {
+	if err := validatePathComponent(user); err != nil {
+		return nil, err
+	}
 	if len(messageID) < 4 {
 		return nil, fmt.Errorf("invalid message ID")
 	}
@@ -70,6 +90,9 @@ func (s *MessageStore) ReadMessage(user, messageID string) ([]byte, error) {
 
 // DeleteMessage deletes a message
 func (s *MessageStore) DeleteMessage(user, messageID string) error {
+	if err := validatePathComponent(user); err != nil {
+		return err
+	}
 	if len(messageID) < 4 {
 		return fmt.Errorf("invalid message ID")
 	}
@@ -80,6 +103,9 @@ func (s *MessageStore) DeleteMessage(user, messageID string) error {
 
 // MessageExists checks if a message exists
 func (s *MessageStore) MessageExists(user, messageID string) bool {
+	if err := validatePathComponent(user); err != nil {
+		return false
+	}
 	if len(messageID) < 4 {
 		return false
 	}
