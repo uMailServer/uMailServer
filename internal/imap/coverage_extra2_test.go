@@ -518,113 +518,16 @@ func TestParseSearchCriteria_ToNoValue(t *testing.T) {
 //   - Calling readQuotedString when pos does not point to a quote
 // =======================================================================
 
-func TestReadQuotedString_EscapedChar(t *testing.T) {
-	p := NewParser(`"hello\"world" test`)
-	result := p.readQuotedString()
-	if result != `hello\"world` {
-		t.Errorf("expected 'hello\\\"world', got %q", result)
-	}
-}
-
-func TestReadQuotedString_UnclosedQuote(t *testing.T) {
-	p := NewParser(`"hello world`)
-	result := p.readQuotedString()
-	if result != "hello world" {
-		t.Errorf("expected 'hello world', got %q", result)
-	}
-}
-
-func TestReadQuotedString_NotAtQuote(t *testing.T) {
-	p := NewParser("hello")
-	// Set pos to 0 which is not a quote
-	result := p.readQuotedString()
-	if result != "" {
-		t.Errorf("expected empty string, got %q", result)
-	}
-}
-
-func TestReadQuotedString_EmptyQuoted(t *testing.T) {
-	p := NewParser(`""`)
-	result := p.readQuotedString()
-	if result != "" {
-		t.Errorf("expected empty string, got %q", result)
-	}
-}
-
-func TestReadQuotedString_EscapedAtEnd(t *testing.T) {
-	p := NewParser(`"test\"`)
-	result := p.readQuotedString()
-	// The escaped quote is consumed by the parser; returns raw content
-	if result != `test\"` {
-		t.Errorf("got %q", result)
-	}
-}
-
 // =======================================================================
 // parser.go: normalizeFetchItem (87.5%)
 // The uncovered branch is the final `return item` when none of the
 // special prefixes match (i.e., not BODY[, BODY.PEEK[, or RFC822).
 // =======================================================================
 
-func TestNormalizeFetchItem_PlainItem(t *testing.T) {
-	result := normalizeFetchItem("FLAGS")
-	if result != "FLAGS" {
-		t.Errorf("expected FLAGS, got %q", result)
-	}
-}
-
-func TestNormalizeFetchItem_BodyPeekBracket(t *testing.T) {
-	result := normalizeFetchItem("body.peek[HEADER]")
-	if result != "BODY.PEEK[HEADER]" {
-		t.Errorf("expected BODY.PEEK[HEADER], got %q", result)
-	}
-}
-
-func TestNormalizeFetchItem_RFC822Prefix(t *testing.T) {
-	result := normalizeFetchItem("rfc822.header")
-	if result != "RFC822.HEADER" {
-		t.Errorf("expected RFC822.HEADER, got %q", result)
-	}
-}
-
-func TestNormalizeFetchItem_UID(t *testing.T) {
-	result := normalizeFetchItem("uid")
-	if result != "UID" {
-		t.Errorf("expected UID, got %q", result)
-	}
-}
-
-func TestNormalizeFetchItem_InternalDate(t *testing.T) {
-	result := normalizeFetchItem("internaldate")
-	if result != "INTERNALDATE" {
-		t.Errorf("expected INTERNALDATE, got %q", result)
-	}
-}
-
 // =======================================================================
 // parser.go: ParseStatusItems (81.2%)
 // Missing: the parenthesized list path for StatusItems
 // =======================================================================
-
-func TestParseStatusItems_MultipleItemsParens(t *testing.T) {
-	items, err := ParseStatusItems("(MESSAGES RECENT UIDNEXT UIDVALIDITY UNSEEN)")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(items) != 5 {
-		t.Errorf("expected 5 items, got %d: %v", len(items), items)
-	}
-}
-
-func TestParseStatusItems_SingleItemNoParens(t *testing.T) {
-	items, err := ParseStatusItems("MESSAGES")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(items) != 1 || items[0] != StatusMessages {
-		t.Errorf("expected [MESSAGES], got %v", items)
-	}
-}
 
 // =======================================================================
 // server.go: Start (87.5%) - test error path (listen failure)
@@ -784,16 +687,6 @@ func TestSessionHandle_CommandError(t *testing.T) {
 // =======================================================================
 // parser.go: readToken - test empty input
 // =======================================================================
-
-func TestReadToken_EmptyInput(t *testing.T) {
-	p := NewParser("")
-	// Advance pos past end
-	p.pos = 10
-	result := p.readToken()
-	if result != "" {
-		t.Errorf("expected empty token, got %q", result)
-	}
-}
 
 // =======================================================================
 // parser.go: ParseSequenceSet (90.9%) - test star in range

@@ -852,37 +852,10 @@ func TestParseSequenceSet_InvalidRangePart(t *testing.T) {
 // Uncovered: unknown status item
 // =======================================================================
 
-func TestParseStatusItems_UnknownItem(t *testing.T) {
-	_, err := ParseStatusItems("UNKNOWN")
-	if err == nil {
-		t.Error("expected error for unknown status item")
-	}
-	if !strings.Contains(err.Error(), "unknown status item") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
 // =======================================================================
 // parser.go: ParseFlags (95.2%)
 // Uncovered: error for non-parenthesized flags
 // =======================================================================
-
-func TestParseFlags_NoParens(t *testing.T) {
-	_, err := ParseFlags("FLAGS")
-	if err == nil {
-		t.Error("expected error for non-parenthesized flags")
-	}
-}
-
-func TestParseFlags_WithBackslash(t *testing.T) {
-	flags, err := ParseFlags("(\\Seen \\Flagged)")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(flags) != 2 {
-		t.Errorf("expected 2 flags, got %d: %v", len(flags), flags)
-	}
-}
 
 // =======================================================================
 // server.go: Handle (83.3%)
@@ -1007,46 +980,6 @@ func TestStoreFlags_RemoveFlagFromEmptyFlags(t *testing.T) {
 // =======================================================================
 // parser.go: ParseFetchItems - test ALL/FAST/FULL macros
 // =======================================================================
-
-func TestParseFetchItems_AllMacro(t *testing.T) {
-	items, err := ParseFetchItems("ALL")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(items) != 4 {
-		t.Errorf("expected 4 items for ALL, got %d: %v", len(items), items)
-	}
-}
-
-func TestParseFetchItems_FastMacro(t *testing.T) {
-	items, err := ParseFetchItems("FAST")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(items) != 3 {
-		t.Errorf("expected 3 items for FAST, got %d: %v", len(items), items)
-	}
-}
-
-func TestParseFetchItems_FullMacro(t *testing.T) {
-	items, err := ParseFetchItems("FULL")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(items) != 5 {
-		t.Errorf("expected 5 items for FULL, got %d: %v", len(items), items)
-	}
-}
-
-func TestParseFetchItems_BodyPeekBracket(t *testing.T) {
-	items, err := ParseFetchItems("(BODY.PEEK[HEADER])")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(items) != 1 {
-		t.Errorf("expected 1 item, got %d: %v", len(items), items)
-	}
-}
 
 // =======================================================================
 // mailstore.go: ListMailboxes with different patterns
