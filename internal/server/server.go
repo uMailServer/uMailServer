@@ -309,6 +309,11 @@ func (s *Server) Start() error {
 
 	imapServer := imap.NewServer(imapCfg, mailstore)
 	imapServer.SetAuthFunc(s.authenticate)
+		if s.searchSvc != nil {
+			imapServer.SetOnExpunge(func(user, mailbox string, uid uint32) {
+				s.searchSvc.RemoveMessage(user, mailbox, uid)
+			})
+		}
 
 	if err := imapServer.Start(); err != nil {
 		return fmt.Errorf("failed to start IMAP server: %w", err)

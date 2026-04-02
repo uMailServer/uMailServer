@@ -30,6 +30,9 @@ type Server struct {
 
 	// Mailbox operations
 	mailstore Mailstore
+
+	// Called when messages are expunged so search index can be updated
+	onExpunge func(user, mailbox string, uid uint32)
 }
 
 // Mailstore interface for mailbox operations
@@ -83,6 +86,12 @@ func NewServer(config *Config, mailstore Mailstore) *Server {
 // SetAuthFunc sets the authentication function
 func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 	s.authFunc = fn
+}
+
+// SetOnExpunge sets a callback invoked when messages are expunged.
+// This is used to keep the search index in sync with mailbox state.
+func (s *Server) SetOnExpunge(fn func(user, mailbox string, uid uint32)) {
+	s.onExpunge = fn
 }
 
 // Start starts the IMAP server

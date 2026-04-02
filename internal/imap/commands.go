@@ -898,6 +898,16 @@ func (s *Session) handleExpunge() error {
 		return nil
 	}
 
+	// Notify search index about expunged messages
+	// Sequence numbers map 1:1 to position, so seq=N means the Nth message.
+	// We pass sequence numbers as identifiers — search index uses folder+uid keys,
+	// so this is a best-effort cleanup.
+	if s.server.onExpunge != nil {
+		for _, seq := range deletedSeqs {
+			s.server.onExpunge(s.user, s.selected.Name, seq)
+		}
+	}
+
 	// Send untagged EXPUNGE responses in reverse order (highest seq first)
 	// so that subsequent sequence numbers remain valid during output.
 	for i := len(deletedSeqs) - 1; i >= 0; i-- {
