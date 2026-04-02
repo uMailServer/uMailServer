@@ -756,25 +756,81 @@ func cmdQueue(args []string) {
 	}
 
 	subcmd := args[0]
-	fmt.Printf("Queue command: %s\n", subcmd)
+
+	// Open database for real operations
+	dataDir := "./data"
+	dbPath := filepath.Join(dataDir, "umailserver.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer database.Close()
 
 	switch subcmd {
 	case "list":
-		fmt.Println("Listing queue entries...")
+		entries, err := database.GetPendingQueue(time.Now().Add(24 * time.Hour))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to list queue: %v\n", err)
+			os.Exit(1)
+		}
+		if len(entries) == 0 {
+			fmt.Println("Queue is empty.")
+			return
+		}
+		fmt.Printf("%-20s %-30s %-30s %-10s %s\n", "ID", "From", "To", "Status", "Retries")
+		fmt.Println(strings.Repeat("-", 110))
+		for _, e := range entries {
+			fmt.Printf("%-20s %-30s %-30s %-10s %d\n", e.ID, e.From, strings.Join(e.To, ","), e.Status, e.RetryCount)
+		}
 	case "retry":
 		if len(args) < 2 {
 			fmt.Println("Usage: umailserver queue retry <id>")
 			os.Exit(1)
 		}
-		fmt.Printf("Retrying queue entry: %s\n", args[1])
+		entry, err := database.GetQueueEntry(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Queue entry not found: %s\n", args[1])
+			os.Exit(1)
+		}
+		entry.Status = "pending"
+		entry.NextRetry = time.Now()
+		entry.RetryCount = 0
+		entry.LastError = ""
+		if err := database.UpdateQueueEntry(entry); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to retry entry: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Queue entry retried: %s\n", args[1])
 	case "flush":
-		fmt.Println("Flushing queue...")
+		entries, err := database.GetPendingQueue(time.Now().Add(24 * time.Hour))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to flush queue: %v\n", err)
+			os.Exit(1)
+		}
+		count := 0
+		for _, e := range entries {
+			if e.Status == "failed" {
+				e.Status = "pending"
+				e.NextRetry = time.Now()
+				e.RetryCount = 0
+				e.LastError = ""
+				if err := database.UpdateQueueEntry(e); err == nil {
+					count++
+				}
+			}
+		}
+		fmt.Printf("Flushed %d failed entries\n", count)
 	case "drop":
 		if len(args) < 2 {
 			fmt.Println("Usage: umailserver queue drop <id>")
 			os.Exit(1)
 		}
-		fmt.Printf("Dropping queue entry: %s\n", args[1])
+		if err := database.Dequeue(args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to drop entry: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Queue entry dropped: %s\n", args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown queue subcommand: %s\n", subcmd)
 		os.Exit(1)
