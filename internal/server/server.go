@@ -367,6 +367,9 @@ func (s *Server) Start() error {
 	}
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
 	s.apiServer.SetSearchService(s.searchSvc)
+	if s.queue != nil {
+		s.apiServer.SetQueueManager(s.queue)
+	}
 
 	go func() {
 		if err := s.apiServer.Start(apiCfg.Addr); err != nil {

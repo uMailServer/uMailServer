@@ -15,6 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/search"
@@ -48,6 +49,7 @@ type Server struct {
 	sseServer  *websocket.SSEServer
 	searchSvc  *search.Service
 	msgStore   *storage.MessageStore
+	queueMgr   *queue.Manager
 	httpServer *http.Server
 }
 
@@ -65,6 +67,24 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	}
 
 	sseServer := websocket.NewSSEServer(logger)
+	sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) {
+		parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
+			return []byte(config.JWTSecret), nil
+		})
+		if err != nil || !parsed.Valid {
+			return "", false, fmt.Errorf("invalid token")
+		}
+		claims, ok := parsed.Claims.(jwt.MapClaims)
+		if !ok {
+			return "", false, fmt.Errorf("invalid claims")
+		}
+		u, _ := claims["sub"].(string)
+		a, _ := claims["admin"].(bool)
+		return u, a, nil
+	})
 
 	return &Server{
 		db:        database,
@@ -97,8 +117,8 @@ func (s *Server) router() http.Handler {
 	// SSE endpoint for real-time updates
 	mux.HandleFunc("/api/v1/events", s.sseServer.Handler())
 
-	// MCP endpoint
-	mux.HandleFunc("/mcp", s.mcpServer.HandleHTTP)
+	// MCP endpoint (protected by auth)
+	mux.HandleFunc("/mcp", s.authMiddleware(http.HandlerFunc(s.mcpServer.HandleHTTP)).ServeHTTP)
 
 	// Authentication
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
@@ -425,6 +445,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.sendJSON(w, http.StatusOK, stats)
 }
 
+
+// SetQueueManager injects the queue manager for stats
+func (s *Server) SetQueueManager(qm *queue.Manager) {
+	s.queueMgr = qm
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -444,11 +470,18 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		accounts += len(accts)
 	}
 
+	queueSize := 0
+	if s.queueMgr != nil {
+		if stats, err := s.queueMgr.GetStats(); err == nil {
+			queueSize = stats.Pending + stats.Sending + stats.Failed
+		}
+	}
+
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"domains":    len(domains),
 		"accounts":   accounts,
 		"messages":   0, // Would need to scan maildirs
-		"queue_size": 0, // Would need queue manager
+		"queue_size": queueSize,
 	})
 }
 

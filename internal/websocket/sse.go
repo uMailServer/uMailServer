@@ -63,8 +63,12 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
+		} else if s.authFunc != nil {
+			// authFunc is set but no token provided
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		} else {
-			// For development, allow unauthenticated connections
+			// No authFunc configured — development mode, use user parameter
 			user = r.URL.Query().Get("user")
 			if user == "" {
 				http.Error(w, "Missing user parameter", http.StatusBadRequest)
