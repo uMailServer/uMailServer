@@ -160,6 +160,13 @@ func (s *Server) Serve(listener net.Listener) error {
 
 // handleConnection handles a new SMTP connection
 func (s *Server) handleConnection(conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic in SMTP connection handler", "error", r)
+			conn.Close()
+		}
+	}()
+
 	// Check rate limit
 	if s.rateLimiter != nil {
 		ip := getIPFromAddr(conn.RemoteAddr().String())

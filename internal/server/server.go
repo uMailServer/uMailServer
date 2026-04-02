@@ -715,6 +715,11 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 
 			if s.searchSvc != nil {
 				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							s.logger.Error("Panic in search indexing", "error", r)
+						}
+					}()
 					if idxErr := s.searchSvc.IndexMessage(email, "INBOX", uid); idxErr != nil {
 						s.logger.Error("Failed to index message for search", "email", email, "uid", uid, "error", idxErr)
 					}
@@ -738,7 +743,14 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 
 	// Send vacation auto-reply if configured
 	if account.VacationSettings != "" && s.queue != nil {
-		go s.sendVacationReply(email, from, account.VacationSettings)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Panic in vacation reply", "error", r)
+				}
+			}()
+			s.sendVacationReply(email, from, account.VacationSettings)
+		}()
 	}
 
 	return nil

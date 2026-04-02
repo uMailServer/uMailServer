@@ -87,6 +87,13 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 
 // send delivers webhook
 func (m *Manager) send(hook *Webhook, event Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Log via fmt since logger may not be available
+			fmt.Printf("webhook: panic in send: %v\n", r)
+		}
+	}()
+
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return

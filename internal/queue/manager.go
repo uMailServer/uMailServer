@@ -237,6 +237,12 @@ func (m *Manager) processPendingEntries() {
 
 // deliver attempts to deliver a message
 func (m *Manager) deliver(entry *db.QueueEntry) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("queue: panic in delivery: %v (to: %v)\n", r, entry.To)
+		}
+	}()
+
 	// Update status to sending
 	entry.Status = "sending"
 	m.db.UpdateQueueEntry(entry)

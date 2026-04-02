@@ -176,6 +176,13 @@ func (s *Server) acceptLoop(listener net.Listener) {
 
 // handleConnection handles a single IMAP connection
 func (s *Server) handleConnection(conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic in IMAP connection handler", "error", r)
+			conn.Close()
+		}
+	}()
+
 	session := NewSession(conn, s)
 	metrics.Get().IMAPConnection()
 

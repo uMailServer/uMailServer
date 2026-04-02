@@ -159,6 +159,13 @@ func (s *Server) acceptLoop() {
 
 // handleConnection handles a single POP3 connection
 func (s *Server) handleConnection(conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Panic in POP3 connection handler", "error", r)
+			conn.Close()
+		}
+	}()
+
 	session := NewSession(conn, s)
 
 	s.sessionsMu.Lock()
