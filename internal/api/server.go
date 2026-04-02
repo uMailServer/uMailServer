@@ -1154,8 +1154,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userStr, ok := user.(string)
+	if !ok {
+		s.sendError(w, http.StatusUnauthorized, "invalid user context")
+		return
+	}
+
 	results, err := s.searchSvc.Search(search.MessageSearchOptions{
-		User:   user.(string),
+		User:   userStr,
 		Folder: folder,
 		Query:  query,
 		Limit:  limit,

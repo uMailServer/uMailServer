@@ -222,7 +222,9 @@ func (s *Server) handleToolCall(params json.RawMessage) (map[string]interface{},
 	case "list_accounts":
 		domain := ""
 		if d, ok := req.Arguments["domain"]; ok {
-			domain = d.(string)
+			if ds, ok := d.(string); ok {
+				domain = ds
+			}
 		}
 		return s.toolListAccounts(domain)
 	case "list_domains":
@@ -234,10 +236,16 @@ func (s *Server) handleToolCall(params json.RawMessage) (map[string]interface{},
 
 // Tool implementations
 func (s *Server) toolGetStats() (map[string]interface{}, error) {
-	domains, _ := s.db.ListDomains()
+	domains, err := s.db.ListDomains()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list domains: %w", err)
+	}
 	accounts := 0
 	for _, d := range domains {
-		accts, _ := s.db.ListAccountsByDomain(d.Name)
+		accts, err := s.db.ListAccountsByDomain(d.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list accounts for domain %s: %w", d.Name, err)
+		}
 		accounts += len(accts)
 	}
 
@@ -255,9 +263,15 @@ func (s *Server) toolListAccounts(domain string) (map[string]interface{}, error)
 	if domain != "" {
 		accounts, err = s.db.ListAccountsByDomain(domain)
 	} else {
-		domains, _ := s.db.ListDomains()
+		domains, err := s.db.ListDomains()
+		if err != nil {
+			return nil, fmt.Errorf("failed to list domains: %w", err)
+		}
 		for _, d := range domains {
-			domainAccounts, _ := s.db.ListAccountsByDomain(d.Name)
+			domainAccounts, err := s.db.ListAccountsByDomain(d.Name)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list accounts for domain %s: %w", d.Name, err)
+			}
 			accounts = append(accounts, domainAccounts...)
 		}
 	}
