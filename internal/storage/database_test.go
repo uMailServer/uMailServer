@@ -100,13 +100,10 @@ func TestDatabaseAuthenticateUser(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			database := setupTestDB(t)
-			authenticated, err := database.AuthenticateUser(tt.username, tt.password)
-			if err != nil {
-				t.Errorf("AuthenticateUser(%q, %q) returned error: %v", tt.username, tt.password, err)
-			}
-			// Stub implementation always returns true
-			if !authenticated {
-				t.Errorf("AuthenticateUser(%q, %q) = false, want true (stub)", tt.username, tt.password)
+			// AuthenticateUser is not implemented — real auth is via SetAuthFunc
+			_, err := database.AuthenticateUser(tt.username, tt.password)
+			if err == nil {
+				t.Errorf("AuthenticateUser(%q, %q) expected error (not implemented)", tt.username, tt.password)
 			}
 		})
 	}
@@ -572,7 +569,7 @@ func TestDatabaseGetNextUIDDifferentMailboxes(t *testing.T) {
 func TestDatabaseAuthenticateUserDifferentCredentials(t *testing.T) {
 	database := setupTestDB(t)
 
-	// All should return true (stub behavior)
+	// AuthenticateUser returns error — real auth is via injected SetAuthFunc
 	creds := []struct {
 		user, pass string
 	}{
@@ -582,12 +579,9 @@ func TestDatabaseAuthenticateUserDifferentCredentials(t *testing.T) {
 	}
 
 	for _, c := range creds {
-		ok, err := database.AuthenticateUser(c.user, c.pass)
-		if err != nil {
-			t.Errorf("AuthenticateUser(%q, %q) error: %v", c.user, c.pass, err)
-		}
-		if !ok {
-			t.Errorf("AuthenticateUser(%q, %q) = false, want true (stub)", c.user, c.pass)
+		_, err := database.AuthenticateUser(c.user, c.pass)
+		if err == nil {
+			t.Errorf("AuthenticateUser(%q, %q) expected error (not implemented)", c.user, c.pass)
 		}
 	}
 }
@@ -1107,12 +1101,10 @@ func TestNilDatabaseGetMailboxCounts(t *testing.T) {
 
 func TestNilDatabaseAuthenticateUser(t *testing.T) {
 	db := &Database{path: "fake"}
-	ok, err := db.AuthenticateUser("user", "pass")
-	if err != nil {
-		t.Errorf("Nil DB AuthenticateUser should not error: %v", err)
-	}
-	if !ok {
-		t.Error("Expected true from stub")
+	_, err := db.AuthenticateUser("user", "pass")
+	// AuthenticateUser is not implemented — expects error
+	if err == nil {
+		t.Error("Expected error from unimplemented AuthenticateUser")
 	}
 }
 

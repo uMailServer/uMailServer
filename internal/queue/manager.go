@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/rand"
@@ -477,9 +478,37 @@ func (m *Manager) GetStats() (*QueueStats, error) {
 
 // getStats is the internal version without locking
 func (m *Manager) getStats() (*QueueStats, error) {
-	// In a real implementation, this would query the database
-	// For now, return empty stats
-	return &QueueStats{}, nil
+	stats := &QueueStats{}
+
+	entries, err := m.db.GetPendingQueue(time.Now().Add(24 * time.Hour))
+	if err != nil {
+		return stats, err
+	}
+
+	// Count all queue entries by status
+	m.db.ForEach(db.BucketQueue, func(key string, value []byte) error {
+		var entry db.QueueEntry
+		if err := json.Unmarshal(value, &entry); err != nil {
+			return nil // skip malformed entries
+		}
+		stats.Total++
+		switch entry.Status {
+		case "pending":
+			stats.Pending++
+		case "sending":
+			stats.Sending++
+		case "failed":
+			stats.Failed++
+		case "delivered":
+			stats.Delivered++
+		case "bounced":
+			stats.Bounced++
+		}
+		return nil
+	})
+
+	_ = entries // entries already counted via ForEach
+	return stats, nil
 }
 
 // SetMaxRetries sets the maximum number of retry attempts

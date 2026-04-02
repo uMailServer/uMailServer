@@ -35,10 +35,13 @@ func (db *Database) Close() error {
 	return nil
 }
 
-// AuthenticateUser validates user credentials
+// AuthenticateUser validates user credentials against the account database.
+// NOTE: This is a fallback — the primary auth path is via SetAuthFunc injected
+// from the server orchestrator. This method should NOT be relied upon for
+// production authentication without a proper credential store.
 func (db *Database) AuthenticateUser(username, password string) (bool, error) {
-	// TODO: Implement actual authentication
-	return true, nil
+	// No account database available in storage.Database — defer to injected authFunc
+	return false, fmt.Errorf("AuthenticateUser: not implemented, use SetAuthFunc")
 }
 
 // Mailbox represents mailbox metadata

@@ -58,15 +58,11 @@ func TestBboltMailstoreAuthenticate(t *testing.T) {
 	}
 	defer ms.Close()
 
-	// Test authentication - implementation returns true for now
-	authenticated, err := ms.Authenticate("testuser", "password")
-	if err != nil {
-		t.Errorf("Authenticate returned error: %v", err)
-	}
-
-	// Current implementation always returns true
-	if !authenticated {
-		t.Error("Expected authentication to succeed")
+	// Authenticate delegates to storage.Database.AuthenticateUser which is
+	// not implemented — real auth is injected via server.SetAuthFunc.
+	_, err = ms.Authenticate("testuser", "password")
+	if err == nil {
+		t.Error("Expected error from unimplemented AuthenticateUser")
 	}
 }
 
