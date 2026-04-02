@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -40,6 +41,12 @@ var webmailHTML = []byte(`<!DOCTYPE html>
 </body>
 </html>`)
 
+// loginAttempt tracks failed login attempts per IP
+type loginAttempt struct {
+	count    int
+	lastSeen time.Time
+}
+
 // Server represents the admin API server
 type Server struct {
 	db         *db.DB
@@ -51,6 +58,10 @@ type Server struct {
 	msgStore   *storage.MessageStore
 	queueMgr   *queue.Manager
 	httpServer *http.Server
+
+	// Login rate limiting
+	loginMu      sync.Mutex
+	loginAttempts map[string]*loginAttempt
 }
 
 // Config holds API server configuration
@@ -290,6 +301,44 @@ func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// checkLoginRateLimit returns true if the IP is allowed to attempt login.
+// Allows 5 attempts per minute per IP; blocks for 5 minutes after that.
+func (s *Server) checkLoginRateLimit(ip string) bool {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+
+	now := time.Now()
+	attempt, exists := s.loginAttempts[ip]
+	if !exists || now.Sub(attempt.lastSeen) > 5*time.Minute {
+		s.loginAttempts = make(map[string]*loginAttempt)
+		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
+		return true
+	}
+
+	if attempt.count >= 5 {
+		return false
+	}
+	attempt.count++
+	attempt.lastSeen = now
+	return true
+}
+
+// recordLoginFailure increments the failed login counter for an IP.
+func (s *Server) recordLoginFailure(ip string) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+
+	now := time.Now()
+	attempt, exists := s.loginAttempts[ip]
+	if !exists {
+		s.loginAttempts = make(map[string]*loginAttempt)
+		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
+		return
+	}
+	attempt.count++
+	attempt.lastSeen = now
+}
+
 // Handlers
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +355,13 @@ func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Rate limit login attempts by IP
+	ip := strings.Split(r.RemoteAddr, ":")[0]
+	if !s.checkLoginRateLimit(ip) {
+		s.sendError(w, http.StatusTooManyRequests, "too many login attempts")
 		return
 	}
 
@@ -326,12 +382,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Get account
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
+		s.recordLoginFailure(ip)
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
 
 	// Check password using bcrypt
 	if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(req.Password)); err != nil {
+		s.recordLoginFailure(ip)
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
