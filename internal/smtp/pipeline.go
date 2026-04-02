@@ -5,6 +5,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 // MessageContext holds the context for a message being processed
@@ -518,20 +520,31 @@ func (s *ScoreStage) Name() string { return "Score" }
 func (s *ScoreStage) Process(ctx *MessageContext) PipelineResult {
 	ctx.SpamResult.Score = ctx.SpamScore
 
+	m := metrics.Get()
+
 	if ctx.SpamScore >= s.rejectThreshold {
 		ctx.SpamResult.Verdict = "reject"
 		ctx.Rejected = true
 		ctx.RejectionCode = 550
 		ctx.RejectionMessage = "Message rejected as spam"
+		if m != nil {
+			m.SpamDetected()
+		}
 		return ResultReject
 	}
 
 	if ctx.SpamScore >= s.junkThreshold {
 		ctx.SpamResult.Verdict = "junk"
+		if m != nil {
+			m.SpamDetected()
+		}
 		return ResultAccept
 	}
 
 	ctx.SpamResult.Verdict = "inbox"
+	if m != nil {
+		m.HamDetected()
+	}
 	return ResultAccept
 }
 

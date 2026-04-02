@@ -19,6 +19,7 @@ import (
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/imap"
 	"github.com/umailserver/umailserver/internal/mcp"
+	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/pop3"
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/search"
@@ -650,6 +651,9 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 			"size":       len(data),
 		})
 	}
+
+	// Track delivery metric
+	metrics.Get().DeliverySuccess()
 
 	return nil
 }

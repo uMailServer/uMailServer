@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 // Server represents an SMTP server
@@ -172,6 +174,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	session := NewSession(conn, s)
+	metrics.Get().SMTPConnection()
 
 	s.connMu.Lock()
 	s.connections[session.ID()] = session

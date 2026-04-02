@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/umailserver/umailserver/internal/auth"
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 // SessionState represents the current state of an SMTP session
@@ -719,6 +720,9 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	if s.server.onAuth != nil {
 		ok, err := s.server.onAuth(username, password)
 		if err != nil || !ok {
+			if m := metrics.Get(); m != nil {
+				m.SMTPAuthFailure()
+			}
 			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
 	}
@@ -772,6 +776,9 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	if s.server.onAuth != nil {
 		ok, err := s.server.onAuth(username, password)
 		if err != nil || !ok {
+			if m := metrics.Get(); m != nil {
+				m.SMTPAuthFailure()
+			}
 			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
 	}
@@ -810,6 +817,9 @@ func (s *Session) handleAuthCRAMMD5() error {
 	// Verify using the shared auth function
 	username, ok := auth.VerifyCRAMMD5(challengeB64, response, s.server.onGetUserSecret)
 	if !ok {
+		if m := metrics.Get(); m != nil {
+			m.SMTPAuthFailure()
+		}
 		return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 	}
 

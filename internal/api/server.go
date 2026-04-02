@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -491,6 +493,18 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:   time.Now(),
 	}
 
+	// Generate DKIM key pair for the domain
+	privKey, _, err := auth.GenerateDKIMKeyPair(2048)
+	if err == nil {
+		domain.DKIMSelector = "default"
+		domain.DKIMPublicKey = auth.GetPublicKeyForDNS(privKey)
+		privKeyBytes := x509.MarshalPKCS1PrivateKey(privKey)
+		domain.DKIMPrivateKey = string(pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: privKeyBytes,
+		}))
+	}
+
 	if err := s.db.CreateDomain(domain); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to create domain")
 		return
@@ -650,9 +664,13 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 
 	var req struct {
-		Password string `json:"password"`
-		IsAdmin  bool   `json:"is_admin"`
-		IsActive bool   `json:"is_active"`
+		Password         string `json:"password"`
+		IsAdmin          bool   `json:"is_admin"`
+		IsActive         bool   `json:"is_active"`
+		ForwardTo        string `json:"forward_to"`
+		ForwardKeepCopy  bool   `json:"forward_keep_copy"`
+		QuotaLimit       int64  `json:"quota_limit"`
+		VacationSettings string `json:"vacation_settings"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -671,6 +689,10 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 	account.IsAdmin = req.IsAdmin
 	account.IsActive = req.IsActive
+	account.ForwardTo = req.ForwardTo
+	account.ForwardKeepCopy = req.ForwardKeepCopy
+	account.QuotaLimit = req.QuotaLimit
+	account.VacationSettings = req.VacationSettings
 	account.UpdatedAt = time.Now()
 
 	if err := s.db.UpdateAccount(account); err != nil {
@@ -781,26 +803,37 @@ func (s *Server) sendError(w http.ResponseWriter, status int, message string) {
 }
 
 func domainToJSON(d *db.DomainData) map[string]interface{} {
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"name":         d.Name,
 		"max_accounts": d.MaxAccounts,
 		"is_active":    d.IsActive,
 		"created_at":   d.CreatedAt,
 		"updated_at":   d.UpdatedAt,
 	}
+	if d.DKIMSelector != "" {
+		result["dkim_selector"] = d.DKIMSelector
+		result["dkim_public_key"] = d.DKIMPublicKey
+	}
+	return result
 }
 
 func accountToJSON(a *db.AccountData) map[string]interface{} {
-	return map[string]interface{}{
-		"email":       a.Email,
-		"is_admin":    a.IsAdmin,
-		"is_active":   a.IsActive,
-		"quota_used":  a.QuotaUsed,
-		"quota_limit": a.QuotaLimit,
-		"created_at":  a.CreatedAt,
-		"updated_at":  a.UpdatedAt,
-		"last_login":  a.LastLoginAt,
+	result := map[string]interface{}{
+		"email":             a.Email,
+		"is_admin":          a.IsAdmin,
+		"is_active":         a.IsActive,
+		"quota_used":        a.QuotaUsed,
+		"quota_limit":       a.QuotaLimit,
+		"forward_to":        a.ForwardTo,
+		"forward_keep_copy": a.ForwardKeepCopy,
+		"created_at":        a.CreatedAt,
+		"updated_at":        a.UpdatedAt,
+		"last_login":        a.LastLoginAt,
 	}
+	if a.VacationSettings != "" {
+		result["vacation_settings"] = a.VacationSettings
+	}
+	return result
 }
 
 func parseEmail(email string) (user, domain string) {

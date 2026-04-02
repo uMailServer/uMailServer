@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 // Server represents an IMAP server
@@ -166,6 +168,7 @@ func (s *Server) acceptLoop(listener net.Listener) {
 // handleConnection handles a single IMAP connection
 func (s *Server) handleConnection(conn net.Conn) {
 	session := NewSession(conn, s)
+	metrics.Get().IMAPConnection()
 
 	s.sessionsMu.Lock()
 	s.sessions[session.ID()] = session
