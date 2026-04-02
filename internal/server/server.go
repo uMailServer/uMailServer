@@ -381,6 +381,9 @@ func (s *Server) startMCP() {
 
 	mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
 	mcpSrv := mcp.NewServer(s.database)
+	if s.config.MCP.AuthToken != "" {
+		mcpSrv.SetAuthToken(s.config.MCP.AuthToken)
+	}
 	if len(s.config.HTTP.CorsOrigins) > 0 {
 		mcpSrv.SetCorsOrigin(strings.Join(s.config.HTTP.CorsOrigins, ","))
 	}

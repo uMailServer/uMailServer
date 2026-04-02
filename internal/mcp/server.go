@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/umailserver/umailserver/internal/db"
 )
@@ -13,6 +14,7 @@ type Server struct {
 	db         *db.DB
 	version    string
 	corsOrigin string
+	authToken  string
 }
 
 // NewServer creates MCP server
@@ -21,6 +23,12 @@ func NewServer(database *db.DB) *Server {
 		db:      database,
 		version: "1.0.0",
 	}
+}
+
+// SetAuthToken sets the authentication token for the MCP server.
+// If set, all requests must include this token in the Authorization header.
+func (s *Server) SetAuthToken(token string) {
+	s.authToken = token
 }
 
 // SetCorsOrigin sets the allowed CORS origin(s).
@@ -47,6 +55,16 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
+	}
+
+	// Check authentication if token is configured
+	if s.authToken != "" {
+		authHeader := r.Header.Get("Authorization")
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if token != s.authToken {
+			s.writeError(w, http.StatusUnauthorized, "Unauthorized")
+			return
+		}
 	}
 
 	var req MCPRequest

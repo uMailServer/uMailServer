@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -697,7 +698,7 @@ func (s *Session) handleAppend(args []string, line string) error {
 
 			// Read the message data
 			data := make([]byte, size)
-			_, err = s.reader.Read(data)
+			_, err = io.ReadFull(s.reader, data)
 			if err != nil {
 				s.WriteResponse(s.tag, "NO Failed to read message data")
 				return err
