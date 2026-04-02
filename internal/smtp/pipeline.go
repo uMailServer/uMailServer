@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
@@ -184,6 +185,7 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 
 // RateLimitStage checks rate limits
 type RateLimitStage struct {
+	mu     sync.Mutex
 	limits map[string]*rateLimiter
 }
 
@@ -202,6 +204,9 @@ func NewRateLimitStage() *RateLimitStage {
 func (s *RateLimitStage) Name() string { return "RateLimit" }
 
 func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Simple rate limiting by IP
 	key := ctx.RemoteIP.String()
 	now := time.Now()
@@ -322,6 +327,7 @@ func (s *SPFStage) evaluateSPF(record string, ip net.IP, domain string) SPFResul
 
 // GreylistStage implements greylisting
 type GreylistStage struct {
+	mu       sync.Mutex
 	greylist map[string]*greylistEntry
 }
 
@@ -340,6 +346,9 @@ func NewGreylistStage() *GreylistStage {
 func (s *GreylistStage) Name() string { return "Greylist" }
 
 func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	// Create triplet key: sender IP + sender email + recipient email
 	for _, recipient := range ctx.To {
 		key := fmt.Sprintf("%s:%s:%s", ctx.RemoteIP.String(), ctx.From, recipient)
