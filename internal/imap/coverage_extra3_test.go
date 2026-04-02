@@ -733,7 +733,7 @@ func TestHandleIdle_MailboxUpdateChangesExists(t *testing.T) {
 	// Wait for potential notification
 	waitForLine(lines, "", 2*time.Second)
 
-	client.Write([]byte("DONE\r\n"))
+	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
 
 	select {
 	case <-idleDone:

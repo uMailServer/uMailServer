@@ -338,7 +338,10 @@ func TestCoverageHandleIdleNewMsgNotification(t *testing.T) {
 		t.Logf("notification: %s", line)
 	}
 
-	client.Write([]byte("DONE\r\n"))
+	// Close the notification channel to exit IDLE via the notification path.
+	// This ensures idleCleanup can unblock the DONE-reading goroutine via
+	// SetReadDeadline instead of hitting the 5-second doneChan timeout.
+	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
 
 	select {
 	case <-idleDone:
@@ -372,7 +375,7 @@ func TestCoverageHandleIdleFlagNotification(t *testing.T) {
 		t.Logf("flags notification: %s", line)
 	}
 
-	client.Write([]byte("DONE\r\n"))
+	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
 
 	select {
 	case <-idleDone:
@@ -406,7 +409,7 @@ func TestCoverageHandleIdleExpungeNotification(t *testing.T) {
 		t.Logf("expunge notification: %s", line)
 	}
 
-	client.Write([]byte("DONE\r\n"))
+	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
 
 	select {
 	case <-idleDone:
@@ -439,7 +442,7 @@ func TestCoverageHandleIdleMailboxUpdateNotification(t *testing.T) {
 	// Drain any notification responses
 	waitForLine(lines, "", 2*time.Second)
 
-	client.Write([]byte("DONE\r\n"))
+	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
 
 	select {
 	case <-idleDone:
@@ -469,7 +472,7 @@ func TestCoverageHandleIdleWrongMailboxNotification(t *testing.T) {
 	hub := GetNotificationHub()
 	hub.NotifyNewMessage("testuser", "Sent", 10, 1)
 
-	client.Write([]byte("DONE\r\n"))
+	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
 
 	select {
 	case <-idleDone:
@@ -494,7 +497,7 @@ func TestCoverageHandleIdleNoSelectedMailbox(t *testing.T) {
 		t.Fatal("timeout")
 	}
 
-	client.Write([]byte("DONE\r\n"))
+	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
 
 	select {
 	case <-idleDone:
@@ -518,7 +521,11 @@ func TestCoverageHandleIdleReadError(t *testing.T) {
 		t.Fatal("timeout")
 	}
 
-	// Close the client connection to force a read error
+	// Close the notification channel first to exit IDLE via the
+	// notification path, then close the client to clean up the pipe.
+	// This ordering ensures idleCleanup can unblock the DONE-reading
+	// goroutine via SetReadDeadline instead of hitting the 5-second timeout.
+	GetNotificationHub().Unsubscribe("test", session.idleNotifyChan)
 	client.Close()
 
 	select {
