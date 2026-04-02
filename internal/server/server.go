@@ -363,6 +363,7 @@ func (s *Server) Start() error {
 		JWTSecret: s.config.Security.JWTSecret,
 	}
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
+	s.apiServer.SetSearchService(s.searchSvc)
 
 	go func() {
 		if err := s.apiServer.Start(apiCfg.Addr); err != nil {
@@ -535,6 +536,16 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 			continue
 		}
 
+		// Resolve alias if the recipient is not a direct account
+		target, _ := s.database.ResolveAlias(domain, user)
+		if target != "" {
+			tUser, tDomain := parseEmail(target)
+			if tUser != "" && tDomain != "" {
+				user = tUser
+				domain = tDomain
+			}
+		}
+
 		// Local delivery
 		if err := s.deliverLocal(user, domain, from, data); err != nil {
 			s.logger.Error("Failed to deliver locally",
@@ -575,6 +586,13 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 	}
 
 	if account == nil || !account.IsActive {
+		// Check catch-all target for the domain
+		if domainData, derr := s.database.GetDomain(domain); derr == nil && domainData != nil && domainData.CatchAllTarget != "" {
+			tUser, tDomain := parseEmail(domainData.CatchAllTarget)
+			if tUser != "" && tDomain != "" {
+				return s.deliverLocal(tUser, tDomain, from, data)
+			}
+		}
 		return fmt.Errorf("user does not exist or is not active: %s", email)
 	}
 
@@ -598,6 +616,30 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 		"from", from,
 		"message_id", messageID,
 	)
+
+	// Handle mail forwarding
+	if account.ForwardTo != "" {
+		forwardTargets := strings.Split(account.ForwardTo, ",")
+		for _, fwd := range forwardTargets {
+			fwd = strings.TrimSpace(fwd)
+			if fwd == "" {
+				continue
+			}
+			if s.queue != nil {
+				s.queue.Enqueue(email, []string{fwd}, data)
+			}
+		}
+		if !account.ForwardKeepCopy {
+			return nil
+		}
+	}
+
+	// Index message for search
+	if s.searchSvc != nil {
+		go func() {
+			_ = s.searchSvc.IndexMessage(email, "INBOX", 1) // TODO: get actual UID
+		}()
+	}
 
 	// Trigger webhook for mail received
 	if s.webhookMgr != nil {

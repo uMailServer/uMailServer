@@ -948,7 +948,8 @@ func TestSearch_ThroughRouter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected 200, got %d: %s", rec.Code, rec.Body.String())
+	// Without search service wired, expect 503
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
@@ -129,6 +130,11 @@ func (s *Server) router() http.Handler {
 	return s.corsMiddleware(s.authMiddleware(api))
 }
 
+// SetSearchService injects the search service into the API server
+func (s *Server) SetSearchService(svc *search.Service) {
+	s.searchSvc = svc
+}
+
 // Start starts the API server
 func (s *Server) Start(addr string) error {
 	s.config.Addr = addr
@@ -244,6 +250,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		TOTPCode string `json:"totp_code"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -265,6 +272,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(req.Password)); err != nil {
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
+	}
+
+	// Check TOTP if enabled
+	if account.TOTPEnabled {
+		if req.TOTPCode == "" {
+			s.sendError(w, http.StatusUnauthorized, "TOTP code required")
+			return
+		}
+		if !auth.ValidateTOTP(account.TOTPSecret, req.TOTPCode) {
+			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
+			return
+		}
 	}
 
 	// Generate JWT
@@ -833,13 +852,28 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Perform search
-	// Note: search service needs to be initialized with storage
-	// For now, return a placeholder response
+	if s.searchSvc == nil {
+		s.sendError(w, http.StatusServiceUnavailable, "search service not available")
+		return
+	}
+
+	results, err := s.searchSvc.Search(search.MessageSearchOptions{
+		User:   user.(string),
+		Folder: folder,
+		Query:  query,
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "search failed")
+		return
+	}
+
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"query":   query,
 		"folder":  folder,
-		"results": []interface{}{},
-		"total":   0,
+		"results": results,
+		"total":   len(results),
 		"limit":   limit,
 		"offset":  offset,
 	})

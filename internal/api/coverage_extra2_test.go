@@ -196,17 +196,9 @@ func TestHandleSearch_WithLimitOffset(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	var result map[string]interface{}
-	json.NewDecoder(rec.Body).Decode(&result)
-	if result["limit"] != 5.0 {
-		t.Errorf("Expected limit=5, got %v", result["limit"])
-	}
-	if result["offset"] != 10.0 {
-		t.Errorf("Expected offset=10, got %v", result["offset"])
+	// Without search service wired, expect 503
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d", rec.Code)
 	}
 }
 
@@ -346,18 +338,9 @@ func TestHandleSearch_InvalidLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected 200 (falls back to defaults), got %d", rec.Code)
-	}
-
-	var result map[string]interface{}
-	json.NewDecoder(rec.Body).Decode(&result)
-	// Should fall back to defaults: limit=20, offset=0
-	if result["limit"] != 20.0 {
-		t.Errorf("Expected default limit=20, got %v", result["limit"])
-	}
-	if result["offset"] != 0.0 {
-		t.Errorf("Expected default offset=0, got %v", result["offset"])
+	// Without search service wired, expect 503
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d", rec.Code)
 	}
 }
 

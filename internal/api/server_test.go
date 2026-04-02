@@ -902,101 +902,48 @@ func TestHandleSearchMissingQuery(t *testing.T) {
 	}
 }
 
-// TestHandleSearchWithQuery tests successful search with query
+// TestHandleSearchWithQuery tests search returns 503 when no search service
 func TestHandleSearchWithQuery(t *testing.T) {
 	server := NewServer(nil, nil, Config{})
 
-	// Search with query parameter and user context
 	ctx := context.WithValue(context.Background(), "user", "test@example.com")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&folder=INBOX&limit=10&offset=5", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	server.handleSearch(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", rec.Code)
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
-		t.Fatalf("Failed to decode JSON: %v", err)
-	}
-
-	if result["query"] != "test" {
-		t.Errorf("Expected query 'test', got %v", result["query"])
-	}
-
-	if result["folder"] != "INBOX" {
-		t.Errorf("Expected folder 'INBOX', got %v", result["folder"])
-	}
-
-	if result["limit"] != 10.0 { // JSON numbers are float64
-		t.Errorf("Expected limit 10, got %v", result["limit"])
-	}
-
-	if result["offset"] != 5.0 {
-		t.Errorf("Expected offset 5, got %v", result["offset"])
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", rec.Code)
 	}
 }
 
-// TestHandleSearchDefaultLimitOffset tests search with default limit/offset values
+// TestHandleSearchDefaultLimitOffset tests search without search service returns 503
 func TestHandleSearchDefaultLimitOffset(t *testing.T) {
 	server := NewServer(nil, nil, Config{})
 
-	// Search with only query parameter (no limit/offset)
 	ctx := context.WithValue(context.Background(), "user", "test@example.com")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=hello", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	server.handleSearch(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", rec.Code)
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
-		t.Fatalf("Failed to decode JSON: %v", err)
-	}
-
-	// Default limit is 20
-	if result["limit"] != 20.0 {
-		t.Errorf("Expected default limit 20, got %v", result["limit"])
-	}
-
-	// Default offset is 0
-	if result["offset"] != 0.0 {
-		t.Errorf("Expected default offset 0, got %v", result["offset"])
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", rec.Code)
 	}
 }
 
-// TestHandleSearchInvalidLimitOffset tests search with invalid limit/offset values
+// TestHandleSearchInvalidLimitOffset tests search without search service returns 503
 func TestHandleSearchInvalidLimitOffset(t *testing.T) {
 	server := NewServer(nil, nil, Config{})
 
-	// Search with invalid limit/offset (should use defaults)
 	ctx := context.WithValue(context.Background(), "user", "test@example.com")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=invalid&offset=invalid", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	server.handleSearch(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected status 200, got %d", rec.Code)
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
-		t.Fatalf("Failed to decode JSON: %v", err)
-	}
-
-	// Should use defaults for invalid values
-	if result["limit"] != 20.0 {
-		t.Errorf("Expected default limit 20 for invalid input, got %v", result["limit"])
-	}
-
-	if result["offset"] != 0.0 {
-		t.Errorf("Expected default offset 0 for invalid input, got %v", result["offset"])
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", rec.Code)
 	}
 }
 
