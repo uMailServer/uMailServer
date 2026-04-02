@@ -401,7 +401,12 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 
 		// Load message data if not loaded
 		if msg.Data == nil {
-			msg.Data, _ = s.server.mailstore.GetMessageData(s.user, index-1)
+			var loadErr error
+			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index-1)
+			if loadErr != nil {
+				s.WriteResponse("-ERR Failed to read message")
+				return nil
+			}
 		}
 
 		s.WriteResponse(fmt.Sprintf("+OK %d octets", len(msg.Data)))
@@ -494,7 +499,12 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 
 		// Load message data
 		if msg.Data == nil {
-			msg.Data, _ = s.server.mailstore.GetMessageData(s.user, index-1)
+			var loadErr error
+			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index-1)
+			if loadErr != nil {
+				s.WriteResponse("-ERR Failed to read message")
+				return nil
+			}
 		}
 
 		// Send headers + specified lines

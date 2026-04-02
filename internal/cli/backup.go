@@ -308,7 +308,10 @@ func (bm *BackupManager) Restore(backupFile string) error {
 
 	// Reset file to beginning
 	file.Seek(0, 0)
-	gr, _ = gzip.NewReader(file)
+	gr, err = gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("failed to decompress backup: %w", err)
+	}
 	tr = tar.NewReader(gr)
 
 	// Extract files

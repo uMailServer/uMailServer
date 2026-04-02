@@ -480,7 +480,7 @@ func (m *Manager) GetStats() (*QueueStats, error) {
 func (m *Manager) getStats() (*QueueStats, error) {
 	stats := &QueueStats{}
 
-	entries, err := m.db.GetPendingQueue(time.Now().Add(24 * time.Hour))
+	_, err := m.db.GetPendingQueue(time.Now().Add(24 * time.Hour))
 	if err != nil {
 		return stats, err
 	}
@@ -507,7 +507,6 @@ func (m *Manager) getStats() (*QueueStats, error) {
 		return nil
 	})
 
-	_ = entries // entries already counted via ForEach
 	return stats, nil
 }
 

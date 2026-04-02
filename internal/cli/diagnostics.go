@@ -329,11 +329,22 @@ func (d *Diagnostics) CheckTLS(hostname string) (*TLSCheckResult, error) {
 		return result, nil
 	}
 
-	_ = smtpResult
-	_ = imapResult
-
-	result.Valid = true
-	result.Message = "TLS configuration looks good"
+	// Combine sub-results into the overall result
+	result.Protocol = imapResult.Protocol
+	result.Cipher = imapResult.Cipher
+	result.Version = imapResult.Version
+	result.Valid = smtpResult.Valid && imapResult.Valid
+	if !smtpResult.Valid || !imapResult.Valid {
+		result.Message = "TLS issues detected"
+		if !smtpResult.Valid {
+			result.Message += fmt.Sprintf(" (SMTP: %s)", smtpResult.Message)
+		}
+		if !imapResult.Valid {
+			result.Message += fmt.Sprintf(" (IMAP: %s)", imapResult.Message)
+		}
+	} else {
+		result.Message = "TLS configuration looks good"
+	}
 
 	return result, nil
 }

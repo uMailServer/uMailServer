@@ -100,8 +100,12 @@ func (db *Database) CreateMailbox(user, mailbox string) error {
 		}
 		if b.Get([]byte("uidvalidity")) == nil {
 			now := time.Now().Unix()
-			_ = b.Put([]byte("uidvalidity"), itob(uint32(now)))
-			_ = b.Put([]byte("uidnext"), itob(1))
+			if err := b.Put([]byte("uidvalidity"), itob(uint32(now))); err != nil {
+				return err
+			}
+			if err := b.Put([]byte("uidnext"), itob(1)); err != nil {
+				return err
+			}
 		}
 		// Also create the messages bucket
 		_, err = tx.CreateBucketIfNotExists([]byte(messagesBucket(user, mailbox)))
@@ -115,8 +119,12 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 		return nil
 	}
 	return db.bolt.Update(func(tx *bbolt.Tx) error {
-		_ = tx.DeleteBucket([]byte(mailboxKey(user, mailbox)))
-		_ = tx.DeleteBucket([]byte(messagesBucket(user, mailbox)))
+		if err := tx.DeleteBucket([]byte(mailboxKey(user, mailbox))); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
+		if err := tx.DeleteBucket([]byte(messagesBucket(user, mailbox))); err != nil && err != bbolt.ErrBucketNotFound {
+			return err
+		}
 		return nil
 	})
 }
@@ -141,8 +149,12 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 			if err != nil {
 				return err
 			}
-			_ = newB.Put([]byte("uidvalidity"), itob(uint32(time.Now().Unix())))
-			_ = newB.Put([]byte("uidnext"), itob(1))
+			if err := newB.Put([]byte("uidvalidity"), itob(uint32(time.Now().Unix()))); err != nil {
+				return err
+			}
+			if err := newB.Put([]byte("uidnext"), itob(1)); err != nil {
+				return err
+			}
 			_, err = tx.CreateBucketIfNotExists([]byte(newMsgs))
 			return err
 		}
