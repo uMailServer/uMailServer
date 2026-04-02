@@ -63,6 +63,13 @@ type Config struct {
 
 // NewServer creates a new admin API server
 func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if config.JWTSecret == "" {
+		logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
+		config.JWTSecret = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
 	if config.TokenExpiry == 0 {
 		config.TokenExpiry = 24 * time.Hour
 	}
@@ -131,17 +138,17 @@ func (s *Server) router() http.Handler {
 	// Protected routes
 	api := http.NewServeMux()
 
-	// Domains
-	api.HandleFunc("/api/v1/domains", s.handleDomains)
-	api.HandleFunc("/api/v1/domains/", s.handleDomainDetail)
+	// Domains (admin only)
+	api.HandleFunc("/api/v1/domains", s.adminMiddleware(http.HandlerFunc(s.handleDomains)).ServeHTTP)
+	api.HandleFunc("/api/v1/domains/", s.adminMiddleware(http.HandlerFunc(s.handleDomainDetail)).ServeHTTP)
 
-	// Accounts
-	api.HandleFunc("/api/v1/accounts", s.handleAccounts)
-	api.HandleFunc("/api/v1/accounts/", s.handleAccountDetail)
+	// Accounts (admin only)
+	api.HandleFunc("/api/v1/accounts", s.adminMiddleware(http.HandlerFunc(s.handleAccounts)).ServeHTTP)
+	api.HandleFunc("/api/v1/accounts/", s.adminMiddleware(http.HandlerFunc(s.handleAccountDetail)).ServeHTTP)
 
-	// Queue
-	api.HandleFunc("/api/v1/queue", s.handleQueue)
-	api.HandleFunc("/api/v1/queue/", s.handleQueueDetail)
+	// Queue (admin only)
+	api.HandleFunc("/api/v1/queue", s.adminMiddleware(http.HandlerFunc(s.handleQueue)).ServeHTTP)
+	api.HandleFunc("/api/v1/queue/", s.adminMiddleware(http.HandlerFunc(s.handleQueueDetail)).ServeHTTP)
 
 	// Metrics
 	api.HandleFunc("/api/v1/metrics", s.handleMetrics)
@@ -265,6 +272,21 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, "isAdmin", claims["admin"])
 
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// adminMiddleware wraps a handler to require admin role.
+// Must be used after authMiddleware so that "isAdmin" is in context.
+func (s *Server) adminMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isAdmin, _ := r.Context().Value("isAdmin").(bool)
+		if !isAdmin {
+			s.sendJSON(w, http.StatusForbidden, map[string]string{
+				"error": "admin access required",
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
