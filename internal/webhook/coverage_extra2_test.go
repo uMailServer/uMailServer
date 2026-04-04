@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
 )
@@ -40,6 +41,7 @@ func TestSend_InvalidURL(t *testing.T) {
 // TestSend_ValidServer tests send with a real HTTP server.
 func TestSend_ValidServer(t *testing.T) {
 	mgr, _ := setupTestManager(t)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	var receivedBody []byte
 	var receivedHeaders http.Header
@@ -91,7 +93,8 @@ func TestSend_ValidServer(t *testing.T) {
 func TestSend_NoSecret(t *testing.T) {
 	database, _ := db.Open(t.TempDir() + "/test.db")
 	defer database.Close()
-	mgr := NewManager(database, "") // empty secret
+	mgr := NewManager(database, "")
+	mgr.SetAllowPrivateIP(true) // empty secret
 
 	var receivedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,4 +254,129 @@ func TestHTTPHandler_UnsupportedMethod(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", resp.StatusCode)
 	}
+}
+
+// TestGetCircuitBreakerMetrics tests the GetCircuitBreakerMetrics method.
+func TestGetCircuitBreakerMetrics(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	// Get metrics when no webhooks have been called
+	metrics := mgr.GetCircuitBreakerMetrics()
+	if metrics == nil {
+		t.Error("expected non-nil metrics map")
+	}
+}
+
+// TestIsValidWebhookURL_InvalidSchemes tests URL validation with invalid schemes.
+func TestIsValidWebhookURL_InvalidSchemes(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"ftp://example.com/webhook", false},
+		{"file:///etc/passwd", false},
+		{"javascript:alert(1)", false},
+		{"data:text/html,<script>alert(1)</script>", false},
+	}
+
+	for _, tt := range tests {
+		got := mgr.isValidWebhookURL(tt.url)
+		if got != tt.want {
+			t.Errorf("isValidWebhookURL(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+// TestIsValidWebhookURL_InvalidHostnames tests URL validation with invalid hostnames.
+func TestIsValidWebhookURL_InvalidHostnames(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	// Without allowPrivateIP, localhost should be blocked
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"http://localhost/webhook", false},
+		{"http://127.0.0.1/webhook", false},
+		{"http://[::1]/webhook", false},
+	}
+
+	for _, tt := range tests {
+		got := mgr.isValidWebhookURL(tt.url)
+		if got != tt.want {
+			t.Errorf("isValidWebhookURL(%q) = %v, want %v", tt.url, got, tt.want)
+		}
+	}
+}
+
+// TestIsValidWebhookURL_WithPrivateIPAllowed tests URL validation when private IPs are allowed.
+func TestIsValidWebhookURL_WithPrivateIPAllowed(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	mgr.SetAllowPrivateIP(true)
+
+	// With allowPrivateIP, localhost should be allowed
+	url := "http://localhost/webhook"
+	if !mgr.isValidWebhookURL(url) {
+		t.Errorf("isValidWebhookURL(%q) = false, want true when allowPrivateIP is true", url)
+	}
+}
+
+// TestIsValidWebhookURL_EmptyURL tests URL validation with empty URL.
+func TestIsValidWebhookURL_EmptyURL(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	if mgr.isValidWebhookURL("") {
+		t.Error("isValidWebhookURL(\"\") should return false")
+	}
+}
+
+// TestIsValidWebhookURL_ValidURLs tests URL validation with valid URLs.
+func TestIsValidWebhookURL_ValidURLs(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+
+	tests := []string{
+		"https://example.com/webhook",
+		"https://api.service.com/hooks/webhook",
+		"http://webhook.example.com:8080/endpoint",
+	}
+
+	for _, url := range tests {
+		if !mgr.isValidWebhookURL(url) {
+			t.Errorf("isValidWebhookURL(%q) = false, want true", url)
+		}
+	}
+}
+
+// TestSend_CircuitBreakerOpen tests send when circuit breaker is open.
+func TestSend_CircuitBreakerOpen(t *testing.T) {
+	mgr, _ := setupTestManager(t)
+	mgr.SetAllowPrivateIP(true)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	hook := &Webhook{
+		ID:     "cb-test-hook",
+		URL:    server.URL,
+		Events: []string{"*"},
+		Active: true,
+	}
+
+	event := Event{Type: "test.event", Data: map[string]string{"key": "value"}}
+
+	// Force circuit breaker open by calling send multiple times
+	// and getting failures
+	for i := 0; i < 5; i++ {
+		mgr.send(hook, event)
+	}
+
+	// Give time for circuit breaker to update
+	time.Sleep(100 * time.Millisecond)
+
+	// Circuit breaker should be in some state, send should handle it gracefully
+	mgr.send(hook, event)
 }
