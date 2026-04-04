@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1337,6 +1338,262 @@ END:VCARD`
 
 	server.ServeHTTP(w, req)
 
+	if w.Code != http.StatusCreated && w.Code != http.StatusNoContent {
+		t.Errorf("Status = %d, want %d or %d", w.Code, http.StatusCreated, http.StatusNoContent)
+	}
+}
+
+// Test handleProppatch with remove operation
+func TestCardDAVHandleProppatch_RemoveProperty(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	// Create addressbook with description
+	ab := &Addressbook{ID: "test-ab", Name: "Test", Description: "Original Description"}
+	server.storage.CreateAddressbook("user@example.com", ab)
+
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<D:propertyupdate xmlns:D="DAV:">
+  <D:remove>
+    <D:prop>
+      <D:addressbook-description/>
+    </D:prop>
+  </D:remove>
+</D:propertyupdate>`
+
+	req := httptest.NewRequest("PROPPATCH", "/dav/addressbooks/test-ab", strings.NewReader(body))
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	// Remove operation should still return OK
+	if w.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// Test handleReport with multiple contacts
+func TestCardDAVHandleReport_MultipleContacts(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	// Create addressbook with multiple contacts
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	server.storage.CreateAddressbook("user@example.com", ab)
+
+	for i := 0; i < 3; i++ {
+		vcard := fmt.Sprintf(`BEGIN:VCARD
+UID:contact-%d
+FN:Contact %d
+END:VCARD`, i, i)
+		contact := &Contact{UID: fmt.Sprintf("contact-%d", i)}
+		server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
+	}
+
+	reportBody := `<?xml version="1.0" encoding="utf-8"?>
+<addressbook-query xmlns="urn:ietf:params:xml:ns:carddav">
+<prop><address-data/></prop>
+</addressbook-query>`
+
+	req := httptest.NewRequest("REPORT", "/dav/addressbooks/test-ab", strings.NewReader(reportBody))
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMultiStatus {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
+	}
+
+	body, _ := io.ReadAll(w.Body)
+	// Should contain all 3 contacts
+	for i := 0; i < 3; i++ {
+		if !strings.Contains(string(body), fmt.Sprintf("contact-%d", i)) {
+			t.Errorf("Response should contain contact-%d", i)
+		}
+	}
+}
+
+// Test handleReport non-existent addressbook
+func TestCardDAVHandleReport_NonExistentAddressbook(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	reportBody := `<?xml version="1.0" encoding="utf-8"?>
+<addressbook-query xmlns="urn:ietf:params:xml:ns:carddav">
+<prop><address-data/></prop>
+</addressbook-query>`
+
+	req := httptest.NewRequest("REPORT", "/dav/addressbooks/nonexistent-ab", strings.NewReader(reportBody))
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	// Should still return multistatus (empty) rather than error
+	if w.Code != http.StatusMultiStatus {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
+	}
+}
+
+// Test handlePropfind with Depth: 1 on addressbook
+func TestCardDAVHandlePropfind_Depth1OnAddressbook(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	// Create addressbook with contact
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	server.storage.CreateAddressbook("user@example.com", ab)
+
+	vcard := `BEGIN:VCARD
+UID:test-contact
+FN:Test Contact
+END:VCARD`
+	contact := &Contact{UID: "test-contact"}
+	server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
+
+	req := httptest.NewRequest("PROPFIND", "/dav/addressbooks/test-ab", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	req.Header.Set("Depth", "1")
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMultiStatus {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
+	}
+
+	body, _ := io.ReadAll(w.Body)
+	if !strings.Contains(string(body), "test-contact") {
+		t.Error("Response should contain contact")
+	}
+}
+
+// Test handleDelete then get
+func TestCardDAVHandleDelete_ThenGet(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	// Create addressbook and contact
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	server.storage.CreateAddressbook("user@example.com", ab)
+
+	vcard := `BEGIN:VCARD
+UID:test-contact
+FN:Test Contact
+END:VCARD`
+	contact := &Contact{UID: "test-contact"}
+	server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
+
+	// Delete the contact
+	req := httptest.NewRequest("DELETE", "/dav/addressbooks/test-ab/test-contact.vcf", nil)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	}
+
+	// Try to get the deleted contact
+	req2 := httptest.NewRequest("GET", "/dav/addressbooks/test-ab/test-contact.vcf", nil)
+	req2.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	w2 := httptest.NewRecorder()
+
+	server.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusNotFound {
+		t.Errorf("Status = %d, want %d", w2.Code, http.StatusNotFound)
+	}
+}
+
+// Test handleMkCol with special characters in name
+func TestCardDAVHandleMkCol_SpecialChars(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	mkcolBody := `<?xml version="1.0" encoding="utf-8"?>
+<mkcol xmlns="DAV:">
+  <set>
+    <prop>
+      <displayname>My Special Contacts & Friends</displayname>
+    </prop>
+  </set>
+</mkcol>`
+
+	req := httptest.NewRequest("MKCOL", "/dav/addressbooks/special-chars", strings.NewReader(mkcolBody))
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusCreated)
+	}
+}
+
+// Test CardDAVBuildPrincipalResponse with different username
+func TestCardDAVBuildPrincipalResponse_DifferentUser(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	resp := server.buildPrincipalResponse("admin@company.com")
+
+	if resp.Href == "" {
+		t.Error("Href should not be empty")
+	}
+
+	if len(resp.Propstat) == 0 {
+		t.Fatal("Propstat should not be empty")
+	}
+
+	found := false
+	for _, prop := range resp.Propstat[0].Prop {
+		if prop.XMLName.Local == "displayname" && prop.Value == "admin@company.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("displayname property should contain username")
+	}
+}
+
+// Test handlePut without content-type header
+func TestCardDAVHandlePut_NoContentType(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	// Create addressbook
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	server.storage.CreateAddressbook("user@example.com", ab)
+
+	vcard := `BEGIN:VCARD
+UID:test-contact
+FN:Test Contact
+END:VCARD`
+
+	req := httptest.NewRequest("PUT", "/dav/addressbooks/test-ab/test-contact.vcf", strings.NewReader(vcard))
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
+	// No Content-Type header
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	// Should still work
 	if w.Code != http.StatusCreated && w.Code != http.StatusNoContent {
 		t.Errorf("Status = %d, want %d or %d", w.Code, http.StatusCreated, http.StatusNoContent)
 	}
