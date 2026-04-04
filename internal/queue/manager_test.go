@@ -71,7 +71,7 @@ func TestManager(t *testing.T) {
 	defer database.Close()
 
 	// Create queue manager
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	t.Run("StartStop", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -163,7 +163,7 @@ func TestNewManager(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 	if manager == nil {
 		t.Fatal("expected non-nil manager")
 	}
@@ -228,7 +228,7 @@ func TestManagerGetQueueEntry(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Try to get non-existent entry
 	_, err = manager.GetQueueEntry("non-existent-id")
@@ -248,7 +248,7 @@ func TestManagerGetPendingEntries(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	entries, err := manager.GetPendingEntries()
 	if err != nil {
@@ -269,7 +269,7 @@ func TestManagerDropEntry(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Try to drop non-existent entry
 	err = manager.DropEntry("non-existent-id")
@@ -286,7 +286,7 @@ func TestManagerFlushQueue(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	err = manager.FlushQueue()
 	if err != nil {
@@ -329,7 +329,7 @@ func TestManagerFlushQueueWithFailedEntries(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a failed queue entry
 	entry := &db.QueueEntry{
@@ -370,7 +370,7 @@ func TestManagerFlushQueueNoFailedEntries(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a pending queue entry (not failed)
 	entry := &db.QueueEntry{
@@ -432,7 +432,7 @@ func TestManagerDoubleStart(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -461,7 +461,7 @@ func TestManagerDoubleStop(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -543,7 +543,7 @@ func TestManagerSetMaxRetries(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Set max retries to 5
 	manager.SetMaxRetries(5)
@@ -567,7 +567,7 @@ func TestManagerSetMaxQueueSize(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Set max queue size to 500
 	manager.SetMaxQueueSize(500)
@@ -657,7 +657,7 @@ func TestManagerEnqueue(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Test enqueue
 	from := "sender@example.com"
@@ -694,7 +694,7 @@ func TestManagerEnqueueQueueFull(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 	manager.SetMaxQueueSize(0) // Set queue size to 0 to simulate full queue
 
 	from := "sender@example.com"
@@ -716,7 +716,7 @@ func TestManagerRetryEntry(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// First enqueue a message
 	from := "sender@example.com"
@@ -807,7 +807,7 @@ func TestHandleDeliverySuccess(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a temporary message file
 	messagePath := filepath.Join(dataDir, "test.msg")
@@ -848,7 +848,7 @@ func TestHandleDeliveryFailure(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a temporary message file
 	messagePath := filepath.Join(dataDir, "test.msg")
@@ -895,7 +895,7 @@ func TestHandleDeliveryFailureMaxRetries(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 	manager.SetMaxRetries(3)
 
 	// Create a temporary message file
@@ -933,7 +933,7 @@ func TestGenerateBounce(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a temporary message file
 	messagePath := filepath.Join(dataDir, "test.msg")
@@ -1016,7 +1016,7 @@ func TestManagerStartStop(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Test Start
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1073,7 +1073,7 @@ func TestManagerProcessPendingEntries(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Enqueue a message
 	from := "sender@example.com"
@@ -1098,7 +1098,7 @@ func TestManagerDeliver(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a message file
 	messagePath := filepath.Join(dataDir, "test.msg")
@@ -1130,7 +1130,7 @@ func TestManagerDeliverToMX(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	message := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest content")
 
@@ -1151,7 +1151,7 @@ func TestManagerDeliverWithEmptyMessagePath(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	entry := &db.QueueEntry{
 		ID:          "test-empty-path",
@@ -1178,7 +1178,7 @@ func TestManagerDeliverWithNonExistentFile(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	entry := &db.QueueEntry{
 		ID:          "test-missing-file",
@@ -1205,7 +1205,7 @@ func TestManagerProcessQueue(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a message file
 	messagePath := filepath.Join(dataDir, "test.msg")
@@ -1261,7 +1261,7 @@ func TestManagerEnqueueWithEmptyRecipient(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	from := "sender@example.com"
 	to := []string{} // Empty recipient list
@@ -1284,7 +1284,7 @@ func TestManagerRetryEntryNotFound(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Try to retry non-existent entry
 	err = manager.RetryEntry("non-existent-id")
@@ -1303,7 +1303,7 @@ func TestManagerRetryEntryNotFailed(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a pending entry
 	entry := &db.QueueEntry{
@@ -1347,7 +1347,7 @@ func TestHandleDeliveryFailureWithMetrics(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a temporary message file
 	messagePath := filepath.Join(dataDir, "test.msg")
@@ -1398,7 +1398,7 @@ func TestGenerateBounceWithMissingFile(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	entry := &db.QueueEntry{
 		ID:          "test-bounce-missing",
@@ -1424,7 +1424,7 @@ func TestManagerDeliverLocalDomain(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a message file
 	messagePath := filepath.Join(dataDir, "test.msg")
@@ -1460,7 +1460,7 @@ func TestSignWithDKIMNoKey(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, tmpDir)
+	manager := NewManager(database, nil, tmpDir, nil)
 
 	// Test with no DKIM key configured — should fail gracefully
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
@@ -1552,7 +1552,7 @@ func setupManager(t *testing.T) (*Manager, string, *db.DB) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 	return manager, dataDir, database
 }
 
@@ -2626,4 +2626,33 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func TestManagerSetRequireTLS(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	manager := NewManager(database, nil, dataDir, nil)
+
+	// Test default value (should be false)
+	if manager.requireTLS {
+		t.Error("expected requireTLS to be false by default")
+	}
+
+	// Set requireTLS to true
+	manager.SetRequireTLS(true)
+	if !manager.requireTLS {
+		t.Error("expected requireTLS to be true after SetRequireTLS(true)")
+	}
+
+	// Set requireTLS to false
+	manager.SetRequireTLS(false)
+	if manager.requireTLS {
+		t.Error("expected requireTLS to be false after SetRequireTLS(false)")
+	}
 }

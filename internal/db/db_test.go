@@ -251,3 +251,87 @@ func TestUpdateQueueEntry(t *testing.T) {
 		t.Errorf("expected RetryCount 1, got %d", retrieved.RetryCount)
 	}
 }
+
+func TestAliasOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/test.db"
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	t.Run("GetAlias_NotFound", func(t *testing.T) {
+		_, err := db.GetAlias("example.com", "nonexistent")
+		if err == nil {
+			t.Error("expected error for nonexistent alias")
+		}
+	})
+
+	t.Run("GetAliasAndResolve", func(t *testing.T) {
+		alias := &AliasData{
+			Alias:     "alias@example.com",
+			Target:    "user@example.com",
+			Domain:    "example.com",
+			IsActive:  true,
+			CreatedAt: time.Now(),
+		}
+
+		key := "example.com:alias"
+		if err := db.Put(BucketAliases, key, alias); err != nil {
+			t.Fatalf("Put alias failed: %v", err)
+		}
+
+		// Test GetAlias
+		retrieved, err := db.GetAlias("example.com", "alias")
+		if err != nil {
+			t.Fatalf("GetAlias failed: %v", err)
+		}
+		if retrieved.Alias != alias.Alias {
+			t.Errorf("expected alias %s, got %s", alias.Alias, retrieved.Alias)
+		}
+		if retrieved.Target != alias.Target {
+			t.Errorf("expected target %s, got %s", alias.Target, retrieved.Target)
+		}
+
+		// Test ResolveAlias
+		target, err := db.ResolveAlias("example.com", "alias")
+		if err != nil {
+			t.Fatalf("ResolveAlias failed: %v", err)
+		}
+		if target != alias.Target {
+			t.Errorf("expected target %s, got %s", alias.Target, target)
+		}
+	})
+
+	t.Run("ResolveAlias_Inactive", func(t *testing.T) {
+		alias := &AliasData{
+			Alias:     "inactive@example.com",
+			Target:    "user@example.com",
+			Domain:    "example.com",
+			IsActive:  false,
+			CreatedAt: time.Now(),
+		}
+
+		key := "example.com:inactive"
+		if err := db.Put(BucketAliases, key, alias); err != nil {
+			t.Fatalf("Put alias failed: %v", err)
+		}
+
+		target, err := db.ResolveAlias("example.com", "inactive")
+		if err != nil {
+			t.Fatalf("ResolveAlias failed: %v", err)
+		}
+		if target != "" {
+			t.Errorf("expected empty target for inactive alias, got %s", target)
+		}
+	})
+
+	t.Run("ResolveAlias_NotFound", func(t *testing.T) {
+		_, err := db.ResolveAlias("example.com", "nonexistent")
+		if err == nil {
+			t.Error("expected error for nonexistent alias")
+		}
+	})
+}
