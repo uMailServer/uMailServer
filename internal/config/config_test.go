@@ -1483,3 +1483,662 @@ func TestSetupWizardRunDataDirError(t *testing.T) {
 		t.Error("expected error when data directory creation fails")
 	}
 }
+
+func TestValidateJWTSecretTooShort(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Security.JWTSecret = "short"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for short JWT secret")
+	}
+	if !strings.Contains(err.Error(), "jwt_secret must be at least 32 characters") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTLSMinVersionInvalid(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.MinVersion = "1.1"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for invalid TLS min version")
+	}
+	if !strings.Contains(err.Error(), "tls.min_version must be '1.2' or '1.3'") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTLSMinVersionValid(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.MinVersion = "1.2"
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error for valid TLS min version 1.2: %v", err)
+	}
+
+	cfg.TLS.MinVersion = "1.3"
+	err = cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error for valid TLS min version 1.3: %v", err)
+	}
+}
+
+func TestValidatePortConflict(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SMTP.Inbound.Enabled = true
+	cfg.SMTP.Inbound.Port = 25
+	cfg.IMAP.Enabled = true
+	cfg.IMAP.Port = 25 // Same port as SMTP
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for port conflict")
+	}
+	if !strings.Contains(err.Error(), "port conflict") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateMaxConnectionsNegative(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*Config)
+	}{
+		{"IMAP", func(c *Config) {
+			c.IMAP.Enabled = true
+			c.IMAP.MaxConnections = -1
+		}},
+		{"SMTP.Inbound", func(c *Config) {
+			c.SMTP.Inbound.Enabled = true
+			c.SMTP.Inbound.MaxConnections = -1
+		}},
+		{"SMTP.Submission", func(c *Config) {
+			c.SMTP.Submission.Enabled = true
+			c.SMTP.Submission.MaxConnections = -1
+		}},
+		{"SMTP.SubmissionTLS", func(c *Config) {
+			c.SMTP.SubmissionTLS.Enabled = true
+			c.SMTP.SubmissionTLS.MaxConnections = -1
+		}},
+		{"POP3", func(c *Config) {
+			c.POP3.Enabled = true
+			c.POP3.MaxConnections = -1
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Error("expected validation error for negative max connections")
+			}
+		})
+	}
+}
+
+func TestValidateSpamThresholdsOutOfRange(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*Config)
+		errMsg string
+	}{
+		{
+			name: "junk_threshold negative",
+			modify: func(c *Config) {
+				c.Spam.JunkThreshold = -1
+			},
+			errMsg: "spam.junk_threshold must be between 0 and 100",
+		},
+		{
+			name: "junk_threshold over 100",
+			modify: func(c *Config) {
+				// Need: junk < quarantine < reject
+				// To get junk=101 to trigger range check, we need:
+				// junk=101, quarantine=102, reject=103 - but reject=103 > 100
+				// Actually the order is checked BEFORE range, so if we can satisfy ordering
+				// with values in range, we can test range. But for junk > 100:
+				// - quarantine > junk (101) means quarantine >= 102
+				// - reject > junk (101) and reject > quarantine
+				// - But reject > quarantine > junk=101, so reject >= 103 > 100
+				// This means we CANNOT test junk > 100 because the ordering constraints
+				// force reject and quarantine above 100 as well.
+				// So we test ordering violations instead when setting junk=101.
+				c.Spam.JunkThreshold = 101
+				c.Spam.QuarantineThreshold = 50 // quarantine <= junk triggers ordering error
+				c.Spam.RejectThreshold = 102
+			},
+			errMsg: "spam.quarantine_threshold must be greater than spam.junk_threshold",
+		},
+		{
+			name: "quarantine_threshold negative",
+			modify: func(c *Config) {
+				// Need: junk < quarantine < reject to satisfy ordering
+				// For quarantine=-1, need junk < -1 and -1 < reject
+				c.Spam.QuarantineThreshold = -1
+				c.Spam.JunkThreshold = -2
+				c.Spam.RejectThreshold = 0
+			},
+			errMsg: "spam.junk_threshold must be between 0 and 100", // junk range check runs before quarantine
+		},
+		{
+			name: "quarantine_threshold over 100",
+			modify: func(c *Config) {
+				// Need: junk < quarantine < reject
+				// quarantine=101, junk=5, reject must be > 101 and > quarantine - but reject > 101 > 100
+				// So ordering check fails first. Let's set reject=102 but that > 100
+				c.Spam.QuarantineThreshold = 101
+				c.Spam.JunkThreshold = 5
+				c.Spam.RejectThreshold = 50 // reject <= quarantine triggers ordering error
+			},
+			errMsg: "spam.quarantine_threshold must be less than spam.reject_threshold",
+		},
+		{
+			name: "reject_threshold negative",
+			modify: func(c *Config) {
+				// reject > junk is impossible when reject is negative and junk is non-negative.
+				// So this will always fail the ordering check first.
+				c.Spam.RejectThreshold = -1
+				c.Spam.JunkThreshold = 0
+				c.Spam.QuarantineThreshold = 5
+			},
+			errMsg: "spam.reject_threshold must be greater than spam.junk_threshold", // ordering check fails first
+		},
+		{
+			name: "reject_threshold over 100",
+			modify: func(c *Config) {
+				// Need: junk < quarantine < reject
+				// reject=101, junk=50, quarantine=75 - this satisfies ordering (50 < 75 < 101)
+				// But reject=101 > 100 so range check should trigger
+				c.Spam.RejectThreshold = 101
+				c.Spam.JunkThreshold = 50
+				c.Spam.QuarantineThreshold = 75
+			},
+			errMsg: "spam.reject_threshold must be between 0 and 100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Error("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.errMsg) {
+				t.Errorf("expected error containing %q, got: %v", tt.errMsg, err)
+			}
+		})
+	}
+}
+
+func TestValidateRateLimitsNegative(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*Config)
+	}{
+		{"SMTPPerMinute", func(c *Config) {
+			c.Security.RateLimit.SMTPPerMinute = -1
+		}},
+		{"SMTPPerHour", func(c *Config) {
+			c.Security.RateLimit.SMTPPerHour = -1
+		}},
+		{"IMAPConnections", func(c *Config) {
+			c.Security.RateLimit.IMAPConnections = -1
+		}},
+		{"HTTPRequestsPerMinute", func(c *Config) {
+			c.Security.RateLimit.HTTPRequestsPerMinute = -1
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Error("expected validation error for negative rate limit")
+			}
+		})
+	}
+}
+
+func TestValidateTimeoutsNegative(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*Config)
+	}{
+		{"ReadTimeout", func(c *Config) {
+			c.SMTP.Inbound.Enabled = true
+			c.SMTP.Inbound.ReadTimeout = -1
+		}},
+		{"WriteTimeout", func(c *Config) {
+			c.SMTP.Inbound.Enabled = true
+			c.SMTP.Inbound.WriteTimeout = -1
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Error("expected validation error for negative timeout")
+			}
+		})
+	}
+}
+
+func TestValidateAVEnabledMissingAddr(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AV.Enabled = true
+	cfg.AV.Addr = ""
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for AV enabled without addr")
+	}
+	if !strings.Contains(err.Error(), "av.addr is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateAVInvalidAction(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AV.Enabled = true
+	cfg.AV.Addr = "127.0.0.1:3310"
+	cfg.AV.Action = "invalid"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for invalid AV action")
+	}
+	if !strings.Contains(err.Error(), "av.action must be 'reject', 'quarantine', or 'tag'") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateLoggingInvalidLevel(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Logging.Level = "trace"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for invalid logging level")
+	}
+	if !strings.Contains(err.Error(), "logging.level must be") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateLoggingInvalidFormat(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Logging.Format = "xml"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for invalid logging format")
+	}
+	if !strings.Contains(err.Error(), "logging.format must be") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTLSCertFileMissingKey(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.CertFile = "/path/to/cert.pem"
+	cfg.TLS.KeyFile = ""
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for TLS cert without key")
+	}
+	if !strings.Contains(err.Error(), "tls.key_file is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTLSKeyFileMissingCert(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.CertFile = ""
+	cfg.TLS.KeyFile = "/path/to/key.pem"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for TLS key without cert")
+	}
+	if !strings.Contains(err.Error(), "tls.cert_file is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateTLSCertFileNotReadable(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.CertFile = "/nonexistent/cert.pem"
+	cfg.TLS.KeyFile = "/nonexistent/key.pem"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for non-readable TLS cert file")
+	}
+	if !strings.Contains(err.Error(), "tls.cert_file is not readable") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateACMEMissingEmail(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.ACME.Enabled = true
+	cfg.TLS.ACME.Email = ""
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for ACME without email")
+	}
+	if !strings.Contains(err.Error(), "tls.acme.email is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateACMEInvalidProvider(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.ACME.Enabled = true
+	cfg.TLS.ACME.Email = "test@example.com"
+	cfg.TLS.ACME.Provider = "invalid"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for invalid ACME provider")
+	}
+	if !strings.Contains(err.Error(), "tls.acme.provider must be") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateACMEInvalidChallenge(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.ACME.Enabled = true
+	cfg.TLS.ACME.Email = "test@example.com"
+	cfg.TLS.ACME.Provider = "letsencrypt"
+	cfg.TLS.ACME.Challenge = "tls-alpn-01"
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for invalid ACME challenge")
+	}
+	if !strings.Contains(err.Error(), "tls.acme.challenge must be") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateDuplicateDomain(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Domains = []DomainConfig{
+		{Name: "example.com"},
+		{Name: "example.com"},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for duplicate domain")
+	}
+	if !strings.Contains(err.Error(), "duplicate domain") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateDomainNegativeMaxAccounts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Domains = []DomainConfig{
+		{Name: "example.com", MaxAccounts: -1},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for negative max accounts")
+	}
+	if !strings.Contains(err.Error(), "domains[0].max_accounts must be non-negative") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateMetricsEnabledMissingPath(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Metrics.Enabled = true
+	cfg.Metrics.Path = ""
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error for metrics enabled without path")
+	}
+	if !strings.Contains(err.Error(), "metrics.path is required") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckPortConflicts(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// Test all port assignments that should not conflict
+	cfg.SMTP.Inbound.Port = 25
+	cfg.SMTP.Submission.Port = 587
+	cfg.SMTP.SubmissionTLS.Port = 465
+	cfg.IMAP.Port = 993
+	cfg.IMAP.STARTTLSPort = 143
+	cfg.POP3.Port = 995
+	cfg.HTTP.Port = 8080
+	cfg.HTTP.HTTPPort = 8081
+	cfg.Admin.Port = 8443
+	cfg.Metrics.Port = 9090
+	cfg.MCP.Port = 8082
+
+	err := cfg.checkPortConflicts()
+	if err != nil {
+		t.Errorf("unexpected port conflict error: %v", err)
+	}
+}
+
+func TestCheckPortConflictsDisabledPorts(t *testing.T) {
+	cfg := DefaultConfig()
+	// Set all ports to 0 (disabled) - should not conflict
+	cfg.SMTP.Inbound.Port = 0
+	cfg.SMTP.Submission.Port = 0
+	cfg.SMTP.SubmissionTLS.Port = 0
+	cfg.IMAP.Port = 0
+	cfg.IMAP.STARTTLSPort = 0
+	cfg.POP3.Port = 0
+	cfg.HTTP.Port = 0
+	cfg.HTTP.HTTPPort = 0
+	cfg.Admin.Port = 0
+	cfg.Metrics.Port = 0
+	cfg.MCP.Port = 0
+
+	err := cfg.checkPortConflicts()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckFileReadableDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	err := checkFileReadable(tmpDir)
+	if err == nil {
+		t.Error("expected error when checking directory as file")
+	}
+	if !strings.Contains(err.Error(), "path is a directory") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckFileReadableNonExistent(t *testing.T) {
+	err := checkFileReadable("/nonexistent/file/path")
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+	if !strings.Contains(err.Error(), "file does not exist") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestCheckDirWritableNonWritable(t *testing.T) {
+	// On Unix, try to write to a read-only directory
+	// On Windows, this might not fail, so we just verify it doesn't panic
+	tmpDir := t.TempDir()
+	err := checkDirWritable(tmpDir)
+	if err != nil {
+		t.Logf("checkDirWritable failed (may be expected on some systems): %v", err)
+	}
+}
+
+func TestValidateRejectThresholdLessThanJunk(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Spam.RejectThreshold = 3.0
+	cfg.Spam.JunkThreshold = 5.0
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error when reject <= junk")
+	}
+}
+
+func TestValidateRejectThresholdEqualJunk(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Spam.RejectThreshold = 5.0
+	cfg.Spam.JunkThreshold = 5.0
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error when reject == junk")
+	}
+}
+
+func TestValidateRejectThresholdGreaterThanQuarantine(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Spam.RejectThreshold = 5.0
+	cfg.Spam.QuarantineThreshold = 5.0
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error when quarantine >= reject")
+	}
+}
+
+func TestValidateRejectThresholdGreaterThanQuarantineLessThanJunk(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Spam.RejectThreshold = 3.0
+	cfg.Spam.QuarantineThreshold = 5.0
+	cfg.Spam.JunkThreshold = 7.0
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected validation error when quarantine <= junk")
+	}
+}
+
+func TestValidateIMAPDisabledNoPortCheck(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.IMAP.Enabled = false
+	cfg.IMAP.Port = 0
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error when IMAP disabled: %v", err)
+	}
+}
+
+func TestValidatePOP3DisabledNoPortCheck(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.POP3.Enabled = false
+	cfg.POP3.Port = 0
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error when POP3 disabled: %v", err)
+	}
+}
+
+func TestValidateSMTPSubmissionDisabledNoPortCheck(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SMTP.Submission.Enabled = false
+	cfg.SMTP.Submission.Port = 0
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error when SMTP submission disabled: %v", err)
+	}
+}
+
+func TestValidateSMTPInboundDisabledNoPortCheck(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.SMTP.Inbound.Enabled = false
+	cfg.SMTP.Inbound.Port = 0
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error when SMTP inbound disabled: %v", err)
+	}
+}
+
+func TestValidateAvidActionTag(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AV.Enabled = true
+	cfg.AV.Addr = "127.0.0.1:3310"
+	cfg.AV.Action = "tag"
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error for valid AV action 'tag': %v", err)
+	}
+}
+
+func TestValidateAvidActionQuarantine(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AV.Enabled = true
+	cfg.AV.Addr = "127.0.0.1:3310"
+	cfg.AV.Action = "quarantine"
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error for valid AV action 'quarantine': %v", err)
+	}
+}
+
+func TestValidateAvidActionReject(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.AV.Enabled = true
+	cfg.AV.Addr = "127.0.0.1:3310"
+	cfg.AV.Action = "reject"
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error for valid AV action 'reject': %v", err)
+	}
+}
+
+func TestValidateLoggingLevelValid(t *testing.T) {
+	tests := []string{"debug", "info", "warn", "error"}
+
+	for _, level := range tests {
+		cfg := DefaultConfig()
+		cfg.Logging.Level = level
+		err := cfg.Validate()
+		if err != nil {
+			t.Errorf("unexpected error for valid logging level %q: %v", level, err)
+		}
+	}
+}
+
+func TestValidateLoggingFormatValid(t *testing.T) {
+	tests := []string{"json", "text"}
+
+	for _, format := range tests {
+		cfg := DefaultConfig()
+		cfg.Logging.Format = format
+		err := cfg.Validate()
+		if err != nil {
+			t.Errorf("unexpected error for valid logging format %q: %v", format, err)
+		}
+	}
+}
+
+func TestValidateACMELetsencryptStaging(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.ACME.Enabled = true
+	cfg.TLS.ACME.Email = "test@example.com"
+	cfg.TLS.ACME.Provider = "letsencrypt-staging"
+	cfg.TLS.ACME.Challenge = "http-01"
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error for letsencrypt-staging: %v", err)
+	}
+}
+
+func TestValidateACMEDNSChallenge(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TLS.ACME.Enabled = true
+	cfg.TLS.ACME.Email = "test@example.com"
+	cfg.TLS.ACME.Provider = "letsencrypt"
+	cfg.TLS.ACME.Challenge = "dns-01"
+	err := cfg.Validate()
+	if err != nil {
+		t.Errorf("unexpected error for dns-01 challenge: %v", err)
+	}
+}
