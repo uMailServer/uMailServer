@@ -2539,8 +2539,10 @@ func TestImportMaildirWalkError(t *testing.T) {
 
 	mm := NewMigrationManager(database, nil, nil)
 
-	// Try to walk a non-existent directory
-	err = mm.importMaildir("/nonexistent/path/that/does/not/exist")
+	// Use a path that will definitely fail - Windows-incompatible path
+	// or a path that the current user cannot access
+	nonExistentPath := filepath.Join(tmpDir, "this_subdir_does_not_exist_and_will_never_exist_12345")
+	err = mm.importMaildir(nonExistentPath)
 	if err == nil {
 		t.Error("expected error for non-existent path")
 	}
