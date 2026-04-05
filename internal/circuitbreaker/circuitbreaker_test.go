@@ -263,3 +263,120 @@ func TestCircuitBreaker_Concurrent(t *testing.T) {
 		t.Errorf("expected closed after concurrent successes, got %s", cb.State())
 	}
 }
+
+func TestCircuitBreaker_HalfOpenToOpen(t *testing.T) {
+	cb := New(Config{
+		MaxFailures:      2,
+		Timeout:          50 * time.Millisecond,
+		SuccessThreshold: 3,
+		FailureThreshold: 1,
+	})
+
+	// Open the circuit
+	for i := 0; i < 2; i++ {
+		cb.RecordFailure()
+	}
+
+	// Wait for half-open
+	time.Sleep(100 * time.Millisecond)
+
+	// Transition to half-open
+	if !cb.Allow() {
+		t.Fatal("should allow first request in half-open")
+	}
+
+	if cb.State() != StateHalfOpen {
+		t.Fatalf("expected state half-open, got %s", cb.State())
+	}
+
+	// Record failure in half-open - should transition back to open
+	cb.RecordFailure()
+
+	if cb.State() != StateOpen {
+		t.Errorf("expected state open after failure in half-open, got %s", cb.State())
+	}
+}
+
+func TestCircuitBreaker_HalfOpenRequestLimit(t *testing.T) {
+	cb := New(Config{
+		MaxFailures:      2,
+		Timeout:          50 * time.Millisecond,
+		SuccessThreshold: 2,
+		FailureThreshold: 1,
+	})
+
+	// Open the circuit
+	for i := 0; i < 2; i++ {
+		cb.RecordFailure()
+	}
+
+	if cb.State() != StateOpen {
+		t.Fatal("expected open state")
+	}
+
+	// Wait for half-open transition
+	time.Sleep(100 * time.Millisecond)
+
+	// First Allow(): Open -> HalfOpen (sets halfOpenReq=0, returns true, does NOT increment)
+	allowed1 := cb.Allow()
+	t.Logf("First Allow: %v (Open->HalfOpen, halfOpenReq=0)", allowed1)
+
+	// Second Allow(): HalfOpen, halfOpenReq 0<2 → increments to 1, returns true
+	allowed2 := cb.Allow()
+	t.Logf("Second Allow: %v (halfOpenReq=1)", allowed2)
+
+	// Third Allow(): HalfOpen, halfOpenReq 1<2 → increments to 2, returns true
+	allowed3 := cb.Allow()
+	t.Logf("Third Allow: %v (halfOpenReq=2)", allowed3)
+
+	// Fourth Allow(): HalfOpen, halfOpenReq 2<2 is false → returns false
+	allowed4 := cb.Allow()
+	t.Logf("Fourth Allow: %v (should be false)", allowed4)
+
+	if allowed4 {
+		t.Error("should reject fourth request when half-open limit reached")
+	}
+}
+
+func TestCircuitBreaker_RecordFailureClosed(t *testing.T) {
+	cb := New(Config{
+		MaxFailures: 5,
+		Timeout:     time.Minute,
+	})
+
+	// Record failures up to but not including max
+	for i := 0; i < 4; i++ {
+		cb.RecordFailure()
+		if cb.State() != StateClosed {
+			t.Errorf("should still be closed after %d failures", i+1)
+		}
+	}
+
+	// 5th failure should open
+	cb.RecordFailure()
+	if cb.State() != StateOpen {
+		t.Error("should be open after max failures")
+	}
+}
+
+func TestCircuitBreaker_RecordFailureInOpenState(t *testing.T) {
+	cb := New(Config{
+		MaxFailures: 2,
+		Timeout:     50 * time.Millisecond,
+	})
+
+	// Open the circuit
+	cb.RecordFailure()
+	cb.RecordFailure()
+
+	if cb.State() != StateOpen {
+		t.Fatal("expected open state")
+	}
+
+	// RecordFailure in Open state - should be no-op (no state change)
+	cb.RecordFailure()
+
+	if cb.State() != StateOpen {
+		t.Error("RecordFailure in Open should not change state")
+	}
+}
