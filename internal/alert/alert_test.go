@@ -631,3 +631,36 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 		t.Error("expected hourly_count in stats")
 	}
 }
+
+func TestNoopLogger(t *testing.T) {
+	logger := &noopLogger{}
+	// These should not panic - they're no-op methods
+	logger.Info("info message", "key", "value")
+	logger.Warn("warn message", "key", "value")
+	logger.Error("error message", "key", "value")
+}
+
+func TestSend_AlertNameEmpty(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	mgr := NewManager(cfg, nil)
+
+	// Send with empty name - should still work but be rate limited
+	err := mgr.Send("", SeverityInfo, "test", nil)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestSend_WebhookNotConfigured(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.WebhookURL = "" // No webhook configured
+	mgr := NewManager(cfg, nil)
+
+	// Should succeed with no webhook (no-op)
+	err := mgr.Send("no_webhook", SeverityInfo, "test alert", nil)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
