@@ -1,0 +1,1066 @@
+openapi: 3.0.3
+info:
+  title: uMailServer API
+  description: |
+    uMailServer REST API for email server administration and user account management.
+
+    ## Authentication
+    The API uses JWT (JSON Web Token) authentication. Obtain a token by calling
+    `/api/auth/login` with valid credentials, then include the token in the
+    `Authorization` header as `Bearer <token>`.
+
+    ## Rate Limiting
+    API requests are rate-limited to prevent abuse. Default limits:
+    - 100 requests per minute for authenticated users
+    - 20 requests per minute for unauthenticated endpoints
+
+    ## Error Handling
+    Errors follow RFC 7807 (Problem Details) format with additional context:
+    ```json
+    {
+      "error": "invalid_request",
+      "message": "Detailed error message",
+      "code": 400
+    }
+    ```
+  version: 1.0.0
+  contact:
+    name: uMailServer Support
+    url: https://github.com/umailserver/umailserver/issues
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://{hostname}/api
+    description: Production server
+    variables:
+      hostname:
+        default: mail.example.com
+        description: Your uMailServer hostname
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Authentication
+    description: User authentication and session management
+  - name: Admin
+    description: Administrative operations (requires admin role)
+  - name: Domains
+    description: Domain management
+  - name: Accounts
+    description: Email account management
+  - name: Aliases
+    description: Email alias management
+  - name: Queue
+    description: Mail queue operations
+  - name: Health
+    description: Health checks and monitoring
+  - name: Metrics
+    description: Prometheus-compatible metrics
+
+paths:
+  # Authentication
+  /api/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Authenticate user
+      description: Obtain a JWT token by providing valid credentials
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: user@example.com
+                password:
+                  type: string
+                  format: password
+                  example: securepassword123
+                totp_code:
+                  type: string
+                  description: TOTP code if 2FA is enabled
+                  example: "123456"
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT access token
+                  expires_at:
+                    type: string
+                    format: date-time
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+
+  /api/auth/logout:
+    post:
+      tags:
+        - Authentication
+      summary: Logout user
+      description: Invalidate the current JWT token
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Logged out successfully
+
+  /api/auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh token
+      description: Obtain a new JWT token before expiration
+      responses:
+        '200':
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+
+  /api/auth/totp/setup:
+    post:
+      tags:
+        - Authentication
+      summary: Setup TOTP 2FA
+      description: Generate TOTP secret and QR code URI for 2FA setup
+      responses:
+        '200':
+          description: TOTP setup initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret:
+                    type: string
+                    description: Base32-encoded TOTP secret
+                  uri:
+                    type: string
+                    description: otpauth:// URI for QR code generation
+
+  /api/auth/totp/verify:
+    post:
+      tags:
+        - Authentication
+      summary: Verify and enable TOTP
+      description: Verify TOTP code and enable 2FA for the account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - code
+              properties:
+                code:
+                  type: string
+                  pattern: '^[0-9]{6}$'
+                  example: "123456"
+      responses:
+        '200':
+          description: TOTP enabled successfully
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+
+  # Health & Metrics
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Comprehensive health status of all subsystems
+      security: []
+      responses:
+        '200':
+          description: System is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: One or more subsystems unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/live:
+    get:
+      tags:
+        - Health
+      summary: Liveness probe
+      description: Kubernetes liveness probe endpoint
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "alive"
+
+  /health/ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness probe
+      description: Kubernetes readiness probe endpoint
+      security: []
+      responses:
+        '200':
+          description: Service is ready to accept traffic
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "ready"
+        '503':
+          description: Service is not ready
+
+  /metrics:
+    get:
+      tags:
+        - Metrics
+      summary: Prometheus metrics
+      description: Prometheus-compatible metrics endpoint
+      security: []
+      responses:
+        '200':
+          description: Prometheus metrics in text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # Admin - Dashboard
+  /api/admin/dashboard:
+    get:
+      tags:
+        - Admin
+      summary: Admin dashboard data
+      description: Get overview statistics for the admin dashboard
+      responses:
+        '200':
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domains:
+                    type: integer
+                    description: Total number of domains
+                  accounts:
+                    type: integer
+                    description: Total number of accounts
+                  queue_size:
+                    type: integer
+                    description: Current mail queue size
+                  storage_used:
+                    type: integer
+                    description: Storage used in bytes
+                  recent_events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Event'
+
+  # Domains
+  /api/admin/domains:
+    get:
+      tags:
+        - Domains
+        - Admin
+      summary: List all domains
+      description: Get a list of all configured domains
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of domains
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  domains:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Domain'
+                  total:
+                    type: integer
+
+    post:
+      tags:
+        - Domains
+        - Admin
+      summary: Create domain
+      description: Create a new email domain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainCreate'
+      responses:
+        '201':
+          description: Domain created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '409':
+          description: Domain already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/domains/{domain}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+          format: hostname
+        example: example.com
+
+    get:
+      tags:
+        - Domains
+        - Admin
+      summary: Get domain details
+      description: Get detailed information about a specific domain
+      responses:
+        '200':
+          description: Domain details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    put:
+      tags:
+        - Domains
+        - Admin
+      summary: Update domain
+      description: Update domain configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainUpdate'
+      responses:
+        '200':
+          description: Domain updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    delete:
+      tags:
+        - Domains
+        - Admin
+      summary: Delete domain
+      description: Delete a domain and all associated accounts
+      responses:
+        '204':
+          description: Domain deleted successfully
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: Cannot delete domain with existing accounts
+
+  # Accounts
+  /api/admin/domains/{domain}/accounts:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+        example: example.com
+
+    get:
+      tags:
+        - Accounts
+        - Admin
+      summary: List domain accounts
+      description: Get all accounts for a specific domain
+      responses:
+        '200':
+          description: List of accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+                  total:
+                    type: integer
+
+    post:
+      tags:
+        - Accounts
+        - Admin
+      summary: Create account
+      description: Create a new email account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCreate'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '409':
+          description: Account already exists
+
+  /api/admin/domains/{domain}/accounts/{localPart}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: localPart
+        in: path
+        required: true
+        schema:
+          type: string
+        example: user
+
+    get:
+      tags:
+        - Accounts
+        - Admin
+      summary: Get account details
+      responses:
+        '200':
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+
+    put:
+      tags:
+        - Accounts
+        - Admin
+      summary: Update account
+      description: Update account settings (quota, password, etc.)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+      responses:
+        '200':
+          description: Account updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+
+    delete:
+      tags:
+        - Accounts
+        - Admin
+      summary: Delete account
+      responses:
+        '204':
+          description: Account deleted successfully
+
+  /api/account/me:
+    get:
+      tags:
+        - Accounts
+      summary: Get current account
+      description: Get details of the authenticated account
+      responses:
+        '200':
+          description: Account details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+
+    put:
+      tags:
+        - Accounts
+      summary: Update current account
+      description: Update own account settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountUpdate'
+      responses:
+        '200':
+          description: Account updated successfully
+
+  # Aliases
+  /api/admin/domains/{domain}/aliases:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      tags:
+        - Aliases
+        - Admin
+      summary: List domain aliases
+      responses:
+        '200':
+          description: List of aliases
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  aliases:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Alias'
+
+    post:
+      tags:
+        - Aliases
+        - Admin
+      summary: Create alias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AliasCreate'
+      responses:
+        '201':
+          description: Alias created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alias'
+
+  /api/admin/domains/{domain}/aliases/{alias}:
+    parameters:
+      - name: domain
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: alias
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      tags:
+        - Aliases
+        - Admin
+      summary: Get alias details
+      responses:
+        '200':
+          description: Alias details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Alias'
+
+    put:
+      tags:
+        - Aliases
+        - Admin
+      summary: Update alias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AliasUpdate'
+      responses:
+        '200':
+          description: Alias updated successfully
+
+    delete:
+      tags:
+        - Aliases
+        - Admin
+      summary: Delete alias
+      responses:
+        '204':
+          description: Alias deleted successfully
+
+  # Queue
+  /api/admin/queue:
+    get:
+      tags:
+        - Queue
+        - Admin
+      summary: Get queue status
+      description: Get current mail queue statistics
+      responses:
+        '200':
+          description: Queue statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pending:
+                    type: integer
+                  deferred:
+                    type: integer
+                  failed:
+                    type: integer
+                  total:
+                    type: integer
+
+  /api/admin/queue/messages:
+    get:
+      tags:
+        - Queue
+        - Admin
+      summary: List queued messages
+      description: Get list of messages in the queue
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, deferred, failed, all]
+            default: all
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: List of queued messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/QueueEntry'
+
+  /api/admin/queue/messages/{id}/retry:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+
+    post:
+      tags:
+        - Queue
+        - Admin
+      summary: Retry queued message
+      description: Immediately retry delivery of a queued message
+      responses:
+        '200':
+          description: Message queued for retry
+        '404':
+          description: Message not found in queue
+
+  /api/admin/queue/messages/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+
+    delete:
+      tags:
+        - Queue
+        - Admin
+      summary: Remove from queue
+      description: Remove a message from the delivery queue
+      responses:
+        '204':
+          description: Message removed from queue
+        '404':
+          description: Message not found
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        is_admin:
+          type: boolean
+        domains:
+          type: array
+          items:
+            type: string
+
+    Domain:
+      type: object
+      properties:
+        name:
+          type: string
+          example: example.com
+        max_accounts:
+          type: integer
+          example: 100
+        max_aliases:
+          type: integer
+          example: 200
+        max_mailbox_size:
+          type: integer
+          description: Maximum mailbox size in bytes
+          example: 1073741824
+        is_active:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+        dkim_enabled:
+          type: boolean
+          default: true
+        dkim_selector:
+          type: string
+          example: default
+
+    DomainCreate:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          format: hostname
+          example: example.com
+        max_accounts:
+          type: integer
+          default: 100
+        max_aliases:
+          type: integer
+          default: 200
+        max_mailbox_size:
+          type: integer
+          default: 1073741824
+
+    DomainUpdate:
+      type: object
+      properties:
+        max_accounts:
+          type: integer
+        max_aliases:
+          type: integer
+        max_mailbox_size:
+          type: integer
+        is_active:
+          type: boolean
+
+    Account:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        local_part:
+          type: string
+          example: user
+        domain:
+          type: string
+          example: example.com
+        is_active:
+          type: boolean
+        is_admin:
+          type: boolean
+        quota_used:
+          type: integer
+          description: Storage used in bytes
+        quota_limit:
+          type: integer
+          description: Storage limit in bytes
+        created_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: string
+          format: date-time
+        totp_enabled:
+          type: boolean
+
+    AccountCreate:
+      type: object
+      required:
+        - local_part
+        - password
+      properties:
+        local_part:
+          type: string
+          pattern: '^[a-zA-Z0-9._-]+$'
+          example: user
+        password:
+          type: string
+          format: password
+          minLength: 8
+        quota_limit:
+          type: integer
+          default: 1073741824
+        is_admin:
+          type: boolean
+          default: false
+
+    AccountUpdate:
+      type: object
+      properties:
+        password:
+          type: string
+          format: password
+          minLength: 8
+        quota_limit:
+          type: integer
+        is_active:
+          type: boolean
+
+    Alias:
+      type: object
+      properties:
+        domain:
+          type: string
+        alias:
+          type: string
+          example: support
+        target:
+          type: string
+          format: email
+          example: user@example.com
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    AliasCreate:
+      type: object
+      required:
+        - alias
+        - target
+      properties:
+        alias:
+          type: string
+          example: support
+        target:
+          type: string
+          format: email
+        is_active:
+          type: boolean
+          default: true
+
+    AliasUpdate:
+      type: object
+      properties:
+        target:
+          type: string
+          format: email
+        is_active:
+          type: boolean
+
+    QueueEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        from:
+          type: string
+          format: email
+        to:
+          type: array
+          items:
+            type: string
+            format: email
+        status:
+          type: string
+          enum: [pending, deferred, failed]
+        created_at:
+          type: string
+          format: date-time
+        next_retry:
+          type: string
+          format: date-time
+        retry_count:
+          type: integer
+        error_message:
+          type: string
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        checks:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+                enum: [healthy, unhealthy, warning]
+              message:
+                type: string
+              details:
+                type: object
+
+    Event:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [login, logout, message_sent, message_received, account_created, error]
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: integer
+
+  responses:
+    BadRequestError:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: invalid_request
+            message: Invalid request parameters
+            code: 400
+
+    UnauthorizedError:
+      description: Authentication required or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: unauthorized
+            message: Invalid or missing authentication token
+            code: 401
+
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: not_found
+            message: Requested resource not found
+            code: 404
+
+    RateLimitError:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: rate_limited
+            message: Too many requests, please try again later
+            code: 429

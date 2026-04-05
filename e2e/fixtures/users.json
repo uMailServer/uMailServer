@@ -1,0 +1,25 @@
+{
+  "admin": {
+    "email": "admin@example.com",
+    "password": "Admin123!",
+    "domain": "example.com",
+    "isAdmin": true
+  },
+  "user": {
+    "email": "user@example.com",
+    "password": "User123!",
+    "domain": "example.com",
+    "isAdmin": false
+  },
+  "newUser": {
+    "localPart": "newuser",
+    "email": "newuser@example.com",
+    "password": "NewUser123!",
+    "domain": "example.com"
+  },
+  "testDomain": {
+    "name": "testdomain.com",
+    "maxAccounts": 10,
+    "maxAliases": 20
+  }
+}

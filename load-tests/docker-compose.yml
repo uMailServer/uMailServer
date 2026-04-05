@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  # uMailServer instance for testing
+  umailserver:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "143:143"
+      - "993:993"
+      - "110:110"
+      - "995:995"
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      - UMAILSERVER_SERVER_HOSTNAME=mail.example.com
+      - UMAILSERVER_SECURITY_JWTSECRET=test-secret-key-for-load-testing-only
+      - UMAILSERVER_LOGGING_LEVEL=warn
+    volumes:
+      - umail-data:/var/lib/umailserver
+      - ./config:/etc/umailserver
+    networks:
+      - loadtest-network
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - loadtest-network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../config/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ../config/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - loadtest-network
+
+  # InfluxDB for k6 metrics
+  influxdb:
+    image: influxdb:1.8
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=k6
+    volumes:
+      - influxdb-data:/var/lib/influxdb
+    networks:
+      - loadtest-network
+
+  # k6 load test runner
+  k6:
+    image: grafana/k6:latest
+    volumes:
+      - ./k6:/tests
+    working_dir: /tests
+    command: run --out influxdb=http://influxdb:8086/k6 /tests/api-load.js
+    environment:
+      - API_URL=http://umailserver:8080
+      - API_USER=admin@example.com
+      - API_PASS=admin123
+      - K6_OUT=influxdb=http://influxdb:8086/k6
+    networks:
+      - loadtest-network
+    depends_on:
+      - umailserver
+      - influxdb
+
+volumes:
+  umail-data:
+  prometheus-data:
+  grafana-data:
+  influxdb-data:
+
+networks:
+  loadtest-network:
+    driver: bridge
