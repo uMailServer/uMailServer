@@ -517,12 +517,24 @@ func (mm *MigrationManager) processMBOXMessage(data []byte, folder string) error
 	}
 
 	// Reconstruct message
-	messageData := strings.Join(lines, "\n")
+	messageData := []byte(strings.Join(lines, "\n"))
 
-	// Determine target user from message headers
+	// Determine target user from message headers or folder name
 	targetUser := mm.extractTargetUser(string(data), folder)
+	if targetUser == "" || targetUser == "unknown" {
+		return fmt.Errorf("could not determine target user for message")
+	}
 
-	fmt.Printf("    Message size: %d bytes -> folder: %s, user: %s\n", len(messageData), folder, targetUser)
+	// Store message if we have a valid target
+	if mm.msgStore != nil {
+		msgID, err := mm.msgStore.StoreMessage(targetUser, messageData)
+		if err != nil {
+			return fmt.Errorf("failed to store message: %w", err)
+		}
+		fmt.Printf("    Stored message (ID: %s, size: %d bytes, user: %s)\n", msgID[:8], len(messageData), targetUser)
+	} else {
+		fmt.Printf("    Message size: %d bytes -> user: %s (no message store)\n", len(messageData), targetUser)
+	}
 
 	return nil
 }
