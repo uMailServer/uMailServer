@@ -1,0 +1,122 @@
+{
+  "app": {
+    "name": "uMailServer Admin",
+    "tagline": "E-posta Sunucusu Yönetimi"
+  },
+  "nav": {
+    "dashboard": "Ana Sayfa",
+    "domains": "Alan Adları",
+    "accounts": "Hesaplar",
+    "aliases": "Takma Adlar",
+    "queue": "E-posta Kuyruğu",
+    "settings": "Ayarlar",
+    "logout": "Çıkış"
+  },
+  "auth": {
+    "login": "Yönetici Girişi",
+    "email": "E-posta",
+    "password": "Şifre",
+    "submit": "Giriş Yap",
+    "forgotPassword": "Şifremi Unuttum?",
+    "invalidCredentials": "Geçersiz kimlik bilgileri",
+    "sessionExpired": "Oturum süresi doldu. Lütfen tekrar giriş yapın."
+  },
+  "dashboard": {
+    "title": "Ana Sayfa",
+    "overview": "Sistem Genel Bakış",
+    "domains": "Alan Adları",
+    "accounts": "Hesaplar",
+    "queueSize": "Kuyruk Boyutu",
+    "storageUsed": "Kullanılan Depolama",
+    "recentEvents": "Son Olaylar",
+    "systemHealth": "Sistem Sağlığı",
+    "healthy": "Sağlıklı",
+    "unhealthy": "Sorunlu"
+  },
+  "domains": {
+    "title": "Alan Adları",
+    "add": "Alan Adı Ekle",
+    "edit": "Düzenle",
+    "delete": "Sil",
+    "name": "Alan Adı",
+    "maxAccounts": "Maksimum Hesap",
+    "maxAliases": "Maksimum Takma Ad",
+    "status": "Durum",
+    "active": "Aktif",
+    "inactive": "Pasif",
+    "created": "Oluşturulma",
+    "confirmDelete": "Bu alan adını silmek istediğinize emin misiniz? Tüm hesaplar ve takma adlar silinecektir.",
+    "createdSuccess": "Alan adı başarıyla oluşturuldu",
+    "updatedSuccess": "Alan adı güncellendi",
+    "deletedSuccess": "Alan adı silindi"
+  },
+  "accounts": {
+    "title": "Hesaplar",
+    "add": "Hesap Ekle",
+    "edit": "Düzenle",
+    "delete": "Sil",
+    "email": "E-posta",
+    "password": "Şifre",
+    "quota": "Kota",
+    "used": "Kullanılan",
+    "admin": "Yönetici",
+    "active": "Aktif",
+    "created": "Oluşturulma",
+    "lastLogin": "Son Giriş",
+    "confirmDelete": "Bu hesabı silmek istediğinize emin misiniz? Tüm e-postalar silinecektir.",
+    "createdSuccess": "Hesap oluşturuldu",
+    "updatedSuccess": "Hesap güncellendi",
+    "deletedSuccess": "Hesap silindi"
+  },
+  "queue": {
+    "title": "E-posta Kuyruğu",
+    "pending": "Bekleyen",
+    "deferred": "Ertelenen",
+    "failed": "Başarısız",
+    "empty": "Kuyruk boş",
+    "retry": "Tekrar Dene",
+    "delete": "Sil",
+    "from": "Gönderen",
+    "to": "Alıcı",
+    "status": "Durum",
+    "created": "Oluşturulma",
+    "nextRetry": "Sonraki Deneme",
+    "retryCount": "Deneme Sayısı"
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "general": "Genel",
+    "security": "Güvenlik",
+    "smtp": "SMTP",
+    "save": "Ayarları Kaydet",
+    "saved": "Ayarlar kaydedildi"
+  },
+  "common": {
+    "search": "Ara",
+    "filter": "Filtrele",
+    "refresh": "Yenile",
+    "cancel": "İptal",
+    "confirm": "Onayla",
+    "save": "Kaydet",
+    "delete": "Sil",
+    "edit": "Düzenle",
+    "create": "Oluştur",
+    "back": "Geri",
+    "loading": "Yükleniyor...",
+    "error": "Hata",
+    "success": "Başarılı",
+    "warning": "Uyarı",
+    "info": "Bilgi",
+    "required": "Zorunlu",
+    "optional": "İsteğe Bağlı",
+    "actions": "İşlemler"
+  },
+  "errors": {
+    "generic": "Bir hata oluştu",
+    "notFound": "Bulunamadı",
+    "unauthorized": "Yetkisiz",
+    "forbidden": "Erişim reddedildi",
+    "validation": "Doğrulama hatası",
+    "serverError": "Sunucu hatası"
+  }
+}
