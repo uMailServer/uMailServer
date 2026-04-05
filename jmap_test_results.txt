@@ -1,0 +1,56 @@
+=== RUN   TestNewServer
+--- PASS: TestNewServer (0.00s)
+=== RUN   TestNewServerWithConfig
+--- PASS: TestNewServerWithConfig (0.00s)
+=== RUN   TestAuthenticate
+--- PASS: TestAuthenticate (0.00s)
+=== RUN   TestAuthenticate_NoAuth
+--- PASS: TestAuthenticate_NoAuth (0.00s)
+=== RUN   TestAuthenticate_InvalidToken
+--- PASS: TestAuthenticate_InvalidToken (0.00s)
+=== RUN   TestHandleWellKnown
+--- PASS: TestHandleWellKnown (0.00s)
+=== RUN   TestHandleWellKnown_MethodNotAllowed
+--- PASS: TestHandleWellKnown_MethodNotAllowed (0.00s)
+=== RUN   TestHandleSession
+--- PASS: TestHandleSession (0.00s)
+=== RUN   TestHandleSession_Unauthorized
+--- PASS: TestHandleSession_Unauthorized (0.00s)
+=== RUN   TestHandleSession_MethodNotAllowed
+--- PASS: TestHandleSession_MethodNotAllowed (0.00s)
+=== RUN   TestHandleAPI
+--- PASS: TestHandleAPI (0.00s)
+=== RUN   TestHandleAPI_Unauthorized
+--- PASS: TestHandleAPI_Unauthorized (0.00s)
+=== RUN   TestHandleAPI_InvalidJSON
+--- PASS: TestHandleAPI_InvalidJSON (0.00s)
+=== RUN   TestHandleUpload
+--- PASS: TestHandleUpload (0.00s)
+=== RUN   TestHandleUpload_Unauthorized
+--- PASS: TestHandleUpload_Unauthorized (0.00s)
+=== RUN   TestHandleDownload_NotFound
+--- FAIL: TestHandleDownload_NotFound (0.00s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]
+[signal 0xc0000005 code=0x0 addr=0x0 pc=0x7ff75b5d8ffa]
+
+goroutine 39 [running]:
+testing.tRunner.func1.2({0x7ff75b6e8140, 0x7ff75b9cc080})
+	C:/Program Files/Go/src/testing/testing.go:1974 +0x239
+testing.tRunner.func1()
+	C:/Program Files/Go/src/testing/testing.go:1977 +0x349
+panic({0x7ff75b6e8140?, 0x7ff75b9cc080?})
+	C:/Program Files/Go/src/runtime/panic.go:860 +0x13a
+github.com/umailserver/umailserver/internal/storage.(*MessageStore).ReadMessage(0x0, {0x36dd678806c0, 0x10}, {0x36dd67890824, 0x7})
+	D:/Codebox/PROJECTS/uMailServer/internal/storage/messagestore.go:87 +0xda
+github.com/umailserver/umailserver/internal/jmap.(*Server).handleDownload(0x36dd67886690, {0x7ff75b7638c0, 0x36dd6788e500}, 0x36dd678a3680)
+	D:/Codebox/PROJECTS/uMailServer/internal/jmap/server.go:306 +0x192
+github.com/umailserver/umailserver/internal/jmap.(*Server).ServeHTTP(0x36dd67886690, {0x7ff75b7638c0, 0x36dd6788e500}, 0x36dd678a3680)
+	D:/Codebox/PROJECTS/uMailServer/internal/jmap/server.go:89 +0x591
+github.com/umailserver/umailserver/internal/jmap.TestHandleDownload_NotFound(0x36dd678b0a00)
+	D:/Codebox/PROJECTS/uMailServer/internal/jmap/server_test.go:329 +0x514
+testing.tRunner(0x36dd678b0a00, 0x7ff75b75ce00)
+	C:/Program Files/Go/src/testing/testing.go:2036 +0xc3
+created by testing.(*T).Run in goroutine 1
+	C:/Program Files/Go/src/testing/testing.go:2101 +0x4a9
+FAIL	github.com/umailserver/umailserver/internal/jmap	0.025s
+FAIL
