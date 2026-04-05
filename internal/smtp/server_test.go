@@ -482,3 +482,76 @@ func TestServerSetAuthLimits_ZeroMaxAttempts(t *testing.T) {
 		t.Error("expected isAuthLockedOut=false when maxLoginAttempts=0")
 	}
 }
+
+func TestServerIsAuthLockedOut_WithFailures(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	// Set auth limits with maxAttempts=3 and 1 hour lockout
+	server.SetAuthLimits(3, time.Hour)
+
+	// Should not be locked out initially
+	if server.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out initially")
+	}
+
+	// Record some failures
+	server.recordAuthFailure("192.168.1.1")
+	server.recordAuthFailure("192.168.1.1")
+
+	// Still should not be locked (only 2 failures)
+	if server.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out with 2 failures")
+	}
+
+	// Third failure should lock out
+	server.recordAuthFailure("192.168.1.1")
+	if !server.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected locked out with 3 failures")
+	}
+}
+
+func TestServerClearAuthFailures(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	server.SetAuthLimits(3, time.Hour)
+	server.recordAuthFailure("192.168.1.1")
+	server.recordAuthFailure("192.168.1.1")
+
+	if server.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out before clear")
+	}
+
+	server.clearAuthFailures("192.168.1.1")
+
+	if server.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out after clear")
+	}
+}
+
+func TestServerRecordAuthFailure_Disabled(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	// Set maxLoginAttempts to 0 (disabled)
+	server.SetAuthLimits(0, 0)
+
+	// Should not panic
+	server.recordAuthFailure("127.0.0.1")
+}
