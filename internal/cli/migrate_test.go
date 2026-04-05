@@ -156,8 +156,8 @@ func TestMigrateFromIMAPInvalidURL(t *testing.T) {
 	}
 }
 
-// TestMigrateFromIMAPNotImplemented tests IMAP migration returns not implemented
-func TestMigrateFromIMAPNotImplemented(t *testing.T) {
+// TestMigrateFromIMAPConnectionFailure tests IMAP migration handles connection failure
+func TestMigrateFromIMAPConnectionFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
@@ -171,7 +171,7 @@ func TestMigrateFromIMAPNotImplemented(t *testing.T) {
 
 	opts := MigrateOptions{
 		SourceType: "imap",
-		SourceURL:  "imap://mail.example.com",
+		SourceURL:  "imap://unreachable.invalid:993",
 		Username:   "user",
 		Password:   "pass",
 		TargetUser: "test@example.com",
@@ -179,10 +179,11 @@ func TestMigrateFromIMAPNotImplemented(t *testing.T) {
 
 	err = mm.MigrateFromIMAP(opts)
 	if err == nil {
-		t.Error("Expected error for not yet implemented IMAP migration")
+		t.Error("Expected error for unreachable IMAP server")
 	}
-	if !containsStr(err.Error(), "not yet fully implemented") {
-		t.Errorf("Expected 'not yet fully implemented' error, got: %v", err)
+	// Should get a connection error, not "not implemented"
+	if containsStr(err.Error(), "not yet fully implemented") {
+		t.Errorf("IMAP migration should be implemented, got: %v", err)
 	}
 }
 

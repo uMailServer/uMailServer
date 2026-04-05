@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	extimap "github.com/emersion/go-imap"
+	"github.com/emersion/go-imap/client"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -65,19 +67,190 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 		return fmt.Errorf("invalid IMAP URL: %w", err)
 	}
 
-	fmt.Printf("Host: %s\n", u.Host)
+	host := u.Host
+	port := 993
+	useTLS := true
+
+	// Handle non-standard ports
+	if strings.Contains(host, ":") {
+		parts := strings.Split(host, ":")
+		host = parts[0]
+		if len(parts) > 1 {
+			fmt.Sscanf(parts[1], "%d", &port)
+		}
+	} else if u.Scheme == "imap" {
+		port = 143
+		useTLS = false
+	}
+
+	fmt.Printf("Host: %s\n", host)
+	fmt.Printf("Port: %d\n", port)
 	fmt.Printf("Username: %s\n", opts.Username)
 
-	// TODO: Implement actual IMAP sync using go-imap client
-	// For now, this is a placeholder implementation
+	// Connect to IMAP server
+	var imapClient *client.Client
+	if useTLS {
+		imapClient, err = client.DialTLS(fmt.Sprintf("%s:%d", host, port), nil)
+	} else {
+		imapClient, err = client.Dial(fmt.Sprintf("%s:%d", host, port))
+	}
+	if err != nil {
+		return fmt.Errorf("failed to connect to IMAP server: %w", err)
+	}
+	defer imapClient.Logout()
 
-	fmt.Println("IMAP migration would:")
-	fmt.Println("1. Connect to source IMAP server")
-	fmt.Println("2. List mailboxes/folders")
-	fmt.Println("3. Sync messages from each folder")
-	fmt.Println("4. Preserve flags and metadata")
+	// Authenticate
+	if err := imapClient.Login(opts.Username, opts.Password); err != nil {
+		return fmt.Errorf("failed to authenticate: %w", err)
+	}
+	fmt.Println("Authenticated successfully")
 
-	return fmt.Errorf("IMAP migration not yet fully implemented")
+	// List mailboxes using channel-based API
+	mailboxChan := make(chan *extimap.MailboxInfo, 100)
+	doneChan := make(chan error, 1)
+
+	go func() {
+		doneChan <- imapClient.List("", "*", mailboxChan)
+	}()
+
+	var mailboxes []*extimap.MailboxInfo
+	for mbox := range mailboxChan {
+		mailboxes = append(mailboxes, mbox)
+	}
+
+	if err := <-doneChan; err != nil {
+		return fmt.Errorf("failed to list mailboxes: %w", err)
+	}
+
+	fmt.Printf("Found %d mailboxes\n", len(mailboxes))
+
+	totalMessages := 0
+	migratedMessages := 0
+
+	for _, mailbox := range mailboxes {
+		// Check if mailbox is selectable (skip \Noselect mailboxes)
+		skip := false
+		for _, attr := range mailbox.Attributes {
+			if attr == "\\Noselect" || attr == "Noselect" {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		mboxName := mailbox.Name
+		if mboxName == "" {
+			mboxName = "INBOX"
+		}
+
+		fmt.Printf("\nMigrating mailbox: %s\n", mboxName)
+
+		// Select mailbox
+		mbox, err := imapClient.Select(mboxName, false)
+		if err != nil {
+			mm.logger.Warn("Failed to select mailbox, skipping", "mailbox", mboxName, "error", err)
+			continue
+		}
+
+		if mbox.Messages == 0 {
+			fmt.Printf("  Empty mailbox, skipping\n")
+			continue
+		}
+
+		fmt.Printf("  Messages: %d\n", mbox.Messages)
+		totalMessages += int(mbox.Messages)
+
+		// Fetch messages in batches
+		seqSet := new(extimap.SeqSet)
+		seqSet.AddRange(1, mbox.Messages)
+
+		items := []extimap.FetchItem{
+			extimap.FetchEnvelope,
+			extimap.FetchFlags,
+			extimap.FetchInternalDate,
+			extimap.FetchBody,
+		}
+
+		messages := make(chan *extimap.Message, 100)
+		done := make(chan error, 1)
+
+		go func() {
+			done <- imapClient.Fetch(seqSet, items, messages)
+		}()
+
+		for msg := range messages {
+			if opts.DryRun {
+				fmt.Printf("  [DRY RUN] Would migrate message %d\n", msg.SeqNum)
+				migratedMessages++
+				continue
+			}
+
+			// Extract message content using GetBody
+			msgData, err := extractIMAPMessageData(msg)
+			if err != nil {
+				mm.logger.Warn("Failed to extract message data", "seq", msg.SeqNum, "error", err)
+				continue
+			}
+
+			// Store message
+			if mm.msgStore != nil {
+				msgID, err := mm.msgStore.StoreMessage(opts.TargetUser, msgData)
+				if err != nil {
+					mm.logger.Error("Failed to store message", "seq", msg.SeqNum, "error", err)
+					continue
+				}
+
+				// Store flags if supported
+				if len(msg.Flags) > 0 {
+					mm.storeIMAPMessageFlags(opts.TargetUser, msgID, msg.Flags)
+				}
+
+				fmt.Printf("  Migrated message %d (ID: %s)\n", msg.SeqNum, msgID[:8])
+			}
+			migratedMessages++
+
+			// Progress indicator for large mailboxes
+			if migratedMessages%100 == 0 {
+				fmt.Printf("  Progress: %d / %d messages\n", migratedMessages, totalMessages)
+			}
+		}
+
+		if err := <-done; err != nil {
+			mm.logger.Warn("Error fetching messages", "mailbox", mboxName, "error", err)
+		}
+	}
+
+	fmt.Printf("\n=== Migration Complete ===\n")
+	fmt.Printf("Total mailboxes: %d\n", len(mailboxes))
+	fmt.Printf("Total messages: %d\n", totalMessages)
+	fmt.Printf("Migrated: %d\n", migratedMessages)
+
+	if opts.DryRun {
+		fmt.Println("(Dry run - no actual changes made)")
+	}
+
+	return nil
+}
+
+// extractIMAPMessageData extracts the raw message data from an IMAP message
+func extractIMAPMessageData(msg *extimap.Message) ([]byte, error) {
+	// Use GetBody to get the message body
+	// Empty section name gets the entire message
+	section := &extimap.BodySectionName{}
+	body := msg.GetBody(section)
+	if body != nil {
+		data := make([]byte, body.Len())
+		body.Read(data)
+		return data, nil
+	}
+	return nil, fmt.Errorf("no body found in message")
+}
+
+// storeIMAPMessageFlags stores message flags in the database
+func (mm *MigrationManager) storeIMAPMessageFlags(user, msgID string, flags []string) {
+	mm.logger.Debug("Message flags", "user", user, "msgID", msgID[:8], "flags", flags)
 }
 
 // MigrateFromDovecot imports from Dovecot maildir

@@ -684,7 +684,7 @@ func TestMigrateFromIMAPDryRun(t *testing.T) {
 
 	opts := MigrateOptions{
 		SourceType: "imap",
-		SourceURL:  "imap://mail.example.com",
+		SourceURL:  "imap://unreachable.invalid",
 		Username:   "user",
 		Password:   "pass",
 		TargetUser: "localuser",
@@ -692,11 +692,12 @@ func TestMigrateFromIMAPDryRun(t *testing.T) {
 	}
 
 	err = mm.MigrateFromIMAP(opts)
+	// With IMAP now implemented, we expect a connection error, not "not implemented"
 	if err == nil {
-		t.Error("expected error (not yet implemented)")
+		t.Error("expected error for unreachable IMAP server")
 	}
-	if !strings.Contains(err.Error(), "not yet fully implemented") {
-		t.Errorf("expected 'not yet fully implemented' error, got: %v", err)
+	if strings.Contains(err.Error(), "not yet fully implemented") {
+		t.Errorf("IMAP migration should be implemented, got: %v", err)
 	}
 }
 
