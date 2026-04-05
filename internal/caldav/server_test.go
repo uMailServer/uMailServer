@@ -1097,6 +1097,81 @@ func TestHandleCalendarPropfind_NonExistentCalendar(t *testing.T) {
 	}
 }
 
+func TestHandleCalendarPropfind_EmptyCalendarID(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+
+	multistatus := &Multistatus{}
+	// Test with empty calendar ID (parts[3] == "")
+	server.handleCalendarPropfind("/dav/calendars/user@example.com/", "user@example.com", multistatus)
+
+	if len(multistatus.Responses) != 0 {
+		t.Error("Should not add responses for empty calendar ID")
+	}
+}
+
+func TestHandleCalendarPropfind_WithEvent(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	// Create a calendar first
+	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
+	err := server.storage.CreateCalendar("user@example.com", cal)
+	if err != nil {
+		t.Fatalf("Failed to create calendar: %v", err)
+	}
+
+	// Save an event
+	eventData := `BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:test-event-1
+SUMMARY:Test Event
+END:VEVENT
+END:VCALENDAR`
+	event := &CalendarEvent{
+		UID:     "test-event-1",
+		Summary: "Test Event",
+	}
+	err = server.storage.SaveEvent("user@example.com", "test-cal", event, eventData)
+	if err != nil {
+		t.Fatalf("Failed to save event: %v", err)
+	}
+
+	multistatus := &Multistatus{}
+	// Test with event path
+	server.handleCalendarPropfind("/dav/calendars/user@example.com/test-cal/test-event-1", "user@example.com", multistatus)
+
+	// Should have one response for the event
+	if len(multistatus.Responses) != 1 {
+		t.Errorf("Expected 1 response, got %d", len(multistatus.Responses))
+	}
+}
+
+func TestHandleCalendarPropfind_NonExistentEvent(t *testing.T) {
+	server := NewServer(t.TempDir(), slog.Default())
+	server.SetAuthFunc(func(username, password string) (bool, error) {
+		return true, nil
+	})
+
+	// Create a calendar
+	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
+	err := server.storage.CreateCalendar("user@example.com", cal)
+	if err != nil {
+		t.Fatalf("Failed to create calendar: %v", err)
+	}
+
+	multistatus := &Multistatus{}
+	// Test with non-existent event path
+	server.handleCalendarPropfind("/dav/calendars/user@example.com/test-cal/nonexistent-event", "user@example.com", multistatus)
+
+	// Should have no responses (event not found)
+	if len(multistatus.Responses) != 0 {
+		t.Errorf("Expected 0 responses for non-existent event, got %d", len(multistatus.Responses))
+	}
+}
+
 func TestHandleReport_InvalidQuery(t *testing.T) {
 	server := NewServer(t.TempDir(), slog.Default())
 	server.SetAuthFunc(func(username, password string) (bool, error) {
