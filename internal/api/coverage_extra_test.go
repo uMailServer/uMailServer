@@ -1,18 +1,23 @@
 package api
 
 import (
-	"log/slog"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/queue"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -2149,5 +2154,244 @@ func TestHandleLogin_InvalidPassword(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("Expected 401 for wrong password, got %d", rec.Code)
+	}
+}
+
+// --- Mock FileSystem and FileInfo coverage ---
+
+func TestMockFileInfo_Name(t *testing.T) {
+	fi := &mockFileInfo{name: "testfile.txt", size: 100}
+	if fi.Name() != "testfile.txt" {
+		t.Errorf("expected Name() = 'testfile.txt', got %q", fi.Name())
+	}
+}
+
+func TestMockFileInfo_Size(t *testing.T) {
+	fi := &mockFileInfo{name: "testfile.txt", size: 100}
+	if fi.Size() != 100 {
+		t.Errorf("expected Size() = 100, got %d", fi.Size())
+	}
+}
+
+func TestMockFileInfo_Mode(t *testing.T) {
+	fi := &mockFileInfo{name: "testfile.txt", size: 100}
+	mode := fi.Mode()
+	if mode != 0644 {
+		t.Errorf("expected Mode() = 0644, got %o", mode)
+	}
+}
+
+func TestMockFileInfo_IsDir(t *testing.T) {
+	fi := &mockFileInfo{name: "testfile.txt", size: 100}
+	if fi.IsDir() != false {
+		t.Errorf("expected IsDir() = false, got %v", fi.IsDir())
+	}
+}
+
+func TestMockFileInfo_Sys(t *testing.T) {
+	fi := &mockFileInfo{name: "testfile.txt", size: 100}
+	if fi.Sys() != nil {
+		t.Errorf("expected Sys() = nil, got %v", fi.Sys())
+	}
+}
+
+func TestMockFile_Seek(t *testing.T) {
+ mf := &mockFile{content: "test content", name: "test.txt", pos: 0}
+
+	// Seek from start
+	n, err := mf.Seek(5, 0)
+	if err != nil {
+		t.Fatalf("Seek failed: %v", err)
+	}
+	if n != 5 {
+		t.Errorf("expected pos 5, got %d", n)
+	}
+
+	// Seek from current
+	n, err = mf.Seek(3, 1)
+	if err != nil {
+		t.Fatalf("Seek current failed: %v", err)
+	}
+	if n != 8 {
+		t.Errorf("expected pos 8, got %d", n)
+	}
+
+	// Seek from end
+	n, err = mf.Seek(-5, 2)
+	if err != nil {
+		t.Fatalf("Seek end failed: %v", err)
+	}
+	if n != 7 {
+		t.Errorf("expected pos 7, got %d", n)
+	}
+}
+
+func TestMockFile_ReadBeyondEOF(t *testing.T) {
+	mf := &mockFile{content: "test", name: "test.txt", pos: 4}
+	p := make([]byte, 10)
+	n, err := mf.Read(p)
+	if n != 0 {
+		t.Errorf("expected 0 bytes read, got %d", n)
+	}
+	if err != io.EOF {
+		t.Errorf("expected io.EOF, got %v", err)
+	}
+}
+
+// --- MockQueueManager coverage ---
+
+func TestMockQueueManager_GetStats(t *testing.T) {
+	stats := &queue.QueueStats{Pending: 5, Sending: 10, Failed: 2}
+	m := &MockQueueManager{StatsResult: stats}
+
+	result, err := m.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats failed: %v", err)
+	}
+	if result.Pending != 5 || result.Sending != 10 {
+		t.Errorf("unexpected stats: %+v", result)
+	}
+}
+
+func TestMockQueueManager_GetStats_Error(t *testing.T) {
+	m := &MockQueueManager{StatsError: fmt.Errorf("stats error")}
+
+	_, err := m.GetStats()
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
+func TestMockQueueManager_RetryEntry(t *testing.T) {
+	m := &MockQueueManager{RetryError: nil}
+
+	err := m.RetryEntry("test-id")
+	if err != nil {
+		t.Errorf("RetryEntry failed: %v", err)
+	}
+}
+
+func TestMockQueueManager_RetryEntry_Error(t *testing.T) {
+	m := &MockQueueManager{RetryError: fmt.Errorf("retry error")}
+
+	err := m.RetryEntry("test-id")
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
+func TestMockQueueManager_DeleteEntry(t *testing.T) {
+	m := &MockQueueManager{DeleteError: nil}
+
+	err := m.DeleteEntry("test-id")
+	if err != nil {
+		t.Errorf("DeleteEntry failed: %v", err)
+	}
+}
+
+func TestMockQueueManager_DeleteEntry_Error(t *testing.T) {
+	m := &MockQueueManager{DeleteError: fmt.Errorf("delete error")}
+
+	err := m.DeleteEntry("test-id")
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
+// --- embedFSAdapter coverage ---
+
+func TestEmbedFSAdapter_ReadFile(t *testing.T) {
+	// Create a temp dir with a test file
+	tempDir := t.TempDir()
+	testFS := os.DirFS(tempDir)
+
+	// Create test file
+	testFile := filepath.Join(tempDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	adapter := NewEmbedFSAdapter(testFS)
+
+	content, err := adapter.ReadFile("test.txt")
+	if err != nil {
+		t.Fatalf("ReadFile failed: %v", err)
+	}
+	if string(content) != "test content" {
+		t.Errorf("expected 'test content', got %q", string(content))
+	}
+}
+
+func TestEmbedFSAdapter_ReadFile_NotFound(t *testing.T) {
+	testFS := os.DirFS(t.TempDir())
+	adapter := NewEmbedFSAdapter(testFS)
+
+	_, err := adapter.ReadFile("nonexistent.txt")
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestEmbedFSAdapter_Exists(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on Windows due to file locking issues with fs.FS")
+	}
+
+	tempDir := t.TempDir()
+	testFS := os.DirFS(tempDir)
+
+	// Create test file
+	testFile := filepath.Join(tempDir, "exists.txt")
+	if err := os.WriteFile(testFile, []byte("content"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	adapter := NewEmbedFSAdapter(testFS)
+
+	if !adapter.Exists("exists.txt") {
+		t.Error("expected exists.txt to exist")
+	}
+	if adapter.Exists("nonexistent.txt") {
+		t.Error("expected nonexistent.txt to not exist")
+	}
+}
+
+func TestEmbedFSAdapter_Open_NilFS(t *testing.T) {
+	adapter := &embedFSAdapter{fs: nil}
+
+	_, err := adapter.Open("test.txt")
+	if err == nil {
+		t.Error("expected error for nil fs")
+	}
+}
+
+func TestEmbedFSAdapter_ReadFile_NilFS(t *testing.T) {
+	adapter := &embedFSAdapter{fs: nil}
+
+	_, err := adapter.ReadFile("test.txt")
+	if err == nil {
+		t.Error("expected error for nil fs")
+	}
+}
+
+func TestEmbedFSAdapter_Exists_NilFS(t *testing.T) {
+	adapter := &embedFSAdapter{fs: nil}
+
+	if adapter.Exists("test.txt") {
+		t.Error("expected false for nil fs")
+	}
+}
+
+func TestNewEmbedFSSub_InvalidPath(t *testing.T) {
+	// This tests the error path when fs.Sub fails
+	// Using an invalid path that will cause fs.Sub to fail
+	adapter := newEmbedFSSub(os.DirFS("."), "nonexistent_path_that_should_fail")
+	if adapter == nil {
+		t.Error("expected non-nil adapter")
+	}
+	// Should return adapter that handles nil fs gracefully
+	_, err := adapter.Open("test.txt")
+	if err == nil {
+		t.Error("expected error when opening from nil-subbed fs")
 	}
 }
