@@ -28,7 +28,7 @@
 
 ---
 
-> **Note:** This project is currently in development and not yet ready for production use.
+> **Note:** This project is in active development. For production use, please report any issues found.
 
 
 **uMailServer** is a modern, self-hosted email server written in Go. It provides everything you need to run a complete email infrastructure: SMTP, IMAP, webmail, admin panel, spam filtering, automatic TLS certificates, and more — all in a single binary.

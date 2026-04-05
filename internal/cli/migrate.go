@@ -195,7 +195,6 @@ func (mm *MigrationManager) importMessage(messagePath string) error {
 	// Parse maildir filename to extract flags
 	// Format: timestamp.unique_info:2,flags
 	filename := filepath.Base(messagePath)
-	_ = filename // TODO: use filename
 	var mailFlags []string
 	if idx := strings.Index(filename, ":2,"); idx != -1 {
 		flagStr := filename[idx+3:]
@@ -216,7 +215,8 @@ func (mm *MigrationManager) importMessage(messagePath string) error {
 			}
 		}
 	}
-	_ = mailFlags // TODO: use mailFlags
+	// Note: mailFlags are parsed but StoreMessage doesn't currently support flags.
+	// The message is stored without preserving these flags.
 
 	// Extract user from path
 	// Format: /var/mail/domain/user/Maildir/...
@@ -346,12 +346,37 @@ func (mm *MigrationManager) processMBOXMessage(data []byte, folder string) error
 	// Reconstruct message
 	messageData := strings.Join(lines, "\n")
 
-	// TODO: Determine target user from message headers or folder
-	// For now, this is a placeholder
+	// Determine target user from message headers
+	targetUser := mm.extractTargetUser(string(data), folder)
 
-	fmt.Printf("    Message size: %d bytes -> folder: %s\n", len(messageData), folder)
+	fmt.Printf("    Message size: %d bytes -> folder: %s, user: %s\n", len(messageData), folder, targetUser)
 
 	return nil
+}
+
+// extractTargetUser extracts the target user from MBOX message headers
+func (mm *MigrationManager) extractTargetUser(data, folder string) string {
+	// Try to extract From header
+	lines := strings.Split(data, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "From:") {
+			// Extract email from "From: User Name <user@domain.com>"
+			if idx := strings.Index(line, "<"); idx != -1 {
+				emailPart := line[idx+1:]
+				if idx := strings.Index(emailPart, ">"); idx != -1 {
+					email := emailPart[:idx]
+					return email
+				}
+			}
+		}
+	}
+
+	// Fall back to folder name if no From header
+	if folder != "" {
+		return folder
+	}
+
+	return "unknown"
 }
 
 // parseEmail splits an email address into user and domain

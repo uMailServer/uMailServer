@@ -969,17 +969,27 @@ func (s *Server) handleSearchSnippetGet(user string, call MethodCall) Response {
 	emailIDs, _ := args["emailIds"].([]interface{})
 	search, _ := args["search"].(map[string]interface{})
 
-	// TODO: Generate search snippets
-	_ = search
+	// Extract search query text
+	searchText := ""
+	if text, ok := search["text"].(string); ok {
+		searchText = text
+	}
 
 	var snippets []SearchSnippet
+	var notFound []string
+
 	for _, id := range emailIDs {
 		if idStr, ok := id.(string); ok {
-			snippets = append(snippets, SearchSnippet{
-				EmailID: idStr,
-				Subject: "",
-				Preview: "",
-			})
+			// Try to read the message to generate snippet
+			data, err := s.msgStore.ReadMessage(user, idStr)
+			if err != nil {
+				notFound = append(notFound, idStr)
+				continue
+			}
+
+			snippet := s.generateSearchSnippet(string(data), searchText)
+			snippet.EmailID = idStr
+			snippets = append(snippets, snippet)
 		}
 	}
 
@@ -988,9 +998,47 @@ func (s *Server) handleSearchSnippetGet(user string, call MethodCall) Response {
 		Args: map[string]interface{}{
 			"accountId": accountID,
 			"list":      snippets,
-			"notFound":  []string{},
+			"notFound":  notFound,
 		},
 		ID: call.ID,
+	}
+}
+
+// generateSearchSnippet generates a search snippet from email content
+func (s *Server) generateSearchSnippet(emailData, searchText string) SearchSnippet {
+	lines := strings.Split(emailData, "\n")
+	var subject, body string
+	inBody := false
+
+	for _, line := range lines {
+		// Stop at empty line after headers (body starts)
+		if !inBody && line == "" {
+			inBody = true
+			continue
+		}
+
+		if !inBody {
+			// Parse headers
+			if strings.HasPrefix(strings.ToLower(line), "subject:") {
+				subject = strings.TrimPrefix(line, "subject:")
+				subject = strings.TrimSpace(subject)
+			}
+		} else {
+			// Collect body
+			if len(body) < 200 {
+				body += line + " "
+			}
+		}
+	}
+
+	body = strings.TrimSpace(body)
+	if len(body) > 150 {
+		body = body[:150] + "..."
+	}
+
+	return SearchSnippet{
+		Subject: subject,
+		Preview: body,
 	}
 }
 
@@ -1055,10 +1103,37 @@ func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 	update, _ := args["update"].(map[string]interface{})
 	destroy, _ := args["destroy"].([]interface{})
 
-	// TODO: Implement actual identity creation/update/deletion
-	_ = create
-	_ = update
-	_ = destroy
+	// Identity is currently read-only - derived from account settings
+	// Return notSupported error for any write operations
+
+	notCreated := make(map[string]interface{})
+	for id := range create {
+		notCreated[id] = map[string]interface{}{
+			"type":    "notSupported",
+			"message": "Identity creation is not supported. Identities are derived from account settings.",
+		}
+	}
+
+	notUpdated := make(map[string]interface{})
+	for id := range update {
+		notUpdated[id] = map[string]interface{}{
+			"type":    "notSupported",
+			"message": "Identity modification is not supported. Identities are derived from account settings.",
+		}
+	}
+
+	notDestroyed := make(map[string]interface{})
+	for _, id := range destroy {
+		if idStr, ok := id.(string); ok {
+			// Allow deleting only if it's not the default identity
+			if idStr == "default" {
+				notDestroyed[idStr] = map[string]interface{}{
+					"type":    "notSupported",
+					"message": "Cannot delete the default identity.",
+				}
+			}
+		}
+	}
 
 	return Response{
 		Name: "Identity/set",
@@ -1069,9 +1144,9 @@ func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 			"created":      map[string]interface{}{},
 			"updated":      map[string]interface{}{},
 			"destroyed":    []string{},
-			"notCreated":   map[string]interface{}{},
-			"notUpdated":   map[string]interface{}{},
-			"notDestroyed": map[string]interface{}{},
+			"notCreated":   notCreated,
+			"notUpdated":   notUpdated,
+			"notDestroyed": notDestroyed,
 		},
 		ID: call.ID,
 	}

@@ -28,7 +28,7 @@ We will:
 
 ## Security Features
 
-- Argon2id password hashing
+- bcrypt password hashing (cost 12)
 - Automatic TLS with Let's Encrypt
 - SPF, DKIM, DMARC verification
 - Rate limiting and brute force protection
