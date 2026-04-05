@@ -591,3 +591,81 @@ func TestCoverageHandleStore2_FlagsSilent(t *testing.T) {
 	_ = drainConn(client, 200*time.Millisecond)
 	<-done
 }
+
+// ---------- IMAP Server Auth Locking ----------
+
+func TestCoverageServerSetAuthLimits(t *testing.T) {
+	srv := &Server{}
+	srv.SetAuthLimits(5, time.Hour)
+	if srv.maxLoginAttempts != 5 {
+		t.Errorf("expected maxLoginAttempts=5, got %d", srv.maxLoginAttempts)
+	}
+	if srv.lockoutDuration != time.Hour {
+		t.Errorf("expected lockoutDuration=1h, got %v", srv.lockoutDuration)
+	}
+}
+
+func TestCoverageServerIsAuthLockedOut_Disabled(t *testing.T) {
+	srv := &Server{}
+	srv.authFailures = make(map[string][]time.Time)
+	srv.SetAuthLimits(0, 0)
+
+	// When maxLoginAttempts is 0, should never be locked out
+	if srv.isAuthLockedOut("127.0.0.1") {
+		t.Error("expected not locked out when maxLoginAttempts=0")
+	}
+}
+
+func TestCoverageServerIsAuthLockedOut_WithFailures(t *testing.T) {
+	srv := &Server{}
+	srv.authFailures = make(map[string][]time.Time)
+	srv.SetAuthLimits(3, time.Hour)
+
+	// Should not be locked initially
+	if srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out initially")
+	}
+
+	// Record 2 failures
+	srv.recordAuthFailure("192.168.1.1")
+	srv.recordAuthFailure("192.168.1.1")
+
+	// Still not locked
+	if srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out with 2 failures")
+	}
+
+	// Third failure locks out
+	srv.recordAuthFailure("192.168.1.1")
+	if !srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected locked out after 3 failures")
+	}
+}
+
+func TestCoverageServerClearAuthFailures(t *testing.T) {
+	srv := &Server{}
+	srv.authFailures = make(map[string][]time.Time)
+	srv.SetAuthLimits(3, time.Hour)
+
+	srv.recordAuthFailure("192.168.1.1")
+	srv.recordAuthFailure("192.168.1.1")
+
+	if srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out before clear")
+	}
+
+	srv.clearAuthFailures("192.168.1.1")
+
+	if srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not locked out after clear")
+	}
+}
+
+func TestCoverageServerRecordAuthFailure_Disabled(t *testing.T) {
+	srv := &Server{}
+	srv.authFailures = make(map[string][]time.Time)
+	srv.SetAuthLimits(0, 0)
+
+	// Should not panic
+	srv.recordAuthFailure("127.0.0.1")
+}
