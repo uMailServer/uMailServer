@@ -9,8 +9,9 @@ server:
 
 # TLS Configuration
 tls:
-  cert_dir: certs
-  min_version: "1.2"
+  cert_file: ""               # Path to TLS certificate (manual mode)
+  key_file: ""                # Path to TLS key (manual mode)
+  min_version: "1.2"          # Minimum TLS version: "1.2" or "1.3"
   acme:
     enabled: true
     email: admin@example.com
@@ -44,9 +45,9 @@ imap:
   enabled: true
   bind: "0.0.0.0"
   port: 993
-  tls: true
-  max_connections_per_user: 10
-  session_timeout: 30
+  starttls_port: 143
+  max_connections: 10000      # Max concurrent connections (0 = unlimited)
+  idle_timeout: 30m
 
 # HTTP API and Web UI
 http:
@@ -78,12 +79,14 @@ spam:
 
 # Security
 security:
+  jwt_secret: "change-me-to-a-32-character-secret-minimum"
+  max_login_attempts: 5
+  lockout_duration: 15m
   rate_limit:
-    enabled: true
-    requests_per_minute: 60
-  jwt:
-    access_token_ttl: 15m
-    refresh_token_ttl: 168h
+    smtp_per_minute: 30       # SMTP auth attempts per minute per IP
+    smtp_per_hour: 500        # SMTP connections per hour per IP
+    imap_connections: 50      # Max concurrent IMAP connections per IP
+    http_requests_per_minute: 120  # API requests per minute per IP
 
 # Queue
 queue:
@@ -91,9 +94,13 @@ queue:
   retry_delay: 5m
 
 # Logging
-log:
+logging:
   level: info
   format: json
+  output: stdout              # stdout, stderr, or file path (e.g., /var/log/umailserver/app.log)
+  max_size_mb: 100            # Max log file size before rotation (only for file output)
+  max_backups: 10             # Number of old log files to keep
+  max_age_days: 30            # Max age of old log files in days
 
 # Metrics
 metrics:
@@ -108,7 +115,16 @@ domains:
     dkim:
       selector: default
 
-# MCP Server
+# POP3 Server Configuration
+pop3:
+  enabled: false
+  bind: "0.0.0.0"
+  port: 995
+  max_connections: 10000      # Max concurrent connections (0 = unlimited)
+
+# MCP Server (Model Context Protocol)
 mcp:
   enabled: true
-  require_auth: true
+  bind: "127.0.0.1"
+  port: 3000
+  auth_token: ""              # Set to enable authentication

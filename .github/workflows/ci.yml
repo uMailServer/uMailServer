@@ -129,6 +129,51 @@ jobs:
         run: |
           docker run --rm umailserver:test version
 
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install Playwright
+        run: |
+          cd e2e
+          npm ci
+          npx playwright install chromium firefox webkit
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: umailserver-dev
+          path: .
+
+      - name: Make binary executable
+        run: chmod +x umailserver
+
+      - name: Run E2E tests
+        run: |
+          cd e2e
+          npm test
+        env:
+          BASE_URL: http://localhost:8080
+          WEBSERVER_CMD: "../umailserver --config ../config/test.yaml"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+
   release:
     name: Release
     runs-on: ubuntu-latest
