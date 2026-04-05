@@ -61,6 +61,28 @@ func TestSSEServerSetAuthFunc(t *testing.T) {
 	}
 }
 
+func TestSSEServerSetCorsOrigin(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	server := NewSSEServer(logger)
+
+	// Initially corsOrigin should be empty
+	if server.corsOrigin != "" {
+		t.Errorf("expected empty corsOrigin initially, got %q", server.corsOrigin)
+	}
+
+	// Set CORS origin
+	server.SetCorsOrigin("https://example.com")
+	if server.corsOrigin != "https://example.com" {
+		t.Errorf("expected corsOrigin to be set to %q, got %q", "https://example.com", server.corsOrigin)
+	}
+
+	// Test changing origin
+	server.SetCorsOrigin("https://other.com")
+	if server.corsOrigin != "https://other.com" {
+		t.Errorf("expected corsOrigin to be updated to %q, got %q", "https://other.com", server.corsOrigin)
+	}
+}
+
 func TestSSEServerBroadcast(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
