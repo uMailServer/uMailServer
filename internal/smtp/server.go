@@ -37,6 +37,12 @@ type Server struct {
 
 	// Rate limiting
 	rateLimiter ConnectionRateLimiter
+
+	// Auth brute-force protection
+	maxLoginAttempts int
+	lockoutDuration  time.Duration
+	authFailures     map[string][]time.Time // IP -> failure timestamps
+	authFailuresMu   sync.Mutex
 }
 
 // ConnectionRateLimiter checks if a connection is allowed
@@ -49,11 +55,54 @@ func (s *Server) SetRateLimiter(rl ConnectionRateLimiter) {
 	s.rateLimiter = rl
 }
 
+// SetAuthLimits configures brute-force protection for SMTP AUTH
+func (s *Server) SetAuthLimits(maxAttempts int, lockoutDuration time.Duration) {
+	s.maxLoginAttempts = maxAttempts
+	s.lockoutDuration = lockoutDuration
+}
+
+// isAuthLockedOut returns true if the given IP is temporarily locked out
+func (s *Server) isAuthLockedOut(ip string) bool {
+	if s.maxLoginAttempts <= 0 {
+		return false
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+
+	cutoff := time.Now().Add(-s.lockoutDuration)
+	var recent []time.Time
+	for _, t := range s.authFailures[ip] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	s.authFailures[ip] = recent
+	return len(recent) >= s.maxLoginAttempts
+}
+
+// recordAuthFailure records a failed authentication attempt from the given IP
+func (s *Server) recordAuthFailure(ip string) {
+	if s.maxLoginAttempts <= 0 {
+		return
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+}
+
+// clearAuthFailures removes recorded failures for the given IP
+func (s *Server) clearAuthFailures(ip string) {
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	delete(s.authFailures, ip)
+}
+
 // Config holds SMTP server configuration
 type Config struct {
 	Hostname       string
 	MaxMessageSize int64
 	MaxRecipients  int
+	MaxConnections int
 	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
 	AllowInsecure  bool
@@ -72,10 +121,11 @@ func NewServer(config *Config, logger *slog.Logger) *Server {
 	}
 
 	return &Server{
-		config:      config,
-		connections: make(map[string]*Session),
-		shutdown:    make(chan struct{}),
-		logger:      logger,
+		config:       config,
+		connections:  make(map[string]*Session),
+		shutdown:     make(chan struct{}),
+		logger:       logger,
+		authFailures: make(map[string][]time.Time),
 	}
 }
 
@@ -168,6 +218,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 			conn.Close()
 		}
 	}()
+
+	// Enforce global connection limit
+	s.connMu.RLock()
+	atLimit := s.config.MaxConnections > 0 && len(s.connections) >= s.config.MaxConnections
+	s.connMu.RUnlock()
+	if atLimit {
+		conn.Write([]byte("421 4.7.0 Too many connections, try again later\r\n"))
+		conn.Close()
+		return
+	}
 
 	// Check rate limit
 	if s.rateLimiter != nil {

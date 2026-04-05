@@ -337,49 +337,44 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 	return nil
 }
 
-// AppendMessage appends a message to a mailbox
-func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, date time.Time, data []byte) error {
-	// Store message
-	messageID, err := m.msgStore.StoreMessage(user, data)
-	if err != nil {
-		return err
+// parseMessageHeadersExtended extracts headers including threading info
+func parseMessageHeadersExtended(data []byte) (subject, from, to, date, msgID, inReplyTo string, references []string) {
+	// First get basic headers
+	subject, from, to, date = parseMessageHeaders(data)
+
+	// Parse headers for threading info
+	headers := string(data)
+	if idx := strings.Index(headers, "\r\n\r\n"); idx != -1 {
+		headers = headers[:idx]
+	} else if idx := strings.Index(headers, "\n\n"); idx != -1 {
+		headers = headers[:idx]
 	}
 
-	// Get next UID
-	uid, err := m.db.GetNextUID(user, mailbox)
-	if err != nil {
-		return err
+	for _, line := range strings.Split(headers, "\n") {
+		line = strings.TrimRight(line, "\r")
+		lower := strings.ToLower(line)
+
+		if strings.HasPrefix(lower, "message-id:") {
+			msgID = strings.TrimSpace(line[11:])
+			// Remove angle brackets if present
+			msgID = strings.Trim(msgID, "<>")
+		} else if strings.HasPrefix(lower, "in-reply-to:") {
+			inReplyTo = strings.TrimSpace(line[12:])
+			// Remove angle brackets if present
+			inReplyTo = strings.Trim(inReplyTo, "<>")
+		} else if strings.HasPrefix(lower, "references:") {
+			refs := strings.TrimSpace(line[11:])
+			// Parse reference IDs (space-separated, angle-bracket wrapped)
+			for _, ref := range strings.Fields(refs) {
+				ref = strings.Trim(ref, "<>")
+				if ref != "" {
+					references = append(references, ref)
+				}
+			}
+		}
 	}
 
-	// Parse basic headers for indexing
-	subject, from, to, dateStr := parseMessageHeaders(data)
-
-	// Store metadata
-	meta := &storage.MessageMetadata{
-		MessageID:    messageID,
-		UID:          uid,
-		Flags:        flags,
-		InternalDate: date,
-		Size:         int64(len(data)),
-		Subject:      subject,
-		Date:         dateStr,
-		From:         from,
-		To:           to,
-	}
-
-	if err := m.db.StoreMessageMetadata(user, mailbox, uid, meta); err != nil {
-		return err
-	}
-
-	// Get the sequence number for the new message
-	uids, err := m.db.GetMessageUIDs(user, mailbox)
-	if err == nil {
-		seqNum := uint32(len(uids))
-		// Notify subscribers about the new message
-		GetNotificationHub().NotifyNewMessage(user, mailbox, uid, seqNum)
-	}
-
-	return nil
+	return subject, from, to, date, msgID, inReplyTo, references
 }
 
 // parseMessageHeaders extracts basic headers from message data
@@ -406,6 +401,116 @@ func parseMessageHeaders(data []byte) (subject, from, to, date string) {
 	}
 
 	return subject, from, to, date
+}
+
+// AppendMessage appends a message to a mailbox
+func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, date time.Time, data []byte) error {
+	// Store message
+	messageID, err := m.msgStore.StoreMessage(user, data)
+	if err != nil {
+		return err
+	}
+
+	// Get next UID
+	uid, err := m.db.GetNextUID(user, mailbox)
+	if err != nil {
+		return err
+	}
+
+	// Parse basic headers for indexing
+	subject, from, to, dateStr, _, inReplyTo, references := parseMessageHeadersExtended(data)
+
+	// Get or create thread ID
+	threadID, err := m.db.GetOrCreateThreadID(user, mailbox, subject, inReplyTo, references)
+	if err != nil {
+		threadID = "" // Continue without threading if it fails
+	}
+
+	// Check if this is the root of the thread
+	isThreadRoot := inReplyTo == "" && len(references) == 0
+	if !isThreadRoot && threadID != "" {
+		// Check if there's already a message with this thread ID
+		existingMsgs, _ := m.db.GetThreadMessages(user, mailbox, threadID)
+		isThreadRoot = len(existingMsgs) == 0
+	}
+
+	// Store metadata
+	meta := &storage.MessageMetadata{
+		MessageID:    messageID,
+		UID:          uid,
+		Flags:        flags,
+		InternalDate: date,
+		Size:         int64(len(data)),
+		Subject:      subject,
+		Date:         dateStr,
+		From:         from,
+		To:           to,
+		InReplyTo:    inReplyTo,
+		References:   references,
+		ThreadID:     threadID,
+		IsThreadRoot: isThreadRoot,
+	}
+
+	if err := m.db.StoreMessageMetadata(user, mailbox, uid, meta); err != nil {
+		return err
+	}
+
+	// Update thread information
+	if threadID != "" {
+		m.updateThreadInfo(user, mailbox, threadID, subject, from, meta)
+	}
+
+	// Get the sequence number for the new message
+	uids, err := m.db.GetMessageUIDs(user, mailbox)
+	if err == nil {
+		seqNum := uint32(len(uids))
+		// Notify subscribers about the new message
+		GetNotificationHub().NotifyNewMessage(user, mailbox, uid, seqNum)
+	}
+
+	return nil
+}
+
+// updateThreadInfo updates the thread summary information
+func (m *BboltMailstore) updateThreadInfo(user, mailbox, threadID, subject, from string, meta *storage.MessageMetadata) {
+	// Get or create thread
+	thread, err := m.db.GetThread(user, threadID)
+	if err != nil {
+		// Create new thread
+		thread = &storage.Thread{
+			ThreadID:     threadID,
+			Subject:      storage.NormalizeSubject(subject),
+			Participants: []string{from},
+			MessageCount: 0,
+			UnreadCount:  0,
+			LastActivity: meta.InternalDate,
+			CreatedAt:    time.Now(),
+		}
+	}
+
+	// Update thread info
+	thread.MessageCount++
+	thread.LastActivity = meta.InternalDate
+
+	// Check if sender is already in participants
+	found := false
+	for _, p := range thread.Participants {
+		if p == from {
+			found = true
+			break
+		}
+	}
+	if !found {
+		thread.Participants = append(thread.Participants, from)
+	}
+
+	// Update unread count
+	if !storage.HasFlag(meta.Flags, "\\Seen") {
+		thread.UnreadCount++
+	}
+
+	// Save thread
+	m.db.UpdateThread(user, thread)
 }
 
 // SearchMessages searches for messages matching criteria

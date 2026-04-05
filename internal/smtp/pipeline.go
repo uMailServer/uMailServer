@@ -34,6 +34,7 @@ type MessageContext struct {
 	DKIMResult  DKIMResult
 	SPFResult   SPFResult
 	DMARCResult DMARCResult
+	ARCResult   ARCResult
 
 	// Flags
 	Rejected         bool
@@ -73,6 +74,15 @@ type DMARCResult struct {
 	Result     string // pass, fail, none
 	Policy     string // none, quarantine, reject
 	Percentage int
+}
+
+// ARCResult holds ARC (Authenticated Received Chain) validation results
+type ARCResult struct {
+	Result       string // pass, fail, none, permerror, temperror
+	ChainValid   bool
+	ChainLength  int
+	SealDomain   string
+	SealSelector string
 }
 
 // NewMessageContext creates a new message context
@@ -185,8 +195,9 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 
 // RateLimitStage checks rate limits
 type RateLimitStage struct {
-	mu     sync.Mutex
-	limits map[string]*rateLimiter
+	mu          sync.Mutex
+	limits      map[string]*rateLimiter
+	lastCleanup time.Time
 }
 
 type rateLimiter struct {
@@ -197,7 +208,8 @@ type rateLimiter struct {
 // NewRateLimitStage creates a new rate limit stage
 func NewRateLimitStage() *RateLimitStage {
 	return &RateLimitStage{
-		limits: make(map[string]*rateLimiter),
+		limits:      make(map[string]*rateLimiter),
+		lastCleanup: time.Now(),
 	}
 }
 
@@ -207,9 +219,18 @@ func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Simple rate limiting by IP
 	key := ctx.RemoteIP.String()
 	now := time.Now()
+
+	// Periodically clean up expired rate limit entries to prevent unbounded growth
+	if now.Sub(s.lastCleanup) > 5*time.Minute {
+		for k, l := range s.limits {
+			if now.Sub(l.window) > time.Minute {
+				delete(s.limits, k)
+			}
+		}
+		s.lastCleanup = now
+	}
 
 	limiter, exists := s.limits[key]
 	if !exists || now.Sub(limiter.window) > time.Minute {
@@ -327,8 +348,9 @@ func (s *SPFStage) evaluateSPF(record string, ip net.IP, domain string) SPFResul
 
 // GreylistStage implements greylisting
 type GreylistStage struct {
-	mu       sync.Mutex
-	greylist map[string]*greylistEntry
+	mu          sync.Mutex
+	greylist    map[string]*greylistEntry
+	lastCleanup time.Time
 }
 
 type greylistEntry struct {
@@ -339,7 +361,8 @@ type greylistEntry struct {
 // NewGreylistStage creates a new greylisting stage
 func NewGreylistStage() *GreylistStage {
 	return &GreylistStage{
-		greylist: make(map[string]*greylistEntry),
+		greylist:    make(map[string]*greylistEntry),
+		lastCleanup: time.Now(),
 	}
 }
 
@@ -349,6 +372,18 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now()
+
+	// Periodically clean up stale greylist entries to prevent unbounded growth
+	if now.Sub(s.lastCleanup) > 10*time.Minute {
+		for key, entry := range s.greylist {
+			if now.Sub(entry.firstSeen) > 6*time.Hour {
+				delete(s.greylist, key)
+			}
+		}
+		s.lastCleanup = now
+	}
+
 	// Create triplet key: sender IP + sender email + recipient email
 	for _, recipient := range ctx.To {
 		key := fmt.Sprintf("%s:%s:%s", ctx.RemoteIP.String(), ctx.From, recipient)
@@ -357,7 +392,7 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 		if !exists {
 			// First time seeing this triplet
 			s.greylist[key] = &greylistEntry{
-				firstSeen: time.Now(),
+				firstSeen: now,
 				allowed:   false,
 			}
 			ctx.Rejected = true
@@ -368,7 +403,7 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 
 		if !entry.allowed {
 			// Check if enough time has passed (5 minutes)
-			if time.Since(entry.firstSeen) < 5*time.Minute {
+			if now.Sub(entry.firstSeen) < 5*time.Minute {
 				ctx.Rejected = true
 				ctx.RejectionCode = 451
 				ctx.RejectionMessage = "Greylisted, please try again later"

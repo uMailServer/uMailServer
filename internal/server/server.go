@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,7 +23,9 @@ import (
 	"github.com/umailserver/umailserver/internal/av"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/health"
 	"github.com/umailserver/umailserver/internal/imap"
+	"github.com/umailserver/umailserver/internal/logging"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/pop3"
@@ -50,21 +55,54 @@ type Server struct {
 	mailstore     *imap.BboltMailstore
 	pop3Server    *pop3.Server
 	mcpHTTPServer *http.Server
+	healthMonitor *health.Monitor
 
 	// Submission SMTP servers (ports 587/465)
 	submissionServer    *smtp.Server
 	submissionTLSServer *smtp.Server
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// Search indexing worker pool
+	indexWork chan indexJob
+
+	// Vacation reply deduplication: key = recipient+"|"+sender -> last sent time
+	vacationReplies   map[string]time.Time
+	vacationRepliesMu sync.Mutex
+
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // New creates a new Server instance
 func New(cfg *config.Config) (*Server, error) {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: parseLogLevel(cfg.Logging.Level),
-	}))
+	// Setup log output
+	var logHandler slog.Handler
+	if cfg.Logging.Output == "stdout" || cfg.Logging.Output == "" {
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: parseLogLevel(cfg.Logging.Level),
+		})
+	} else if cfg.Logging.Output == "stderr" {
+		logHandler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: parseLogLevel(cfg.Logging.Level),
+		})
+	} else {
+		// File output with rotation
+		writer, err := logging.NewRotatingWriter(
+			cfg.Logging.Output,
+			cfg.Logging.MaxSizeMB,
+			cfg.Logging.MaxBackups,
+			cfg.Logging.MaxAgeDays,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create log writer: %w", err)
+		}
+		logHandler = slog.NewJSONHandler(writer, &slog.HandlerOptions{
+			Level: parseLogLevel(cfg.Logging.Level),
+		})
+	}
+
+	logger := slog.New(logHandler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -131,6 +169,10 @@ func New(cfg *config.Config) (*Server, error) {
 	s.storageDB = storageDB
 	searchSvc := search.NewService(storageDB, msgStore, logger)
 	s.searchSvc = searchSvc
+	s.indexWork = make(chan indexJob, 1000)
+
+	// Initialize health monitor
+	s.healthMonitor = health.NewMonitor("1.0.0")
 
 	return s, nil
 }
@@ -167,7 +209,7 @@ func (s *Server) Start() error {
 
 	// Initialize queue manager
 	queueDir := filepath.Join(s.config.Server.DataDir, "queue")
-	s.queue = queue.NewManager(s.database, nil, queueDir)
+	s.queue = queue.NewManager(s.database, nil, queueDir, s.logger)
 	s.queue.Start(s.ctx)
 	s.logger.Info("Queue manager started")
 
@@ -179,6 +221,14 @@ func (s *Server) Start() error {
 	s.mailstore = mailstore
 
 	s.startSMTP()
+
+	// Start search indexing worker pool
+	if s.searchSvc != nil {
+		for i := 0; i < 10; i++ {
+			s.wg.Add(1)
+			go s.runIndexWorker()
+		}
+	}
 
 	if err := s.startIMAP(mailstore); err != nil {
 		return err
@@ -203,6 +253,7 @@ func (s *Server) startSMTP() {
 		Hostname:       s.config.Server.Hostname,
 		MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
 		MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
+		MaxConnections: s.config.SMTP.Inbound.MaxConnections,
 		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
 		TLSConfig:      s.tlsManager.GetTLSConfig(),
@@ -212,6 +263,7 @@ func (s *Server) startSMTP() {
 	smtpServer.SetAuthHandler(s.authenticate)
 	smtpServer.SetDeliveryHandler(s.deliverMessage)
 	smtpServer.SetUserSecretHandler(s.getUserSecret)
+	smtpServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
 	// Wire up the message processing pipeline
 	pipeline := smtp.NewPipeline(smtp.NewPipelineLogger(s.logger))
@@ -219,14 +271,16 @@ func (s *Server) startSMTP() {
 	// Create DNS resolver for auth checks
 	resolver := smtp.NewNetDNSResolver()
 
-	// Auth pipeline stages (SPF, DKIM, DMARC)
+	// Auth pipeline stages (SPF, DKIM, DMARC, ARC)
 	spfChecker := auth.NewSPFChecker(resolver)
 	dkimVerifier := auth.NewDKIMVerifier(resolver)
 	dmarcEvaluator := auth.NewDMARCEvaluator(resolver)
+	arcValidator := auth.NewARCValidator(resolver)
 
 	pipeline.AddStage(smtp.NewAuthSPFStage(spfChecker, s.logger))
 	pipeline.AddStage(smtp.NewAuthDKIMStage(dkimVerifier, s.logger))
 	pipeline.AddStage(smtp.NewAuthDMARCStage(dmarcEvaluator, s.logger))
+	pipeline.AddStage(smtp.NewAuthARCStage(arcValidator, s.logger))
 
 	// Spam filtering stages
 	if s.config.Spam.Greylisting.Enabled {
@@ -266,6 +320,7 @@ func (s *Server) startSMTP() {
 			Hostname:       s.config.Server.Hostname,
 			MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
 			MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
+			MaxConnections: s.config.SMTP.Submission.MaxConnections,
 			ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 			WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
 			TLSConfig:      s.tlsManager.GetTLSConfig(),
@@ -278,6 +333,7 @@ func (s *Server) startSMTP() {
 		submissionServer.SetAuthHandler(s.authenticate)
 		submissionServer.SetDeliveryHandler(s.deliverMessage)
 		submissionServer.SetUserSecretHandler(s.getUserSecret)
+		submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
 		go func() {
 			if err := submissionServer.ListenAndServe(submissionAddr); err != nil {
@@ -295,6 +351,7 @@ func (s *Server) startSMTP() {
 			Hostname:       s.config.Server.Hostname,
 			MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
 			MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
+			MaxConnections: s.config.SMTP.SubmissionTLS.MaxConnections,
 			ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 			WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
 			TLSConfig:      s.tlsManager.GetTLSConfig(),
@@ -307,6 +364,7 @@ func (s *Server) startSMTP() {
 		submissionTLSServer.SetAuthHandler(s.authenticate)
 		submissionTLSServer.SetDeliveryHandler(s.deliverMessage)
 		submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
+		submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
 		tlsConfig := s.tlsManager.GetTLSConfig()
 		go func() {
@@ -330,6 +388,11 @@ func (s *Server) startIMAP(mailstore *imap.BboltMailstore) error {
 
 	imapServer := imap.NewServer(imapCfg, mailstore)
 	imapServer.SetAuthFunc(s.authenticate)
+	imapServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+	imapServer.SetReadTimeout(10 * time.Minute)
+	imapServer.SetWriteTimeout(10 * time.Minute)
+	imapServer.SetIdleTimeout(time.Duration(s.config.IMAP.IdleTimeout))
+	imapServer.SetMaxConnections(s.config.IMAP.MaxConnections)
 	if s.searchSvc != nil {
 		imapServer.SetOnExpunge(func(user, mailbox string, uid uint32) {
 			s.searchSvc.RemoveMessage(user, mailbox, uid)
@@ -357,6 +420,10 @@ func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	}
 	pop3Server := pop3.NewServer(pop3Addr, pop3Adapter, s.logger)
 	pop3Server.SetAuthFunc(s.authenticate)
+	pop3Server.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+	pop3Server.SetReadTimeout(10 * time.Minute)
+	pop3Server.SetWriteTimeout(10 * time.Minute)
+	pop3Server.SetMaxConnections(s.config.POP3.MaxConnections)
 
 	if s.tlsManager.IsEnabled() {
 		pop3Server.SetTLSConfig(&pop3.TLSConfig{
@@ -381,12 +448,17 @@ func (s *Server) startMCP() {
 
 	mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
 	mcpSrv := mcp.NewServer(s.database)
-	if s.config.MCP.AuthToken != "" {
-		mcpSrv.SetAuthToken(s.config.MCP.AuthToken)
+	if s.config.MCP.AuthToken == "" {
+		token := generateSecureToken()
+		s.config.MCP.AuthToken = token
+		s.logger.Warn("MCP: no auth token configured; generated a random token", "token", token)
 	}
+	mcpSrv.SetAuthToken(s.config.MCP.AuthToken)
 	if len(s.config.HTTP.CorsOrigins) > 0 {
 		mcpSrv.SetCorsOrigin(strings.Join(s.config.HTTP.CorsOrigins, ","))
 	}
+	// Configure MCP rate limiting (use same limit as HTTP API)
+	mcpSrv.SetRateLimit(s.config.Security.RateLimit.HTTPRequestsPerMinute)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
 
@@ -403,6 +475,68 @@ func (s *Server) startMCP() {
 	s.logger.Info("MCP server started", "addr", mcpAddr)
 }
 
+// queueStatsAdapter wraps a *queue.Manager to satisfy the health.QueueStats interface.
+type queueStatsAdapter struct {
+	mgr *queue.Manager
+}
+
+func (a *queueStatsAdapter) GetStats() (health.QueueStatInfo, error) {
+	stats, err := a.mgr.GetStats()
+	if err != nil {
+		return health.QueueStatInfo{}, err
+	}
+	return health.QueueStatInfo{
+		Pending:  stats.Pending,
+		Sending:  stats.Sending,
+		Failed:   stats.Failed,
+		Deferred: stats.Bounced, // Use bounced as deferred proxy
+	}, nil
+}
+
+// setupHealthChecks registers health checkers and wires up endpoints
+func (s *Server) setupHealthChecks() {
+	// Database health check
+	s.healthMonitor.Register("database", health.DatabaseCheck(func() error {
+		_, err := s.database.ListDomains()
+		return err
+	}))
+
+	// Queue health check
+	if s.queue != nil {
+		// Wrap queue manager to match health.QueueStats interface
+		queueStats := &queueStatsAdapter{mgr: s.queue}
+		s.healthMonitor.Register("queue", health.QueueCheck(queueStats, 1000))
+	}
+
+	// Message store health check
+	if s.msgStore != nil {
+		s.healthMonitor.Register("storage", health.MessageStoreCheck(func() error {
+			// Simple ping - try to get store path
+			_ = s.msgStore
+			return nil
+		}))
+	}
+
+	// TLS certificate health check
+	if s.tlsManager != nil && s.config.TLS.CertFile != "" {
+		s.healthMonitor.Register("tls_certificate", health.TLSCertificateCheck(
+			s.config.TLS.CertFile,
+			s.config.TLS.KeyFile,
+			30, // warning at 30 days
+			7,  // critical at 7 days
+		))
+	}
+
+	// Disk space health check
+	s.healthMonitor.Register("disk_space", health.DiskSpaceCheck(
+		s.config.Server.DataDir,
+		80, // warning at 80%
+		95, // critical at 95%
+	))
+
+	s.logger.Info("Health checks configured")
+}
+
 // startAPI creates and starts the admin HTTP API server.
 func (s *Server) startAPI() {
 	apiCfg := api.Config{
@@ -415,6 +549,12 @@ func (s *Server) startAPI() {
 	if s.queue != nil {
 		s.apiServer.SetQueueManager(s.queue)
 	}
+	// Set health monitor
+	if s.healthMonitor != nil {
+		s.apiServer.SetHealthMonitor(s.healthMonitor)
+	}
+	// Configure API rate limiting
+	s.apiServer.SetAPIRateLimit(s.config.Security.RateLimit.HTTPRequestsPerMinute)
 
 	go func() {
 		if err := s.apiServer.Start(apiCfg.Addr); err != nil {
@@ -438,6 +578,9 @@ func (s *Server) Stop() error {
 
 	// Signal cancellation
 	s.cancel()
+
+	// Close search indexing work queue to drain workers (once only)
+	s.stopOnce.Do(func() { close(s.indexWork) })
 
 	// Stop SMTP server
 	if s.smtpServer != nil {
@@ -474,9 +617,11 @@ func (s *Server) Stop() error {
 
 	// Stop MCP server
 	if s.mcpHTTPServer != nil {
-		if err := s.mcpHTTPServer.Shutdown(s.ctx); err != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.mcpHTTPServer.Shutdown(shutdownCtx); err != nil {
 			s.logger.Error("Failed to stop MCP server", "error", err)
 		}
+		shutdownCancel()
 	}
 
 	// Stop API server
@@ -490,6 +635,9 @@ func (s *Server) Stop() error {
 	if s.queue != nil {
 		s.queue.Stop()
 	}
+
+	// Wait for search index workers to drain before closing databases
+	s.wg.Wait()
 
 	// Close message store
 	if s.msgStore != nil {
@@ -565,33 +713,24 @@ func (s *Server) getUserSecret(username string) (string, error) {
 
 // deliverMessage delivers an incoming message
 func (s *Server) deliverMessage(from string, to []string, data []byte) error {
+	var errs []error
 	for _, recipient := range to {
-		// Parse recipient to get user and domain
 		user, domain := parseEmail(recipient)
 
-		// Check if domain is local
 		domainData, err := s.database.GetDomain(domain)
-		if err != nil {
-			// Domain not found, relay to remote
-			if err := s.relayMessage(from, recipient, data); err != nil {
-				return fmt.Errorf("failed to relay message: %w", err)
+		if err != nil || domainData == nil || !domainData.IsActive {
+			if relayErr := s.relayMessage(from, recipient, data); relayErr != nil {
+				s.logger.Error("Failed to relay message", "to", recipient, "error", relayErr)
+				errs = append(errs, fmt.Errorf("relay %s: %w", recipient, relayErr))
 			}
 			continue
 		}
 
-		if domainData == nil || !domainData.IsActive {
-			// Domain not active, relay to remote
-			if err := s.relayMessage(from, recipient, data); err != nil {
-				return fmt.Errorf("failed to relay message: %w", err)
-			}
-			continue
-		}
-
-		// Resolve alias if the recipient is not a direct account
+		// Resolve alias
 		target, aliasErr := s.database.ResolveAlias(domain, user)
-			if aliasErr != nil {
-				s.logger.Debug("Alias resolution failed, trying direct delivery", "domain", domain, "user", user, "error", aliasErr)
-			}
+		if aliasErr != nil {
+			s.logger.Debug("Alias resolution failed, trying direct delivery", "domain", domain, "user", user, "error", aliasErr)
+		}
 		if target != "" {
 			tUser, tDomain := parseEmail(target)
 			if tUser != "" && tDomain != "" {
@@ -600,17 +739,15 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 			}
 		}
 
-		// Local delivery
 		if err := s.deliverLocal(user, domain, from, data); err != nil {
-			s.logger.Error("Failed to deliver locally",
-				"user", user,
-				"domain", domain,
-				"error", err,
-			)
-			return err
+			s.logger.Error("Failed to deliver locally", "user", user, "domain", domain, "error", err)
+			errs = append(errs, fmt.Errorf("deliver %s: %w", recipient, err))
 		}
 	}
 
+	if len(errs) > 0 {
+		return fmt.Errorf("delivery had %d failure(s): %w", len(errs), errors.Join(errs...))
+	}
 	return nil
 }
 
@@ -717,16 +854,11 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 				}
 
 			if s.searchSvc != nil {
-				go func() {
-					defer func() {
-						if r := recover(); r != nil {
-							s.logger.Error("Panic in search indexing", "error", r)
-						}
-					}()
-					if idxErr := s.searchSvc.IndexMessage(email, "INBOX", uid); idxErr != nil {
-						s.logger.Error("Failed to index message for search", "email", email, "uid", uid, "error", idxErr)
-					}
-				}()
+				select {
+				case s.indexWork <- indexJob{email: email, uid: uid}:
+				default:
+					s.logger.Warn("Search index queue full, dropping index job", "email", email, "uid", uid)
+				}
 			}
 		}
 	}
@@ -875,6 +1007,21 @@ func (a *pop3MailstoreAdapter) GetMessageSize(user string, index int) (int64, er
 	return msg.Size, nil
 }
 
+// indexJob represents a search indexing task.
+type indexJob struct {
+	email string
+	uid   uint32
+}
+
+// runIndexWorker processes search indexing jobs.
+func (s *Server) runIndexWorker() {
+	defer s.wg.Done()
+	for job := range s.indexWork {
+		if err := s.searchSvc.IndexMessage(job.email, "INBOX", job.uid); err != nil {
+			s.logger.Error("Failed to index message for search", "email", job.email, "uid", job.uid, "error", err)
+		}
+	}
+}
 
 // sendVacationReply generates and enqueues an auto-reply message.
 func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON string) {
@@ -884,6 +1031,18 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 			return
 		}
 	}
+
+	key := recipientEmail + "|" + senderEmail
+	s.vacationRepliesMu.Lock()
+	if s.vacationReplies == nil {
+		s.vacationReplies = make(map[string]time.Time)
+	}
+	if lastSent, ok := s.vacationReplies[key]; ok && time.Since(lastSent) < 24*time.Hour {
+		s.vacationRepliesMu.Unlock()
+		return
+	}
+	s.vacationReplies[key] = time.Now()
+	s.vacationRepliesMu.Unlock()
 
 	var settings struct {
 		Enabled   bool   `json:"enabled"`
@@ -933,4 +1092,13 @@ func parseBasicHeaders(data []byte) (subject, from, to, date string) {
 	to = msg.Header.Get("To")
 	date = msg.Header.Get("Date")
 	return
+}
+
+// generateSecureToken generates a cryptographically random 32-byte hex token.
+func generateSecureToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }

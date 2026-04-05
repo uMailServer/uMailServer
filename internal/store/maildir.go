@@ -90,6 +90,9 @@ func (s *MaildirStore) folderPath(domain, user, folder string) string {
 		return maildir
 	}
 	// Maildir++ folder naming: .Folder.Subfolder
+	if strings.ContainsAny(folder, "./\\") {
+		return ""
+	}
 	return filepath.Join(maildir, "."+folder)
 }
 
@@ -156,6 +159,9 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 		return "", fmt.Errorf("failed to move message to new/: %w", err)
 	}
 
+	// Best-effort sync of new/ directory to ensure rename durability
+	s.syncDir(filepath.Join(basePath, "new"))
+
 	return uniqueName, nil
 }
 
@@ -180,11 +186,23 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
+	// Sync to disk for durability
+	file, err := os.OpenFile(tmpPath, os.O_RDWR, 0)
+	if err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to open temp file: %w", err)
+	}
+	file.Sync()
+	file.Close()
+
 	// Atomic rename to cur/
 	if err := os.Rename(tmpPath, curPath); err != nil {
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to move message to cur/: %w", err)
 	}
+
+	// Best-effort sync of cur/ directory to ensure rename durability
+	s.syncDir(filepath.Join(basePath, "cur"))
 
 	return uniqueName, nil
 }
@@ -235,6 +253,17 @@ func (s *MaildirStore) FetchReader(domain, user, folder, filename string) (io.Re
 	return nil, fmt.Errorf("message not found: %s", filename)
 }
 
+// syncDir performs a best-effort fsync on a directory for durability.
+// On Windows this may fail silently, which is acceptable.
+func (s *MaildirStore) syncDir(dir string) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = f.Sync()
+	f.Close()
+}
+
 // Move moves a message from one folder to another
 func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string) error {
 	// Ensure destination folder exists
@@ -275,6 +304,9 @@ func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string)
 	if err := os.Rename(fromPath, toPath); err != nil {
 		return fmt.Errorf("failed to move message: %w", err)
 	}
+
+	// Best-effort sync of destination new/ directory
+	s.syncDir(filepath.Join(toBase, "new"))
 
 	return nil
 }
@@ -323,6 +355,9 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return fmt.Errorf("failed to update flags: %w", err)
 	}
+
+	// Best-effort sync of cur/ directory
+	s.syncDir(filepath.Join(basePath, "cur"))
 
 	return nil
 }

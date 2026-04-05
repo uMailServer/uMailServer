@@ -171,7 +171,13 @@ func TestServerDefaultTokenExpiry(t *testing.T) {
 }
 
 func TestHandleHealth(t *testing.T) {
-	server := NewServer(nil, nil, Config{})
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
 
@@ -188,6 +194,9 @@ func TestHandleHealth(t *testing.T) {
 
 	if result["status"] != "healthy" {
 		t.Errorf("Expected status 'healthy', got %s", result["status"])
+	}
+	if result["database"] != "ok" {
+		t.Errorf("Expected database 'ok', got %s", result["database"])
 	}
 }
 
@@ -314,8 +323,9 @@ func TestHandleWebmail(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "uMailServer Webmail") {
-		t.Error("Expected webmail HTML content")
+	// New admin panel returns HTML content
+	if !strings.Contains(body, "<!doctype html>") && !strings.Contains(body, "<html") {
+		t.Error("Expected HTML content")
 	}
 }
 

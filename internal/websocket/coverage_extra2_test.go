@@ -12,37 +12,47 @@ import (
 	"github.com/umailserver/umailserver/internal/imap"
 )
 
-// TestSSEHandler_ClientStopChannel covers the client.stop case in SSE Handler
-// (sse.go:131-135). This happens when a new client for the same user replaces
-// an existing one, causing the old client's stop channel to close.
+// TestSSEHandler_ClientStopChannel covers the client.stop case in SSE Handler.
+// When the per-user client limit is reached, the oldest client's stop channel
+// is closed so the new connection can be accepted.
 func TestSSEHandler_ClientStopChannel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
 
-	// Pre-register an SSE client for "testuser" with a stop channel we control
+	// Pre-register the maximum number of SSE clients for "testuser"
+	const maxClientsPerUser = 5
 	oldStop := make(chan struct{})
-	oldClient := &SSEClient{
+	clients := make([]*SSEClient, 0, maxClientsPerUser)
+	// The oldest client must be first in the slice to be evicted
+	oldestClient := &SSEClient{
 		user:    "testuser",
 		isAdmin: false,
 		writer:  httptest.NewRecorder(),
 		flusher: &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()},
 		stop:    oldStop,
 	}
+	clients = append(clients, oldestClient)
+	for i := 0; i < maxClientsPerUser-1; i++ {
+		clients = append(clients, &SSEClient{
+			user:    "testuser",
+			isAdmin: false,
+			writer:  httptest.NewRecorder(),
+			flusher: &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()},
+			stop:    make(chan struct{}),
+		})
+	}
 	server.clientsMu.Lock()
-	server.clients["testuser"] = oldClient
+	server.clients["testuser"] = clients
 	server.clientsMu.Unlock()
 
-	// Start a goroutine that monitors oldClient.stop and simulates
-	// the Handler's select loop reacting to it.
+	// Start a goroutine that monitors oldestClient.stop
 	stopHandled := make(chan struct{})
 	go func() {
 		<-oldStop
-		// The handler would then delete the client and return.
-		// We just signal that the stop was received.
 		close(stopHandled)
 	}()
 
-	// Connect a new client for the same user, which will close oldClient.stop
+	// Connect a new client for the same user, which should evict the oldest
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
@@ -51,12 +61,11 @@ func TestSSEHandler_ClientStopChannel(t *testing.T) {
 
 	go server.Handler().ServeHTTP(rec, req)
 
-	// Wait for the old client's stop channel to be closed
 	select {
 	case <-stopHandled:
-		// Success: the stop channel was closed by the new connection
+		// Success: the oldest client's stop channel was closed
 	case <-time.After(300 * time.Millisecond):
-		t.Error("expected old client stop channel to be closed when new client connects")
+		t.Error("expected oldest client stop channel to be closed when new client exceeds limit")
 	}
 }
 
@@ -157,56 +166,46 @@ func TestSSEHandler_HeartbeatTick(t *testing.T) {
 
 // TestSSEHandler_ClientStopTriggeredDuringConnection tests the scenario where
 // a client's stop channel is closed while the Handler select loop is running,
-// covering lines 131-135 in sse.go.
+// covering lines 150-152 in sse.go.
 func TestSSEHandler_ClientStopTriggeredDuringConnection(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
 
-	// We'll connect a user, then connect the same user again to trigger
-	// the first client's stop channel.
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel1()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-	req1 := httptest.NewRequest(http.MethodGet, "/sse?user=dupeuser", nil).WithContext(ctx1)
-	rec1 := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
+	req := httptest.NewRequest(http.MethodGet, "/sse?user=dupeuser", nil).WithContext(ctx)
+	rec := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 
-	handler1Done := make(chan struct{})
+	handlerDone := make(chan struct{})
 	go func() {
-		server.Handler().ServeHTTP(rec1, req1)
-		close(handler1Done)
+		server.Handler().ServeHTTP(rec, req)
+		close(handlerDone)
 	}()
 
-	// Wait for first connection to establish
+	// Wait for connection to establish
 	time.Sleep(100 * time.Millisecond)
 
-	// Now connect the same user with a shorter context, which will
-	// replace the first client and close its stop channel.
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel2()
+	// Find the client and close its stop channel directly
+	server.clientsMu.Lock()
+	var client *SSEClient
+	if len(server.clients["dupeuser"]) > 0 {
+		client = server.clients["dupeuser"][0]
+	}
+	server.clientsMu.Unlock()
 
-	req2 := httptest.NewRequest(http.MethodGet, "/sse?user=dupeuser", nil).WithContext(ctx2)
-	rec2 := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
-
-	handler2Done := make(chan struct{})
-	go func() {
-		server.Handler().ServeHTTP(rec2, req2)
-		close(handler2Done)
-	}()
-
-	// Wait for first handler to exit (it should exit because its stop channel was closed)
-	select {
-	case <-handler1Done:
-		// Success: first handler exited due to stop channel
-	case <-time.After(1 * time.Second):
-		t.Error("expected first handler to exit when stop channel was closed")
+	if client == nil {
+		t.Fatal("expected client to be registered")
 	}
 
-	// Wait for second handler to complete
+	close(client.stop)
+
+	// Wait for handler to exit because stop channel was closed
 	select {
-	case <-handler2Done:
-		// Success
-	case <-time.After(500 * time.Millisecond):
-		t.Error("expected second handler to complete")
+	case <-handlerDone:
+		// Success: handler exited due to stop channel
+	case <-time.After(1 * time.Second):
+		t.Error("expected handler to exit when stop channel was closed")
 	}
 }
 

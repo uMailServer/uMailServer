@@ -24,6 +24,7 @@ type Server struct {
 	sessions   map[string]*Session
 	sessionsMu sync.RWMutex
 	shutdown   chan struct{}
+	stopOnce   sync.Once
 	running    atomic.Bool
 
 	// Authentication
@@ -34,6 +35,20 @@ type Server struct {
 
 	// Called when messages are expunged so search index can be updated
 	onExpunge func(user, mailbox string, uid uint32)
+
+	// Auth brute-force protection
+	maxLoginAttempts int
+	lockoutDuration  time.Duration
+	authFailures     map[string][]time.Time // IP -> failure timestamps
+	authFailuresMu   sync.Mutex
+
+	// Connection timeouts
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+	idleTimeout  time.Duration
+
+	// Connection limits
+	maxConnections int
 }
 
 // Mailstore interface for mailbox operations
@@ -75,12 +90,13 @@ func NewServer(config *Config, mailstore Mailstore) *Server {
 	}
 
 	return &Server{
-		addr:      config.Addr,
-		tlsConfig: config.TLSConfig,
-		logger:    config.Logger,
-		sessions:  make(map[string]*Session),
-		shutdown:  make(chan struct{}),
-		mailstore: mailstore,
+		addr:         config.Addr,
+		tlsConfig:    config.TLSConfig,
+		logger:       config.Logger,
+		sessions:     make(map[string]*Session),
+		shutdown:     make(chan struct{}),
+		mailstore:    mailstore,
+		authFailures: make(map[string][]time.Time),
 	}
 }
 
@@ -93,6 +109,68 @@ func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 // This is used to keep the search index in sync with mailbox state.
 func (s *Server) SetOnExpunge(fn func(user, mailbox string, uid uint32)) {
 	s.onExpunge = fn
+}
+
+// SetAuthLimits configures brute-force protection for IMAP AUTH
+func (s *Server) SetAuthLimits(maxAttempts int, lockoutDuration time.Duration) {
+	s.maxLoginAttempts = maxAttempts
+	s.lockoutDuration = lockoutDuration
+}
+
+// SetReadTimeout sets the read timeout for IMAP connections (except during IDLE).
+func (s *Server) SetReadTimeout(d time.Duration) {
+	s.readTimeout = d
+}
+
+// SetWriteTimeout sets the write timeout for IMAP connections.
+func (s *Server) SetWriteTimeout(d time.Duration) {
+	s.writeTimeout = d
+}
+
+// SetIdleTimeout sets the maximum duration for the IDLE command.
+func (s *Server) SetIdleTimeout(d time.Duration) {
+	s.idleTimeout = d
+}
+
+// SetMaxConnections sets the maximum number of concurrent IMAP connections.
+func (s *Server) SetMaxConnections(n int) {
+	s.maxConnections = n
+}
+
+// isAuthLockedOut returns true if the given IP is temporarily locked out
+func (s *Server) isAuthLockedOut(ip string) bool {
+	if s.maxLoginAttempts <= 0 {
+		return false
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+
+	cutoff := time.Now().Add(-s.lockoutDuration)
+	var recent []time.Time
+	for _, t := range s.authFailures[ip] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	s.authFailures[ip] = recent
+	return len(recent) >= s.maxLoginAttempts
+}
+
+// recordAuthFailure records a failed authentication attempt from the given IP
+func (s *Server) recordAuthFailure(ip string) {
+	if s.maxLoginAttempts <= 0 {
+		return
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+}
+
+// clearAuthFailures removes recorded failures for the given IP
+func (s *Server) clearAuthFailures(ip string) {
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	delete(s.authFailures, ip)
 }
 
 // Start starts the IMAP server
@@ -136,7 +214,7 @@ func (s *Server) StartTLS() error {
 // Stop stops the IMAP server
 func (s *Server) Stop() error {
 	s.running.Store(false)
-	close(s.shutdown)
+	s.stopOnce.Do(func() { close(s.shutdown) })
 
 	for _, listener := range s.listeners {
 		listener.Close()
@@ -183,6 +261,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 			conn.Close()
 		}
 	}()
+
+	s.sessionsMu.RLock()
+	atLimit := s.maxConnections > 0 && len(s.sessions) >= s.maxConnections
+	s.sessionsMu.RUnlock()
+	if atLimit {
+		conn.Write([]byte("* BYE Too many connections\r\n"))
+		conn.Close()
+		return
+	}
 
 	session := NewSession(conn, s)
 	metrics.Get().IMAPConnection()
@@ -287,6 +374,9 @@ func (s *Session) Close() {
 // Handle processes commands from the client
 func (s *Session) Handle() {
 	for s.state != StateLoggedOut {
+		if s.server.readTimeout > 0 && !s.idleActive {
+			s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout))
+		}
 		line, err := s.readLine()
 		if err != nil {
 			if s.state != StateLoggedOut {
@@ -317,8 +407,16 @@ func (s *Session) readLine() (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
+// setWriteDeadline sets the write deadline if configured.
+func (s *Session) setWriteDeadline() {
+	if s.server.writeTimeout > 0 {
+		s.conn.SetWriteDeadline(time.Now().Add(s.server.writeTimeout))
+	}
+}
+
 // WriteResponse writes an IMAP response
 func (s *Session) WriteResponse(tag string, response string) {
+	s.setWriteDeadline()
 	line := fmt.Sprintf("%s %s\r\n", tag, response)
 	s.writer.WriteString(line)
 	s.writer.Flush()
@@ -326,6 +424,7 @@ func (s *Session) WriteResponse(tag string, response string) {
 
 // WriteContinuation writes a continuation request
 func (s *Session) WriteContinuation(text string) {
+	s.setWriteDeadline()
 	line := fmt.Sprintf("+ %s\r\n", text)
 	s.writer.WriteString(line)
 	s.writer.Flush()
@@ -333,6 +432,7 @@ func (s *Session) WriteContinuation(text string) {
 
 // WriteData writes an untagged response
 func (s *Session) WriteData(response string) {
+	s.setWriteDeadline()
 	line := fmt.Sprintf("* %s\r\n", response)
 	s.writer.WriteString(line)
 	s.writer.Flush()

@@ -1,9 +1,8 @@
 package auth
 
-// TODO: Wire DANE/TLSA validation into outbound SMTP delivery.
 // DANE (DNS-Based Authentication of Named Entities, RFC 6698) authenticates
-// TLS connections using DNSSEC. The full implementation exists here but is
-// not yet integrated into the outbound delivery pipeline.
+// TLS connections using DNSSEC. Integrated into queue manager via DANEValidator
+// in internal/queue/manager.go deliverToMX function after STARTTLS.
 
 import (
 	"context"

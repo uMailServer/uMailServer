@@ -3,12 +3,14 @@ package queue
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"net"
 	"net/mail"
@@ -28,9 +30,8 @@ import (
 
 // Manager manages the outbound message queue.
 //
-// Admin API methods (GetStats, SetMaxRetries, SetMaxQueueSize, FlushQueue, RetryEntry)
-// are implemented but not yet wired into the admin panel API endpoints.
-// TODO: Expose via /api/v1/admin/queue/* routes.
+// Admin API methods (GetStats, SetMaxRetries, SetMaxQueueSize, FlushQueue, RetryEntry, DropEntry)
+// are implemented and exposed via /api/v1/admin/queue/* routes.
 type Manager struct {
 	db           *db.DB
 	store        *store.MaildirStore
@@ -41,8 +42,16 @@ type Manager struct {
 	stopOnce     sync.Once
 	mu           sync.RWMutex
 	metrics      *metrics.SimpleMetrics
+	logger       *slog.Logger
 	maxRetries   int
 	maxQueueSize int
+	requireTLS   bool
+
+	// MTA-STS validator for TLS policy enforcement
+	mtastsValidator *auth.MTASTSValidator
+
+	// DANE validator for TLS certificate validation
+	daneValidator *auth.DANEValidator
 
 	// dialSMTP, if set, is used instead of net.DialTimeout for testing.
 	// It returns a net.Conn and is used by deliverToMX.
@@ -62,17 +71,38 @@ type QueueStats struct {
 // Resolver handles DNS resolution for MX records
 type Resolver struct{}
 
+// queueDNSResolver implements auth.DNSResolver for MTA-STS validation
+type queueDNSResolver struct{}
+
+func (r *queueDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	return net.LookupTXT(name)
+}
+
+func (r *queueDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	return net.LookupIP(host)
+}
+
+func (r *queueDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
+	return net.LookupMX(domain)
+}
+
 // NewManager creates a new queue manager
-func NewManager(db *db.DB, store *store.MaildirStore, dataDir string) *Manager {
+func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *slog.Logger) *Manager {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Manager{
-		db:           db,
-		store:        store,
-		dataDir:      dataDir,
-		resolver:     &Resolver{},
-		shutdown:     make(chan struct{}),
-		metrics:      metrics.Get(),
-		maxRetries:   len(retryDelays),
-		maxQueueSize: 10000,
+		db:              db,
+		store:           store,
+		dataDir:         dataDir,
+		resolver:        &Resolver{},
+		shutdown:        make(chan struct{}),
+		metrics:         metrics.Get(),
+		logger:          logger,
+		maxRetries:      len(retryDelays),
+		maxQueueSize:    10000,
+		mtastsValidator: auth.NewMTASTSValidator(&queueDNSResolver{}),
+		daneValidator:   auth.NewDANEValidator(&queueDNSResolver{}),
 	}
 }
 
@@ -265,7 +295,7 @@ func (m *Manager) processPendingEntries() {
 func (m *Manager) deliver(entry *db.QueueEntry) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("queue: panic in delivery: %v (to: %v)\n", r, entry.To)
+			m.logger.Error("panic in delivery", "error", r, "to", entry.To)
 		}
 	}()
 
@@ -317,6 +347,21 @@ func (m *Manager) deliver(entry *db.QueueEntry) {
 
 // deliverToMX delivers a message to a specific MX server
 func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error {
+	// Check MTA-STS policy for recipient domain
+	domain := extractDomain(to)
+	if m.mtastsValidator != nil && domain != "" {
+		allowed, policy, err := m.mtastsValidator.CheckPolicy(context.Background(), domain, mx)
+		if err != nil {
+			m.logger.Debug("MTA-STS check failed", "domain", domain, "mx", mx, "error", err)
+		}
+		if policy != nil && policy.Mode == auth.MTASTSModeEnforce && !allowed {
+			return fmt.Errorf("MTA-STS policy violation: MX %s not allowed for domain %s", mx, domain)
+		}
+		if policy != nil && policy.Mode == auth.MTASTSModeEnforce {
+			m.logger.Debug("MTA-STS policy enforced", "domain", domain, "mx", mx)
+		}
+	}
+
 	// Sign message with DKIM if possible
 	signedMsg, err := m.signWithDKIM(from, message)
 	if err == nil && len(signedMsg) > 0 {
@@ -356,10 +401,29 @@ func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error 
 	// Attempt STARTTLS
 	tlsConfig := &tls.Config{
 		ServerName: mx,
+		MinVersion: tls.VersionTLS12,
 	}
 	if err := client.StartTLS(tlsConfig); err != nil {
-		// STARTTLS failed — continue with plaintext
-		// Some servers don't support TLS
+		if m.requireTLS {
+			return fmt.Errorf("STARTTLS required but failed: %w", err)
+		}
+		// STARTTLS failed — continue with plaintext only if not required
+	} else {
+		// STARTTLS succeeded — validate with DANE if available
+		if m.daneValidator != nil {
+			if state, ok := client.TLSConnectionState(); ok {
+				result, daneErr := m.daneValidator.Validate(mx, 25, &state)
+				if daneErr != nil {
+					m.logger.Debug("DANE validation error", "mx", mx, "error", daneErr)
+				} else if result == auth.DANEValidated {
+					m.logger.Debug("DANE validation successful", "mx", mx)
+				} else if result == auth.DANEFailed {
+					m.logger.Warn("DANE validation failed", "mx", mx)
+					// If DANE is configured but validation failed, reject the connection
+					return fmt.Errorf("DANE validation failed for %s", mx)
+				}
+			}
+		}
 	}
 
 	// Set sender (VERP-encoded for bounce tracking)
@@ -399,6 +463,11 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 
 	// Only delete message file when no other entries reference it
 	m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+
+	// Track metric
+	if m.metrics != nil {
+		m.metrics.DeliverySuccess()
+	}
 }
 
 // handleDeliveryFailure handles delivery failure with exponential backoff and jitter
@@ -478,7 +547,7 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 	// Enqueue bounce as a new message back to the sender
 	if m.db != nil {
 		if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, []byte(bounceMsg)); enqueueErr != nil {
-			fmt.Printf("failed to enqueue bounce message: %v\n", enqueueErr)
+			m.logger.Error("failed to enqueue bounce message", "error", enqueueErr)
 		}
 	}
 
@@ -560,8 +629,17 @@ func (m *Manager) SetMaxQueueSize(max int) {
 	m.maxQueueSize = max
 }
 
+// SetRequireTLS enforces TLS for outbound deliveries.
+func (m *Manager) SetRequireTLS(require bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.requireTLS = require
+}
+
 func generateID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(10000))
+	b := make([]byte, 8)
+	_, _ = crand.Read(b)
+	return fmt.Sprintf("%d-%x", time.Now().UnixNano(), b)
 }
 
 func extractDomain(email string) string {
@@ -584,7 +662,33 @@ func writeFile(path string, data []byte) error {
 		return err
 	}
 
-	return os.Rename(tmpPath, path)
+	// Sync temp file before rename to ensure data durability
+	f, err := os.OpenFile(tmpPath, os.O_RDWR, 0)
+	if err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	f.Close()
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	// Sync parent directory to ensure the rename is durable.
+	// Directory sync may fail on Windows; file sync above is the critical part.
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	_ = dirFile.Sync()
+	dirFile.Close()
+	return nil
 }
 
 func readFile(path string) ([]byte, error) {
@@ -739,3 +843,4 @@ func (r *dkimDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, 
 func (r *dkimDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
 	return net.LookupMX(domain)
 }
+

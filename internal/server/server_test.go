@@ -1846,7 +1846,7 @@ func TestRelayMessage_WithQueue(t *testing.T) {
 	srv := helperServer(t)
 
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.queue.Start(ctx)
@@ -1874,7 +1874,7 @@ func TestRelayMessage_QueueEnqueueMultiple(t *testing.T) {
 	srv := helperServer(t)
 
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.queue.Start(ctx)
@@ -1957,7 +1957,7 @@ func TestDeliverMessage_MixedLocalAndRemote(t *testing.T) {
 	helperCreateAccount(t, srv, "alice", "test.example.com", true, 0, 0)
 
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.queue.Start(ctx)
@@ -1996,7 +1996,7 @@ func TestDeliverMessage_RemoteDomainWithQueue(t *testing.T) {
 	srv := helperServer(t)
 
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.queue.Start(ctx)
@@ -2298,7 +2298,7 @@ func TestRelayMessage_TableDriven(t *testing.T) {
 
 			if tt.setupQueue {
 				queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-				srv.queue = queue.NewManager(srv.database, nil, queueDir)
+				srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				srv.queue.Start(ctx)
@@ -2441,7 +2441,7 @@ func TestDeliverMessage_ClosedDB_RelayError(t *testing.T) {
 
 	// Create a queue manager with an invalid data dir to cause Enqueue to fail
 	badDir := filepath.Join(srv.config.Server.DataDir, "nonexistent_deep", "queue")
-	srv.queue = queue.NewManager(srv.database, nil, badDir)
+	srv.queue = queue.NewManager(srv.database, nil, badDir, nil)
 
 	// Close the database so GetDomain returns error, triggering relay path
 	srv.database.Close()
@@ -2465,7 +2465,7 @@ func TestDeliverMessage_InactiveDomain_RelayFail(t *testing.T) {
 
 	// Set up a queue so the relay path is exercised
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 
 	msgData := []byte("Subject: Test\r\n\r\nBody")
 	err := srv.deliverMessage("sender@external.com", []string{"user@inactive.example.com"}, msgData)
@@ -2596,7 +2596,7 @@ func TestRelayMessage_QueueEnqueueError(t *testing.T) {
 	srv := helperServer(t)
 
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 
 	// Close the database to cause Enqueue to fail
 	srv.database.Close()
@@ -2760,7 +2760,7 @@ func TestDeliverMessage_UnknownDomainWithQueue(t *testing.T) {
 	srv := helperServer(t)
 
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	srv.queue.Start(ctx)
@@ -2893,7 +2893,7 @@ func TestDeliverMessage_InactiveDomain_RelayError(t *testing.T) {
 
 	// Set up a queue that will fail on Enqueue because maxQueueSize is 0 (queue is full)
 	queueDir := filepath.Join(srv.config.Server.DataDir, "queue")
-	srv.queue = queue.NewManager(srv.database, nil, queueDir)
+	srv.queue = queue.NewManager(srv.database, nil, queueDir, nil)
 	srv.queue.SetMaxQueueSize(0)
 
 	msgData := []byte("Subject: Test\r\n\r\nBody")

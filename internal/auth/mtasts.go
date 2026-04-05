@@ -1,8 +1,8 @@
 package auth
 
-// TODO: Wire MTA-STS policy fetching and TLSRPT reporting into outbound SMTP.
 // MTA-STS (RFC 8461) and TLSRPT (RFC 8460) enable TLS policy enforcement and
-// failure reporting. The implementation exists here but is not yet integrated.
+// failure reporting. Integrated into queue manager via MTASTSValidator
+// in internal/queue/manager.go deliverToMX function.
 
 import (
 	"context"

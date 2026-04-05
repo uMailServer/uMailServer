@@ -3,8 +3,11 @@ package cli
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,9 +17,17 @@ import (
 	"github.com/umailserver/umailserver/internal/config"
 )
 
+// fileHash tracks a file's hash for integrity verification
+type fileHash struct {
+	Path string `json:"path"`
+	Hash string `json:"hash"`
+	Size int64  `json:"size"`
+}
+
 // BackupManager handles backup and restore operations
 type BackupManager struct {
 	config *config.Config
+	hashes []fileHash
 }
 
 // NewBackupManager creates a new backup manager
@@ -28,6 +39,9 @@ func NewBackupManager(cfg *config.Config) *BackupManager {
 
 // Backup creates a full backup of the server
 func (bm *BackupManager) Backup(backupPath string) error {
+	// Reset hashes for this backup
+	bm.hashes = []fileHash{}
+
 	timestamp := time.Now().Format("20060102_150405")
 	backupFile := filepath.Join(backupPath, fmt.Sprintf("umailserver_backup_%s.tar.gz", timestamp))
 
@@ -79,6 +93,37 @@ func (bm *BackupManager) Backup(backupPath string) error {
 	return nil
 }
 
+// addFileWithHash copies a file to tar and records its hash
+func (bm *BackupManager) addFileWithHash(tw *tar.Writer, path string, header *tar.Header) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Calculate hash while copying
+	h := sha256.New()
+	writer := io.MultiWriter(tw, h)
+
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+
+	_, err = io.Copy(writer, file)
+	if err != nil {
+		return err
+	}
+
+	// Record hash
+	bm.hashes = append(bm.hashes, fileHash{
+		Path: header.Name,
+		Hash: hex.EncodeToString(h.Sum(nil)),
+		Size: header.Size,
+	})
+
+	return nil
+}
+
 // backupConfig adds configuration files to the backup
 func (bm *BackupManager) backupConfig(tw *tar.Writer) error {
 	configPath := bm.config.Server.DataDir + "/config"
@@ -111,19 +156,7 @@ func (bm *BackupManager) backupConfig(tw *tar.Writer) error {
 			Size:    info.Size(),
 		}
 
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		// Copy file content
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
-		_, err = io.Copy(tw, file)
-		return err
+		return bm.addFileWithHash(tw, path, header)
 	})
 }
 
@@ -139,12 +172,6 @@ func (bm *BackupManager) backupDatabase(tw *tar.Writer) error {
 		return err
 	}
 
-	file, err := os.Open(dbPath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
 	header := &tar.Header{
 		Name:    "database/umailserver.db",
 		Mode:    int64(info.Mode()),
@@ -152,12 +179,7 @@ func (bm *BackupManager) backupDatabase(tw *tar.Writer) error {
 		Size:    info.Size(),
 	}
 
-	if err := tw.WriteHeader(header); err != nil {
-		return err
-	}
-
-	_, err = io.Copy(tw, file)
-	return err
+	return bm.addFileWithHash(tw, dbPath, header)
 }
 
 // backupMaildir adds maildir files to the backup
@@ -204,19 +226,7 @@ func (bm *BackupManager) backupMaildir(tw *tar.Writer) error {
 			Size:    info.Size(),
 		}
 
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		// Copy file content
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
-		_, err = io.Copy(tw, file)
-		return err
+		return bm.addFileWithHash(tw, path, header)
 	})
 }
 
@@ -232,6 +242,7 @@ func (bm *BackupManager) createManifest(tw *tar.Writer, timestamp string) error 
 			"database/",
 			"messages/",
 		},
+		"files": bm.hashes,
 	}
 
 	data, err := json.MarshalIndent(manifest, "", "  ")
@@ -274,6 +285,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 
 	// First, verify the backup by reading the manifest
 	var manifest map[string]interface{}
+	var expectedHashes []fileHash
 	manifestFound := false
 
 	for {
@@ -294,6 +306,19 @@ func (bm *BackupManager) Restore(backupFile string) error {
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				return fmt.Errorf("failed to parse manifest: %w", err)
 			}
+			// Parse file hashes from manifest
+			if files, ok := manifest["files"].([]interface{}); ok {
+				for _, f := range files {
+					if fileMap, ok := f.(map[string]interface{}); ok {
+						h := fileHash{
+							Path: getString(fileMap, "path"),
+							Hash: getString(fileMap, "hash"),
+							Size: getInt64(fileMap, "size"),
+						}
+						expectedHashes = append(expectedHashes, h)
+					}
+				}
+			}
 			manifestFound = true
 			break
 		}
@@ -305,6 +330,11 @@ func (bm *BackupManager) Restore(backupFile string) error {
 
 	fmt.Printf("Backup from: %s\n", manifest["timestamp"])
 	fmt.Printf("Hostname: %s\n", manifest["hostname"])
+
+	// Verify file count
+	if len(expectedHashes) > 0 {
+		fmt.Printf("Backup contains %d files with integrity hashes\n", len(expectedHashes))
+	}
 
 	// Reset file to beginning
 	file.Seek(0, 0)
@@ -343,7 +373,15 @@ func (bm *BackupManager) Restore(backupFile string) error {
 				return fmt.Errorf("failed to create file: %w", err)
 			}
 
-			if _, err := io.Copy(outFile, tr); err != nil {
+			// Calculate hash while extracting if we have expected hashes
+			var writer io.Writer = outFile
+			var h hash.Hash
+			if len(expectedHashes) > 0 {
+				h = sha256.New()
+				writer = io.MultiWriter(outFile, h)
+			}
+
+			if _, err := io.Copy(writer, tr); err != nil {
 				outFile.Close()
 				return fmt.Errorf("failed to write file: %w", err)
 			}
@@ -351,6 +389,22 @@ func (bm *BackupManager) Restore(backupFile string) error {
 
 			// Set file permissions
 			os.Chmod(targetPath, os.FileMode(header.Mode))
+
+			// Verify hash if we have expected hashes
+			if h != nil {
+				computedHash := hex.EncodeToString(h.Sum(nil))
+				for _, expected := range expectedHashes {
+					if expected.Path == header.Name {
+						if computedHash != expected.Hash {
+							os.Remove(targetPath)
+							return fmt.Errorf("integrity check failed for %s: expected %s, got %s",
+								header.Name, expected.Hash, computedHash)
+						}
+						fmt.Printf("  ✓ Verified: %s\n", header.Name)
+						break
+					}
+				}
+			}
 		}
 	}
 
@@ -405,4 +459,25 @@ type BackupInfo struct {
 	Size     int64
 	ModTime  time.Time
 	Path     string
+}
+
+// getString extracts a string value from a map
+func getString(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// getInt64 extracts an int64 value from a map
+func getInt64(m map[string]interface{}, key string) int64 {
+	switch v := m[key].(type) {
+	case int64:
+		return v
+	case float64:
+		return int64(v)
+	case int:
+		return int64(v)
+	}
+	return 0
 }

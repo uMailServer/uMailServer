@@ -13,15 +13,16 @@ import (
 
 // Bucket names
 const (
-	BucketAccounts   = "accounts"
-	BucketDomains    = "domains"
-	BucketQueue      = "queue"
-	BucketSpam       = "spam"
-	BucketMetrics    = "metrics"
-	BucketMessageMeta = "messagemeta"
-	BucketIndex      = "index"
-	BucketAliases    = "aliases"
-	BucketContacts   = "contacts"
+	BucketAccounts      = "accounts"
+	BucketDomains       = "domains"
+	BucketQueue         = "queue"
+	BucketSpam          = "spam"
+	BucketMetrics       = "metrics"
+	BucketMessageMeta   = "messagemeta"
+	BucketIndex         = "index"
+	BucketAliases       = "aliases"
+	BucketContacts      = "contacts"
+	BucketFilters       = "filters"
 )
 
 // DB wraps bbolt database
@@ -66,6 +67,30 @@ type DomainData struct {
 	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
+// QueuePriority represents message priority levels
+type QueuePriority int
+
+const (
+	PriorityLow    QueuePriority = 0
+	PriorityNormal QueuePriority = 1
+	PriorityHigh   QueuePriority = 2
+	PriorityUrgent QueuePriority = 3
+)
+
+func (p QueuePriority) String() string {
+	switch p {
+	case PriorityLow:
+		return "low"
+	case PriorityNormal:
+		return "normal"
+	case PriorityHigh:
+		return "high"
+	case PriorityUrgent:
+		return "urgent"
+	default:
+		return "normal"
+	}
+}
 // QueueEntry holds message queue information
 type QueueEntry struct {
 	ID          string    `json:"id"`
@@ -76,7 +101,8 @@ type QueueEntry struct {
 	NextRetry   time.Time `json:"next_retry"`
 	RetryCount  int       `json:"retry_count"`
 	LastError   string    `json:"last_error"`
-	Status      string    `json:"status"` // pending, sending, failed, delivered
+	Status      string        `json:"status"` // pending, sending, failed, delivered
+	Priority    QueuePriority `json:"priority"` // 0=low, 1=normal, 2=high, 3=urgent
 }
 
 // AliasData holds email alias information
@@ -131,6 +157,7 @@ func (d *DB) initBuckets() error {
 		BucketIndex,
 		BucketContacts,
 		BucketAliases,
+		BucketFilters,
 	}
 
 	return d.bolt.Update(func(tx *bbolt.Tx) error {

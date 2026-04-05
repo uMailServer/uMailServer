@@ -471,6 +471,7 @@ var errMessageTooLarge = errors.New("message too large")
 func (s *Session) readData() ([]byte, error) {
 	reader := bufio.NewReader(s.conn)
 	var data []byte
+	const maxLineLength = 1000 // RFC 5322: max 1000 bytes per line including CRLF
 
 	for {
 		if s.server.config.ReadTimeout > 0 {
@@ -480,6 +481,16 @@ func (s *Session) readData() ([]byte, error) {
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
 			return nil, err
+		}
+
+		// RFC 5322 line length limit check
+		if len(line) > maxLineLength {
+			return nil, fmt.Errorf("line exceeds maximum length of %d bytes", maxLineLength)
+		}
+
+		// Check for null bytes (security: prevent header injection)
+		if bytes.Contains(line, []byte{0}) {
+			return nil, fmt.Errorf("message contains null bytes")
 		}
 
 		// Check for end of data marker
@@ -683,6 +694,11 @@ func (s *Session) handleAUTH(arg string) error {
 		return s.WriteResponse(503, "5.5.1 Already authenticated")
 	}
 
+	// Brute-force lockout check
+	if s.server.isAuthLockedOut(getIPFromAddr(s.conn.RemoteAddr().String())) {
+		return s.WriteResponse(535, "5.7.8 Too many failed authentication attempts")
+	}
+
 	parts := strings.SplitN(arg, " ", 2)
 	mechanism := strings.ToUpper(parts[0])
 
@@ -738,6 +754,7 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	if s.server.onAuth != nil {
 		ok, err := s.server.onAuth(username, password)
 		if err != nil || !ok {
+			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 			if m := metrics.Get(); m != nil {
 				m.SMTPAuthFailure()
 			}
@@ -747,6 +764,7 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 
 	s.isAuth = true
 	s.username = username
+	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 
 	return s.WriteResponse(235, "Authentication successful")
 }
@@ -794,6 +812,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	if s.server.onAuth != nil {
 		ok, err := s.server.onAuth(username, password)
 		if err != nil || !ok {
+			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 			if m := metrics.Get(); m != nil {
 				m.SMTPAuthFailure()
 			}
@@ -803,6 +822,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 
 	s.isAuth = true
 	s.username = username
+	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 
 	return s.WriteResponse(235, "Authentication successful")
 }
@@ -835,6 +855,7 @@ func (s *Session) handleAuthCRAMMD5() error {
 	// Verify using the shared auth function
 	username, ok := auth.VerifyCRAMMD5(challengeB64, response, s.server.onGetUserSecret)
 	if !ok {
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		if m := metrics.Get(); m != nil {
 			m.SMTPAuthFailure()
 		}
@@ -843,6 +864,7 @@ func (s *Session) handleAuthCRAMMD5() error {
 
 	s.isAuth = true
 	s.username = username
+	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 
 	return s.WriteResponse(235, "Authentication successful")
 }
@@ -864,11 +886,14 @@ func (s *Session) handleSTARTTLS() error {
 		return err
 	}
 
-	// Perform TLS handshake
+	// Perform TLS handshake with a bounded timeout
+	s.conn.SetDeadline(time.Now().Add(30 * time.Second))
 	tlsConn := tls.Server(s.conn, s.server.config.TLSConfig)
 	if err := tlsConn.Handshake(); err != nil {
+		s.conn.SetDeadline(time.Time{})
 		return err
 	}
+	s.conn.SetDeadline(time.Time{})
 
 	s.conn = tlsConn
 	s.isTLS = true
@@ -878,9 +903,11 @@ func (s *Session) handleSTARTTLS() error {
 		s.reader.Reset(tlsConn)
 	}
 
-	// Reset state after TLS upgrade
+	// Reset state after TLS upgrade (RFC 3207 Section 4.1)
 	s.state = StateNew
 	s.resetTransaction()
+	s.isAuth = false
+	s.username = ""
 
 	return nil
 }

@@ -24,7 +24,7 @@ func TestEnqueue_QueueFull_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	mgr.SetMaxQueueSize(0) // Set max queue size to 0 to trigger "queue full"
 
 	_, err = mgr.Enqueue("sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
@@ -43,7 +43,7 @@ func TestEnqueue_MultipleRecipients_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	recipients := []string{"rcpt1@example.com", "rcpt2@example.com", "rcpt3@example.com"}
 	id, err := mgr.Enqueue("sender@example.com", recipients, []byte("test message"))
@@ -82,7 +82,7 @@ func TestFlushQueue_Empty_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	err = mgr.FlushQueue()
 	if err != nil {
@@ -99,7 +99,7 @@ func TestFlushQueue_ClosedDB_Cov4(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	database.Close()
 
 	err = mgr.FlushQueue()
@@ -124,7 +124,7 @@ func TestProcessQueue_StartStop_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -159,7 +159,7 @@ func TestGenerateBounce_WithValidDB_Cov4(t *testing.T) {
 	defer database.Close()
 
 	// Set max queue size high enough for the bounce enqueue
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	mgr.SetMaxQueueSize(100)
 
 	// Create a message file for the original message
@@ -193,7 +193,7 @@ func TestGenerateBounce_MissingMessageFile_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	entry := &db.QueueEntry{
 		ID:          "bounce-missing-test",
@@ -241,7 +241,7 @@ func TestStart_AlreadyRunning_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -265,7 +265,7 @@ func TestStop_NotRunning_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	// Stop without starting - should return immediately
 	mgr.Stop()
@@ -285,7 +285,7 @@ func TestGetStats_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	stats, err := mgr.GetStats()
 	if err != nil {
@@ -306,7 +306,7 @@ func TestSetMaxRetries_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	mgr.SetMaxRetries(5)
 
 	if mgr.maxRetries != 5 {
@@ -355,7 +355,7 @@ func TestRetryEntry_NotFound_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	err = mgr.RetryEntry("nonexistent-id")
 	if err == nil {
@@ -378,7 +378,7 @@ func TestDropEntry_NotFound_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	// DropEntry on non-existent ID may or may not error depending on bbolt behavior
 	err = mgr.DropEntry("nonexistent-id")
@@ -400,7 +400,7 @@ func TestGetQueueEntry_NotFound_Cov4(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	_, err = mgr.GetQueueEntry("nonexistent-id")
 	if err == nil {

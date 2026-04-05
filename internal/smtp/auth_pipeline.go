@@ -219,6 +219,68 @@ func mapDKIMResult(dkim DKIMResult) auth.DKIMResult {
 	return auth.DKIMNone
 }
 
+// AuthARCStage uses the real auth.ARCValidator for ARC chain validation
+type AuthARCStage struct {
+	validator *auth.ARCValidator
+	logger    *slog.Logger
+}
+
+// NewAuthARCStage creates a new ARC stage using the real validator
+func NewAuthARCStage(validator *auth.ARCValidator, logger *slog.Logger) *AuthARCStage {
+	return &AuthARCStage{validator: validator, logger: logger}
+}
+
+func (s *AuthARCStage) Name() string { return "ARC" }
+
+func (s *AuthARCStage) Process(ctx *MessageContext) PipelineResult {
+	// Check for ARC headers
+	arcChain, err := s.validator.Validate(context.Background(), ctx.Headers, ctx.Data)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Debug("ARC validation error", "error", err)
+		}
+		ctx.ARCResult = ARCResult{
+			Result: "temperror",
+		}
+		return ResultAccept
+	}
+
+	// Map ARC result
+	ctx.ARCResult = ARCResult{
+		Result:       arcChain.CV,
+		ChainValid:   arcChain.ChainValid,
+		ChainLength:  arcChain.ChainLength,
+		SealDomain:   arcChain.SealDomain,
+		SealSelector: arcChain.SealSelector,
+	}
+
+	// If ARC chain is valid, it can override DMARC failures for forwarded messages
+	if arcChain.ChainValid && arcChain.CV == "pass" {
+		// If DMARC failed but ARC is valid, this might be a legitimate forward
+		// We don't change the DMARC result but we log it and can reduce spam score
+		if ctx.DMARCResult.Result == "fail" {
+			ctx.SpamScore -= 1.0 // Reduce penalty for forwarded messages with valid ARC
+			if s.logger != nil {
+				s.logger.Info("ARC chain valid - reducing DMARC penalty for forwarded message",
+					"domain", arcChain.SealDomain,
+					"selector", arcChain.SealSelector,
+					"chain_length", arcChain.ChainLength,
+				)
+			}
+		}
+	}
+
+	if s.logger != nil {
+		s.logger.Debug("ARC validation completed",
+			"result", arcChain.CV,
+			"chain_valid", arcChain.ChainValid,
+			"chain_length", arcChain.ChainLength,
+		)
+	}
+
+	return ResultAccept
+}
+
 // NetDNSResolver wraps net.Resolver to implement auth.DNSResolver
 type NetDNSResolver struct {
 	resolver *net.Resolver

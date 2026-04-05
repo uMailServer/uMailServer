@@ -14,6 +14,7 @@ import (
 func TestWebhookManager(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	t.Run("CreateWebhook", func(t *testing.T) {
 		req := struct {
@@ -177,6 +178,7 @@ func TestWebhookStruct(t *testing.T) {
 func TestEventMatchesEmpty(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "")
+	manager.SetAllowPrivateIP(true)
 
 	// Empty patterns should not match
 	result := manager.eventMatches([]string{}, "event")
@@ -188,6 +190,7 @@ func TestEventMatchesEmpty(t *testing.T) {
 func TestEventMatchesWildcard(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "")
+	manager.SetAllowPrivateIP(true)
 
 	// Test wildcard matching
 	if !manager.eventMatches([]string{"*"}, "any.event") {
@@ -204,6 +207,7 @@ func TestEventMatchesWildcard(t *testing.T) {
 func TestTrigger(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	// Create a test webhook
 	testHook := &Webhook{
@@ -253,6 +257,7 @@ func TestSend(t *testing.T) {
 
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	hook := &Webhook{
 		ID:     "test-hook",
@@ -289,6 +294,7 @@ func TestSendWithSignature(t *testing.T) {
 
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	hook := &Webhook{
 		ID:     "test-hook",
@@ -314,6 +320,7 @@ func TestSendWithSignature(t *testing.T) {
 func TestSendInvalidURL(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "")
+	manager.SetAllowPrivateIP(true)
 
 	hook := &Webhook{
 		ID:     "test-hook",

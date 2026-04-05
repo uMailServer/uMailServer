@@ -2,6 +2,7 @@ package pop3
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -22,10 +23,24 @@ type Server struct {
 	sessions   map[string]*Session
 	sessionsMu sync.RWMutex
 	shutdown   chan struct{}
+	stopOnce   sync.Once
 	running    atomic.Bool
 
 	authFunc  func(username, password string) (bool, error)
 	mailstore Mailstore
+
+	// Auth brute-force protection
+	maxLoginAttempts int
+	lockoutDuration  time.Duration
+	authFailures     map[string][]time.Time // IP -> failure timestamps
+	authFailuresMu   sync.Mutex
+
+	// Connection timeouts
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+
+	// Connection limits
+	maxConnections int
 }
 
 // TLSConfig holds TLS configuration
@@ -63,6 +78,7 @@ type Session struct {
 	state    State
 	user     string
 	messages []*Message
+	isTLS    bool
 }
 
 // State represents the POP3 session state
@@ -81,11 +97,12 @@ func NewServer(addr string, mailstore Mailstore, logger *slog.Logger) *Server {
 	}
 
 	return &Server{
-		addr:      addr,
-		logger:    logger,
-		mailstore: mailstore,
-		sessions:  make(map[string]*Session),
-		shutdown:  make(chan struct{}),
+		addr:         addr,
+		logger:       logger,
+		mailstore:    mailstore,
+		sessions:     make(map[string]*Session),
+		shutdown:     make(chan struct{}),
+		authFailures: make(map[string][]time.Time),
 	}
 }
 
@@ -94,9 +111,103 @@ func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 	s.authFunc = fn
 }
 
+// SetAuthLimits configures brute-force protection for POP3 AUTH
+func (s *Server) SetAuthLimits(maxAttempts int, lockoutDuration time.Duration) {
+	s.maxLoginAttempts = maxAttempts
+	s.lockoutDuration = lockoutDuration
+}
+
+// isAuthLockedOut returns true if the given IP is temporarily locked out
+func (s *Server) isAuthLockedOut(ip string) bool {
+	if s.maxLoginAttempts <= 0 {
+		return false
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+
+	cutoff := time.Now().Add(-s.lockoutDuration)
+	var recent []time.Time
+	for _, t := range s.authFailures[ip] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	s.authFailures[ip] = recent
+	return len(recent) >= s.maxLoginAttempts
+}
+
+// recordAuthFailure records a failed authentication attempt from the given IP
+func (s *Server) recordAuthFailure(ip string) {
+	if s.maxLoginAttempts <= 0 {
+		return
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+}
+
+// clearAuthFailures removes recorded failures for the given IP
+func (s *Server) clearAuthFailures(ip string) {
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	delete(s.authFailures, ip)
+}
+
+// SetReadTimeout sets the read timeout for POP3 connections.
+func (s *Server) SetReadTimeout(d time.Duration) {
+	s.readTimeout = d
+}
+
+// SetWriteTimeout sets the write timeout for POP3 connections.
+func (s *Server) SetWriteTimeout(d time.Duration) {
+	s.writeTimeout = d
+}
+
+// SetMaxConnections sets the maximum number of concurrent POP3 connections.
+func (s *Server) SetMaxConnections(n int) {
+	s.maxConnections = n
+}
+
 // SetTLSConfig sets the TLS configuration
 func (s *Server) SetTLSConfig(config *TLSConfig) {
 	s.tlsConfig = config
+}
+
+// getTLSConfig builds a *tls.Config from the configured cert/key files.
+func (s *Server) getTLSConfig() (*tls.Config, error) {
+	if s.tlsConfig == nil {
+		return nil, fmt.Errorf("TLS config not provided")
+	}
+	cert, err := tls.LoadX509KeyPair(s.tlsConfig.CertFile, s.tlsConfig.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	}, nil
+}
+
+// StartTLS starts the POP3 server with implicit TLS.
+func (s *Server) StartTLS() error {
+	config, err := s.getTLSConfig()
+	if err != nil {
+		return err
+	}
+
+	listener, err := tls.Listen("tcp", s.addr, config)
+	if err != nil {
+		return fmt.Errorf("failed to listen TLS: %w", err)
+	}
+
+	s.listener = listener
+	s.running.Store(true)
+
+	s.logger.Info("POP3 server started with TLS", "addr", s.addr)
+
+	go s.acceptLoop()
+
+	return nil
 }
 
 // Start starts the POP3 server
@@ -119,7 +230,7 @@ func (s *Server) Start() error {
 // Stop stops the POP3 server
 func (s *Server) Stop() error {
 	s.running.Store(false)
-	close(s.shutdown)
+	s.stopOnce.Do(func() { close(s.shutdown) })
 
 	if s.listener != nil {
 		s.listener.Close()
@@ -166,6 +277,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 			conn.Close()
 		}
 	}()
+
+	s.sessionsMu.RLock()
+	atLimit := s.maxConnections > 0 && len(s.sessions) >= s.maxConnections
+	s.sessionsMu.RUnlock()
+	if atLimit {
+		conn.Write([]byte("-ERR Too many connections\r\n"))
+		conn.Close()
+		return
+	}
 
 	session := NewSession(conn, s)
 
@@ -233,6 +353,9 @@ func (s *Session) Handle() {
 
 // readLine reads a line from the connection
 func (s *Session) readLine() (string, error) {
+	if s.server.readTimeout > 0 {
+		s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout))
+	}
 	line, err := s.reader.ReadString('\n')
 	if err != nil {
 		return "", err
@@ -240,8 +363,16 @@ func (s *Session) readLine() (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
+// setWriteDeadline sets the write deadline if configured.
+func (s *Session) setWriteDeadline() {
+	if s.server.writeTimeout > 0 {
+		s.conn.SetWriteDeadline(time.Now().Add(s.server.writeTimeout))
+	}
+}
+
 // WriteResponse writes a POP3 response
 func (s *Session) WriteResponse(response string) {
+	s.setWriteDeadline()
 	s.writer.WriteString(response + "\r\n")
 	s.writer.Flush()
 }
@@ -252,11 +383,13 @@ func (s *Session) WriteDataLine(line string) {
 	if strings.HasPrefix(line, ".") {
 		line = "." + line
 	}
+	s.setWriteDeadline()
 	s.writer.WriteString(line + "\r\n")
 }
 
 // WriteDataEnd writes the end of data marker
 func (s *Session) WriteDataEnd() {
+	s.setWriteDeadline()
 	s.writer.WriteString(".\r\n")
 	s.writer.Flush()
 }
@@ -313,15 +446,35 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 			return nil
 		}
 
+		host, _, _ := net.SplitHostPort(s.conn.RemoteAddr().String())
+		if s.server.isAuthLockedOut(host) {
+			s.WriteResponse("-ERR Too many failed authentication attempts")
+			s.user = ""
+			return nil
+		}
+
 		// Authenticate
+		authenticated := false
 		if s.server.authFunc != nil {
 			ok, err := s.server.authFunc(s.user, args[0])
-			if err != nil || !ok {
-				s.WriteResponse("-ERR Authentication failed")
-				s.user = ""
-				return nil
+			if err == nil && ok {
+				authenticated = true
+			}
+		} else {
+			ok, err := s.server.mailstore.Authenticate(s.user, args[0])
+			if err == nil && ok {
+				authenticated = true
 			}
 		}
+
+		if !authenticated {
+			s.server.recordAuthFailure(host)
+			s.WriteResponse("-ERR Authentication failed")
+			s.user = ""
+			return nil
+		}
+
+		s.server.clearAuthFailures(host)
 
 		// Load messages
 		messages, err := s.server.mailstore.ListMessages(s.user)
@@ -338,6 +491,37 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		s.WriteResponse("+OK")
 		return fmt.Errorf("quit")
 
+	case "STLS":
+		if s.server.tlsConfig == nil {
+			s.WriteResponse("-ERR Command not available")
+			return nil
+		}
+		if s.isTLS {
+			s.WriteResponse("-ERR Already using TLS")
+			return nil
+		}
+		s.WriteResponse("+OK Begin TLS negotiation")
+		config, err := s.server.getTLSConfig()
+		if err != nil {
+			s.WriteResponse("-ERR TLS configuration error")
+			return nil
+		}
+		s.conn.SetDeadline(time.Now().Add(30 * time.Second))
+		tlsConn := tls.Server(s.conn, config)
+		if err := tlsConn.Handshake(); err != nil {
+			s.conn.SetDeadline(time.Time{})
+			return err
+		}
+		s.conn.SetDeadline(time.Time{})
+		s.conn = tlsConn
+		s.reader = bufio.NewReader(tlsConn)
+		s.writer = bufio.NewWriter(tlsConn)
+		s.isTLS = true
+		s.state = StateAuthorization
+		s.user = ""
+		s.messages = nil
+		return nil
+
 	case "CAPA":
 		s.WriteResponse("+OK Capability list follows")
 		s.WriteDataLine("USER")
@@ -351,6 +535,9 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		s.WriteDataLine("QUIT")
 		s.WriteDataLine("UIDL")
 		s.WriteDataLine("TOP")
+		if s.server.tlsConfig != nil && !s.isTLS {
+			s.WriteDataLine("STLS")
+		}
 		s.WriteDataEnd()
 
 	default:
@@ -364,14 +551,16 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 func (s *Session) handleTransactionCommand(command string, args []string) error {
 	switch command {
 	case "STAT":
-		// Get total size
+		// Count only non-deleted messages and their total size
+		var count int
 		var totalSize int64
 		for _, msg := range s.messages {
 			if msg != nil {
+				count++
 				totalSize += msg.Size
 			}
 		}
-		s.WriteResponse(fmt.Sprintf("+OK %d %d", len(s.messages), totalSize))
+		s.WriteResponse(fmt.Sprintf("+OK %d %d", count, totalSize))
 
 	case "LIST":
 		if len(args) == 0 {
@@ -426,6 +615,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		}
 
 		s.WriteResponse(fmt.Sprintf("+OK %d octets", len(msg.Data)))
+		s.setWriteDeadline()
 		s.writer.Write(msg.Data)
 		if !strings.HasSuffix(string(msg.Data), "\n") {
 			s.writer.WriteString("\r\n")
@@ -568,6 +758,7 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 
 // sendTop sends headers + specified number of lines
 func (s *Session) sendTop(data []byte, lines int) {
+	s.setWriteDeadline()
 	// Find end of headers
 	content := string(data)
 	headerEnd := strings.Index(content, "\r\n\r\n")

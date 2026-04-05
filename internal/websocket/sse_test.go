@@ -347,7 +347,7 @@ func TestSSEServerSendToUserWithClient(t *testing.T) {
 
 	// Register client manually
 	server.clientsMu.Lock()
-	server.clients["testuser"] = client
+	server.clients["testuser"] = []*SSEClient{client}
 	server.clientsMu.Unlock()
 
 	// Test sending to existing user
@@ -385,8 +385,8 @@ func TestSSEServerBroadcastWithClients(t *testing.T) {
 	}
 
 	server.clientsMu.Lock()
-	server.clients["user1"] = client1
-	server.clients["user2"] = client2
+	server.clients["user1"] = []*SSEClient{client1}
+	server.clients["user2"] = []*SSEClient{client2}
 	server.clientsMu.Unlock()
 
 	server.Broadcast("broadcast_event", map[string]string{"message": "hello all"})
@@ -422,8 +422,8 @@ func TestSSEServerSendToAdminsWithAdmin(t *testing.T) {
 	}
 
 	server.clientsMu.Lock()
-	server.clients["admin"] = adminClient
-	server.clients["user"] = regularClient
+	server.clients["admin"] = []*SSEClient{adminClient}
+	server.clients["user"] = []*SSEClient{regularClient}
 	server.clientsMu.Unlock()
 
 	server.SendToAdmins("admin_event", map[string]string{"secret": "data"})
@@ -447,7 +447,7 @@ func TestSSEServerGetConnectedUsersWithClients(t *testing.T) {
 	}
 
 	server.clientsMu.Lock()
-	server.clients["testuser"] = client
+	server.clients["testuser"] = []*SSEClient{client}
 	server.clientsMu.Unlock()
 
 	users := server.GetConnectedUsers()
@@ -470,7 +470,7 @@ func TestSSEServerGetConnectedCountWithClients(t *testing.T) {
 	}
 
 	server.clientsMu.Lock()
-	server.clients["testuser"] = client
+	server.clients["testuser"] = []*SSEClient{client}
 	server.clientsMu.Unlock()
 
 	count := server.GetConnectedCount()
@@ -504,7 +504,7 @@ func containsAt(s, substr string) bool {
 
 // Additional handler tests
 
-func TestSSEServerHandlerReplacesExistingClient(t *testing.T) {
+func TestSSEServerHandlerAllowsMultipleClientsForSameUser(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
 
@@ -517,11 +517,11 @@ func TestSSEServerHandlerReplacesExistingClient(t *testing.T) {
 	}
 
 	server.clientsMu.Lock()
-	server.clients["testuser"] = oldClient
+	server.clients["testuser"] = []*SSEClient{oldClient}
 	server.clientsMu.Unlock()
 
-	// Now connect with same user - should replace old client
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Connect a second client for the same user with a longer timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	req := httptest.NewRequest(http.MethodGet, "/sse?user=testuser", nil).WithContext(ctx)
@@ -530,15 +530,28 @@ func TestSSEServerHandlerReplacesExistingClient(t *testing.T) {
 	}
 
 	go server.Handler().ServeHTTP(rec, req)
-	time.Sleep(150 * time.Millisecond)
 
-	// Old client stop channel should be closed
+	// Wait for connection to establish, then check both clients exist
+	time.Sleep(100 * time.Millisecond)
+
+	server.clientsMu.RLock()
+	clients := server.clients["testuser"]
+	server.clientsMu.RUnlock()
+
+	if len(clients) != 2 {
+		t.Errorf("expected 2 clients for testuser, got %d", len(clients))
+	}
+
+	// Old client's stop channel should NOT be closed
 	select {
 	case <-oldStop:
-		// Good, old client was closed
-	case <-time.After(200 * time.Millisecond):
-		t.Error("expected old client stop channel to be closed")
+		t.Error("expected old client stop channel NOT to be closed")
+	case <-time.After(100 * time.Millisecond):
+		// Good, old client is still active
 	}
+
+	// Let the handler finish cleanly
+	time.Sleep(500 * time.Millisecond)
 }
 
 func TestSSEServerHandleNotificationUnknownType(t *testing.T) {

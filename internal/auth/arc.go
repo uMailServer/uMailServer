@@ -1,9 +1,8 @@
 package auth
 
-// TODO: Wire ARC validation into the SMTP inbound pipeline (server.go Start()).
 // ARC (Authenticated Received Chain, RFC 8617) provides authentication results
-// for messages relayed through intermediaries. The full implementation exists
-// here but is not yet integrated into the message processing pipeline.
+// for messages relayed through intermediaries. Integrated into SMTP pipeline
+// via internal/smtp/auth_pipeline.go AuthARCStage.
 
 import (
 	"context"

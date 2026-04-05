@@ -15,7 +15,7 @@ import (
 // SSEServer provides Server-Sent Events for real-time updates
 type SSEServer struct {
 	logger     *slog.Logger
-	clients    map[string]*SSEClient // user -> client
+	clients    map[string][]*SSEClient // user -> list of clients
 	clientsMu  sync.RWMutex
 	authFunc   func(token string) (user string, isAdmin bool, err error)
 	corsOrigin string
@@ -35,7 +35,7 @@ type SSEClient struct {
 func NewSSEServer(logger *slog.Logger) *SSEServer {
 	s := &SSEServer{
 		logger:  logger,
-		clients: make(map[string]*SSEClient),
+		clients: make(map[string][]*SSEClient),
 	}
 
 	return s
@@ -118,12 +118,15 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 			subscribe: make(chan imap.MailboxNotification, 100),
 		}
 
-		// Register client
+	// Register client (enforce per-user connection limit)
 		s.clientsMu.Lock()
-		if oldClient, exists := s.clients[user]; exists {
-			close(oldClient.stop)
+		const maxClientsPerUser = 5
+		if len(s.clients[user]) >= maxClientsPerUser {
+			oldest := s.clients[user][0]
+			s.clients[user] = s.clients[user][1:]
+			close(oldest.stop)
 		}
-		s.clients[user] = client
+		s.clients[user] = append(s.clients[user], client)
 		s.clientsMu.Unlock()
 
 		s.logger.Info("SSE client connected", "user", user, "is_admin", isAdmin)
@@ -146,16 +149,12 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 		for {
 			select {
 			case <-r.Context().Done():
-				s.clientsMu.Lock()
-				delete(s.clients, user)
-				s.clientsMu.Unlock()
+				s.removeClient(user, client)
 				s.logger.Info("SSE client disconnected", "user", user)
 				return
 
 			case <-client.stop:
-				s.clientsMu.Lock()
-				delete(s.clients, user)
-				s.clientsMu.Unlock()
+				s.removeClient(user, client)
 				return
 
 			case notification := <-notifyChan:
@@ -221,9 +220,9 @@ func (s *SSEServer) sendEvent(client *SSEClient, event string, data interface{})
 // Broadcast sends an event to all connected clients
 func (s *SSEServer) Broadcast(event string, data interface{}) {
 	s.clientsMu.RLock()
-	clients := make([]*SSEClient, 0, len(s.clients))
-	for _, c := range s.clients {
-		clients = append(clients, c)
+	var clients []*SSEClient
+	for _, list := range s.clients {
+		clients = append(clients, list...)
 	}
 	s.clientsMu.RUnlock()
 
@@ -232,27 +231,31 @@ func (s *SSEServer) Broadcast(event string, data interface{}) {
 	}
 }
 
-// SendToUser sends an event to a specific user
+// SendToUser sends an event to all connections of a specific user
 func (s *SSEServer) SendToUser(user, event string, data interface{}) error {
 	s.clientsMu.RLock()
-	client := s.clients[user]
+	clients := s.clients[user]
 	s.clientsMu.RUnlock()
 
-	if client == nil {
+	if len(clients) == 0 {
 		return fmt.Errorf("user not connected")
 	}
 
-	s.sendEvent(client, event, data)
+	for _, client := range clients {
+		s.sendEvent(client, event, data)
+	}
 	return nil
 }
 
 // SendToAdmins sends an event to all admin clients
 func (s *SSEServer) SendToAdmins(event string, data interface{}) {
 	s.clientsMu.RLock()
-	clients := make([]*SSEClient, 0)
-	for _, c := range s.clients {
-		if c.isAdmin {
-			clients = append(clients, c)
+	var clients []*SSEClient
+	for _, list := range s.clients {
+		for _, c := range list {
+			if c.isAdmin {
+				clients = append(clients, c)
+			}
 		}
 	}
 	s.clientsMu.RUnlock()
@@ -278,5 +281,25 @@ func (s *SSEServer) GetConnectedUsers() []string {
 func (s *SSEServer) GetConnectedCount() int {
 	s.clientsMu.RLock()
 	defer s.clientsMu.RUnlock()
-	return len(s.clients)
+	count := 0
+	for _, list := range s.clients {
+		count += len(list)
+	}
+	return count
+}
+
+// removeClient removes a specific client from a user's client list.
+func (s *SSEServer) removeClient(user string, client *SSEClient) {
+	s.clientsMu.Lock()
+	clients := s.clients[user]
+	for i, c := range clients {
+		if c == client {
+			s.clients[user] = append(clients[:i], clients[i+1:]...)
+			break
+		}
+	}
+	if len(s.clients[user]) == 0 {
+		delete(s.clients, user)
+	}
+	s.clientsMu.Unlock()
 }

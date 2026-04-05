@@ -23,7 +23,7 @@ func TestEnqueueGetStatsError(t *testing.T) {
 	// Close database immediately to cause errors
 	database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	_, err = manager.Enqueue("sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
 	if err == nil {
@@ -42,7 +42,7 @@ func TestEnqueueDBFailureDuringEnqueue(t *testing.T) {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Enqueue one entry successfully first
 	id1, err := manager.Enqueue("sender@example.com", []string{"rcpt@example.com"}, []byte("test1"))
@@ -71,7 +71,7 @@ func TestFlushQueueRetryEntryError(t *testing.T) {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	// Create a message file
 	msgPath := filepath.Join(dataDir, "test.msg")
@@ -109,7 +109,7 @@ func TestProcessQueueShutdownChannel(t *testing.T) {
 	}
 	defer database.Close()
 
-	manager := NewManager(database, nil, dataDir)
+	manager := NewManager(database, nil, dataDir, nil)
 
 	ctx := context.Background()
 	go manager.processQueue(ctx)

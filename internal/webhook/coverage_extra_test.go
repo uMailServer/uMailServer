@@ -16,6 +16,7 @@ import (
 func TestHTTPHandlerMethodNotAllowed(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	methods := []string{http.MethodDelete, http.MethodPut, http.MethodPatch, http.MethodOptions}
 	for _, method := range methods {
@@ -35,6 +36,7 @@ func TestHTTPHandlerMethodNotAllowed(t *testing.T) {
 func TestHandleCreateInvalidJSON(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	// Send invalid JSON
 	rr := httptest.NewRecorder()
@@ -50,6 +52,7 @@ func TestHandleCreateInvalidJSON(t *testing.T) {
 func TestHandleCreateEmptyBody(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(manager.HTTPHandler)
@@ -104,6 +107,7 @@ func TestSendHTTPError(t *testing.T) {
 
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	hook := &Webhook{
 		ID:     "test-hook-error",
@@ -131,6 +135,7 @@ func TestTriggerInactiveWebhook(t *testing.T) {
 
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	// Add an inactive webhook
 	hook := &Webhook{
@@ -154,6 +159,7 @@ func TestTriggerEventNotMatching(t *testing.T) {
 
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	hook := &Webhook{
 		ID:     "mismatch-hook",
@@ -171,6 +177,7 @@ func TestTriggerEventNotMatching(t *testing.T) {
 func TestHandleCreateValidThenList(t *testing.T) {
 	database := &db.DB{}
 	manager := NewManager(database, "test-secret")
+	manager.SetAllowPrivateIP(true)
 
 	// Create a webhook
 	req := struct {

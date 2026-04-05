@@ -795,3 +795,501 @@ func TestUIDLDeletedMessage(t *testing.T) {
 		t.Errorf("UIDL deleted: expected -ERR, got %s", resp)
 	}
 }
+
+// Additional tests for coverage
+
+// Test Session.Close
+func TestSession_Close(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+
+	s := &Server{}
+	session := &Session{
+		server: s,
+		state:  StateAuthorization,
+		conn:   server,
+	}
+
+	// Close should not panic
+	session.Close()
+}
+
+// Test Session.ID
+func TestSession_ID(t *testing.T) {
+	session := &Session{
+		id: "test-session-id-123",
+	}
+
+	if session.ID() != "test-session-id-123" {
+		t.Errorf("ID() = %q, want %q", session.ID(), "test-session-id-123")
+	}
+}
+
+// Test truncateCommand helper
+func TestTruncateCommand(t *testing.T) {
+	tests := []struct {
+		input    string
+		maxLen   int
+		expected string
+	}{
+		{"SHORT", 10, "SHORT"},
+		{strings.Repeat("A", 500), 100, strings.Repeat("A", 100) + "..."},
+		{strings.Repeat("B", 600), 510, strings.Repeat("B", 510) + "..."},
+	}
+
+	for _, tt := range tests {
+		result := truncateCommand(tt.input, tt.maxLen)
+		if result != tt.expected {
+			t.Errorf("truncateCommand(%q, %d) = %q, want %q", tt.input, tt.maxLen, result, tt.expected)
+		}
+	}
+}
+
+// Test CAPA in authorization state
+func TestServer_CAPA_AuthState(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	resp := sendCmd(t, conn, reader, "CAPA")
+	if !strings.HasPrefix(resp, "+OK") {
+		t.Errorf("CAPA: expected +OK, got %s", resp)
+	}
+}
+
+// Test unsupported command in authorization state
+func TestServer_Unsupported_AuthState(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	resp := sendCmd(t, conn, reader, "RETR 1")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Unsupported command: expected -ERR, got %s", resp)
+	}
+}
+
+// Test USER without argument
+func TestServer_USER_NoArg(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	resp := sendCmd(t, conn, reader, "USER")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("USER without arg: expected -ERR, got %s", resp)
+	}
+}
+
+// Test PASS without USER
+func TestServer_PASS_NoUser(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	resp := sendCmd(t, conn, reader, "PASS secret")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("PASS without USER: expected -ERR, got %s", resp)
+	}
+}
+
+// Test PASS with authentication error
+func TestServer_PASS_AuthError(t *testing.T) {
+	store := newMockMailstore()
+	store.authErr = fmt.Errorf("auth service down")
+	srv, addr := startTestServer(t, store, func(user, pass string) (bool, error) {
+		return false, fmt.Errorf("auth service down")
+	})
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	resp := sendCmd(t, conn, reader, "PASS pass")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("PASS auth error: expected -ERR, got %s", resp)
+	}
+}
+
+// Test STAT after authentication
+func TestServer_STAT_AfterAuth(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "STAT")
+	if !strings.HasPrefix(resp, "+OK 3") {
+		t.Errorf("STAT: expected +OK 3, got %s", resp)
+	}
+}
+
+// Test LIST with specific message number
+func TestServer_LIST_Specific(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "LIST 2")
+	if !strings.HasPrefix(resp, "+OK 2 200") {
+		t.Errorf("LIST 2: expected +OK 2 200, got %s", resp)
+	}
+}
+
+// Test LIST with invalid message number
+func TestServer_LIST_Invalid(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "LIST abc")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("LIST abc: expected -ERR, got %s", resp)
+	}
+}
+
+// Test RETR with invalid message number
+func TestServer_RETR_Invalid(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "RETR abc")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("RETR abc: expected -ERR, got %s", resp)
+	}
+}
+
+// Test RETR with out of range message
+func TestServer_RETR_OutOfRange(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "RETR 999")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("RETR 999: expected -ERR, got %s", resp)
+	}
+}
+
+// Test DELE with invalid message number
+func TestServer_DELE_Invalid(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "DELE abc")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("DELE abc: expected -ERR, got %s", resp)
+	}
+}
+
+// Test NOOP in transaction state
+func TestServer_NOOP_Transaction(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "NOOP")
+	if !strings.HasPrefix(resp, "+OK") {
+		t.Errorf("NOOP: expected +OK, got %s", resp)
+	}
+}
+
+// Test UIDL with specific message
+func TestServer_UIDL_Specific(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "UIDL 2")
+	if !strings.HasPrefix(resp, "+OK 2 uid-002") {
+		t.Errorf("UIDL 2: expected +OK 2 uid-002, got %s", resp)
+	}
+}
+
+// Test UIDL with invalid message
+func TestServer_UIDL_Invalid(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "UIDL abc")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("UIDL abc: expected -ERR, got %s", resp)
+	}
+}
+
+// Test RSET clears deleted messages
+func TestServer_RSET_ClearsDeleted(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	sendCmd(t, conn, reader, "DELE 1")
+	resp := sendCmd(t, conn, reader, "RSET")
+	if !strings.HasPrefix(resp, "+OK") {
+		t.Errorf("RSET: expected +OK, got %s", resp)
+	}
+
+	// After RSET, message 1 should be visible again
+	resp = sendCmd(t, conn, reader, "LIST 1")
+	if !strings.HasPrefix(resp, "+OK 1") {
+		t.Errorf("LIST 1 after RSET: expected +OK 1, got %s", resp)
+	}
+}
+
+// Test unsupported command in transaction state
+func TestServer_Unsupported_Transaction(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "UNKNOWN")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("Unknown command: expected -ERR, got %s", resp)
+	}
+}
+
+// Test APOP without argument
+func TestServer_APOP_NoArg(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	resp := sendCmd(t, conn, reader, "APOP")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("APOP without arg: expected -ERR, got %s", resp)
+	}
+}
+
+// Test TOP with missing arguments
+func TestServer_TOP_MissingArgs(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "TOP")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("TOP without args: expected -ERR, got %s", resp)
+	}
+}
+
+// Test TOP with one argument
+func TestServer_TOP_OneArg(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	sendCmd(t, conn, reader, "USER test")
+	sendCmd(t, conn, reader, "PASS pass")
+	resp := sendCmd(t, conn, reader, "TOP 1")
+	if !strings.HasPrefix(resp, "-ERR") {
+		t.Errorf("TOP with one arg: expected -ERR, got %s", resp)
+	}
+}
+
+// Test command too long
+func TestServer_CommandTooLong(t *testing.T) {
+	store := newMockMailstore()
+	srv, addr := startTestServer(t, store, nil)
+	defer srv.Stop()
+
+	conn, reader := dialAndRead(t, addr)
+	defer conn.Close()
+
+	// Send a command longer than 512 bytes
+	longCmd := strings.Repeat("A", 600)
+	fmt.Fprintln(conn, longCmd)
+	conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	line, _, _ := reader.ReadLine()
+	if !strings.HasPrefix(string(line), "-ERR") {
+		t.Errorf("Long command: expected -ERR, got %s", string(line))
+	}
+}
+
+// Test setter methods
+func TestServer_SetAuthLimits(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+	srv.SetAuthLimits(5, 10*time.Minute)
+
+	if srv.maxLoginAttempts != 5 {
+		t.Errorf("expected maxLoginAttempts=5, got %d", srv.maxLoginAttempts)
+	}
+	if srv.lockoutDuration != 10*time.Minute {
+		t.Errorf("expected lockoutDuration=10m, got %v", srv.lockoutDuration)
+	}
+}
+
+func TestServer_SetReadTimeout(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+	srv.SetReadTimeout(30 * time.Second)
+
+	if srv.readTimeout != 30*time.Second {
+		t.Errorf("expected readTimeout=30s, got %v", srv.readTimeout)
+	}
+}
+
+func TestServer_SetWriteTimeout(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+	srv.SetWriteTimeout(30 * time.Second)
+
+	if srv.writeTimeout != 30*time.Second {
+		t.Errorf("expected writeTimeout=30s, got %v", srv.writeTimeout)
+	}
+}
+
+func TestServer_SetMaxConnections(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+	srv.SetMaxConnections(100)
+
+	if srv.maxConnections != 100 {
+		t.Errorf("expected maxConnections=100, got %d", srv.maxConnections)
+	}
+}
+
+func TestServer_SetTLSConfig(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+	tlsConfig := &TLSConfig{
+		CertFile: "/etc/certs/cert.pem",
+		KeyFile:  "/etc/certs/key.pem",
+	}
+	srv.SetTLSConfig(tlsConfig)
+
+	if srv.tlsConfig != tlsConfig {
+		t.Error("expected TLSConfig to be set")
+	}
+}
+
+func TestServer_getTLSConfig_NoConfig(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+
+	_, err := srv.getTLSConfig()
+	if err == nil {
+		t.Error("expected error when TLS config not set")
+	}
+}
+
+func TestServer_AuthFailureTracking(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+	srv.SetAuthLimits(3, time.Hour)
+
+	// Record some failures
+	srv.recordAuthFailure("192.168.1.1")
+	srv.recordAuthFailure("192.168.1.1")
+
+	// Should not be locked out yet
+	if srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not to be locked out after 2 failures")
+	}
+
+	// Third failure
+	srv.recordAuthFailure("192.168.1.1")
+
+	// Should now be locked out
+	if !srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected to be locked out after 3 failures")
+	}
+
+	// Clear failures
+	srv.clearAuthFailures("192.168.1.1")
+
+	// Should not be locked out anymore
+	if srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not to be locked out after clearing failures")
+	}
+}
+
+func TestServer_AuthFailureTracking_Disabled(t *testing.T) {
+	srv := NewServer("127.0.0.1:0", nil, nil)
+	// Disable auth limits
+	srv.SetAuthLimits(0, time.Hour)
+
+	// Record many failures
+	for i := 0; i < 10; i++ {
+		srv.recordAuthFailure("192.168.1.1")
+	}
+
+	// Should never be locked out when disabled
+	if srv.isAuthLockedOut("192.168.1.1") {
+		t.Error("expected not to be locked out when auth limits disabled")
+	}
+}

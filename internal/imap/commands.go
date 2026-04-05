@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -206,11 +207,14 @@ func (s *Session) handleStartTLS() error {
 
 	s.WriteResponse(s.tag, "OK Begin TLS negotiation now")
 
-	// Upgrade to TLS
+	// Upgrade to TLS with a bounded handshake timeout
+	s.conn.SetDeadline(time.Now().Add(30 * time.Second))
 	tlsConn := tls.Server(s.conn, s.server.tlsConfig)
 	if err := tlsConn.Handshake(); err != nil {
+		s.conn.SetDeadline(time.Time{})
 		return fmt.Errorf("TLS handshake failed: %w", err)
 	}
+	s.conn.SetDeadline(time.Time{})
 
 	s.tlsConn = tlsConn
 	s.conn = tlsConn
@@ -338,7 +342,18 @@ func (s *Session) handleAuthLogin() error {
 // AUTHENTICATE PLAIN, and AUTHENTICATE LOGIN.
 // okMsg is the human-readable text sent on success (e.g. "LOGIN completed").
 // failMsg is sent on authentication failure (e.g. "AUTHENTICATE failed").
+func clientIP(conn net.Conn) string {
+	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	return host
+}
+
 func (s *Session) authenticateUser(username, password, okMsg, failMsg string) error {
+	ip := clientIP(s.conn)
+	if s.server.isAuthLockedOut(ip) {
+		s.WriteResponse(s.tag, "NO Too many failed authentication attempts")
+		return nil
+	}
+
 	authenticated := false
 	if s.server.authFunc != nil {
 		auth, err := s.server.authFunc(username, password)
@@ -353,10 +368,12 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 	}
 
 	if !authenticated {
+		s.server.recordAuthFailure(ip)
 		s.WriteResponse(s.tag, "NO "+failMsg)
 		return nil
 	}
 
+	s.server.clearAuthFailures(ip)
 	s.user = username
 	s.state = StateAuthenticated
 
@@ -803,9 +820,21 @@ func (s *Session) handleIdle() error {
 	}
 
 	// Wait for either DONE or notifications
+	var idleTimer <-chan time.Time
+	if s.server.idleTimeout > 0 {
+		t := time.NewTimer(s.server.idleTimeout)
+		defer t.Stop()
+		idleTimer = t.C
+	}
+
 	for {
 		select {
 		case <-doneChan:
+			s.WriteResponse(s.tag, "OK IDLE terminated")
+			idleCleanup()
+			return nil
+
+		case <-idleTimer:
 			s.WriteResponse(s.tag, "OK IDLE terminated")
 			idleCleanup()
 			return nil
@@ -1280,7 +1309,7 @@ func formatFetchResponse(msg *Message, items []string) string {
 		case "FLAGS":
 			parts = append(parts, fmt.Sprintf("FLAGS (%s)", strings.Join(msg.Flags, " ")))
 		case "INTERNALDATE":
-			parts = append(parts, fmt.Sprintf("INTERNALDATE \"%s\"", msg.InternalDate.Format("02-Jan-YYYY HH:mm:ss +0000")))
+			parts = append(parts, fmt.Sprintf("INTERNALDATE \"%s\"", msg.InternalDate.Format("02-Jan-2006 15:04:05 -0700")))
 		case "RFC822.SIZE":
 			parts = append(parts, fmt.Sprintf("RFC822.SIZE %d", msg.Size))
 		case "UID":

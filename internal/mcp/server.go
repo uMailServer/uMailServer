@@ -3,8 +3,11 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
 )
@@ -15,6 +18,17 @@ type Server struct {
 	version    string
 	corsOrigin string
 	authToken  string
+
+	// Rate limiting
+	rateLimit    int // requests per minute, 0 = disabled
+	rateMu       sync.Mutex
+	rateAttempts map[string]*rateAttempt
+}
+
+// rateAttempt tracks MCP requests per IP for rate limiting
+type rateAttempt struct {
+	count       int
+	windowStart time.Time
 }
 
 // NewServer creates MCP server
@@ -36,6 +50,44 @@ func (s *Server) SetCorsOrigin(origin string) {
 	s.corsOrigin = origin
 }
 
+// SetRateLimit sets the rate limit for MCP requests (requests per minute, 0 = disabled)
+func (s *Server) SetRateLimit(limit int) {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	s.rateLimit = limit
+}
+
+// checkRateLimit returns true if the IP is allowed to make MCP requests
+func (s *Server) checkRateLimit(ip string) bool {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+
+	if s.rateLimit <= 0 {
+		return true // rate limiting disabled
+	}
+
+	if s.rateAttempts == nil {
+		s.rateAttempts = make(map[string]*rateAttempt)
+	}
+
+	now := time.Now()
+	attempt, exists := s.rateAttempts[ip]
+
+	// Check if window has expired (1 minute window)
+	if !exists || now.Sub(attempt.windowStart) > time.Minute {
+		s.rateAttempts[ip] = &rateAttempt{count: 1, windowStart: now}
+		return true
+	}
+
+	// Check if limit exceeded
+	if attempt.count >= s.rateLimit {
+		return false
+	}
+
+	attempt.count++
+	return true
+}
+
 // HandleHTTP handles MCP requests
 func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -54,6 +106,16 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != "POST" {
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// Check rate limit by IP
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	if !s.checkRateLimit(ip) {
+		s.writeError(w, http.StatusTooManyRequests, "Rate limit exceeded")
 		return
 	}
 

@@ -25,21 +25,24 @@ func DefaultConfig() *Config {
 				Bind:           "0.0.0.0",
 				MaxMessageSize: Size(50 * 1024 * 1024), // 50MB
 				MaxRecipients:  100,
+				MaxConnections: 10000,
 				ReadTimeout:    Duration(5 * time.Minute),
 				WriteTimeout:   Duration(5 * time.Minute),
 			},
 			Submission: SubmissionSMTPConfig{
-				Enabled:     true,
-				Port:        587,
-				Bind:        "0.0.0.0",
-				RequireAuth: true,
-				RequireTLS:  true,
+				Enabled:        true,
+				Port:           587,
+				Bind:           "0.0.0.0",
+				RequireAuth:    true,
+				RequireTLS:     true,
+				MaxConnections: 10000,
 			},
 			SubmissionTLS: SubmissionTLSConfig{
-				Enabled:     true,
-				Port:        465,
-				Bind:        "0.0.0.0",
-				RequireAuth: true,
+				Enabled:        true,
+				Port:           465,
+				Bind:           "0.0.0.0",
+				RequireAuth:    true,
+				MaxConnections: 10000,
 			},
 		},
 		IMAP: IMAPConfig{
@@ -53,7 +56,8 @@ func DefaultConfig() *Config {
 		POP3: POP3Config{
 			Enabled: false,
 			Port:    995,
-			Bind:    "0.0.0.0",
+			Bind:           "0.0.0.0",
+			MaxConnections: 10000,
 		},
 		HTTP: HTTPConfig{
 			Enabled:  true,
@@ -94,6 +98,7 @@ func DefaultConfig() *Config {
 		Security: SecurityConfig{
 			MaxLoginAttempts: 5,
 			LockoutDuration:  Duration(15 * time.Minute),
+			JWTSecret:        "change-me-in-production-32-char-secret",
 			RateLimit: RateLimitConfig{
 				SMTPPerMinute:         30,
 				SMTPPerHour:           500,
@@ -109,9 +114,12 @@ func DefaultConfig() *Config {
 		},
 		Domains: []DomainConfig{},
 		Logging: LoggingConfig{
-			Level:  "info",
-			Format: "json",
-			Output: "stdout",
+			Level:      "info",
+			Format:     "json",
+			Output:     "stdout",
+			MaxSizeMB:  100, // 100 MB
+			MaxBackups: 10,
+			MaxAgeDays: 30,
 		},
 		Metrics: MetricsConfig{
 			Enabled: true,

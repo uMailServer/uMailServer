@@ -81,7 +81,7 @@ func TestProcessQueueContextCancel(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
@@ -110,7 +110,7 @@ func TestProcessQueueShutdownChannel3(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	// Use a fresh shutdown channel we control
 	shutdown := make(chan struct{})
 	mgr.shutdown = shutdown
@@ -141,7 +141,7 @@ func TestProcessPendingEntriesBasic(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	entry := &db.QueueEntry{
 		ID:          "pending-basic-test",
@@ -190,7 +190,7 @@ func TestFlushQueue_WithPendingEntry_Cov3(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	// Create a message file
 	msgPath := filepath.Join(dataDir, "flush-test.msg")
@@ -238,7 +238,7 @@ func TestEnqueue_WriteFileFailure(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 
 	// Create a file where the queue directory would go to prevent writeFile
 	queueDir := filepath.Join(dataDir, "queue")
@@ -261,7 +261,7 @@ func TestGenerateBounce_EnqueueError(t *testing.T) {
 	}
 	defer database.Close()
 
-	mgr := NewManager(database, nil, dataDir)
+	mgr := NewManager(database, nil, dataDir, nil)
 	// Set max queue size to 0 so Enqueue inside generateBounce will fail
 	mgr.SetMaxQueueSize(0)
 

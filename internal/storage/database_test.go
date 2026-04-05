@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1360,5 +1361,319 @@ func TestBboltDeleteMailboxNonExistent(t *testing.T) {
 	err := db.DeleteMailbox("user1", "GhostBox")
 	if err != nil {
 		t.Errorf("DeleteMailbox for non-existent should not error: %v", err)
+	}
+}
+
+// ==================== Thread Tests ====================
+
+func TestGetThread(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a thread
+	thread := &Thread{
+		ThreadID:     "thread-123",
+		Subject:      "Test Thread",
+		Participants: []string{"user1@example.com", "user2@example.com"},
+		MessageCount: 5,
+		UnreadCount:  2,
+		LastActivity: time.Now(),
+		CreatedAt:    time.Now(),
+	}
+
+	err = db.UpdateThread("user@example.com", thread)
+	if err != nil {
+		t.Fatalf("Failed to create thread: %v", err)
+	}
+
+	// Retrieve the thread
+	retrieved, err := db.GetThread("user@example.com", "thread-123")
+	if err != nil {
+		t.Errorf("GetThread failed: %v", err)
+	}
+
+	if retrieved == nil {
+		t.Fatal("Retrieved thread is nil")
+	}
+
+	if retrieved.ThreadID != "thread-123" {
+		t.Errorf("ThreadID = %s, want thread-123", retrieved.ThreadID)
+	}
+
+	if retrieved.Subject != "Test Thread" {
+		t.Errorf("Subject = %s, want Test Thread", retrieved.Subject)
+	}
+}
+
+func TestGetThread_NotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	_, err = db.GetThread("user@example.com", "nonexistent-thread")
+	if err == nil {
+		t.Error("Expected error for nonexistent thread")
+	}
+}
+
+func TestGetThreads(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create multiple threads
+	for i := 0; i < 5; i++ {
+		thread := &Thread{
+			ThreadID:     fmt.Sprintf("thread-%d", i),
+			Subject:      fmt.Sprintf("Thread %d", i),
+			Participants: []string{"user@example.com"},
+			MessageCount: i + 1,
+			UnreadCount:  i,
+			LastActivity: time.Now(),
+			CreatedAt:    time.Now(),
+		}
+		db.UpdateThread("user@example.com", thread)
+	}
+
+	// Get all threads
+	threads, err := db.GetThreads("user@example.com", 10, 0)
+	if err != nil {
+		t.Errorf("GetThreads failed: %v", err)
+	}
+
+	if len(threads) != 5 {
+		t.Errorf("Expected 5 threads, got %d", len(threads))
+	}
+}
+
+func TestGetThreads_WithLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create multiple threads
+	for i := 0; i < 10; i++ {
+		thread := &Thread{
+			ThreadID:     fmt.Sprintf("thread-%d", i),
+			Subject:      fmt.Sprintf("Thread %d", i),
+			Participants: []string{"user@example.com"},
+			MessageCount: 1,
+			LastActivity: time.Now(),
+			CreatedAt:    time.Now(),
+		}
+		db.UpdateThread("user@example.com", thread)
+	}
+
+	// Get with limit
+	threads, err := db.GetThreads("user@example.com", 5, 0)
+	if err != nil {
+		t.Errorf("GetThreads failed: %v", err)
+	}
+
+	if len(threads) != 5 {
+		t.Errorf("Expected 5 threads (limited), got %d", len(threads))
+	}
+}
+
+func TestGetThreads_WithOffset(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create multiple threads
+	for i := 0; i < 10; i++ {
+		thread := &Thread{
+			ThreadID:     fmt.Sprintf("thread-%d", i),
+			Subject:      fmt.Sprintf("Thread %d", i),
+			Participants: []string{"user@example.com"},
+			MessageCount: 1,
+			LastActivity: time.Now(),
+			CreatedAt:    time.Now(),
+		}
+		db.UpdateThread("user@example.com", thread)
+	}
+
+	// Get with offset
+	threads, err := db.GetThreads("user@example.com", 10, 5)
+	if err != nil {
+		t.Errorf("GetThreads failed: %v", err)
+	}
+
+	if len(threads) != 5 {
+		t.Errorf("Expected 5 threads (offset 5), got %d", len(threads))
+	}
+}
+
+func TestUpdateThread(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	thread := &Thread{
+		ThreadID:     "thread-update",
+		Subject:      "Original Subject",
+		Participants: []string{"user@example.com"},
+		MessageCount: 1,
+		LastActivity: time.Now(),
+		CreatedAt:    time.Now(),
+	}
+
+	// Create thread
+	err = db.UpdateThread("user@example.com", thread)
+	if err != nil {
+		t.Fatalf("Failed to create thread: %v", err)
+	}
+
+	// Update thread
+	thread.Subject = "Updated Subject"
+	thread.MessageCount = 5
+	err = db.UpdateThread("user@example.com", thread)
+	if err != nil {
+		t.Errorf("Failed to update thread: %v", err)
+	}
+
+	// Verify update
+	retrieved, _ := db.GetThread("user@example.com", "thread-update")
+	if retrieved.Subject != "Updated Subject" {
+		t.Errorf("Subject = %s, want Updated Subject", retrieved.Subject)
+	}
+
+	if retrieved.MessageCount != 5 {
+		t.Errorf("MessageCount = %d, want 5", retrieved.MessageCount)
+	}
+}
+
+func TestDeleteThread(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	thread := &Thread{
+		ThreadID:     "thread-delete",
+		Subject:      "To Be Deleted",
+		Participants: []string{"user@example.com"},
+		MessageCount: 1,
+		LastActivity: time.Now(),
+		CreatedAt:    time.Now(),
+	}
+
+	// Create thread
+	db.UpdateThread("user@example.com", thread)
+
+	// Delete thread
+	err = db.DeleteThread("user@example.com", "thread-delete")
+	if err != nil {
+		t.Errorf("DeleteThread failed: %v", err)
+	}
+
+	// Verify deletion
+	_, err = db.GetThread("user@example.com", "thread-delete")
+	if err == nil {
+		t.Error("Expected error after deleting thread")
+	}
+}
+
+func TestSearchThreads(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDatabase(tmpDir + "/test.db")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create threads
+	threads := []*Thread{
+		{
+			ThreadID:     "thread-1",
+			Subject:      "Important Meeting",
+			Participants: []string{"alice@example.com", "bob@example.com"},
+			MessageCount: 5,
+			LastActivity: time.Now(),
+			CreatedAt:    time.Now(),
+		},
+		{
+			ThreadID:     "thread-2",
+			Subject:      "Project Discussion",
+			Participants: []string{"charlie@example.com"},
+			MessageCount: 3,
+			LastActivity: time.Now(),
+			CreatedAt:    time.Now(),
+		},
+		{
+			ThreadID:     "thread-3",
+			Subject:      "Important Update",
+			Participants: []string{"dave@example.com"},
+			MessageCount: 2,
+			LastActivity: time.Now(),
+			CreatedAt:    time.Now(),
+		},
+	}
+
+	for _, thread := range threads {
+		db.UpdateThread("user@example.com", thread)
+	}
+
+	// Search by subject
+	results, err := db.SearchThreads("user@example.com", "Important")
+	if err != nil {
+		t.Errorf("SearchThreads failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 threads with 'Important', got %d", len(results))
+	}
+
+	// Search by participant
+	results, err = db.SearchThreads("user@example.com", "alice")
+	if err != nil {
+		t.Errorf("SearchThreads failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 thread with 'alice', got %d", len(results))
+	}
+}
+
+func TestNormalizeSubject(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Re: Test Subject", "Test Subject"},
+		{"RE: Test Subject", "Test Subject"},
+		{"Re[2]: Test Subject", "Test Subject"},
+		{"Fwd: Test Subject", "Test Subject"},
+		{"FW: Test Subject", "Test Subject"},
+		{"Re: Fwd: Test Subject", "Test Subject"},
+		{"Test Subject", "Test Subject"},
+	}
+
+	for _, tt := range tests {
+		result := NormalizeSubject(tt.input)
+		if result != tt.expected {
+			t.Errorf("NormalizeSubject(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
 	}
 }

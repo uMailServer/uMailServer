@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/x509"
+	"io"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/umailserver/umailserver"
 	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/queue"
@@ -26,26 +28,21 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Simple placeholder HTML for webmail - in production this would be the built React app
-var webmailHTML = []byte(`<!DOCTYPE html>
-<html>
-<head>
-    <title>uMailServer Webmail</title>
-    <style>
-        body { font-family: system-ui, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-        h1 { color: #2563eb; }
-    </style>
-</head>
-<body>
-    <h1>uMailServer Webmail</h1>
-    <p>Webmail is loading...</p>
-</body>
-</html>`)
-
 // loginAttempt tracks failed login attempts per IP
 type loginAttempt struct {
 	count    int
 	lastSeen time.Time
+}
+
+// apiRateAttempt tracks API requests per IP for rate limiting
+type apiRateAttempt struct {
+	count    int
+	windowStart time.Time
+}
+
+// HealthMonitor interface for health checks
+type HealthMonitor interface {
+	HTTPHandler() http.HandlerFunc
 }
 
 // Server represents the admin API server
@@ -59,10 +56,36 @@ type Server struct {
 	msgStore   *storage.MessageStore
 	queueMgr   *queue.Manager
 	httpServer *http.Server
+	healthMon  HealthMonitor
+
+	// Interface abstractions for testability
+	vacationMgr VacationManager
+	filterMgr   FilterManager
+	pushSvc     PushService
+
+	// File system abstraction for embed.FS
+	webmailFS FileSystem
+	adminFS   FileSystem
 
 	// Login rate limiting
 	loginMu      sync.Mutex
 	loginAttempts map[string]*loginAttempt
+
+	// API rate limiting (HTTPRequestsPerMinute)
+	apiRateMu       sync.Mutex
+	apiRateAttempts map[string]*apiRateAttempt
+	apiRateLimit    int // requests per minute, 0 = disabled
+
+	// Mock errors for testing (used to test error paths)
+	vacationGetError       error
+	vacationSetError       error
+	vacationDeleteError    error
+	filterSaveError        error
+	filterGetError         error
+	pushSubscribeError     error
+	pushUnsubscribeError   error
+	pushSendError          error
+	queueMgrStatsError     error
 }
 
 // Config holds API server configuration
@@ -110,11 +133,80 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	})
 
 	return &Server{
-		db:        database,
-		logger:    logger,
-		config:    config,
-		mcpServer: mcp.NewServer(database),
-		sseServer: sseServer,
+		db:         database,
+		logger:     logger,
+		config:     config,
+		mcpServer:  mcp.NewServer(database),
+		sseServer:  sseServer,
+		webmailFS:  newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
+		adminFS:    newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+	}
+}
+
+// NewServerWithInterfaces creates a new admin API server with injectable interfaces for testing
+func NewServerWithInterfaces(
+	database *db.DB,
+	logger *slog.Logger,
+	config Config,
+	vacationMgr VacationManager,
+	filterMgr FilterManager,
+	pushSvc PushService,
+	webmailFS FileSystem,
+	adminFS FileSystem,
+) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if config.JWTSecret == "" {
+		logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
+		config.JWTSecret = fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	if config.TokenExpiry == 0 {
+		config.TokenExpiry = 24 * time.Hour
+	}
+
+	sseServer := websocket.NewSSEServer(logger)
+	if len(config.CorsOrigins) > 0 {
+		sseServer.SetCorsOrigin(strings.Join(config.CorsOrigins, ","))
+	}
+	sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) {
+		parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
+			return []byte(config.JWTSecret), nil
+		})
+		if err != nil || !parsed.Valid {
+			return "", false, fmt.Errorf("invalid token")
+		}
+		claims, ok := parsed.Claims.(jwt.MapClaims)
+		if !ok {
+			return "", false, fmt.Errorf("invalid claims")
+		}
+		u, _ := claims["sub"].(string)
+		a, _ := claims["admin"].(bool)
+		return u, a, nil
+	})
+
+	// Use provided FS or default to embedded
+	if webmailFS == nil {
+		webmailFS = NewEmbedFSAdapter(umailserver.WebmailFS)
+	}
+	if adminFS == nil {
+		adminFS = NewEmbedFSAdapter(umailserver.AdminFS)
+	}
+
+	return &Server{
+		db:           database,
+		logger:       logger,
+		config:       config,
+		mcpServer:    mcp.NewServer(database),
+		sseServer:    sseServer,
+		vacationMgr:  vacationMgr,
+		filterMgr:    filterMgr,
+		pushSvc:      pushSvc,
+		webmailFS:    webmailFS,
+		adminFS:      adminFS,
 	}
 }
 
@@ -127,12 +219,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) router() http.Handler {
 	mux := http.NewServeMux()
 
-	// Webmail (static files)
+	// Webmail (static files) - user interface
 	mux.HandleFunc("/", s.handleWebmail)
-	mux.HandleFunc("/webmail", s.handleWebmail)
+	mux.HandleFunc("/webmail/", s.handleWebmail)
 
-	// Health check
-	mux.HandleFunc("/health", s.handleHealth)
+	// Admin panel (static files) - admin interface
+	mux.HandleFunc("/admin/", s.handleAdmin)
+
+	// Health check - use health monitor if available
+	if s.healthMon != nil {
+		mux.HandleFunc("/health", s.healthMon.HTTPHandler())
+	} else {
+		mux.HandleFunc("/health", s.handleHealth)
+	}
 
 	// Metrics endpoint (admin only)
 	mux.HandleFunc("/metrics", s.authMiddleware(s.adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -173,8 +272,78 @@ func (s *Server) router() http.Handler {
 	// Search
 	api.HandleFunc("/api/v1/search", s.handleSearch)
 
-	// Wrap with middleware
-	return s.corsMiddleware(s.authMiddleware(api))
+	// Threads
+	api.HandleFunc("/api/v1/threads", s.handleThreads)
+	api.HandleFunc("/api/v1/threads/search", s.handleThreadSearch)
+	api.HandleFunc("/api/v1/threads/", s.handleThreadPath)
+
+	// Vacation auto-reply
+	api.HandleFunc("/api/v1/vacation", s.handleVacation)
+
+	// Admin routes
+	api.HandleFunc("/api/v1/admin/vacations", s.adminMiddleware(http.HandlerFunc(s.handleAdminVacations)).ServeHTTP)
+
+	// Push notifications
+	api.HandleFunc("/api/v1/push/vapid-public-key", s.handlePushVAPID)
+	api.HandleFunc("/api/v1/push/subscribe", s.handlePushSubscribe)
+	api.HandleFunc("/api/v1/push/unsubscribe", s.handlePushUnsubscribe)
+	api.HandleFunc("/api/v1/push/subscriptions", s.handlePushSubscriptions)
+	api.HandleFunc("/api/v1/push/test", s.handlePushTest)
+	api.HandleFunc("/api/v1/admin/push/stats", s.adminMiddleware(http.HandlerFunc(s.handleAdminPushStats)).ServeHTTP)
+
+	// Email filters
+	api.HandleFunc("/api/v1/filters", s.handleFilters)
+	api.HandleFunc("/api/v1/filters/reorder", s.handleFilterReorder)
+	api.HandleFunc("/api/v1/filters/", s.handleFilterPath)
+
+	// Queue admin routes
+	api.HandleFunc("/api/v1/admin/queue", s.adminMiddleware(http.HandlerFunc(s.handleQueue)).ServeHTTP)
+	api.HandleFunc("/api/v1/admin/queue/", s.adminMiddleware(http.HandlerFunc(s.handleQueueDetail)).ServeHTTP)
+
+	// Wrap API with auth middleware and mount to main mux
+	apiHandler := s.rateLimitMiddleware(s.limitBodyMiddleware(s.corsMiddleware(s.authMiddleware(api))))
+	mux.Handle("/api/v1/", apiHandler)
+
+	return mux
+}
+
+// limitBodyMiddleware restricts request body size to prevent DoS.
+func (s *Server) limitBodyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, 4<<20) // 4 MB
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// rateLimitMiddleware enforces API rate limiting per IP.
+// Exempts health check and authentication endpoints.
+func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip rate limiting for health and auth endpoints
+		if r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/api/v1/auth/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Get client IP
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip == "" {
+			ip = r.RemoteAddr
+		}
+
+		if !s.checkAPIRateLimit(ip) {
+			s.logger.Warn("API rate limit exceeded",
+				slog.String("ip", ip),
+				slog.String("path", r.URL.Path),
+			)
+			s.sendError(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // SetSearchService injects the search service into the API server
@@ -351,14 +520,146 @@ func (s *Server) recordLoginFailure(ip string) {
 // Handlers
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	s.sendJSON(w, http.StatusOK, map[string]string{
+	status := http.StatusOK
+	result := map[string]interface{}{
 		"status": "healthy",
-	})
+	}
+
+	// Check database
+	if s.db == nil {
+		status = http.StatusServiceUnavailable
+		result["status"] = "unhealthy"
+		result["database"] = "not initialized"
+	} else {
+		if _, err := s.db.ListDomains(); err != nil {
+			status = http.StatusServiceUnavailable
+			result["status"] = "unhealthy"
+			result["database"] = err.Error()
+		} else {
+			result["database"] = "ok"
+		}
+	}
+
+	// Check queue manager
+	if s.queueMgr != nil {
+		// Check for mock error injection (used in tests)
+		if s.queueMgrStatsError != nil {
+			status = http.StatusServiceUnavailable
+			result["status"] = "unhealthy"
+			result["queue"] = s.queueMgrStatsError.Error()
+		} else if _, err := s.queueMgr.GetStats(); err != nil {
+			status = http.StatusServiceUnavailable
+			result["status"] = "unhealthy"
+			result["queue"] = err.Error()
+		} else {
+			result["queue"] = "ok"
+		}
+	}
+
+	// Check message store
+	if s.msgStore != nil {
+		result["storage"] = "ok"
+	}
+
+	s.sendJSON(w, status, result)
 }
 
 func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(webmailHTML)
+	// Use injected webmail FS
+	webmailFS := s.webmailFS
+	if webmailFS == nil {
+		webmailFS = NewEmbedFSAdapter(umailserver.WebmailFS)
+	}
+
+	// Handle SPA routing - serve index.html for non-existent paths
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	if path == "" {
+		path = "index.html"
+	}
+
+	// Try to open the file
+	file, err := webmailFS.Open(path)
+	if err != nil {
+		// If file not found, serve index.html for SPA routing
+		file, err = webmailFS.Open("index.html")
+		if err != nil {
+			s.logger.Error("Failed to open index.html", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		path = "index.html"
+	}
+	defer file.Close()
+
+	// Set content type based on file extension
+	if strings.HasSuffix(path, ".html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	} else if strings.HasSuffix(path, ".js") {
+		w.Header().Set("Content-Type", "application/javascript")
+	} else if strings.HasSuffix(path, ".css") {
+		w.Header().Set("Content-Type", "text/css")
+	} else if strings.HasSuffix(path, ".svg") {
+		w.Header().Set("Content-Type", "image/svg+xml")
+	}
+
+	// Serve file content
+	stat, err := file.Stat()
+	if err != nil {
+		s.logger.Error("Failed to stat file", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	http.ServeContent(w, r, path, stat.ModTime(), file.(io.ReadSeeker))
+}
+
+func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	// Use injected admin FS
+	adminFS := s.adminFS
+	if adminFS == nil {
+		adminFS = NewEmbedFSAdapter(umailserver.AdminFS)
+	}
+
+	// Handle SPA routing - serve index.html for non-existent paths
+	path := strings.TrimPrefix(r.URL.Path, "/admin/")
+	if path == "" {
+		path = "index.html"
+	}
+
+	// Try to open the file
+	file, err := adminFS.Open(path)
+	if err != nil {
+		// If file not found, serve index.html for SPA routing
+		file, err = adminFS.Open("index.html")
+		if err != nil {
+			s.logger.Error("Failed to open index.html", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		path = "index.html"
+	}
+	defer file.Close()
+
+	// Set content type based on file extension
+	if strings.HasSuffix(path, ".html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	} else if strings.HasSuffix(path, ".js") {
+		w.Header().Set("Content-Type", "application/javascript")
+	} else if strings.HasSuffix(path, ".css") {
+		w.Header().Set("Content-Type", "text/css")
+	} else if strings.HasSuffix(path, ".svg") {
+		w.Header().Set("Content-Type", "image/svg+xml")
+	}
+
+	// Serve file content
+	stat, err := file.Stat()
+	if err != nil {
+		s.logger.Error("Failed to stat file", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	http.ServeContent(w, r, path, stat.ModTime(), file.(io.ReadSeeker))
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -684,6 +985,50 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // SetQueueManager injects the queue manager for stats
 func (s *Server) SetQueueManager(qm *queue.Manager) {
 	s.queueMgr = qm
+}
+
+// SetHealthMonitor sets the health monitor for health endpoints
+func (s *Server) SetHealthMonitor(mon HealthMonitor) {
+	s.healthMon = mon
+}
+
+// SetAPIRateLimit sets the HTTP API rate limit (requests per minute, 0 = disabled)
+func (s *Server) SetAPIRateLimit(limit int) {
+	s.apiRateMu.Lock()
+	defer s.apiRateMu.Unlock()
+	s.apiRateLimit = limit
+}
+
+// checkAPIRateLimit returns true if the IP is allowed to make API requests.
+// Uses sliding window based on HTTPRequestsPerMinute config.
+func (s *Server) checkAPIRateLimit(ip string) bool {
+	s.apiRateMu.Lock()
+	defer s.apiRateMu.Unlock()
+
+	if s.apiRateLimit <= 0 {
+		return true // rate limiting disabled
+	}
+
+	if s.apiRateAttempts == nil {
+		s.apiRateAttempts = make(map[string]*apiRateAttempt)
+	}
+
+	now := time.Now()
+	attempt, exists := s.apiRateAttempts[ip]
+
+	// Check if window has expired (1 minute window)
+	if !exists || now.Sub(attempt.windowStart) > time.Minute {
+		s.apiRateAttempts[ip] = &apiRateAttempt{count: 1, windowStart: now}
+		return true
+	}
+
+	// Check if limit exceeded
+	if attempt.count >= s.apiRateLimit {
+		return false
+	}
+
+	attempt.count++
+	return true
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

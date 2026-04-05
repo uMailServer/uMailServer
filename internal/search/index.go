@@ -86,10 +86,12 @@ func (idx *Index) removeInternal(docID string) {
 
 	// Remove all tokens for this document
 	allText := doc.Content
-	for _, value := range doc.Fields {
+	for field, value := range doc.Fields {
 		tokens := tokenize(value)
 		for _, token := range tokens {
-			delete(idx.tokens[token], docID)
+			// Remove field-prefixed token (as added in Add)
+			fieldToken := field + ":" + token
+			delete(idx.tokens[fieldToken], docID)
 		}
 		allText += " " + value
 	}

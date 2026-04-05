@@ -61,17 +61,3 @@ func (p *PIDFile) Remove() error {
 	return os.Remove(p.path)
 }
 
-// isProcessRunning checks if a process with the given PID is running
-func isProcessRunning(pid int) bool {
-	// On Unix, send signal 0 to check if process exists
-	// On Windows, this is handled differently
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-
-	// On Windows, FindProcess always succeeds, need additional check
-	// For simplicity, we assume it's running if we found it
-	_ = process
-	return true
-}
