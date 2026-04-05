@@ -438,3 +438,47 @@ func TestTruncate(t *testing.T) {
 		}
 	}
 }
+
+func TestServerSetAuthLimits(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	// Set auth limits with maxAttempts=5 and lockoutDuration=10 minutes
+	server.SetAuthLimits(5, 10*time.Minute)
+
+	// Verify the values are set
+	if server.maxLoginAttempts != 5 {
+		t.Errorf("expected maxLoginAttempts=5, got %d", server.maxLoginAttempts)
+	}
+	if server.lockoutDuration != 10*time.Minute {
+		t.Errorf("expected lockoutDuration=10m, got %v", server.lockoutDuration)
+	}
+}
+
+func TestServerSetAuthLimits_ZeroMaxAttempts(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	// Set auth limits with maxAttempts=0 (disabled)
+	server.SetAuthLimits(0, 0)
+
+	if server.maxLoginAttempts != 0 {
+		t.Errorf("expected maxLoginAttempts=0, got %d", server.maxLoginAttempts)
+	}
+
+	// isAuthLockedOut should return false when maxLoginAttempts is 0
+	locked := server.isAuthLockedOut("127.0.0.1")
+	if locked {
+		t.Error("expected isAuthLockedOut=false when maxLoginAttempts=0")
+	}
+}
