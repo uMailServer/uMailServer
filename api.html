@@ -1,0 +1,3572 @@
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+		<title>api: Go Coverage Report</title>
+		<style>
+			body {
+				background: black;
+				color: rgb(80, 80, 80);
+			}
+			body, pre, #legend span {
+				font-family: Menlo, monospace;
+				font-weight: bold;
+			}
+			#topbar {
+				background: black;
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 42px;
+				border-bottom: 1px solid rgb(80, 80, 80);
+			}
+			#content {
+				margin-top: 50px;
+			}
+			#nav, #legend {
+				float: left;
+				margin-left: 10px;
+			}
+			#legend {
+				margin-top: 12px;
+			}
+			#nav {
+				margin-top: 10px;
+			}
+			#legend span {
+				margin: 0 5px;
+			}
+			.cov0 { color: rgb(192, 0, 0) }
+.cov1 { color: rgb(128, 128, 128) }
+.cov2 { color: rgb(116, 140, 131) }
+.cov3 { color: rgb(104, 152, 134) }
+.cov4 { color: rgb(92, 164, 137) }
+.cov5 { color: rgb(80, 176, 140) }
+.cov6 { color: rgb(68, 188, 143) }
+.cov7 { color: rgb(56, 200, 146) }
+.cov8 { color: rgb(44, 212, 149) }
+.cov9 { color: rgb(32, 224, 152) }
+.cov10 { color: rgb(20, 236, 155) }
+
+		</style>
+	</head>
+	<body>
+		<div id="topbar">
+			<div id="nav">
+				<select id="files">
+				
+				<option value="file0">github.com/umailserver/umailserver/internal/api/embed_fs.go (84.2%)</option>
+				
+				<option value="file1">github.com/umailserver/umailserver/internal/api/filters.go (96.3%)</option>
+				
+				<option value="file2">github.com/umailserver/umailserver/internal/api/mock_filter.go (84.6%)</option>
+				
+				<option value="file3">github.com/umailserver/umailserver/internal/api/mock_fs.go (100.0%)</option>
+				
+				<option value="file4">github.com/umailserver/umailserver/internal/api/mock_push.go (100.0%)</option>
+				
+				<option value="file5">github.com/umailserver/umailserver/internal/api/mock_queue.go (100.0%)</option>
+				
+				<option value="file6">github.com/umailserver/umailserver/internal/api/mock_vacation.go (90.9%)</option>
+				
+				<option value="file7">github.com/umailserver/umailserver/internal/api/pprof.go (83.3%)</option>
+				
+				<option value="file8">github.com/umailserver/umailserver/internal/api/push.go (93.4%)</option>
+				
+				<option value="file9">github.com/umailserver/umailserver/internal/api/security_middleware.go (98.2%)</option>
+				
+				<option value="file10">github.com/umailserver/umailserver/internal/api/server.go (85.1%)</option>
+				
+				<option value="file11">github.com/umailserver/umailserver/internal/api/threads.go (84.0%)</option>
+				
+				<option value="file12">github.com/umailserver/umailserver/internal/api/vacation.go (98.9%)</option>
+				
+				</select>
+			</div>
+			<div id="legend">
+				<span>not tracked</span>
+			
+				<span class="cov0">not covered</span>
+				<span class="cov8">covered</span>
+			
+			</div>
+		</div>
+		<div id="content">
+		
+		<pre class="file" id="file0" style="display: none">package api
+
+import (
+        "io"
+        "io/fs"
+)
+
+// embedFSAdapter wraps embed.FS to implement the FileSystem interface
+type embedFSAdapter struct {
+        fs fs.FS
+}
+
+// NewEmbedFSAdapter creates a new adapter for embed.FS
+func NewEmbedFSAdapter(embeddedFS fs.FS) FileSystem <span class="cov8" title="1">{
+        return &amp;embedFSAdapter{fs: embeddedFS}
+}</span>
+
+// newEmbedFSSub creates a sub-FS from an embedded FS
+func newEmbedFSSub(embeddedFS fs.FS, path string) FileSystem <span class="cov8" title="1">{
+        subFS, err := fs.Sub(embeddedFS, path)
+        if err != nil </span><span class="cov0" title="0">{
+                // Return a failing adapter
+                return &amp;embedFSAdapter{fs: nil}
+        }</span>
+        <span class="cov8" title="1">return &amp;embedFSAdapter{fs: subFS}</span>
+}
+
+func (a *embedFSAdapter) Open(name string) (fs.File, error) <span class="cov8" title="1">{
+        if a.fs == nil </span><span class="cov8" title="1">{
+                return nil, fs.ErrNotExist
+        }</span>
+        <span class="cov8" title="1">return a.fs.Open(name)</span>
+}
+
+func (a *embedFSAdapter) ReadFile(name string) ([]byte, error) <span class="cov8" title="1">{
+        if a.fs == nil </span><span class="cov8" title="1">{
+                return nil, fs.ErrNotExist
+        }</span>
+        <span class="cov8" title="1">file, err := a.fs.Open(name)
+        if err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+        <span class="cov8" title="1">defer file.Close()
+        return io.ReadAll(file)</span>
+}
+
+func (a *embedFSAdapter) Exists(name string) bool <span class="cov8" title="1">{
+        if a.fs == nil </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov0" title="0">_, err := a.fs.Open(name)
+        return err == nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file1" style="display: none">package api
+
+import (
+        "encoding/json"
+        "fmt"
+        "net/http"
+        "path"
+        "strings"
+        "time"
+
+        "github.com/google/uuid"
+        "github.com/umailserver/umailserver/internal/db"
+)
+
+// FilterCondition represents a single filter condition
+type FilterCondition struct {
+        Field      string `json:"field"`      // from, to, subject, body, header
+        Operator   string `json:"operator"`   // contains, equals, startsWith, endsWith, matches
+        Value      string `json:"value"`
+        HeaderName string `json:"headerName,omitempty"`
+}
+
+// FilterAction represents a single filter action
+type FilterAction struct {
+        Type      string `json:"type"`                // move, copy, delete, markRead, markSpam, forward, flag
+        Target    string `json:"target,omitempty"`    // for move/copy
+        ForwardTo string `json:"forwardTo,omitempty"` // for forward
+}
+
+// EmailFilter represents a user's email filter
+type EmailFilter struct {
+        ID         string            `json:"id"`
+        UserID     string            `json:"user_id"`
+        Name       string            `json:"name"`
+        Enabled    bool              `json:"enabled"`
+        MatchAll   bool              `json:"matchAll"`
+        Conditions []FilterCondition `json:"conditions"`
+        Actions    []FilterAction    `json:"actions"`
+        Priority   int               `json:"priority"`
+        CreatedAt  time.Time         `json:"createdAt"`
+        UpdatedAt  time.Time         `json:"updatedAt"`
+}
+
+// handleFilters handles GET/POST /api/v1/filters
+func (s *Server) handleFilters(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.handleGetFilters(w, r)</span>
+        case http.MethodPost:<span class="cov8" title="1">
+                s.handleCreateFilter(w, r)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+// handleFilter handles GET/PUT/DELETE /api/v1/filters/:id
+func (s *Server) handleFilter(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.handleGetFilter(w, r)</span>
+        case http.MethodPut:<span class="cov8" title="1">
+                s.handleUpdateFilter(w, r)</span>
+        case http.MethodDelete:<span class="cov8" title="1">
+                s.handleDeleteFilter(w, r)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+// handleGetFilters gets all filters for the current user
+func (s *Server) handleGetFilters(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get filters for user
+        <span class="cov8" title="1">filters, err := s.getUserFilters(user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to get filters", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to get filters")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "filters": filters,
+        })</span>
+}
+
+// handleGetFilter gets a single filter
+func (s *Server) handleGetFilter(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get filter ID from path
+        <span class="cov8" title="1">filterID := path.Base(r.URL.Path)
+
+        // Get filter
+        filter, err := s.getFilter(user, filterID)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "filter not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, filter)</span>
+}
+
+// handleCreateFilter creates a new filter
+func (s *Server) handleCreateFilter(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Parse request body
+        <span class="cov8" title="1">var req struct {
+                Name       string            `json:"name"`
+                MatchAll   bool              `json:"matchAll"`
+                Conditions []FilterCondition `json:"conditions"`
+                Actions    []FilterAction    `json:"actions"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        // Validate
+        <span class="cov8" title="1">if req.Name == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "filter name is required")
+                return
+        }</span>
+        <span class="cov8" title="1">if len(req.Conditions) == 0 </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "at least one condition is required")
+                return
+        }</span>
+        <span class="cov8" title="1">if len(req.Actions) == 0 </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "at least one action is required")
+                return
+        }</span>
+
+        // Create filter
+        <span class="cov8" title="1">filter := &amp;EmailFilter{
+                ID:         uuid.New().String(),
+                UserID:     user,
+                Name:       req.Name,
+                Enabled:    true,
+                MatchAll:   req.MatchAll,
+                Conditions: req.Conditions,
+                Actions:    req.Actions,
+                Priority:   0, // Will be set based on order
+                CreatedAt:  time.Now(),
+                UpdatedAt:  time.Now(),
+        }
+
+        // Save filter
+        if err := s.saveFilter(filter); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to save filter", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to save filter")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusCreated, filter)</span>
+}
+
+// handleUpdateFilter updates an existing filter
+func (s *Server) handleUpdateFilter(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get filter ID from path
+        <span class="cov8" title="1">filterID := path.Base(r.URL.Path)
+
+        // Get existing filter
+        existing, err := s.getFilter(user, filterID)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "filter not found")
+                return
+        }</span>
+
+        // Parse request body
+        <span class="cov8" title="1">var req struct {
+                Name       string            `json:"name"`
+                Enabled    *bool             `json:"enabled,omitempty"`
+                MatchAll   bool              `json:"matchAll"`
+                Conditions []FilterCondition `json:"conditions"`
+                Actions    []FilterAction    `json:"actions"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        // Update fields
+        <span class="cov8" title="1">if req.Name != "" </span><span class="cov8" title="1">{
+                existing.Name = req.Name
+        }</span>
+        <span class="cov8" title="1">if req.Enabled != nil </span><span class="cov8" title="1">{
+                existing.Enabled = *req.Enabled
+        }</span>
+        <span class="cov8" title="1">existing.MatchAll = req.MatchAll
+        if len(req.Conditions) &gt; 0 </span><span class="cov0" title="0">{
+                existing.Conditions = req.Conditions
+        }</span>
+        <span class="cov8" title="1">if len(req.Actions) &gt; 0 </span><span class="cov0" title="0">{
+                existing.Actions = req.Actions
+        }</span>
+        <span class="cov8" title="1">existing.UpdatedAt = time.Now()
+
+        // Save filter
+        if err := s.saveFilter(existing); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to update filter", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to update filter")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, existing)</span>
+}
+
+// handleDeleteFilter deletes a filter
+func (s *Server) handleDeleteFilter(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get filter ID from path
+        <span class="cov8" title="1">filterID := path.Base(r.URL.Path)
+
+        // Delete filter
+        if err := s.deleteFilter(user, filterID); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "filter not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "deleted",
+        })</span>
+}
+
+// handleFilterToggle handles POST /api/v1/filters/:id/toggle
+func (s *Server) handleFilterToggle(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get filter ID from path
+        <span class="cov8" title="1">pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+        if len(pathParts) &lt; 2 </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusBadRequest, "invalid filter id")
+                return
+        }</span>
+        <span class="cov8" title="1">filterID := pathParts[len(pathParts)-2]
+
+        // Get existing filter
+        existing, err := s.getFilter(user, filterID)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "filter not found")
+                return
+        }</span>
+
+        // Toggle enabled state
+        <span class="cov8" title="1">existing.Enabled = !existing.Enabled
+        existing.UpdatedAt = time.Now()
+
+        // Save filter
+        if err := s.saveFilter(existing); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to toggle filter", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to toggle filter")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, existing)</span>
+}
+
+// handleFilterPath routes filter requests including toggle paths
+func (s *Server) handleFilterPath(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        path := strings.Trim(r.URL.Path, "/")
+        parts := strings.Split(path, "/")
+
+        // Check if this is a toggle request: /api/v1/filters/{id}/toggle
+        if len(parts) &gt;= 4 &amp;&amp; parts[len(parts)-1] == "toggle" </span><span class="cov8" title="1">{
+                s.handleFilterToggle(w, r)
+                return
+        }</span>
+
+        // Otherwise fall through to handleFilter
+        <span class="cov8" title="1">s.handleFilter(w, r)</span>
+}
+
+// handleFilterReorder handles POST /api/v1/filters/reorder
+func (s *Server) handleFilterReorder(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Parse request body
+        <span class="cov8" title="1">var req struct {
+                FilterIDs []string `json:"filterIds"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        // Reorder filters
+        <span class="cov8" title="1">if err := s.reorderFilters(user, req.FilterIDs); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to reorder filters", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to reorder filters")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "reordered",
+        })</span>
+}
+
+// Database/storage functions
+
+// filterKey returns the database key for a filter
+func filterKey(userID, filterID string) string <span class="cov8" title="1">{
+        return fmt.Sprintf("%s:%s", userID, filterID)
+}</span>
+
+// getUserFilters gets all filters for a user
+func (s *Server) getUserFilters(userID string) ([]*EmailFilter, error) <span class="cov8" title="1">{
+        // Use interface if set
+        if s.filterMgr != nil </span><span class="cov8" title="1">{
+                return s.filterMgr.GetUserFilters(userID)
+        }</span>
+        <span class="cov8" title="1">if s.db == nil </span><span class="cov8" title="1">{
+                return []*EmailFilter{}, nil
+        }</span>
+
+        <span class="cov8" title="1">var filters []*EmailFilter
+        prefix := userID + ":"
+
+        err := s.db.ForEachPrefix(db.BucketFilters, prefix, func(key string, value []byte) error </span><span class="cov8" title="1">{
+                var filter EmailFilter
+                if err := json.Unmarshal(value, &amp;filter); err != nil </span><span class="cov0" title="0">{
+                        return nil // Skip invalid entries
+                }</span>
+                <span class="cov8" title="1">filters = append(filters, &amp;filter)
+                return nil</span>
+        })
+
+        <span class="cov8" title="1">if err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+
+        // Sort by priority
+        <span class="cov8" title="1">for i := range filters </span><span class="cov8" title="1">{
+                filters[i].Priority = i
+        }</span>
+
+        <span class="cov8" title="1">return filters, nil</span>
+}
+
+// getFilter gets a single filter by ID
+func (s *Server) getFilter(userID, filterID string) (*EmailFilter, error) <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.filterGetError != nil </span><span class="cov0" title="0">{
+                return nil, s.filterGetError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.filterMgr != nil </span><span class="cov8" title="1">{
+                return s.filterMgr.GetFilter(userID, filterID)
+        }</span>
+        <span class="cov8" title="1">if s.db == nil </span><span class="cov8" title="1">{
+                return nil, fmt.Errorf("database not available")
+        }</span>
+
+        <span class="cov8" title="1">key := filterKey(userID, filterID)
+        var filter EmailFilter
+        if err := s.db.Get(db.BucketFilters, key, &amp;filter); err != nil </span><span class="cov8" title="1">{
+                return nil, err
+        }</span>
+
+        <span class="cov8" title="1">return &amp;filter, nil</span>
+}
+
+// saveFilter saves a filter
+func (s *Server) saveFilter(filter *EmailFilter) error <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.filterSaveError != nil </span><span class="cov8" title="1">{
+                return s.filterSaveError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.filterMgr != nil </span><span class="cov8" title="1">{
+                return s.filterMgr.SaveFilter(filter)
+        }</span>
+        <span class="cov8" title="1">if s.db == nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("database not available")
+        }</span>
+
+        <span class="cov8" title="1">key := filterKey(filter.UserID, filter.ID)
+        return s.db.Put(db.BucketFilters, key, filter)</span>
+}
+
+// deleteFilter deletes a filter
+func (s *Server) deleteFilter(userID, filterID string) error <span class="cov8" title="1">{
+        // Use interface if set
+        if s.filterMgr != nil </span><span class="cov8" title="1">{
+                return s.filterMgr.DeleteFilter(userID, filterID)
+        }</span>
+        <span class="cov8" title="1">if s.db == nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("database not available")
+        }</span>
+
+        <span class="cov8" title="1">key := filterKey(userID, filterID)
+        return s.db.Delete(db.BucketFilters, key)</span>
+}
+
+// reorderFilters updates the priority of filters
+func (s *Server) reorderFilters(userID string, filterIDs []string) error <span class="cov8" title="1">{
+        // Use interface if set
+        if s.filterMgr != nil </span><span class="cov8" title="1">{
+                return s.filterMgr.ReorderFilters(userID, filterIDs)
+        }</span>
+        <span class="cov8" title="1">if s.db == nil </span><span class="cov8" title="1">{
+                return fmt.Errorf("database not available")
+        }</span>
+
+        <span class="cov8" title="1">for priority, filterID := range filterIDs </span><span class="cov8" title="1">{
+                filter, err := s.getFilter(userID, filterID)
+                if err != nil </span><span class="cov0" title="0">{
+                        continue</span>
+                }
+                <span class="cov8" title="1">filter.Priority = priority
+                filter.UpdatedAt = time.Now()
+                s.saveFilter(filter)</span>
+        }
+
+        <span class="cov8" title="1">return nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file2" style="display: none">package api
+
+// MockFilterManager mock for testing
+type MockFilterManager struct {
+        GetUserFiltersError error
+        GetFilterError      error
+        SaveFilterError     error
+        DeleteFilterError   error
+        ReorderFiltersError error
+
+        GetUserFiltersResult []*EmailFilter
+        GetFilterResult      *EmailFilter
+        SaveFilterCalled     bool
+        DeleteFilterCalled   bool
+        ReorderFiltersCalled bool
+        ReorderFiltersArg    []string
+}
+
+func (m *MockFilterManager) GetUserFilters(userID string) ([]*EmailFilter, error) <span class="cov8" title="1">{
+        if m.GetUserFiltersError != nil </span><span class="cov8" title="1">{
+                return nil, m.GetUserFiltersError
+        }</span>
+        <span class="cov0" title="0">return m.GetUserFiltersResult, nil</span>
+}
+
+func (m *MockFilterManager) GetFilter(userID, filterID string) (*EmailFilter, error) <span class="cov8" title="1">{
+        if m.GetFilterError != nil </span><span class="cov8" title="1">{
+                return nil, m.GetFilterError
+        }</span>
+        <span class="cov0" title="0">return m.GetFilterResult, nil</span>
+}
+
+func (m *MockFilterManager) SaveFilter(filter *EmailFilter) error <span class="cov8" title="1">{
+        m.SaveFilterCalled = true
+        return m.SaveFilterError
+}</span>
+
+func (m *MockFilterManager) DeleteFilter(userID, filterID string) error <span class="cov8" title="1">{
+        m.DeleteFilterCalled = true
+        return m.DeleteFilterError
+}</span>
+
+func (m *MockFilterManager) ReorderFilters(userID string, filterIDs []string) error <span class="cov8" title="1">{
+        m.ReorderFiltersCalled = true
+        m.ReorderFiltersArg = filterIDs
+        return m.ReorderFiltersError
+}</span>
+</pre>
+		
+		<pre class="file" id="file3" style="display: none">package api
+
+import (
+        "io"
+        "io/fs"
+        "strings"
+        "time"
+)
+
+// MockFS mock for embed.FS testing
+type MockFS struct {
+        Files     map[string]string
+        OpenError error
+        StatError error
+}
+
+// mockFile implements io.ReadSeeker for testing
+type mockFile struct {
+        content   string
+        name      string
+        pos       int
+        statError error
+}
+
+func (f *mockFile) Stat() (fs.FileInfo, error) <span class="cov8" title="1">{
+        if f.statError != nil </span><span class="cov8" title="1">{
+                return nil, f.statError
+        }</span>
+        <span class="cov8" title="1">return &amp;mockFileInfo{name: f.name, size: int64(len(f.content))}, nil</span>
+}
+
+func (f *mockFile) Read(p []byte) (int, error) <span class="cov8" title="1">{
+        if f.pos &gt;= len(f.content) </span><span class="cov8" title="1">{
+                return 0, io.EOF
+        }</span>
+        <span class="cov8" title="1">n := copy(p, f.content[f.pos:])
+        f.pos += n
+        return n, nil</span>
+}
+
+func (f *mockFile) Seek(offset int64, whence int) (int64, error) <span class="cov8" title="1">{
+        switch whence </span>{
+        case io.SeekStart:<span class="cov8" title="1">
+                f.pos = int(offset)</span>
+        case io.SeekCurrent:<span class="cov8" title="1">
+                f.pos += int(offset)</span>
+        case io.SeekEnd:<span class="cov8" title="1">
+                f.pos = len(f.content) + int(offset)</span>
+        }
+        <span class="cov8" title="1">return int64(f.pos), nil</span>
+}
+
+func (f *mockFile) Close() error <span class="cov8" title="1">{
+        return nil
+}</span>
+
+// mockFileInfo implements fs.FileInfo
+type mockFileInfo struct {
+        name string
+        size int64
+}
+
+func (fi *mockFileInfo) Name() string       <span class="cov8" title="1">{ return fi.name }</span>
+func (fi *mockFileInfo) Size() int64        <span class="cov8" title="1">{ return fi.size }</span>
+func (fi *mockFileInfo) Mode() fs.FileMode  <span class="cov8" title="1">{ return 0644 }</span>
+func (fi *mockFileInfo) ModTime() time.Time <span class="cov8" title="1">{ return time.Now() }</span>
+func (fi *mockFileInfo) IsDir() bool        <span class="cov8" title="1">{ return false }</span>
+func (fi *mockFileInfo) Sys() interface{}  <span class="cov8" title="1">{ return nil }</span>
+
+func (m *MockFS) Open(name string) (fs.File, error) <span class="cov8" title="1">{
+        if m.OpenError != nil </span><span class="cov8" title="1">{
+                return nil, m.OpenError
+        }</span>
+        <span class="cov8" title="1">content, ok := m.Files[name]
+        if !ok </span><span class="cov8" title="1">{
+                // Try with index.html fallback
+                if name == "index.html" || strings.HasSuffix(name, "/") </span><span class="cov8" title="1">{
+                        if content, ok = m.Files["index.html"]; ok </span><span class="cov8" title="1">{
+                                return &amp;mockFile{content: content, name: "index.html", statError: m.StatError}, nil
+                        }</span>
+                }
+                <span class="cov8" title="1">return nil, fs.ErrNotExist</span>
+        }
+        <span class="cov8" title="1">return &amp;mockFile{content: content, name: name, statError: m.StatError}, nil</span>
+}
+
+func (m *MockFS) ReadFile(name string) ([]byte, error) <span class="cov8" title="1">{
+        content, ok := m.Files[name]
+        if !ok </span><span class="cov8" title="1">{
+                return nil, fs.ErrNotExist
+        }</span>
+        <span class="cov8" title="1">return []byte(content), nil</span>
+}
+
+func (m *MockFS) Exists(name string) bool <span class="cov8" title="1">{
+        _, ok := m.Files[name]
+        return ok
+}</span>
+</pre>
+		
+		<pre class="file" id="file4" style="display: none">package api
+
+import (
+        "github.com/umailserver/umailserver/internal/push"
+)
+
+// MockPushService mock for testing
+type MockPushService struct {
+        SubscribeError       error
+        UnsubscribeError     error
+        SendNotificationError error
+        GetVAPIDPublicKeyResult string
+
+        SubscribeCalls       []string
+        UnsubscribeCalls    []struct{ UserID, SubscriptionID string }
+        SendNotificationCalls []struct{ UserID string }
+}
+
+func (m *MockPushService) Subscribe(userID string, sub *push.Subscription) error <span class="cov8" title="1">{
+        if m.SubscribeCalls == nil </span><span class="cov8" title="1">{
+                m.SubscribeCalls = []string{}
+        }</span>
+        <span class="cov8" title="1">m.SubscribeCalls = append(m.SubscribeCalls, userID)
+        return m.SubscribeError</span>
+}
+
+func (m *MockPushService) Unsubscribe(userID, subscriptionID string) error <span class="cov8" title="1">{
+        if m.UnsubscribeCalls == nil </span><span class="cov8" title="1">{
+                m.UnsubscribeCalls = []struct{ UserID, SubscriptionID string }{}
+        }</span>
+        <span class="cov8" title="1">m.UnsubscribeCalls = append(m.UnsubscribeCalls, struct{ UserID, SubscriptionID string }{userID, subscriptionID})
+        return m.UnsubscribeError</span>
+}
+
+func (m *MockPushService) SendNotification(userID string, notif *push.Notification) error <span class="cov8" title="1">{
+        if m.SendNotificationCalls == nil </span><span class="cov8" title="1">{
+                m.SendNotificationCalls = []struct{ UserID string }{}
+        }</span>
+        <span class="cov8" title="1">m.SendNotificationCalls = append(m.SendNotificationCalls, struct{ UserID string }{userID})
+        return m.SendNotificationError</span>
+}
+
+func (m *MockPushService) GetVAPIDPublicKey() string <span class="cov8" title="1">{
+        return m.GetVAPIDPublicKeyResult
+}</span>
+</pre>
+		
+		<pre class="file" id="file5" style="display: none">package api
+
+import (
+        "github.com/umailserver/umailserver/internal/queue"
+)
+
+// MockQueueManager mock for testing
+type MockQueueManager struct {
+        StatsError  error
+        RetryError  error
+        DeleteError error
+        StatsResult *queue.QueueStats
+}
+
+func (m *MockQueueManager) GetStats() (*queue.QueueStats, error) <span class="cov8" title="1">{
+        if m.StatsError != nil </span><span class="cov8" title="1">{
+                return nil, m.StatsError
+        }</span>
+        <span class="cov8" title="1">return m.StatsResult, nil</span>
+}
+
+func (m *MockQueueManager) RetryEntry(id string) error <span class="cov8" title="1">{
+        return m.RetryError
+}</span>
+
+func (m *MockQueueManager) DeleteEntry(id string) error <span class="cov8" title="1">{
+        return m.DeleteError
+}</span>
+</pre>
+		
+		<pre class="file" id="file6" style="display: none">package api
+
+import (
+        "github.com/umailserver/umailserver/internal/vacation"
+)
+
+// MockVacationManager mock for testing
+type MockVacationManager struct {
+        GetConfigError    error
+        SetConfigError    error
+        DeleteConfigError error
+        ListActiveError   error
+
+        GetConfigResult    *vacation.Config
+        DeleteConfigCalled bool
+        SetConfigCalled   bool
+        SetConfigArg      *vacation.Config
+        ListActiveResult  []string
+}
+
+func (m *MockVacationManager) GetConfig(userID string) (*vacation.Config, error) <span class="cov8" title="1">{
+        if m.GetConfigError != nil </span><span class="cov8" title="1">{
+                return nil, m.GetConfigError
+        }</span>
+        <span class="cov8" title="1">return m.GetConfigResult, nil</span>
+}
+
+func (m *MockVacationManager) SetConfig(userID string, cfg *vacation.Config) error <span class="cov8" title="1">{
+        m.SetConfigCalled = true
+        m.SetConfigArg = cfg
+        return m.SetConfigError
+}</span>
+
+func (m *MockVacationManager) DeleteConfig(userID string) error <span class="cov8" title="1">{
+        m.DeleteConfigCalled = true
+        return m.DeleteConfigError
+}</span>
+
+func (m *MockVacationManager) ListActive() ([]string, error) <span class="cov8" title="1">{
+        if m.ListActiveError != nil </span><span class="cov8" title="1">{
+                return nil, m.ListActiveError
+        }</span>
+        <span class="cov0" title="0">return m.ListActiveResult, nil</span>
+}
+</pre>
+		
+		<pre class="file" id="file7" style="display: none">package api
+
+import (
+        "net/http"
+        "net/http/pprof"
+        "strings"
+)
+
+// pprofHandler routes pprof requests to the standard library handlers.
+// This provides Go runtime profiling data for performance analysis.
+func (s *Server) pprofHandler(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Extract the pprof command from the URL path
+        // Path format: /debug/pprof/{cmd}
+        path := strings.TrimPrefix(r.URL.Path, "/debug/pprof")
+        path = strings.TrimPrefix(path, "/")
+
+        switch path </span>{
+        case "", "index":<span class="cov8" title="1">
+                pprof.Index(w, r)</span>
+        case "cmdline":<span class="cov8" title="1">
+                pprof.Cmdline(w, r)</span>
+        case "profile":<span class="cov0" title="0">
+                pprof.Profile(w, r)</span>
+        case "symbol":<span class="cov8" title="1">
+                pprof.Symbol(w, r)</span>
+        case "trace":<span class="cov0" title="0">
+                pprof.Trace(w, r)</span>
+        case "goroutine":<span class="cov8" title="1">
+                pprof.Handler("goroutine").ServeHTTP(w, r)</span>
+        case "heap":<span class="cov8" title="1">
+                pprof.Handler("heap").ServeHTTP(w, r)</span>
+        case "threadcreate":<span class="cov8" title="1">
+                pprof.Handler("threadcreate").ServeHTTP(w, r)</span>
+        case "block":<span class="cov8" title="1">
+                pprof.Handler("block").ServeHTTP(w, r)</span>
+        case "mutex":<span class="cov8" title="1">
+                pprof.Handler("mutex").ServeHTTP(w, r)</span>
+        case "allocs":<span class="cov8" title="1">
+                pprof.Handler("allocs").ServeHTTP(w, r)</span>
+        default:<span class="cov8" title="1">
+                // Try to handle as a custom profile
+                if handler := pprof.Handler(path); handler != nil </span><span class="cov8" title="1">{
+                        handler.ServeHTTP(w, r)
+                }</span> else<span class="cov0" title="0"> {
+                        http.NotFound(w, r)
+                }</span>
+        }
+}
+
+// RegisterPprofRoutes adds pprof routes to the router (admin only)
+func (s *Server) RegisterPprofRoutes(mux *http.ServeMux) <span class="cov8" title="1">{
+        // Wrap pprof handlers with admin middleware
+        mux.HandleFunc("/debug/pprof/", s.adminMiddleware(http.HandlerFunc(s.pprofHandler)).ServeHTTP)
+}</span>
+</pre>
+		
+		<pre class="file" id="file8" style="display: none">package api
+
+import (
+        "encoding/json"
+        "net/http"
+
+        "github.com/umailserver/umailserver/internal/push"
+)
+
+// handlePushVAPID handles GET /api/v1/push/vapid-public-key
+func (s *Server) handlePushVAPID(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get VAPID public key
+        <span class="cov8" title="1">publicKey := s.getVAPIDPublicKey()
+        if publicKey == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusServiceUnavailable, "push notifications not configured")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "publicKey": publicKey,
+        })</span>
+}
+
+// handlePushSubscribe handles POST /api/v1/push/subscribe
+func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Parse request body
+        <span class="cov8" title="1">var req struct {
+                Endpoint   string `json:"endpoint"`
+                P256dh     string `json:"p256dh"`
+                Auth       string `json:"auth"`
+                DeviceType string `json:"deviceType,omitempty"`
+                OS         string `json:"os,omitempty"`
+                Browser    string `json:"browser,omitempty"`
+                Name       string `json:"name,omitempty"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        // Validate required fields
+        <span class="cov8" title="1">if req.Endpoint == "" || req.P256dh == "" || req.Auth == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "endpoint, p256dh, and auth are required")
+                return
+        }</span>
+
+        // Create subscription
+        <span class="cov8" title="1">sub := &amp;push.Subscription{
+                Endpoint: req.Endpoint,
+                P256dh:   req.P256dh,
+                Auth:     req.Auth,
+                DeviceInfo: push.DeviceInfo{
+                        DeviceType: req.DeviceType,
+                        OS:         req.OS,
+                        Browser:    req.Browser,
+                        Name:       req.Name,
+                },
+        }
+
+        // Save subscription
+        if err := s.subscribePush(user, sub); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to subscribe to push", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to subscribe")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusCreated, map[string]string{
+                "status":         "subscribed",
+                "subscriptionId": sub.ID,
+        })</span>
+}
+
+// handlePushUnsubscribe handles DELETE /api/v1/push/unsubscribe
+func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodDelete </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get subscription ID from query or body
+        <span class="cov8" title="1">subscriptionID := r.URL.Query().Get("id")
+        if subscriptionID == "" </span><span class="cov8" title="1">{
+                // Try to get from body
+                var req struct {
+                        Endpoint string `json:"endpoint"`
+                }
+                if err := json.NewDecoder(r.Body).Decode(&amp;req); err == nil &amp;&amp; req.Endpoint != "" </span><span class="cov8" title="1">{
+                        // Find subscription by endpoint
+                        subscriptionID = s.findSubscriptionByEndpoint(user, req.Endpoint)
+                }</span>
+        }
+
+        <span class="cov8" title="1">if subscriptionID == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "subscription id or endpoint required")
+                return
+        }</span>
+
+        // Unsubscribe
+        <span class="cov8" title="1">if err := s.unsubscribePush(user, subscriptionID); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to unsubscribe from push", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to unsubscribe")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "unsubscribed",
+        })</span>
+}
+
+// handlePushSubscriptions handles GET /api/v1/push/subscriptions
+func (s *Server) handlePushSubscriptions(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get subscriptions
+        <span class="cov8" title="1">subs := s.getPushSubscriptions(user)
+
+        // Sanitize for output (don't expose sensitive keys)
+        var result []map[string]interface{}
+        for _, sub := range subs </span><span class="cov0" title="0">{
+                result = append(result, map[string]interface{}{
+                        "id":         sub.ID,
+                        "createdAt":  sub.CreatedAt,
+                        "updatedAt":  sub.UpdatedAt,
+                        "deviceInfo": sub.DeviceInfo,
+                })
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "subscriptions": result,
+        })</span>
+}
+
+// handlePushTest handles POST /api/v1/push/test
+func (s *Server) handlePushTest(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Send test notification
+        <span class="cov8" title="1">if err := s.sendTestPushNotification(user); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to send test notification", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to send test notification")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "sent",
+        })</span>
+}
+
+// handleAdminPushStats handles GET /api/v1/admin/push/stats (admin only)
+func (s *Server) handleAdminPushStats(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Check admin
+        <span class="cov8" title="1">isAdmin, _ := r.Context().Value("isAdmin").(bool)
+        if !isAdmin </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusForbidden, "admin access required")
+                return
+        }</span>
+
+        <span class="cov8" title="1">stats := s.getPushStats()
+        s.sendJSON(w, http.StatusOK, stats)</span>
+}
+
+// Placeholder functions - would be implemented with actual push service
+
+func (s *Server) getVAPIDPublicKey() string <span class="cov8" title="1">{
+        // Use interface if set
+        if s.pushSvc != nil </span><span class="cov8" title="1">{
+                return s.pushSvc.GetVAPIDPublicKey()
+        }</span>
+        // In real implementation, get from push service
+        <span class="cov8" title="1">return ""</span>
+}
+
+func (s *Server) subscribePush(userID string, sub *push.Subscription) error <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.pushSubscribeError != nil </span><span class="cov8" title="1">{
+                return s.pushSubscribeError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.pushSvc != nil </span><span class="cov8" title="1">{
+                return s.pushSvc.Subscribe(userID, sub)
+        }</span>
+        // In real implementation, call push service
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (s *Server) unsubscribePush(userID, subscriptionID string) error <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.pushUnsubscribeError != nil </span><span class="cov8" title="1">{
+                return s.pushUnsubscribeError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.pushSvc != nil </span><span class="cov8" title="1">{
+                return s.pushSvc.Unsubscribe(userID, subscriptionID)
+        }</span>
+        // In real implementation, call push service
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (s *Server) getPushSubscriptions(userID string) []*push.Subscription <span class="cov8" title="1">{
+        // In real implementation, call push service
+        return []*push.Subscription{}
+}</span>
+
+func (s *Server) findSubscriptionByEndpoint(userID, endpoint string) string <span class="cov8" title="1">{
+        // In real implementation, search in push service
+        return ""
+}</span>
+
+func (s *Server) sendTestPushNotification(userID string) error <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.pushSendError != nil </span><span class="cov8" title="1">{
+                return s.pushSendError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.pushSvc != nil </span><span class="cov8" title="1">{
+                return s.pushSvc.SendNotification(userID, &amp;push.Notification{
+                        Title: "Test Notification",
+                        Body:  "This is a test push notification",
+                })
+        }</span>
+        // In real implementation, send via push service
+        <span class="cov8" title="1">return nil</span>
+}
+
+func (s *Server) getPushStats() map[string]interface{} <span class="cov8" title="1">{
+        // In real implementation, get from push service
+        return map[string]interface{}{
+                "totalSubscriptions": 0,
+                "totalUsers":         0,
+                "deviceTypes":        map[string]int{},
+                "osTypes":            map[string]int{},
+        }
+}</span>
+</pre>
+		
+		<pre class="file" id="file9" style="display: none">package api
+
+import (
+        "net/http"
+        "strings"
+)
+
+// securityHeadersMiddleware adds security headers to all responses
+func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler <span class="cov8" title="1">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                // Prevent clickjacking
+                w.Header().Set("X-Frame-Options", "DENY")
+
+                // Prevent MIME type sniffing
+                w.Header().Set("X-Content-Type-Options", "nosniff")
+
+                // XSS Protection for legacy browsers
+                w.Header().Set("X-XSS-Protection", "1; mode=block")
+
+                // Referrer policy
+                w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+                // Content Security Policy
+                csp := []string{
+                        "default-src 'self'",
+                        "script-src 'self' 'unsafe-inline'", // unsafe-inline needed for React
+                        "style-src 'self' 'unsafe-inline'",
+                        "img-src 'self' data: https:",
+                        "font-src 'self'",
+                        "connect-src 'self'",
+                        "frame-ancestors 'none'",
+                        "base-uri 'self'",
+                        "form-action 'self'",
+                }
+                w.Header().Set("Content-Security-Policy", strings.Join(csp, "; "))
+
+                // HSTS for HTTPS connections
+                if r.TLS != nil </span><span class="cov0" title="0">{
+                        w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+                }</span>
+
+                <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+        })
+}
+
+// csrfMiddleware validates CSRF tokens for state-changing requests
+func (s *Server) csrfMiddleware(next http.Handler) http.Handler <span class="cov8" title="1">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                // Skip CSRF check for safe methods
+                if isSafeMethod(r.Method) </span><span class="cov8" title="1">{
+                        next.ServeHTTP(w, r)
+                        return
+                }</span>
+
+                // Skip CSRF for API endpoints that use JWT auth
+                // JWT is already a form of CSRF protection
+                <span class="cov8" title="1">if strings.HasPrefix(r.URL.Path, "/api/") </span><span class="cov8" title="1">{
+                        // Additional check: require Content-Type to be application/json
+                        // This prevents simple form-based CSRF attacks
+                        contentType := r.Header.Get("Content-Type")
+                        if !strings.Contains(contentType, "application/json") </span><span class="cov8" title="1">{
+                                s.sendError(w, http.StatusBadRequest, "Content-Type must be application/json")
+                                return
+                        }</span>
+                }
+
+                <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+        })
+}
+
+// isSafeMethod returns true for HTTP methods that don't modify state
+func isSafeMethod(method string) bool <span class="cov8" title="1">{
+        switch method </span>{
+        case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:<span class="cov8" title="1">
+                return true</span>
+        default:<span class="cov8" title="1">
+                return false</span>
+        }
+}
+
+// requestSizeMiddleware limits the size of incoming requests
+func (s *Server) requestSizeMiddleware(maxSize int64) func(http.Handler) http.Handler <span class="cov8" title="1">{
+        return func(next http.Handler) http.Handler </span><span class="cov8" title="1">{
+                return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                        r.Body = http.MaxBytesReader(w, r.Body, maxSize)
+                        next.ServeHTTP(w, r)
+                }</span>)
+        }
+}
+
+// ipWhitelistMiddleware restricts access to specific IP addresses
+func (s *Server) ipWhitelistMiddleware(allowedIPs []string) func(http.Handler) http.Handler <span class="cov8" title="1">{
+        allowed := make(map[string]bool)
+        for _, ip := range allowedIPs </span><span class="cov8" title="1">{
+                allowed[ip] = true
+        }</span>
+
+        <span class="cov8" title="1">return func(next http.Handler) http.Handler </span><span class="cov8" title="1">{
+                return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                        clientIP := getClientIP(r)
+                        if !allowed[clientIP] </span><span class="cov8" title="1">{
+                                s.sendError(w, http.StatusForbidden, "Access denied")
+                                return
+                        }</span>
+                        <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+                })
+        }
+}
+
+// getClientIP extracts the client IP from the request
+func getClientIP(r *http.Request) string <span class="cov8" title="1">{
+        // Check X-Forwarded-For header (for proxies)
+        xff := r.Header.Get("X-Forwarded-For")
+        if xff != "" </span><span class="cov8" title="1">{
+                // Take the first IP in the chain
+                ips := strings.Split(xff, ",")
+                if len(ips) &gt; 0 </span><span class="cov8" title="1">{
+                        return strings.TrimSpace(ips[0])
+                }</span>
+        }
+
+        // Check X-Real-Ip header
+        <span class="cov8" title="1">xri := r.Header.Get("X-Real-Ip")
+        if xri != "" </span><span class="cov8" title="1">{
+                return xri
+        }</span>
+
+        // Fall back to RemoteAddr
+        <span class="cov8" title="1">ip := r.RemoteAddr
+        // Strip port if present
+        if idx := strings.LastIndex(ip, ":"); idx != -1 </span><span class="cov8" title="1">{
+                ip = ip[:idx]
+        }</span>
+        <span class="cov8" title="1">return ip</span>
+}
+
+// validateContentTypeMiddleware ensures requests have the correct Content-Type
+func validateContentTypeMiddleware(contentType string) func(http.Handler) http.Handler <span class="cov8" title="1">{
+        return func(next http.Handler) http.Handler </span><span class="cov8" title="1">{
+                return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                        if r.Method != http.MethodGet &amp;&amp; r.Method != http.MethodHead </span><span class="cov8" title="1">{
+                                ct := r.Header.Get("Content-Type")
+                                if ct == "" || !strings.HasPrefix(ct, contentType) </span><span class="cov8" title="1">{
+                                        http.Error(w, "Invalid Content-Type", http.StatusUnsupportedMediaType)
+                                        return
+                                }</span>
+                        }
+                        <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+                })
+        }
+}
+</pre>
+		
+		<pre class="file" id="file10" style="display: none">package api
+
+import (
+        "context"
+        "crypto/x509"
+        "io"
+        "encoding/json"
+        "encoding/pem"
+        "fmt"
+        "log/slog"
+        "net"
+        "net/http"
+        "strconv"
+        "strings"
+        "sync"
+        "time"
+
+        "github.com/golang-jwt/jwt/v5"
+        "github.com/umailserver/umailserver"
+        "github.com/umailserver/umailserver/internal/auth"
+        "github.com/umailserver/umailserver/internal/db"
+        "github.com/umailserver/umailserver/internal/queue"
+        "github.com/umailserver/umailserver/internal/mcp"
+        "github.com/umailserver/umailserver/internal/metrics"
+        "github.com/umailserver/umailserver/internal/search"
+        "github.com/umailserver/umailserver/internal/storage"
+        "github.com/umailserver/umailserver/internal/websocket"
+        "golang.org/x/crypto/bcrypt"
+)
+
+// loginAttempt tracks failed login attempts per IP
+type loginAttempt struct {
+        count    int
+        lastSeen time.Time
+}
+
+// apiRateAttempt tracks API requests per IP for rate limiting
+type apiRateAttempt struct {
+        count    int
+        windowStart time.Time
+}
+
+// HealthMonitor interface for health checks
+type HealthMonitor interface {
+        HTTPHandler() http.HandlerFunc
+}
+
+// Server represents the admin API server
+type Server struct {
+        db         *db.DB
+        logger     *slog.Logger
+        config     Config
+        mcpServer  *mcp.Server
+        sseServer  *websocket.SSEServer
+        searchSvc  *search.Service
+        msgStore   *storage.MessageStore
+        queueMgr   *queue.Manager
+        httpServer *http.Server
+        healthMon  HealthMonitor
+
+        // Interface abstractions for testability
+        vacationMgr VacationManager
+        filterMgr   FilterManager
+        pushSvc     PushService
+
+        // File system abstraction for embed.FS
+        webmailFS FileSystem
+        adminFS   FileSystem
+
+        // Login rate limiting
+        loginMu      sync.Mutex
+        loginAttempts map[string]*loginAttempt
+
+        // API rate limiting (HTTPRequestsPerMinute)
+        apiRateMu       sync.Mutex
+        apiRateAttempts map[string]*apiRateAttempt
+        apiRateLimit    int // requests per minute, 0 = disabled
+
+        // Mock errors for testing (used to test error paths)
+        vacationGetError       error
+        vacationSetError       error
+        vacationDeleteError    error
+        filterSaveError        error
+        filterGetError         error
+        pushSubscribeError     error
+        pushUnsubscribeError   error
+        pushSendError          error
+        queueMgrStatsError     error
+}
+
+// Config holds API server configuration
+type Config struct {
+        Addr        string
+        JWTSecret   string
+        TokenExpiry time.Duration
+        CorsOrigins []string
+}
+
+// NewServer creates a new admin API server
+func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server <span class="cov8" title="1">{
+        if logger == nil </span><span class="cov8" title="1">{
+                logger = slog.Default()
+        }</span>
+        <span class="cov8" title="1">if config.JWTSecret == "" </span><span class="cov8" title="1">{
+                logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
+                config.JWTSecret = fmt.Sprintf("%d", time.Now().UnixNano())
+        }</span>
+        <span class="cov8" title="1">if config.TokenExpiry == 0 </span><span class="cov8" title="1">{
+                config.TokenExpiry = 24 * time.Hour
+        }</span>
+
+        <span class="cov8" title="1">sseServer := websocket.NewSSEServer(logger)
+        if len(config.CorsOrigins) &gt; 0 </span><span class="cov8" title="1">{
+                sseServer.SetCorsOrigin(strings.Join(config.CorsOrigins, ","))
+        }</span>
+        <span class="cov8" title="1">sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) </span><span class="cov0" title="0">{
+                parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) </span><span class="cov0" title="0">{
+                        if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok </span><span class="cov0" title="0">{
+                                return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+                        }</span>
+                        <span class="cov0" title="0">return []byte(config.JWTSecret), nil</span>
+                })
+                <span class="cov0" title="0">if err != nil || !parsed.Valid </span><span class="cov0" title="0">{
+                        return "", false, fmt.Errorf("invalid token")
+                }</span>
+                <span class="cov0" title="0">claims, ok := parsed.Claims.(jwt.MapClaims)
+                if !ok </span><span class="cov0" title="0">{
+                        return "", false, fmt.Errorf("invalid claims")
+                }</span>
+                <span class="cov0" title="0">u, _ := claims["sub"].(string)
+                a, _ := claims["admin"].(bool)
+                return u, a, nil</span>
+        })
+
+        <span class="cov8" title="1">return &amp;Server{
+                db:         database,
+                logger:     logger,
+                config:     config,
+                mcpServer:  mcp.NewServer(database),
+                sseServer:  sseServer,
+                webmailFS:  newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
+                adminFS:    newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+        }</span>
+}
+
+// NewServerWithInterfaces creates a new admin API server with injectable interfaces for testing
+func NewServerWithInterfaces(
+        database *db.DB,
+        logger *slog.Logger,
+        config Config,
+        vacationMgr VacationManager,
+        filterMgr FilterManager,
+        pushSvc PushService,
+        webmailFS FileSystem,
+        adminFS FileSystem,
+) *Server <span class="cov8" title="1">{
+        if logger == nil </span><span class="cov8" title="1">{
+                logger = slog.Default()
+        }</span>
+        <span class="cov8" title="1">if config.JWTSecret == "" </span><span class="cov8" title="1">{
+                logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
+                config.JWTSecret = fmt.Sprintf("%d", time.Now().UnixNano())
+        }</span>
+        <span class="cov8" title="1">if config.TokenExpiry == 0 </span><span class="cov8" title="1">{
+                config.TokenExpiry = 24 * time.Hour
+        }</span>
+
+        <span class="cov8" title="1">sseServer := websocket.NewSSEServer(logger)
+        if len(config.CorsOrigins) &gt; 0 </span><span class="cov0" title="0">{
+                sseServer.SetCorsOrigin(strings.Join(config.CorsOrigins, ","))
+        }</span>
+        <span class="cov8" title="1">sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) </span><span class="cov0" title="0">{
+                parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) </span><span class="cov0" title="0">{
+                        if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok </span><span class="cov0" title="0">{
+                                return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+                        }</span>
+                        <span class="cov0" title="0">return []byte(config.JWTSecret), nil</span>
+                })
+                <span class="cov0" title="0">if err != nil || !parsed.Valid </span><span class="cov0" title="0">{
+                        return "", false, fmt.Errorf("invalid token")
+                }</span>
+                <span class="cov0" title="0">claims, ok := parsed.Claims.(jwt.MapClaims)
+                if !ok </span><span class="cov0" title="0">{
+                        return "", false, fmt.Errorf("invalid claims")
+                }</span>
+                <span class="cov0" title="0">u, _ := claims["sub"].(string)
+                a, _ := claims["admin"].(bool)
+                return u, a, nil</span>
+        })
+
+        // Use provided FS or default to embedded
+        <span class="cov8" title="1">if webmailFS == nil </span><span class="cov8" title="1">{
+                webmailFS = NewEmbedFSAdapter(umailserver.WebmailFS)
+        }</span>
+        <span class="cov8" title="1">if adminFS == nil </span><span class="cov8" title="1">{
+                adminFS = NewEmbedFSAdapter(umailserver.AdminFS)
+        }</span>
+
+        <span class="cov8" title="1">return &amp;Server{
+                db:           database,
+                logger:       logger,
+                config:       config,
+                mcpServer:    mcp.NewServer(database),
+                sseServer:    sseServer,
+                vacationMgr:  vacationMgr,
+                filterMgr:    filterMgr,
+                pushSvc:      pushSvc,
+                webmailFS:    webmailFS,
+                adminFS:      adminFS,
+        }</span>
+}
+
+// ServeHTTP implements the http.Handler interface
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        s.router().ServeHTTP(w, r)
+}</span>
+
+// router sets up the HTTP routes
+func (s *Server) router() http.Handler <span class="cov8" title="1">{
+        mux := http.NewServeMux()
+
+        // Webmail (static files) - user interface
+        mux.HandleFunc("/", s.handleWebmail)
+        mux.HandleFunc("/webmail/", s.handleWebmail)
+
+        // Admin panel (static files) - admin interface
+        mux.HandleFunc("/admin/", s.handleAdmin)
+
+        // Health check - use health monitor if available
+        if s.healthMon != nil </span><span class="cov0" title="0">{
+                mux.HandleFunc("/health", s.healthMon.HTTPHandler())
+        }</span> else<span class="cov8" title="1"> {
+                mux.HandleFunc("/health", s.handleHealth)
+        }</span>
+
+        // Metrics endpoint (admin only)
+        <span class="cov8" title="1">mux.HandleFunc("/metrics", s.authMiddleware(s.adminMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov0" title="0">{
+                metrics.Get().HTTPHandler(w, r)
+        }</span>))).ServeHTTP)
+
+        // SSE endpoint for real-time updates
+        <span class="cov8" title="1">mux.HandleFunc("/api/v1/events", s.sseServer.Handler())
+
+        // MCP endpoint (protected by auth)
+        mux.HandleFunc("/mcp", s.authMiddleware(http.HandlerFunc(s.mcpServer.HandleHTTP)).ServeHTTP)
+
+        // Authentication
+        mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
+        mux.HandleFunc("/api/v1/auth/refresh", s.handleRefresh)
+
+        // Protected routes
+        api := http.NewServeMux()
+
+        // Domains (admin only)
+        api.HandleFunc("/api/v1/domains", s.adminMiddleware(http.HandlerFunc(s.handleDomains)).ServeHTTP)
+        api.HandleFunc("/api/v1/domains/", s.adminMiddleware(http.HandlerFunc(s.handleDomainDetail)).ServeHTTP)
+
+        // Accounts (admin only)
+        api.HandleFunc("/api/v1/accounts", s.adminMiddleware(http.HandlerFunc(s.handleAccounts)).ServeHTTP)
+        api.HandleFunc("/api/v1/accounts/", s.adminMiddleware(http.HandlerFunc(s.handleAccountDetail)).ServeHTTP)
+
+        // Queue (admin only)
+        api.HandleFunc("/api/v1/queue", s.adminMiddleware(http.HandlerFunc(s.handleQueue)).ServeHTTP)
+        api.HandleFunc("/api/v1/queue/", s.adminMiddleware(http.HandlerFunc(s.handleQueueDetail)).ServeHTTP)
+
+        // Metrics (admin only)
+        api.HandleFunc("/api/v1/metrics", s.adminMiddleware(http.HandlerFunc(s.handleMetrics)).ServeHTTP)
+
+        // Stats (admin only)
+        api.HandleFunc("/api/v1/stats", s.adminMiddleware(http.HandlerFunc(s.handleStats)).ServeHTTP)
+
+        // Search
+        api.HandleFunc("/api/v1/search", s.handleSearch)
+
+        // Threads
+        api.HandleFunc("/api/v1/threads", s.handleThreads)
+        api.HandleFunc("/api/v1/threads/search", s.handleThreadSearch)
+        api.HandleFunc("/api/v1/threads/", s.handleThreadPath)
+
+        // Vacation auto-reply
+        api.HandleFunc("/api/v1/vacation", s.handleVacation)
+
+        // Admin routes
+        api.HandleFunc("/api/v1/admin/vacations", s.adminMiddleware(http.HandlerFunc(s.handleAdminVacations)).ServeHTTP)
+
+        // Push notifications
+        api.HandleFunc("/api/v1/push/vapid-public-key", s.handlePushVAPID)
+        api.HandleFunc("/api/v1/push/subscribe", s.handlePushSubscribe)
+        api.HandleFunc("/api/v1/push/unsubscribe", s.handlePushUnsubscribe)
+        api.HandleFunc("/api/v1/push/subscriptions", s.handlePushSubscriptions)
+        api.HandleFunc("/api/v1/push/test", s.handlePushTest)
+        api.HandleFunc("/api/v1/admin/push/stats", s.adminMiddleware(http.HandlerFunc(s.handleAdminPushStats)).ServeHTTP)
+
+        // Email filters
+        api.HandleFunc("/api/v1/filters", s.handleFilters)
+        api.HandleFunc("/api/v1/filters/reorder", s.handleFilterReorder)
+        api.HandleFunc("/api/v1/filters/", s.handleFilterPath)
+
+        // Queue admin routes
+        api.HandleFunc("/api/v1/admin/queue", s.adminMiddleware(http.HandlerFunc(s.handleQueue)).ServeHTTP)
+        api.HandleFunc("/api/v1/admin/queue/", s.adminMiddleware(http.HandlerFunc(s.handleQueueDetail)).ServeHTTP)
+
+        // Wrap API with auth middleware and mount to main mux
+        apiHandler := s.rateLimitMiddleware(s.limitBodyMiddleware(s.corsMiddleware(s.authMiddleware(api))))
+        mux.Handle("/api/v1/", apiHandler)
+
+        return mux</span>
+}
+
+// limitBodyMiddleware restricts request body size to prevent DoS.
+func (s *Server) limitBodyMiddleware(next http.Handler) http.Handler <span class="cov8" title="1">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                if r.Body != nil </span><span class="cov8" title="1">{
+                        r.Body = http.MaxBytesReader(w, r.Body, 4&lt;&lt;20) // 4 MB
+                }</span>
+                <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+        })
+}
+
+// rateLimitMiddleware enforces API rate limiting per IP.
+// Exempts health check and authentication endpoints.
+func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler <span class="cov8" title="1">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                // Skip rate limiting for health and auth endpoints
+                if r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/api/v1/auth/") </span><span class="cov0" title="0">{
+                        next.ServeHTTP(w, r)
+                        return
+                }</span>
+
+                // Get client IP
+                <span class="cov8" title="1">ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+                if ip == "" </span><span class="cov8" title="1">{
+                        ip = r.RemoteAddr
+                }</span>
+
+                <span class="cov8" title="1">if !s.checkAPIRateLimit(ip) </span><span class="cov8" title="1">{
+                        s.logger.Warn("API rate limit exceeded",
+                                slog.String("ip", ip),
+                                slog.String("path", r.URL.Path),
+                        )
+                        s.sendError(w, http.StatusTooManyRequests, "rate limit exceeded, try again later")
+                        return
+                }</span>
+
+                <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+        })
+}
+
+// SetSearchService injects the search service into the API server
+func (s *Server) SetSearchService(svc *search.Service) <span class="cov8" title="1">{
+        s.searchSvc = svc
+}</span>
+
+// Start starts the API server
+func (s *Server) Start(addr string) error <span class="cov8" title="1">{
+        s.config.Addr = addr
+
+        s.httpServer = &amp;http.Server{
+                Addr:         addr,
+                Handler:      s,
+                ReadTimeout:  30 * time.Second,
+                WriteTimeout: 30 * time.Second,
+        }
+
+        s.logger.Info("Admin API server starting", "addr", addr)
+        return s.httpServer.ListenAndServe()
+}</span>
+
+// Stop gracefully stops the API server
+func (s *Server) Stop() error <span class="cov8" title="1">{
+        if s.httpServer != nil </span><span class="cov8" title="1">{
+                ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+                defer cancel()
+                return s.httpServer.Shutdown(ctx)
+        }</span>
+        <span class="cov8" title="1">return nil</span>
+}
+
+// Middleware
+
+func (s *Server) corsMiddleware(next http.Handler) http.Handler <span class="cov8" title="1">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                origin := r.Header.Get("Origin")
+                allowed := ""
+                if len(s.config.CorsOrigins) &gt; 0 </span><span class="cov8" title="1">{
+                        for _, o := range s.config.CorsOrigins </span><span class="cov8" title="1">{
+                                if o == origin || o == "*" </span><span class="cov8" title="1">{
+                                        allowed = o
+                                        break</span>
+                                }
+                        }
+                } else<span class="cov8" title="1"> {
+                        allowed = "*"
+                }</span>
+                <span class="cov8" title="1">if allowed != "" </span><span class="cov8" title="1">{
+                        w.Header().Set("Access-Control-Allow-Origin", allowed)
+                }</span>
+                <span class="cov8" title="1">w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+                w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+                if r.Method == "OPTIONS" </span><span class="cov8" title="1">{
+                        w.WriteHeader(http.StatusOK)
+                        return
+                }</span>
+
+                <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+        })
+}
+
+func (s *Server) authMiddleware(next http.Handler) http.Handler <span class="cov8" title="1">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                // Skip auth for health and login endpoints
+                if r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/api/v1/auth/") </span><span class="cov8" title="1">{
+                        next.ServeHTTP(w, r)
+                        return
+                }</span>
+
+                // Get token from Authorization header
+                <span class="cov8" title="1">authHeader := r.Header.Get("Authorization")
+                if authHeader == "" </span><span class="cov8" title="1">{
+                        s.sendError(w, http.StatusUnauthorized, "missing authorization header")
+                        return
+                }</span>
+
+                <span class="cov8" title="1">parts := strings.SplitN(authHeader, " ", 2)
+                if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" </span><span class="cov8" title="1">{
+                        s.sendError(w, http.StatusUnauthorized, "invalid authorization header format")
+                        return
+                }</span>
+
+                <span class="cov8" title="1">tokenStr := parts[1]
+
+                // Validate token
+                token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) </span><span class="cov8" title="1">{
+                        if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok </span><span class="cov8" title="1">{
+                                return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+                        }</span>
+                        <span class="cov8" title="1">return []byte(s.config.JWTSecret), nil</span>
+                })
+
+                <span class="cov8" title="1">if err != nil || !token.Valid </span><span class="cov8" title="1">{
+                        s.sendError(w, http.StatusUnauthorized, "invalid token")
+                        return
+                }</span>
+
+                // Get claims
+                <span class="cov8" title="1">claims, ok := token.Claims.(jwt.MapClaims)
+                if !ok </span><span class="cov0" title="0">{
+                        s.sendError(w, http.StatusUnauthorized, "invalid token claims")
+                        return
+                }</span>
+
+                // Add claims to context
+                <span class="cov8" title="1">ctx := context.WithValue(r.Context(), "user", claims["sub"])
+                ctx = context.WithValue(ctx, "isAdmin", claims["admin"])
+
+                next.ServeHTTP(w, r.WithContext(ctx))</span>
+        })
+}
+
+// adminMiddleware wraps a handler to require admin role.
+// Must be used after authMiddleware so that "isAdmin" is in context.
+func (s *Server) adminMiddleware(next http.Handler) http.Handler <span class="cov8" title="1">{
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) </span><span class="cov8" title="1">{
+                isAdmin, _ := r.Context().Value("isAdmin").(bool)
+                if !isAdmin </span><span class="cov8" title="1">{
+                        s.sendJSON(w, http.StatusForbidden, map[string]string{
+                                "error": "admin access required",
+                        })
+                        return
+                }</span>
+                <span class="cov8" title="1">next.ServeHTTP(w, r)</span>
+        })
+}
+
+// checkLoginRateLimit returns true if the IP is allowed to attempt login.
+// Allows 5 attempts per 5-minute window per IP; blocks after that.
+func (s *Server) checkLoginRateLimit(ip string) bool <span class="cov8" title="1">{
+        s.loginMu.Lock()
+        defer s.loginMu.Unlock()
+
+        if s.loginAttempts == nil </span><span class="cov8" title="1">{
+                s.loginAttempts = make(map[string]*loginAttempt)
+        }</span>
+
+        <span class="cov8" title="1">now := time.Now()
+        attempt, exists := s.loginAttempts[ip]
+        if !exists || now.Sub(attempt.lastSeen) &gt; 5*time.Minute </span><span class="cov8" title="1">{
+                s.loginAttempts[ip] = &amp;loginAttempt{count: 1, lastSeen: now}
+                return true
+        }</span>
+
+        <span class="cov8" title="1">if attempt.count &gt;= 5 </span><span class="cov8" title="1">{
+                return false
+        }</span>
+        <span class="cov8" title="1">attempt.count++
+        attempt.lastSeen = now
+        return true</span>
+}
+
+// recordLoginFailure increments the failed login counter for an IP.
+func (s *Server) recordLoginFailure(ip string) <span class="cov8" title="1">{
+        s.loginMu.Lock()
+        defer s.loginMu.Unlock()
+
+        if s.loginAttempts == nil </span><span class="cov0" title="0">{
+                s.loginAttempts = make(map[string]*loginAttempt)
+        }</span>
+
+        <span class="cov8" title="1">now := time.Now()
+        attempt, exists := s.loginAttempts[ip]
+        if !exists </span><span class="cov8" title="1">{
+                s.loginAttempts[ip] = &amp;loginAttempt{count: 1, lastSeen: now}
+                return
+        }</span>
+        <span class="cov8" title="1">attempt.count++
+        attempt.lastSeen = now</span>
+}
+
+// Handlers
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        status := http.StatusOK
+        result := map[string]interface{}{
+                "status": "healthy",
+        }
+
+        // Check database
+        if s.db == nil </span><span class="cov8" title="1">{
+                status = http.StatusServiceUnavailable
+                result["status"] = "unhealthy"
+                result["database"] = "not initialized"
+        }</span> else<span class="cov8" title="1"> {
+                if _, err := s.db.ListDomains(); err != nil </span><span class="cov8" title="1">{
+                        status = http.StatusServiceUnavailable
+                        result["status"] = "unhealthy"
+                        result["database"] = err.Error()
+                }</span> else<span class="cov8" title="1"> {
+                        result["database"] = "ok"
+                }</span>
+        }
+
+        // Check queue manager
+        <span class="cov8" title="1">if s.queueMgr != nil </span><span class="cov0" title="0">{
+                // Check for mock error injection (used in tests)
+                if s.queueMgrStatsError != nil </span><span class="cov0" title="0">{
+                        status = http.StatusServiceUnavailable
+                        result["status"] = "unhealthy"
+                        result["queue"] = s.queueMgrStatsError.Error()
+                }</span> else<span class="cov0" title="0"> if _, err := s.queueMgr.GetStats(); err != nil </span><span class="cov0" title="0">{
+                        status = http.StatusServiceUnavailable
+                        result["status"] = "unhealthy"
+                        result["queue"] = err.Error()
+                }</span> else<span class="cov0" title="0"> {
+                        result["queue"] = "ok"
+                }</span>
+        }
+
+        // Check message store
+        <span class="cov8" title="1">if s.msgStore != nil </span><span class="cov0" title="0">{
+                result["storage"] = "ok"
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, status, result)</span>
+}
+
+func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Use injected webmail FS
+        webmailFS := s.webmailFS
+        if webmailFS == nil </span><span class="cov0" title="0">{
+                webmailFS = NewEmbedFSAdapter(umailserver.WebmailFS)
+        }</span>
+
+        // Handle SPA routing - serve index.html for non-existent paths
+        <span class="cov8" title="1">path := strings.TrimPrefix(r.URL.Path, "/")
+        if path == "" </span><span class="cov8" title="1">{
+                path = "index.html"
+        }</span>
+
+        // Try to open the file
+        <span class="cov8" title="1">file, err := webmailFS.Open(path)
+        if err != nil </span><span class="cov8" title="1">{
+                // If file not found, serve index.html for SPA routing
+                file, err = webmailFS.Open("index.html")
+                if err != nil </span><span class="cov8" title="1">{
+                        s.logger.Error("Failed to open index.html", "error", err)
+                        http.Error(w, "Internal server error", http.StatusInternalServerError)
+                        return
+                }</span>
+                <span class="cov8" title="1">path = "index.html"</span>
+        }
+        <span class="cov8" title="1">defer file.Close()
+
+        // Set content type based on file extension
+        if strings.HasSuffix(path, ".html") </span><span class="cov8" title="1">{
+                w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        }</span> else<span class="cov8" title="1"> if strings.HasSuffix(path, ".js") </span><span class="cov8" title="1">{
+                w.Header().Set("Content-Type", "application/javascript")
+        }</span> else<span class="cov8" title="1"> if strings.HasSuffix(path, ".css") </span><span class="cov8" title="1">{
+                w.Header().Set("Content-Type", "text/css")
+        }</span> else<span class="cov8" title="1"> if strings.HasSuffix(path, ".svg") </span><span class="cov0" title="0">{
+                w.Header().Set("Content-Type", "image/svg+xml")
+        }</span>
+
+        // Serve file content
+        <span class="cov8" title="1">stat, err := file.Stat()
+        if err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to stat file", "error", err)
+                http.Error(w, "Internal server error", http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov8" title="1">http.ServeContent(w, r, path, stat.ModTime(), file.(io.ReadSeeker))</span>
+}
+
+func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Use injected admin FS
+        adminFS := s.adminFS
+        if adminFS == nil </span><span class="cov0" title="0">{
+                adminFS = NewEmbedFSAdapter(umailserver.AdminFS)
+        }</span>
+
+        // Handle SPA routing - serve index.html for non-existent paths
+        <span class="cov8" title="1">path := strings.TrimPrefix(r.URL.Path, "/admin/")
+        if path == "" </span><span class="cov8" title="1">{
+                path = "index.html"
+        }</span>
+
+        // Try to open the file
+        <span class="cov8" title="1">file, err := adminFS.Open(path)
+        if err != nil </span><span class="cov8" title="1">{
+                // If file not found, serve index.html for SPA routing
+                file, err = adminFS.Open("index.html")
+                if err != nil </span><span class="cov8" title="1">{
+                        s.logger.Error("Failed to open index.html", "error", err)
+                        http.Error(w, "Internal server error", http.StatusInternalServerError)
+                        return
+                }</span>
+                <span class="cov8" title="1">path = "index.html"</span>
+        }
+        <span class="cov8" title="1">defer file.Close()
+
+        // Set content type based on file extension
+        if strings.HasSuffix(path, ".html") </span><span class="cov8" title="1">{
+                w.Header().Set("Content-Type", "text/html; charset=utf-8")
+        }</span> else<span class="cov0" title="0"> if strings.HasSuffix(path, ".js") </span><span class="cov0" title="0">{
+                w.Header().Set("Content-Type", "application/javascript")
+        }</span> else<span class="cov0" title="0"> if strings.HasSuffix(path, ".css") </span><span class="cov0" title="0">{
+                w.Header().Set("Content-Type", "text/css")
+        }</span> else<span class="cov0" title="0"> if strings.HasSuffix(path, ".svg") </span><span class="cov0" title="0">{
+                w.Header().Set("Content-Type", "image/svg+xml")
+        }</span>
+
+        // Serve file content
+        <span class="cov8" title="1">stat, err := file.Stat()
+        if err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to stat file", "error", err)
+                http.Error(w, "Internal server error", http.StatusInternalServerError)
+                return
+        }</span>
+
+        <span class="cov8" title="1">http.ServeContent(w, r, path, stat.ModTime(), file.(io.ReadSeeker))</span>
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Rate limit login attempts by IP
+        <span class="cov8" title="1">ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+        if ip == "" </span><span class="cov0" title="0">{
+                ip = r.RemoteAddr
+        }</span>
+        <span class="cov8" title="1">if !s.checkLoginRateLimit(ip) </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusTooManyRequests, "too many login attempts")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var req struct {
+                Email    string `json:"email"`
+                Password string `json:"password"`
+                TOTPCode string `json:"totp_code"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        // Parse email
+        <span class="cov8" title="1">user, domain := parseEmail(req.Email)
+
+        // Get account
+        account, err := s.db.GetAccount(domain, user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.recordLoginFailure(ip)
+                s.sendError(w, http.StatusUnauthorized, "invalid credentials")
+                return
+        }</span>
+
+        // Check password using bcrypt
+        <span class="cov8" title="1">if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(req.Password)); err != nil </span><span class="cov8" title="1">{
+                s.recordLoginFailure(ip)
+                s.sendError(w, http.StatusUnauthorized, "invalid credentials")
+                return
+        }</span>
+
+        // Check TOTP if enabled
+        <span class="cov8" title="1">if account.TOTPEnabled </span><span class="cov0" title="0">{
+                if req.TOTPCode == "" </span><span class="cov0" title="0">{
+                        s.sendError(w, http.StatusUnauthorized, "TOTP code required")
+                        return
+                }</span>
+                <span class="cov0" title="0">if !auth.ValidateTOTP(account.TOTPSecret, req.TOTPCode) </span><span class="cov0" title="0">{
+                        s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
+                        return
+                }</span>
+        }
+
+        // Generate JWT
+        <span class="cov8" title="1">token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+                "sub":   account.Email,
+                "admin": account.IsAdmin,
+                "exp":   time.Now().Add(s.config.TokenExpiry).Unix(),
+                "iat":   time.Now().Unix(),
+        })
+
+        tokenString, err := token.SignedString([]byte(s.config.JWTSecret))
+        if err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to generate token")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "token":     tokenString,
+                "expiresIn": int(s.config.TokenExpiry.Seconds()),
+        })</span>
+}
+
+func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // The auth middleware already validated the token
+        <span class="cov8" title="1">user := r.Context().Value("user")
+        isAdmin := r.Context().Value("isAdmin")
+
+        // Generate new token
+        token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+                "sub":   user,
+                "admin": isAdmin,
+                "exp":   time.Now().Add(s.config.TokenExpiry).Unix(),
+                "iat":   time.Now().Unix(),
+        })
+
+        tokenString, err := token.SignedString([]byte(s.config.JWTSecret))
+        if err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to generate token")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "token":     tokenString,
+                "expiresIn": int(s.config.TokenExpiry.Seconds()),
+        })</span>
+}
+
+func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.listDomains(w, r)</span>
+        case http.MethodPost:<span class="cov8" title="1">
+                s.createDomain(w, r)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        domain := strings.TrimPrefix(r.URL.Path, "/api/v1/domains/")
+
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.getDomain(w, r, domain)</span>
+        case http.MethodPut:<span class="cov8" title="1">
+                s.updateDomain(w, r, domain)</span>
+        case http.MethodDelete:<span class="cov8" title="1">
+                s.deleteDomain(w, r, domain)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.listAccounts(w, r)</span>
+        case http.MethodPost:<span class="cov8" title="1">
+                s.createAccount(w, r)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        suffix := strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/")
+
+        // Handle TOTP 2FA sub-paths
+        if strings.HasSuffix(suffix, "/totp/setup") </span><span class="cov8" title="1">{
+                email := suffix[:len(suffix)-len("/totp/setup")]
+                s.handleTOTPSetup(w, r, email)
+                return
+        }</span>
+        <span class="cov8" title="1">if strings.HasSuffix(suffix, "/totp/disable") </span><span class="cov0" title="0">{
+                email := suffix[:len(suffix)-len("/totp/disable")]
+                s.handleTOTPDisable(w, r, email)
+                return
+        }</span>
+        <span class="cov8" title="1">if strings.HasSuffix(suffix, "/totp/verify") </span><span class="cov8" title="1">{
+                email := suffix[:len(suffix)-len("/totp/verify")]
+                s.handleTOTPVerify(w, r, email)
+                return
+        }</span>
+
+        // Regular account detail
+        <span class="cov8" title="1">switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.getAccount(w, r, suffix)</span>
+        case http.MethodPut:<span class="cov8" title="1">
+                s.updateAccount(w, r, suffix)</span>
+        case http.MethodDelete:<span class="cov8" title="1">
+                s.deleteAccount(w, r, suffix)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+// TOTP 2FA handlers
+
+func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email string) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        <span class="cov8" title="1">user, domain := parseEmail(email)
+        account, err := s.db.GetAccount(domain, user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "account not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">secret, err := auth.GenerateTOTPSecret()
+        if err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to generate TOTP secret")
+                return
+        }</span>
+
+        // Store secret but don't enable yet — user must verify first
+        <span class="cov8" title="1">account.TOTPSecret = secret
+        account.UpdatedAt = time.Now()
+        if err := s.db.UpdateAccount(account); err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to save TOTP secret")
+                return
+        }</span>
+
+        <span class="cov8" title="1">uri := auth.GenerateTOTPUri(secret, email, "uMailServer")
+
+        s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "secret": secret,
+                "uri":    uri,
+        })</span>
+}
+
+func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email string) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        <span class="cov8" title="1">user, domain := parseEmail(email)
+        account, err := s.db.GetAccount(domain, user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "account not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">if account.TOTPSecret == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "TOTP not set up — call /totp/setup first")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var req struct {
+                Code string `json:"code"`
+        }
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        <span class="cov8" title="1">if !auth.ValidateTOTP(account.TOTPSecret, req.Code) </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
+                return
+        }</span>
+
+        // Code verified — enable TOTP
+        <span class="cov0" title="0">account.TOTPEnabled = true
+        account.UpdatedAt = time.Now()
+        if err := s.db.UpdateAccount(account); err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to enable TOTP")
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "enabled": true,
+        })</span>
+}
+
+func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email string) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        <span class="cov8" title="1">user, domain := parseEmail(email)
+        account, err := s.db.GetAccount(domain, user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "account not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">account.TOTPSecret = ""
+        account.TOTPEnabled = false
+        account.UpdatedAt = time.Now()
+        if err := s.db.UpdateAccount(account); err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to disable TOTP")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "enabled": false,
+        })</span>
+}
+
+func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.listQueue(w, r)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+func (s *Server) handleQueueDetail(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        id := strings.TrimPrefix(r.URL.Path, "/api/v1/queue/")
+
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.getQueueEntry(w, r, id)</span>
+        case http.MethodPost:<span class="cov8" title="1">
+                s.retryQueueEntry(w, r, id)</span>
+        case http.MethodDelete:<span class="cov8" title="1">
+                s.dropQueueEntry(w, r, id)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get actual metrics from metrics collector
+        <span class="cov8" title="1">stats := metrics.Get().GetStats()
+        s.sendJSON(w, http.StatusOK, stats)</span>
+}
+
+
+// SetQueueManager injects the queue manager for stats
+func (s *Server) SetQueueManager(qm *queue.Manager) <span class="cov8" title="1">{
+        s.queueMgr = qm
+}</span>
+
+// SetHealthMonitor sets the health monitor for health endpoints
+func (s *Server) SetHealthMonitor(mon HealthMonitor) <span class="cov8" title="1">{
+        s.healthMon = mon
+}</span>
+
+// SetAPIRateLimit sets the HTTP API rate limit (requests per minute, 0 = disabled)
+func (s *Server) SetAPIRateLimit(limit int) <span class="cov8" title="1">{
+        s.apiRateMu.Lock()
+        defer s.apiRateMu.Unlock()
+        s.apiRateLimit = limit
+}</span>
+
+// checkAPIRateLimit returns true if the IP is allowed to make API requests.
+// Uses sliding window based on HTTPRequestsPerMinute config.
+func (s *Server) checkAPIRateLimit(ip string) bool <span class="cov8" title="1">{
+        s.apiRateMu.Lock()
+        defer s.apiRateMu.Unlock()
+
+        if s.apiRateLimit &lt;= 0 </span><span class="cov8" title="1">{
+                return true // rate limiting disabled
+        }</span>
+
+        <span class="cov8" title="1">if s.apiRateAttempts == nil </span><span class="cov8" title="1">{
+                s.apiRateAttempts = make(map[string]*apiRateAttempt)
+        }</span>
+
+        <span class="cov8" title="1">now := time.Now()
+        attempt, exists := s.apiRateAttempts[ip]
+
+        // Check if window has expired (1 minute window)
+        if !exists || now.Sub(attempt.windowStart) &gt; time.Minute </span><span class="cov8" title="1">{
+                s.apiRateAttempts[ip] = &amp;apiRateAttempt{count: 1, windowStart: now}
+                return true
+        }</span>
+
+        // Check if limit exceeded
+        <span class="cov8" title="1">if attempt.count &gt;= s.apiRateLimit </span><span class="cov8" title="1">{
+                return false
+        }</span>
+
+        <span class="cov8" title="1">attempt.count++
+        return true</span>
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        <span class="cov8" title="1">domains, err := s.db.ListDomains()
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to get stats")
+                return
+        }</span>
+
+        // Count accounts across all domains
+        <span class="cov8" title="1">accounts := 0
+        for _, d := range domains </span><span class="cov8" title="1">{
+                accts, _ := s.db.ListAccountsByDomain(d.Name)
+                accounts += len(accts)
+        }</span>
+
+        <span class="cov8" title="1">queueSize := 0
+        if s.queueMgr != nil </span><span class="cov0" title="0">{
+                if stats, err := s.queueMgr.GetStats(); err == nil </span><span class="cov0" title="0">{
+                        queueSize = stats.Pending + stats.Sending + stats.Failed
+                }</span>
+        }
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "domains":    len(domains),
+                "accounts":   accounts,
+                "messages":   0, // Would need to scan maildirs
+                "queue_size": queueSize,
+        })</span>
+}
+
+// Domain handlers
+
+func (s *Server) listDomains(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        domains, err := s.db.ListDomains()
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to list domains")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var result []map[string]interface{}
+        for _, d := range domains </span><span class="cov8" title="1">{
+                result = append(result, domainToJSON(d))
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, result)</span>
+}
+
+func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        var req struct {
+                Name        string `json:"name"`
+                MaxAccounts int    `json:"max_accounts"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        <span class="cov8" title="1">if req.Name == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "domain name is required")
+                return
+        }</span>
+
+        <span class="cov8" title="1">domain := &amp;db.DomainData{
+                Name:        req.Name,
+                MaxAccounts: req.MaxAccounts,
+                IsActive:    true,
+                CreatedAt:   time.Now(),
+                UpdatedAt:   time.Now(),
+        }
+
+        // Generate DKIM key pair for the domain
+        privKey, _, err := auth.GenerateDKIMKeyPair(2048)
+        if err == nil </span><span class="cov8" title="1">{
+                domain.DKIMSelector = "default"
+                domain.DKIMPublicKey = auth.GetPublicKeyForDNS(privKey)
+                privKeyBytes := x509.MarshalPKCS1PrivateKey(privKey)
+                domain.DKIMPrivateKey = string(pem.EncodeToMemory(&amp;pem.Block{
+                        Type:  "RSA PRIVATE KEY",
+                        Bytes: privKeyBytes,
+                }))
+        }</span>
+
+        <span class="cov8" title="1">if err := s.db.CreateDomain(domain); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to create domain")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusCreated, domainToJSON(domain))</span>
+}
+
+func (s *Server) getDomain(w http.ResponseWriter, r *http.Request, name string) <span class="cov8" title="1">{
+        domain, err := s.db.GetDomain(name)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "domain not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, domainToJSON(domain))</span>
+}
+
+func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name string) <span class="cov8" title="1">{
+        domain, err := s.db.GetDomain(name)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "domain not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var req struct {
+                MaxAccounts int  `json:"max_accounts"`
+                IsActive    bool `json:"is_active"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        <span class="cov8" title="1">domain.MaxAccounts = req.MaxAccounts
+        domain.IsActive = req.IsActive
+        domain.UpdatedAt = time.Now()
+
+        if err := s.db.UpdateDomain(domain); err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to update domain")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, domainToJSON(domain))</span>
+}
+
+func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, name string) <span class="cov8" title="1">{
+        if err := s.db.DeleteDomain(name); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
+                return
+        }</span>
+
+        <span class="cov8" title="1">w.WriteHeader(http.StatusNoContent)</span>
+}
+
+// Account handlers
+
+func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        domain := r.URL.Query().Get("domain")
+
+        var accounts []*db.AccountData
+        var err error
+
+        if domain != "" </span><span class="cov8" title="1">{
+                accounts, err = s.db.ListAccountsByDomain(domain)
+        }</span> else<span class="cov8" title="1"> {
+                // Get all accounts from all domains
+                domains, listErr := s.db.ListDomains()
+                if listErr != nil </span><span class="cov8" title="1">{
+                        s.sendError(w, http.StatusInternalServerError, "failed to list accounts")
+                        return
+                }</span>
+                <span class="cov8" title="1">for _, d := range domains </span><span class="cov8" title="1">{
+                        domainAccounts, accErr := s.db.ListAccountsByDomain(d.Name)
+                        if accErr != nil </span><span class="cov0" title="0">{
+                                s.sendError(w, http.StatusInternalServerError, "failed to list accounts for domain")
+                                return
+                        }</span>
+                        <span class="cov8" title="1">accounts = append(accounts, domainAccounts...)</span>
+                }
+        }
+
+        <span class="cov8" title="1">if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to list accounts")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var result []map[string]interface{}
+        for _, a := range accounts </span><span class="cov8" title="1">{
+                result = append(result, accountToJSON(a))
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, result)</span>
+}
+
+func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        var req struct {
+                Email    string `json:"email"`
+                Password string `json:"password"`
+                IsAdmin  bool   `json:"is_admin"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        <span class="cov8" title="1">if req.Email == "" || req.Password == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "email and password are required")
+                return
+        }</span>
+
+        <span class="cov8" title="1">user, domain := parseEmail(req.Email)
+
+        // Hash password with bcrypt
+        hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+        if err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to hash password")
+                return
+        }</span>
+
+        <span class="cov8" title="1">account := &amp;db.AccountData{
+                Email:        req.Email,
+                LocalPart:    user,
+                Domain:       domain,
+                PasswordHash: string(hashedPassword),
+                IsAdmin:      req.IsAdmin,
+                IsActive:     true,
+                CreatedAt:    time.Now(),
+                UpdatedAt:    time.Now(),
+        }
+
+        if err := s.db.CreateAccount(account); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to create account")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusCreated, accountToJSON(account))</span>
+}
+
+func (s *Server) getAccount(w http.ResponseWriter, r *http.Request, email string) <span class="cov8" title="1">{
+        user, domain := parseEmail(email)
+
+        account, err := s.db.GetAccount(domain, user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "account not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, accountToJSON(account))</span>
+}
+
+func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email string) <span class="cov8" title="1">{
+        user, domain := parseEmail(email)
+
+        account, err := s.db.GetAccount(domain, user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "account not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var req struct {
+                Password         string `json:"password"`
+                IsAdmin          bool   `json:"is_admin"`
+                IsActive         bool   `json:"is_active"`
+                ForwardTo        string `json:"forward_to"`
+                ForwardKeepCopy  bool   `json:"forward_keep_copy"`
+                QuotaLimit       int64  `json:"quota_limit"`
+                VacationSettings string `json:"vacation_settings"`
+        }
+
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        <span class="cov8" title="1">if req.Password != "" </span><span class="cov8" title="1">{
+                // Hash new password with bcrypt
+                hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+                if err != nil </span><span class="cov0" title="0">{
+                        s.sendError(w, http.StatusInternalServerError, "failed to hash password")
+                        return
+                }</span>
+                <span class="cov8" title="1">account.PasswordHash = string(hashedPassword)</span>
+        }
+        <span class="cov8" title="1">account.IsAdmin = req.IsAdmin
+        account.IsActive = req.IsActive
+        account.ForwardTo = req.ForwardTo
+        account.ForwardKeepCopy = req.ForwardKeepCopy
+        account.QuotaLimit = req.QuotaLimit
+        account.VacationSettings = req.VacationSettings
+        account.UpdatedAt = time.Now()
+
+        if err := s.db.UpdateAccount(account); err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to update account")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, accountToJSON(account))</span>
+}
+
+func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email string) <span class="cov8" title="1">{
+        user, domain := parseEmail(email)
+
+        if err := s.db.DeleteAccount(domain, user); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to delete account")
+                return
+        }</span>
+
+        <span class="cov8" title="1">w.WriteHeader(http.StatusNoContent)</span>
+}
+
+// Queue handlers
+
+func (s *Server) listQueue(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get pending queue entries from database
+        entries, err := s.db.GetPendingQueue(time.Now().Add(24 * time.Hour))
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to list queue")
+                return
+        }</span>
+
+        <span class="cov8" title="1">var result []map[string]interface{}
+        for _, e := range entries </span><span class="cov8" title="1">{
+                result = append(result, map[string]interface{}{
+                        "id":          e.ID,
+                        "from":        e.From,
+                        "to":          e.To,
+                        "status":      e.Status,
+                        "retry_count": e.RetryCount,
+                        "last_error":  e.LastError,
+                        "created_at":  e.CreatedAt,
+                        "next_retry":  e.NextRetry,
+                })
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, result)</span>
+}
+
+func (s *Server) getQueueEntry(w http.ResponseWriter, r *http.Request, id string) <span class="cov8" title="1">{
+        entry, err := s.db.GetQueueEntry(id)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "queue entry not found")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "id":          entry.ID,
+                "from":        entry.From,
+                "to":          entry.To,
+                "status":      entry.Status,
+                "retry_count": entry.RetryCount,
+                "last_error":  entry.LastError,
+                "created_at":  entry.CreatedAt,
+                "next_retry":  entry.NextRetry,
+        })</span>
+}
+
+func (s *Server) retryQueueEntry(w http.ResponseWriter, r *http.Request, id string) <span class="cov8" title="1">{
+        entry, err := s.db.GetQueueEntry(id)
+        if err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "queue entry not found")
+                return
+        }</span>
+
+        // Reset retry count and status
+        <span class="cov8" title="1">entry.Status = "pending"
+        entry.RetryCount = 0
+        entry.LastError = ""
+        entry.NextRetry = time.Now()
+
+        if err := s.db.UpdateQueueEntry(entry); err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "failed to retry queue entry")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{"status": "retrying"})</span>
+}
+
+func (s *Server) dropQueueEntry(w http.ResponseWriter, r *http.Request, id string) <span class="cov8" title="1">{
+        if err := s.db.Dequeue(id); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusInternalServerError, "failed to drop queue entry")
+                return
+        }</span>
+
+        <span class="cov8" title="1">w.WriteHeader(http.StatusNoContent)</span>
+}
+
+// Helpers
+
+func (s *Server) sendJSON(w http.ResponseWriter, status int, data interface{}) <span class="cov8" title="1">{
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(status)
+        json.NewEncoder(w).Encode(data)
+}</span>
+
+func (s *Server) sendError(w http.ResponseWriter, status int, message string) <span class="cov8" title="1">{
+        s.sendJSON(w, status, map[string]string{"error": message})
+}</span>
+
+func domainToJSON(d *db.DomainData) map[string]interface{} <span class="cov8" title="1">{
+        result := map[string]interface{}{
+                "name":         d.Name,
+                "max_accounts": d.MaxAccounts,
+                "is_active":    d.IsActive,
+                "created_at":   d.CreatedAt,
+                "updated_at":   d.UpdatedAt,
+        }
+        if d.DKIMSelector != "" </span><span class="cov8" title="1">{
+                result["dkim_selector"] = d.DKIMSelector
+                result["dkim_public_key"] = d.DKIMPublicKey
+        }</span>
+        <span class="cov8" title="1">return result</span>
+}
+
+func accountToJSON(a *db.AccountData) map[string]interface{} <span class="cov8" title="1">{
+        result := map[string]interface{}{
+                "email":             a.Email,
+                "is_admin":          a.IsAdmin,
+                "is_active":         a.IsActive,
+                "quota_used":        a.QuotaUsed,
+                "quota_limit":       a.QuotaLimit,
+                "forward_to":        a.ForwardTo,
+                "forward_keep_copy": a.ForwardKeepCopy,
+                "created_at":        a.CreatedAt,
+                "updated_at":        a.UpdatedAt,
+                "last_login":        a.LastLoginAt,
+        }
+        if a.VacationSettings != "" </span><span class="cov8" title="1">{
+                result["vacation_settings"] = a.VacationSettings
+        }</span>
+        <span class="cov8" title="1">return result</span>
+}
+
+func parseEmail(email string) (user, domain string) <span class="cov8" title="1">{
+        at := strings.LastIndex(email, "@")
+        if at == -1 </span><span class="cov8" title="1">{
+                return email, ""
+        }</span>
+        <span class="cov8" title="1">return email[:at], email[at+1:]</span>
+}
+
+// Search handlers
+
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user := r.Context().Value("user")
+        if user == nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Parse query parameters
+        <span class="cov8" title="1">query := r.URL.Query().Get("q")
+        if query == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "missing query parameter 'q'")
+                return
+        }</span>
+
+        <span class="cov8" title="1">folder := r.URL.Query().Get("folder")
+        limitStr := r.URL.Query().Get("limit")
+        offsetStr := r.URL.Query().Get("offset")
+
+        limit := 20
+        if limitStr != "" </span><span class="cov8" title="1">{
+                if l, err := strconv.Atoi(limitStr); err == nil &amp;&amp; l &gt; 0 </span><span class="cov8" title="1">{
+                        limit = l
+                }</span>
+        }
+
+        <span class="cov8" title="1">offset := 0
+        if offsetStr != "" </span><span class="cov8" title="1">{
+                if o, err := strconv.Atoi(offsetStr); err == nil &amp;&amp; o &gt;= 0 </span><span class="cov8" title="1">{
+                        offset = o
+                }</span>
+        }
+
+        // Perform search
+        <span class="cov8" title="1">if s.searchSvc == nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusServiceUnavailable, "search service not available")
+                return
+        }</span>
+
+        <span class="cov0" title="0">userStr, ok := user.(string)
+        if !ok </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusUnauthorized, "invalid user context")
+                return
+        }</span>
+
+        <span class="cov0" title="0">results, err := s.searchSvc.Search(search.MessageSearchOptions{
+                User:   userStr,
+                Folder: folder,
+                Query:  query,
+                Limit:  limit,
+                Offset: offset,
+        })
+        if err != nil </span><span class="cov0" title="0">{
+                s.sendError(w, http.StatusInternalServerError, "search failed")
+                return
+        }</span>
+
+        <span class="cov0" title="0">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "query":   query,
+                "folder":  folder,
+                "results": results,
+                "total":   len(results),
+                "limit":   limit,
+                "offset":  offset,
+        })</span>
+}
+</pre>
+		
+		<pre class="file" id="file11" style="display: none">package api
+
+import (
+        "encoding/json"
+        "net/http"
+        "strconv"
+        "strings"
+        "time"
+
+        "github.com/umailserver/umailserver/internal/storage"
+)
+
+// ThreadResponse represents a thread in API responses
+type ThreadResponse struct {
+        ThreadID     string    `json:"thread_id"`
+        Subject      string    `json:"subject"`
+        Participants []string  `json:"participants"`
+        MessageCount int       `json:"message_count"`
+        UnreadCount  int       `json:"unread_count"`
+        LastActivity time.Time `json:"last_activity"`
+        CreatedAt    time.Time `json:"created_at"`
+}
+
+// ThreadMessageResponse represents a message in a thread
+type ThreadMessageResponse struct {
+        MessageID string    `json:"message_id"`
+        UID       uint32    `json:"uid"`
+        Mailbox   string    `json:"mailbox"`
+        From      string    `json:"from"`
+        To        string    `json:"to"`
+        Subject   string    `json:"subject"`
+        Date      time.Time `json:"date"`
+        IsRead    bool      `json:"is_read"`
+        Flags     []string  `json:"flags"`
+}
+
+// ThreadListResponse represents the response for listing threads
+type ThreadListResponse struct {
+        Threads []ThreadResponse `json:"threads"`
+        Total   int              `json:"total"`
+        Limit   int              `json:"limit"`
+        Offset  int              `json:"offset"`
+}
+
+// handleThreads handles GET /api/v1/threads
+func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Parse query parameters
+        <span class="cov8" title="1">limit := 20
+        offset := 0
+        mailbox := "INBOX"
+
+        if l := r.URL.Query().Get("limit"); l != "" </span><span class="cov8" title="1">{
+                if parsed, err := strconv.Atoi(l); err == nil &amp;&amp; parsed &gt; 0 &amp;&amp; parsed &lt;= 100 </span><span class="cov8" title="1">{
+                        limit = parsed
+                }</span>
+        }
+
+        <span class="cov8" title="1">if o := r.URL.Query().Get("offset"); o != "" </span><span class="cov8" title="1">{
+                if parsed, err := strconv.Atoi(o); err == nil &amp;&amp; parsed &gt;= 0 </span><span class="cov8" title="1">{
+                        offset = parsed
+                }</span>
+        }
+
+        <span class="cov8" title="1">if m := r.URL.Query().Get("mailbox"); m != "" </span><span class="cov8" title="1">{
+                mailbox = m
+        }</span>
+
+        // Get threads from database
+        <span class="cov8" title="1">threads, err := s.getThreadsForMailbox(user, mailbox, limit, offset)
+        if err != nil </span><span class="cov0" title="0">{
+                s.logger.Error("failed to get threads", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to get threads")
+                return
+        }</span>
+
+        // Convert to response format
+        <span class="cov8" title="1">response := ThreadListResponse{
+                Threads: make([]ThreadResponse, 0, len(threads)),
+                Total:   len(threads),
+                Limit:   limit,
+                Offset:  offset,
+        }
+
+        for _, t := range threads </span><span class="cov0" title="0">{
+                response.Threads = append(response.Threads, ThreadResponse{
+                        ThreadID:     t.ThreadID,
+                        Subject:      t.Subject,
+                        Participants: t.Participants,
+                        MessageCount: t.MessageCount,
+                        UnreadCount:  t.UnreadCount,
+                        LastActivity: t.LastActivity,
+                        CreatedAt:    t.CreatedAt,
+                })
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, response)</span>
+}
+
+// handleThreadDetail handles GET /api/v1/threads/{id}
+func (s *Server) handleThreadDetail(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Extract thread ID from URL
+        <span class="cov8" title="1">threadID := r.URL.Path[len("/api/v1/threads/"):]
+        if threadID == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "thread ID required")
+                return
+        }</span>
+
+        // Get mailbox from query (default to INBOX)
+        <span class="cov8" title="1">mailbox := r.URL.Query().Get("mailbox")
+        if mailbox == "" </span><span class="cov8" title="1">{
+                mailbox = "INBOX"
+        }</span>
+
+        // Get thread messages
+        <span class="cov8" title="1">messages, err := s.getThreadMessages(user, mailbox, threadID)
+        if err != nil </span><span class="cov0" title="0">{
+                s.logger.Error("failed to get thread messages", "error", err, "user", user, "thread", threadID)
+                s.sendError(w, http.StatusInternalServerError, "failed to get thread messages")
+                return
+        }</span>
+
+        <span class="cov8" title="1">if len(messages) == 0 </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusNotFound, "thread not found")
+                return
+        }</span>
+
+        // Convert to response format
+        <span class="cov0" title="0">response := make([]ThreadMessageResponse, 0, len(messages))
+        for _, m := range messages </span><span class="cov0" title="0">{
+                response = append(response, ThreadMessageResponse{
+                        MessageID: m.MessageID,
+                        UID:       m.UID,
+                        Mailbox:   m.Mailbox,
+                        From:      m.From,
+                        To:        m.To,
+                        Subject:   m.Subject,
+                        Date:      m.Date,
+                        IsRead:    m.IsRead,
+                        Flags:     m.Flags,
+                })
+        }</span>
+
+        <span class="cov0" title="0">s.sendJSON(w, http.StatusOK, response)</span>
+}
+
+// handleThreadSearch handles GET /api/v1/threads/search
+func (s *Server) handleThreadSearch(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get search query
+        <span class="cov8" title="1">query := r.URL.Query().Get("q")
+        if query == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "query parameter 'q' required")
+                return
+        }</span>
+
+        // Search threads
+        <span class="cov8" title="1">threads, err := s.searchThreads(user, query)
+        if err != nil </span><span class="cov0" title="0">{
+                s.logger.Error("failed to search threads", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to search threads")
+                return
+        }</span>
+
+        // Convert to response format
+        <span class="cov8" title="1">response := make([]ThreadResponse, 0, len(threads))
+        for _, t := range threads </span><span class="cov0" title="0">{
+                response = append(response, ThreadResponse{
+                        ThreadID:     t.ThreadID,
+                        Subject:      t.Subject,
+                        Participants: t.Participants,
+                        MessageCount: t.MessageCount,
+                        UnreadCount:  t.UnreadCount,
+                        LastActivity: t.LastActivity,
+                        CreatedAt:    t.CreatedAt,
+                })
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "threads": response,
+                "query":   query,
+        })</span>
+}
+
+// handleThreadMarkRead handles POST /api/v1/threads/{id}/read
+func (s *Server) handleThreadMarkRead(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodPost </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Extract thread ID from URL
+        // Path format: /api/v1/threads/{id}/read
+        <span class="cov8" title="1">path := r.URL.Path
+        path = path[len("/api/v1/threads/"):]
+        path = path[:len(path)-len("/read")] // Remove "/read" suffix
+
+        if path == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "thread ID required")
+                return
+        }</span>
+
+        // Get mailbox from query (default to INBOX)
+        <span class="cov8" title="1">mailbox := r.URL.Query().Get("mailbox")
+        if mailbox == "" </span><span class="cov8" title="1">{
+                mailbox = "INBOX"
+        }</span>
+
+        // Mark all messages in thread as read
+        <span class="cov8" title="1">err := s.markThreadAsRead(user, mailbox, path)
+        if err != nil </span><span class="cov0" title="0">{
+                s.logger.Error("failed to mark thread as read", "error", err, "user", user, "thread", path)
+                s.sendError(w, http.StatusInternalServerError, "failed to mark thread as read")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "success",
+        })</span>
+}
+
+// handleThreadPath routes to the appropriate thread handler based on path
+func (s *Server) handleThreadPath(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        path := r.URL.Path[len("/api/v1/threads/"):]
+
+        // Check for sub-paths
+        if strings.HasSuffix(path, "/read") </span><span class="cov8" title="1">{
+                s.handleThreadMarkRead(w, r)
+                return
+        }</span>
+
+        // Default to detail handler for GET/DELETE
+        <span class="cov8" title="1">switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.handleThreadDetail(w, r)</span>
+        case http.MethodDelete:<span class="cov8" title="1">
+                s.handleThreadDelete(w, r)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+// handleThreadDelete handles DELETE /api/v1/threads/{id}
+func (s *Server) handleThreadDelete(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodDelete </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Get user from context
+        <span class="cov8" title="1">user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Extract thread ID from URL
+        <span class="cov8" title="1">threadID := r.URL.Path[len("/api/v1/threads/"):]
+        if threadID == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "thread ID required")
+                return
+        }</span>
+
+        // Get mailbox from query (default to INBOX)
+        <span class="cov8" title="1">mailbox := r.URL.Query().Get("mailbox")
+        if mailbox == "" </span><span class="cov8" title="1">{
+                mailbox = "INBOX"
+        }</span>
+
+        // Delete all messages in thread
+        <span class="cov8" title="1">err := s.deleteThread(user, mailbox, threadID)
+        if err != nil </span><span class="cov0" title="0">{
+                s.logger.Error("failed to delete thread", "error", err, "user", user, "thread", threadID)
+                s.sendError(w, http.StatusInternalServerError, "failed to delete thread")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "deleted",
+        })</span>
+}
+
+// getThreadsForMailbox retrieves threads for a user's mailbox
+func (s *Server) getThreadsForMailbox(user, mailbox string, limit, offset int) ([]*storage.Thread, error) <span class="cov8" title="1">{
+        // This is a placeholder - in a real implementation, we would query the database
+        // For now, return an empty list
+        return []*storage.Thread{}, nil
+}</span>
+
+// getThreadMessages retrieves messages for a specific thread
+func (s *Server) getThreadMessages(user, mailbox, threadID string) ([]*storage.ThreadMessage, error) <span class="cov8" title="1">{
+        // This is a placeholder - in a real implementation, we would query the database
+        // For now, return an empty list
+        return []*storage.ThreadMessage{}, nil
+}</span>
+
+// searchThreads searches for threads matching a query
+func (s *Server) searchThreads(user, query string) ([]*storage.Thread, error) <span class="cov8" title="1">{
+        // This is a placeholder - in a real implementation, we would search the database
+        // For now, return an empty list
+        return []*storage.Thread{}, nil
+}</span>
+
+// markThreadAsRead marks all messages in a thread as read
+func (s *Server) markThreadAsRead(user, mailbox, threadID string) error <span class="cov8" title="1">{
+        // This is a placeholder - in a real implementation, we would update the database
+        return nil
+}</span>
+
+// deleteThread deletes all messages in a thread
+func (s *Server) deleteThread(user, mailbox, threadID string) error <span class="cov8" title="1">{
+        // This is a placeholder - in a real implementation, we would delete from the database
+        return nil
+}</span>
+
+// decodeJSON decodes JSON from request body (helper function)
+func decodeJSON(r *http.Request, v interface{}) error <span class="cov8" title="1">{
+        decoder := json.NewDecoder(r.Body)
+        decoder.DisallowUnknownFields()
+        return decoder.Decode(v)
+}</span>
+</pre>
+		
+		<pre class="file" id="file12" style="display: none">package api
+
+import (
+        "encoding/json"
+        "net/http"
+        "time"
+
+        "github.com/umailserver/umailserver/internal/vacation"
+)
+
+// VacationConfig represents vacation auto-reply configuration in API
+type VacationConfig struct {
+        Enabled          bool     `json:"enabled"`
+        StartDate        *string  `json:"start_date,omitempty"`
+        EndDate          *string  `json:"end_date,omitempty"`
+        Subject          string   `json:"subject"`
+        Message          string   `json:"message"`
+        HTMLMessage      string   `json:"html_message,omitempty"`
+        SendInterval     int      `json:"send_interval,omitempty"` // in hours
+        ExcludeAddresses []string `json:"exclude_addresses,omitempty"`
+        IgnoreLists      bool     `json:"ignore_lists,omitempty"`
+        IgnoreBulk       bool     `json:"ignore_bulk,omitempty"`
+}
+
+// handleVacation handles GET/PUT /api/v1/vacation
+func (s *Server) handleVacation(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        switch r.Method </span>{
+        case http.MethodGet:<span class="cov8" title="1">
+                s.handleGetVacation(w, r)</span>
+        case http.MethodPut:<span class="cov8" title="1">
+                s.handleSetVacation(w, r)</span>
+        case http.MethodDelete:<span class="cov8" title="1">
+                s.handleDeleteVacation(w, r)</span>
+        default:<span class="cov8" title="1">
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")</span>
+        }
+}
+
+// handleGetVacation gets vacation configuration
+func (s *Server) handleGetVacation(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Get vacation manager from server (we need to add this field)
+        <span class="cov8" title="1">config, err := s.getVacationConfig(user)
+        if err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to get vacation config", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to get vacation config")
+                return
+        }</span>
+
+        // Convert to API response
+        <span class="cov8" title="1">response := VacationConfig{
+                Enabled:          config.Enabled,
+                Subject:          config.Subject,
+                Message:          config.Message,
+                HTMLMessage:      config.HTMLMessage,
+                SendInterval:     int(config.SendInterval.Hours()),
+                ExcludeAddresses: config.ExcludeAddresses,
+                IgnoreLists:      config.IgnoreLists,
+                IgnoreBulk:       config.IgnoreBulk,
+        }
+
+        if !config.StartDate.IsZero() </span><span class="cov8" title="1">{
+                startStr := config.StartDate.Format(time.RFC3339)
+                response.StartDate = &amp;startStr
+        }</span>
+        <span class="cov8" title="1">if !config.EndDate.IsZero() </span><span class="cov8" title="1">{
+                endStr := config.EndDate.Format(time.RFC3339)
+                response.EndDate = &amp;endStr
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, response)</span>
+}
+
+// handleSetVacation sets vacation configuration
+func (s *Server) handleSetVacation(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Parse request body
+        <span class="cov8" title="1">var req VacationConfig
+        if err := json.NewDecoder(r.Body).Decode(&amp;req); err != nil </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "invalid request body")
+                return
+        }</span>
+
+        // Convert to internal config
+        <span class="cov8" title="1">config := &amp;vacation.Config{
+                Enabled:          req.Enabled,
+                Subject:          req.Subject,
+                Message:          req.Message,
+                HTMLMessage:      req.HTMLMessage,
+                SendInterval:     time.Duration(req.SendInterval) * time.Hour,
+                ExcludeAddresses: req.ExcludeAddresses,
+                IgnoreLists:      req.IgnoreLists,
+                IgnoreBulk:       req.IgnoreBulk,
+        }
+
+        if req.StartDate != nil </span><span class="cov8" title="1">{
+                if startDate, err := time.Parse(time.RFC3339, *req.StartDate); err == nil </span><span class="cov8" title="1">{
+                        config.StartDate = startDate
+                }</span>
+        }
+        <span class="cov8" title="1">if req.EndDate != nil </span><span class="cov8" title="1">{
+                if endDate, err := time.Parse(time.RFC3339, *req.EndDate); err == nil </span><span class="cov8" title="1">{
+                        config.EndDate = endDate
+                }</span>
+        }
+
+        // Validate
+        <span class="cov8" title="1">if config.Enabled &amp;&amp; config.Subject == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "subject is required when vacation is enabled")
+                return
+        }</span>
+        <span class="cov8" title="1">if config.Enabled &amp;&amp; config.Message == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusBadRequest, "message is required when vacation is enabled")
+                return
+        }</span>
+
+        // Save config
+        <span class="cov8" title="1">if err := s.setVacationConfig(user, config); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to set vacation config", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to set vacation config")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "success",
+        })</span>
+}
+
+// handleDeleteVacation deletes vacation configuration
+func (s *Server) handleDeleteVacation(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        // Get user from context
+        user, ok := r.Context().Value("user").(string)
+        if !ok || user == "" </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusUnauthorized, "unauthorized")
+                return
+        }</span>
+
+        // Delete config
+        <span class="cov8" title="1">if err := s.deleteVacationConfig(user); err != nil </span><span class="cov8" title="1">{
+                s.logger.Error("Failed to delete vacation config", "error", err, "user", user)
+                s.sendError(w, http.StatusInternalServerError, "failed to delete vacation config")
+                return
+        }</span>
+
+        <span class="cov8" title="1">s.sendJSON(w, http.StatusOK, map[string]string{
+                "status": "deleted",
+        })</span>
+}
+
+// handleAdminVacations handles GET /api/v1/admin/vacations (admin only)
+func (s *Server) handleAdminVacations(w http.ResponseWriter, r *http.Request) <span class="cov8" title="1">{
+        if r.Method != http.MethodGet </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+                return
+        }</span>
+
+        // Check admin (should be done by middleware, but double-check)
+        <span class="cov8" title="1">isAdmin, _ := r.Context().Value("isAdmin").(bool)
+        if !isAdmin </span><span class="cov8" title="1">{
+                s.sendError(w, http.StatusForbidden, "admin access required")
+                return
+        }</span>
+
+        // Get active vacations
+        <span class="cov8" title="1">activeVacations := s.listActiveVacations()
+
+        s.sendJSON(w, http.StatusOK, map[string]interface{}{
+                "active_vacations": activeVacations,
+                "count":            len(activeVacations),
+        })</span>
+}
+
+// getVacationConfig gets vacation config for a user
+func (s *Server) getVacationConfig(user string) (*vacation.Config, error) <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.vacationGetError != nil </span><span class="cov8" title="1">{
+                return nil, s.vacationGetError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.vacationMgr != nil </span><span class="cov8" title="1">{
+                return s.vacationMgr.GetConfig(user)
+        }</span>
+        // Placeholder - in real implementation, get from vacation manager
+        <span class="cov8" title="1">return &amp;vacation.Config{
+                Enabled:      false,
+                Subject:      "Out of Office",
+                Message:      "I am currently out of office. I will respond to your email when I return.",
+                SendInterval: 7 * 24 * time.Hour,
+                IgnoreLists:  true,
+                IgnoreBulk:   true,
+        }, nil</span>
+}
+
+// setVacationConfig sets vacation config for a user
+func (s *Server) setVacationConfig(user string, config *vacation.Config) error <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.vacationSetError != nil </span><span class="cov8" title="1">{
+                return s.vacationSetError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.vacationMgr != nil </span><span class="cov8" title="1">{
+                return s.vacationMgr.SetConfig(user, config)
+        }</span>
+        // Placeholder - in real implementation, save to vacation manager
+        <span class="cov8" title="1">return nil</span>
+}
+
+// deleteVacationConfig deletes vacation config for a user
+func (s *Server) deleteVacationConfig(user string) error <span class="cov8" title="1">{
+        // Check for mock error injection (used in tests)
+        if s.vacationDeleteError != nil </span><span class="cov8" title="1">{
+                return s.vacationDeleteError
+        }</span>
+        // Use interface if set
+        <span class="cov8" title="1">if s.vacationMgr != nil </span><span class="cov8" title="1">{
+                return s.vacationMgr.DeleteConfig(user)
+        }</span>
+        // Placeholder - in real implementation, delete from vacation manager
+        <span class="cov8" title="1">return nil</span>
+}
+
+// listActiveVacations lists all active vacations
+func (s *Server) listActiveVacations() []string <span class="cov8" title="1">{
+        // Use interface if set
+        if s.vacationMgr != nil </span><span class="cov8" title="1">{
+                list, err := s.vacationMgr.ListActive()
+                if err != nil </span><span class="cov8" title="1">{
+                        return []string{}
+                }</span>
+                <span class="cov0" title="0">return list</span>
+        }
+        // Placeholder - in real implementation, get from vacation manager
+        <span class="cov8" title="1">return []string{}</span>
+}
+</pre>
+		
+		</div>
+	</body>
+	<script>
+	(function() {
+		var files = document.getElementById('files');
+		var visible;
+		files.addEventListener('change', onChange, false);
+		function select(part) {
+			if (visible)
+				visible.style.display = 'none';
+			visible = document.getElementById(part);
+			if (!visible)
+				return;
+			files.value = part;
+			visible.style.display = 'block';
+			location.hash = part;
+		}
+		function onChange() {
+			select(files.value);
+			window.scrollTo(0, 0);
+		}
+		if (location.hash != "") {
+			select(location.hash.substr(1));
+		}
+		if (!visible) {
+			select("file0");
+		}
+	})();
+	</script>
+</html>
