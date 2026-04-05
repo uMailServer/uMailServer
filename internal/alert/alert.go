@@ -102,9 +102,14 @@ type Logger interface {
 // noopLogger is a no-op logger implementation
 type noopLogger struct{}
 
-func (n *noopLogger) Info(msg string, args ...interface{})  {}
-func (n *noopLogger) Warn(msg string, args ...interface{})  {}
-func (n *noopLogger) Error(msg string, args ...interface{}) {}
+// Info is a no-op
+func (n *noopLogger) Info(msg string, args ...interface{}) { _ = msg }
+
+// Warn is a no-op
+func (n *noopLogger) Warn(msg string, args ...interface{}) { _ = msg }
+
+// Error is a no-op
+func (n *noopLogger) Error(msg string, args ...interface{}) { _ = msg }
 
 // NewManager creates a new alert manager
 func NewManager(config Config, logger Logger) *Manager {

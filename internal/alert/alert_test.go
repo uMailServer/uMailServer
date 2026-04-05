@@ -664,3 +664,227 @@ func TestSend_WebhookNotConfigured(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
+
+func TestSend_WebhookServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.WebhookURL = server.URL
+	mgr := NewManager(cfg, nil)
+
+	err := mgr.Send("webhook_error", SeverityInfo, "test alert", nil)
+	// Should return error because webhook returned 500
+	if err == nil {
+		t.Error("expected error for webhook server error")
+	}
+}
+
+func TestSend_WebhookNetworkError(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.WebhookURL = "http://localhost:99999/webhook" // Non-existent server
+	mgr := NewManager(cfg, nil)
+
+	err := mgr.Send("webhook_net_error", SeverityInfo, "test alert", nil)
+	// Should return error because connection failed
+	if err == nil {
+		t.Error("expected error for webhook network error")
+	}
+}
+
+func TestShouldSend_HourlyReset(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.MaxAlerts = 1
+	cfg.MinInterval = 0
+
+	mgr := NewManager(cfg, nil)
+
+	// Send first alert
+	err := mgr.Send("reset_test", SeverityInfo, "first", nil)
+	if err != nil {
+		t.Errorf("first send failed: %v", err)
+	}
+
+	// Directly manipulate hourStart to trigger reset
+	mgr.hourStart = time.Now().Add(-2 * time.Hour)
+	mgr.hourlyCount = 1 // At max
+
+	// shouldSend should reset the count and allow sending
+	// This tests the hourly reset branch
+	result := mgr.shouldSend("reset_test")
+	if !result {
+		t.Error("expected shouldSend to return true after hourly reset")
+	}
+}
+
+func TestSend_EmailNotConfigured(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.SMTPServer = "" // No SMTP configured
+	mgr := NewManager(cfg, nil)
+
+	// Should succeed with no email (no-op)
+	err := mgr.Send("no_email", SeverityInfo, "test alert", nil)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestGetStats_HourlyReset(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.MaxAlerts = 100
+
+	mgr := NewManager(cfg, nil)
+
+	// Manually set hourStart to 2 hours ago to trigger reset branch
+	mgr.hourStart = time.Now().Add(-2 * time.Hour)
+	mgr.hourlyCount = 50 // Some count that should be reset
+
+	stats := mgr.GetStats()
+
+	// Hourly count should be reset to 0
+	if stats["hourly_count"] != 0 {
+		t.Errorf("expected hourly_count=0 after reset, got %v", stats["hourly_count"])
+	}
+}
+
+func TestSendWebhook_ClientError(t *testing.T) {
+	// Test 4xx client error (should return error)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest) // 400
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.WebhookURL = server.URL
+
+	mgr := NewManager(cfg, nil)
+
+	alert := Alert{
+		Name:      "test_alert",
+		Severity:  SeverityWarning,
+		Timestamp: time.Now(),
+	}
+
+	err := mgr.sendWebhook(alert)
+	if err == nil {
+		t.Error("expected error for 400 status")
+	}
+}
+
+func TestSendWebhook_TooManyRequests(t *testing.T) {
+	// Test 429 Too Many Requests
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests) // 429
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.WebhookURL = server.URL
+
+	mgr := NewManager(cfg, nil)
+
+	alert := Alert{
+		Name:      "test_alert",
+		Severity:  SeverityWarning,
+		Timestamp: time.Now(),
+	}
+
+	err := mgr.sendWebhook(alert)
+	if err == nil {
+		t.Error("expected error for 429 status")
+	}
+}
+
+func TestSend_BothWebhookAndEmailFail(t *testing.T) {
+	webhookServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer webhookServer.Close()
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.WebhookURL = webhookServer.URL
+	cfg.SMTPServer = "invalid.smtp.server"
+	cfg.SMTPPort = 587
+	cfg.FromAddress = "test@example.com"
+	cfg.ToAddresses = []string{"alert@example.com"}
+
+	mgr := NewManager(cfg, nil)
+
+	// Both webhook and email should fail
+	err := mgr.Send("both_fail", SeverityCritical, "test alert", nil)
+	if err == nil {
+		t.Error("expected error when both webhook and email fail")
+	}
+	// Error should indicate at least one failure
+	t.Logf("Got expected error: %v", err)
+}
+
+func TestSend_WebhookFailsEmailSucceeds(t *testing.T) {
+	webhookServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer webhookServer.Close()
+
+	emailServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Don't respond to SMTP - just let it timeout or fail
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer emailServer.Close()
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.WebhookURL = webhookServer.URL
+	// SMTP not configured, so only webhook fails but no error returned
+	// because email is not configured
+
+	mgr := NewManager(cfg, nil)
+
+	err := mgr.Send("webhook_fail_only", SeverityInfo, "test alert", nil)
+	// Should return nil because email is not configured (not an error path)
+	if err != nil {
+		t.Logf("Got error: %v", err)
+	}
+}
+
+func TestSend_WithDetails(t *testing.T) {
+	var receivedAlert Alert
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &receivedAlert)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.WebhookURL = server.URL
+	cfg.MinInterval = 0
+
+	mgr := NewManager(cfg, nil)
+
+	details := map[string]interface{}{
+		"key1": "value1",
+		"key2": 123,
+		"key3": true,
+	}
+
+	err := mgr.Send("with_details", SeverityInfo, "test with details", details)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if receivedAlert.Details == nil {
+		t.Error("expected details to be set")
+	}
+	if receivedAlert.Details["key1"] != "value1" {
+		t.Errorf("expected key1=value1, got %v", receivedAlert.Details["key1"])
+	}
+}

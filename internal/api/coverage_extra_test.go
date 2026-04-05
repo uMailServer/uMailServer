@@ -2395,3 +2395,114 @@ func TestNewEmbedFSSub_InvalidPath(t *testing.T) {
 		t.Error("expected error when opening from nil-subbed fs")
 	}
 }
+
+func TestHandleAdmin_StatError(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockFS := &MockFS{
+		Files: map[string]string{
+			"index.html": "<!doctype html><html>Admin</html>",
+		},
+		StatError: fmt.Errorf("stat error"),
+	}
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, mockFS)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/index.html", nil)
+	w := httptest.NewRecorder()
+
+	server.handleAdmin(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", w.Code)
+	}
+}
+
+func TestHandleWebmail_StatError(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockFS := &MockFS{
+		Files: map[string]string{
+			"index.html": "<!doctype html><html>Webmail</html>",
+		},
+		StatError: fmt.Errorf("stat error"),
+	}
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, mockFS, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/index.html", nil)
+	w := httptest.NewRecorder()
+
+	server.handleWebmail(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", w.Code)
+	}
+}
+
+func TestHandleWebmail_JSContentType(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockFS := &MockFS{
+		Files: map[string]string{
+			"index.html": "<!doctype html><html>Webmail</html>",
+			"app.js":      "console.log('hello');",
+		},
+	}
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, mockFS, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	w := httptest.NewRecorder()
+
+	server.handleWebmail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/javascript" {
+		t.Errorf("Expected Content-Type application/javascript, got %s", ct)
+	}
+}
+
+func TestHandleWebmail_CSSContentType(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockFS := &MockFS{
+		Files: map[string]string{
+			"index.html": "<!doctype html><html>Webmail</html>",
+			"style.css":   "body { margin: 0; }",
+		},
+	}
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, mockFS, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
+	w := httptest.NewRecorder()
+
+	server.handleWebmail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/css" {
+		t.Errorf("Expected Content-Type text/css, got %s", ct)
+	}
+}
+

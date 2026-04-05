@@ -209,7 +209,7 @@ func TestQueueStatsStruct(t *testing.T) {
 }
 
 func TestResolverLookupMX(t *testing.T) {
-	resolver := &Resolver{}
+	resolver := &realDNSResolver{}
 
 	// Test with a domain that likely has MX records
 	mxRecords, err := resolver.LookupMX("google.com")
@@ -583,7 +583,7 @@ func TestManagerSetMaxQueueSize(t *testing.T) {
 }
 
 func TestResolverLookupMXInvalid(t *testing.T) {
-	resolver := &Resolver{}
+	resolver := &realDNSResolver{}
 
 	// Test with invalid domain
 	mxRecords, err := resolver.LookupMX("invalid-domain-that-does-not-exist-12345.xyz")

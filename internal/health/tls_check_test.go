@@ -2,10 +2,42 @@ package health
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// generateTestCertPEM creates a self-signed certificate that expires at the specified time
+func generateTestCertPEM(t *testing.T, notAfter time.Time) ([]byte, []byte) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:     []string{"127.0.0.1", "localhost"},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return certPEM, keyPEM
+}
 
 func TestTLSCertificateCheck_ACMEManaged(t *testing.T) {
 	// Test with non-existent path (simulating ACME managed cert)
@@ -206,5 +238,77 @@ DgYDVQQKEwdBY21lIENvMB4XDTE3MTAyMDE5NDMwNlow
 
 	if check.Status != StatusUnhealthy {
 		t.Errorf("expected unhealthy status for unparsable cert, got %s", check.Status)
+	}
+}
+
+// TestTLSCertificateCheck_WarningThreshold tests when cert is within warning days
+func TestTLSCertificateCheck_WarningThreshold(t *testing.T) {
+	// Generate a cert that expires in 20 days (within warning of 30 days)
+	certPEM, keyPEM := generateTestCertPEM(t, time.Now().Add(20*24*time.Hour))
+	tempDir := t.TempDir()
+	certPath := filepath.Join(tempDir, "warning.pem")
+	keyPath := filepath.Join(tempDir, "warning.key")
+
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		t.Fatalf("failed to write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0644); err != nil {
+		t.Fatalf("failed to write key: %v", err)
+	}
+
+	// warningDays=30, criticalDays=7, cert expires in 20 days -> should be warning
+	checker := TLSCertificateCheck(certPath, keyPath, 30, 7)
+	check := checker(context.Background())
+
+	if check.Status != StatusDegraded {
+		t.Errorf("expected degraded status for cert expiring in 20 days with 30-day warning, got %s: %s", check.Status, check.Message)
+	}
+}
+
+// TestTLSCertificateCheck_CriticalThreshold tests when cert is within critical days
+func TestTLSCertificateCheck_CriticalThreshold(t *testing.T) {
+	// Generate a cert that expires in 5 days (within critical of 7 days)
+	certPEM, keyPEM := generateTestCertPEM(t, time.Now().Add(5*24*time.Hour))
+	tempDir := t.TempDir()
+	certPath := filepath.Join(tempDir, "critical.pem")
+	keyPath := filepath.Join(tempDir, "critical.key")
+
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		t.Fatalf("failed to write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0644); err != nil {
+		t.Fatalf("failed to write key: %v", err)
+	}
+
+	// warningDays=30, criticalDays=7, cert expires in 5 days -> should be critical
+	checker := TLSCertificateCheck(certPath, keyPath, 30, 7)
+	check := checker(context.Background())
+
+	if check.Status != StatusUnhealthy {
+		t.Errorf("expected unhealthy status for cert expiring in 5 days with 7-day critical, got %s: %s", check.Status, check.Message)
+	}
+}
+
+// TestTLSCertificateCheck_Healthy tests when cert is healthy (not expiring soon)
+func TestTLSCertificateCheck_Healthy(t *testing.T) {
+	// Generate a cert that expires in 100 days (beyond warning of 30 days)
+	certPEM, keyPEM := generateTestCertPEM(t, time.Now().Add(100*24*time.Hour))
+	tempDir := t.TempDir()
+	certPath := filepath.Join(tempDir, "healthy.pem")
+	keyPath := filepath.Join(tempDir, "healthy.key")
+
+	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+		t.Fatalf("failed to write cert: %v", err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0644); err != nil {
+		t.Fatalf("failed to write key: %v", err)
+	}
+
+	// warningDays=30, cert expires in 100 days -> should be healthy
+	checker := TLSCertificateCheck(certPath, keyPath, 30, 7)
+	check := checker(context.Background())
+
+	if check.Status != StatusHealthy {
+		t.Errorf("expected healthy status for cert expiring in 100 days, got %s: %s", check.Status, check.Message)
 	}
 }

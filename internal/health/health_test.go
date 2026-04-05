@@ -368,3 +368,25 @@ type mockQueueStats struct {
 func (m *mockQueueStats) GetStats() (QueueStatInfo, error) {
 	return m.stats, m.err
 }
+
+// TestDatabaseCheck_Timeout tests the timeout path of DatabaseCheck
+func TestDatabaseCheck_Timeout(t *testing.T) {
+	// Create a context with a very short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	// ping function that blocks forever (or very long)
+	blockingPing := func() error {
+		time.Sleep(1 * time.Hour)
+		return nil
+	}
+
+	check := DatabaseCheck(blockingPing)(ctx)
+
+	if check.Status != StatusUnhealthy {
+		t.Errorf("expected unhealthy status for timeout, got %s", check.Status)
+	}
+	if check.Message != "database ping timeout" {
+		t.Errorf("expected timeout message, got %s", check.Message)
+	}
+}

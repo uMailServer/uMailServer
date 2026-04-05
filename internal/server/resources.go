@@ -251,6 +251,6 @@ func (rs ResourceStats) String() string {
 // noopLogger is a no-op logger implementation
 type noopLogger struct{}
 
-func (n *noopLogger) Info(msg string, args ...interface{})  {}
-func (n *noopLogger) Warn(msg string, args ...interface{})  {}
-func (n *noopLogger) Error(msg string, args ...interface{}) {}
+func (n *noopLogger) Info(msg string, args ...interface{})  { _ = msg }
+func (n *noopLogger) Warn(msg string, args ...interface{})  { _ = msg }
+func (n *noopLogger) Error(msg string, args ...interface{}) { _ = msg }

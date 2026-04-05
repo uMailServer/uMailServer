@@ -296,8 +296,6 @@ func TestLoadSubscriptions_MultipleFiles(t *testing.T) {
 	}
 }
 
-// TestLoadSubscriptions_InvalidFilename tests loading with invalid filename pattern
-
 // TestSendToUser_WithInvalidSubscriptions tests SendToUser with some invalid subscriptions
 func TestSendToUser_WithInvalidSubscriptions(t *testing.T) {
 	tmpDir := t.TempDir()

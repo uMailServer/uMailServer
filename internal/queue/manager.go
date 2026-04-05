@@ -36,7 +36,7 @@ type Manager struct {
 	db           *db.DB
 	store        *store.MaildirStore
 	dataDir      string
-	resolver     *Resolver
+	resolver     DNSResolver
 	running      atomic.Bool
 	shutdown     chan struct{}
 	stopOnce     sync.Once
@@ -68,22 +68,52 @@ type QueueStats struct {
 	Total     int
 }
 
-// Resolver handles DNS resolution for MX records
-type Resolver struct{}
+// DNSResolver handles DNS resolution for email delivery
+type DNSResolver interface {
+	LookupMX(domain string) ([]string, error)
+}
 
-// queueDNSResolver implements auth.DNSResolver for MTA-STS validation
-type queueDNSResolver struct{}
+// MTASTSDNSResolver handles DNS resolution for MTA-STS validation
+type MTASTSDNSResolver interface {
+	LookupTXT(ctx context.Context, name string) ([]string, error)
+	LookupIP(ctx context.Context, host string) ([]net.IP, error)
+	LookupMX(ctx context.Context, domain string) ([]*net.MX, error)
+}
 
-func (r *queueDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+// realDNSResolver implements DNSResolver with real network calls
+type realDNSResolver struct{}
+
+func (r *realDNSResolver) LookupMX(domain string) ([]string, error) {
+	mxRecords, err := net.LookupMX(domain)
+	if err != nil {
+		return nil, err
+	}
+	var records []string
+	for _, mx := range mxRecords {
+		records = append(records, mx.Host)
+	}
+	return records, nil
+}
+
+// realMTASTSDNSResolver implements MTASTSDNSResolver with real network calls.
+// Note: LookupIP and LookupMX are stubs since MTA-STS and DANE validators
+// only use LookupTXT. These exist only to satisfy the auth.DNSResolver interface.
+type realMTASTSDNSResolver struct{}
+
+func (r *realMTASTSDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
 	return net.LookupTXT(name)
 }
 
-func (r *queueDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
-	return net.LookupIP(host)
+func (r *realMTASTSDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
+	// MTA-STS and DANE validators do not use LookupIP
+	// This stub exists only to satisfy the auth.DNSResolver interface
+	return nil, nil
 }
 
-func (r *queueDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
-	return net.LookupMX(domain)
+func (r *realMTASTSDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
+	// MTA-STS and DANE validators do not use LookupMX
+	// This stub exists only to satisfy the auth.DNSResolver interface
+	return nil, nil
 }
 
 // NewManager creates a new queue manager
@@ -95,14 +125,14 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		db:              db,
 		store:           store,
 		dataDir:         dataDir,
-		resolver:        &Resolver{},
+		resolver:        &realDNSResolver{},
 		shutdown:        make(chan struct{}),
 		metrics:         metrics.Get(),
 		logger:          logger,
 		maxRetries:      len(retryDelays),
 		maxQueueSize:    10000,
-		mtastsValidator: auth.NewMTASTSValidator(&queueDNSResolver{}),
-		daneValidator:   auth.NewDANEValidator(&queueDNSResolver{}),
+		mtastsValidator: auth.NewMTASTSValidator(&realMTASTSDNSResolver{}),
+		daneValidator:   auth.NewDANEValidator(&realMTASTSDNSResolver{}),
 	}
 }
 
@@ -124,6 +154,16 @@ func (m *Manager) Stop() {
 	}
 	m.running.Store(false)
 	m.stopOnce.Do(func() { close(m.shutdown) })
+}
+
+// SetMTASTSDNSResolver sets the DNS resolver for MTA-STS validation (for testing)
+func (m *Manager) SetMTASTSDNSResolver(resolver MTASTSDNSResolver) {
+	m.mtastsValidator = auth.NewMTASTSValidator(resolver)
+}
+
+// SetDANEDNSResolver sets the DNS resolver for DANE validation (for testing)
+func (m *Manager) SetDANEDNSResolver(resolver MTASTSDNSResolver) {
+	m.daneValidator = auth.NewDANEValidator(resolver)
 }
 
 // Enqueue adds a message to the outbound queue
@@ -728,21 +768,6 @@ func (m *Manager) deleteMessageFileIfUnreferenced(messagePath string) bool {
 		return true
 	}
 	return false
-}
-
-// LookupMX looks up MX records for a domain
-func (r *Resolver) LookupMX(domain string) ([]string, error) {
-	mxRecords, err := net.LookupMX(domain)
-	if err != nil {
-		return nil, err
-	}
-
-	var records []string
-	for _, mx := range mxRecords {
-		records = append(records, mx.Host)
-	}
-
-	return records, nil
 }
 
 // signWithDKIM signs an outgoing message with DKIM if the sender's domain has a DKIM key configured.

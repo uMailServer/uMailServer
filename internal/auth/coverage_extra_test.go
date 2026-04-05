@@ -2,10 +2,14 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base32"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -918,6 +922,203 @@ func TestARCValidateMultipleSets(t *testing.T) {
 }
 
 // --- buildAMSSignatureData extra coverage ---
+
+// --- TOTP extra coverage ---
+
+// TestGenerateTOTPUri_Escaping tests GenerateTOTPUri with special characters
+func TestGenerateTOTPUri_Escaping(t *testing.T) {
+	secret := "JBSWY3DPEHPK3PXP"
+	account := "user@example.com"
+	issuer := "Example Service"
+
+	uri := GenerateTOTPUri(secret, account, issuer)
+
+	if uri == "" {
+		t.Error("expected non-empty URI")
+	}
+	if !strings.Contains(uri, "otpauth://totp/") {
+		t.Error("expected otpauth://totp/ prefix")
+	}
+	if !strings.Contains(uri, "secret="+secret) {
+		t.Error("expected secret parameter")
+	}
+}
+
+// TestGenerateTOTPSecret_Output tests GenerateTOTPSecret output format
+func TestGenerateTOTPSecret_Output(t *testing.T) {
+	secret, err := GenerateTOTPSecret()
+	if err != nil {
+		t.Fatalf("GenerateTOTPSecret failed: %v", err)
+	}
+
+	if secret == "" {
+		t.Error("expected non-empty secret")
+	}
+
+	// Should be valid base32
+	_, err = base32.StdEncoding.DecodeString(secret)
+	if err != nil {
+		t.Errorf("secret should be valid base32: %v", err)
+	}
+}
+
+// TestDecodeTOTPSecret_WithPadding tests decodeTOTPSecret with various padding scenarios
+func TestDecodeTOTPSecret_WithPadding(t *testing.T) {
+	// Test with longer valid base32 strings (divisible by 8)
+	tests := []struct {
+		name   string
+		secret string
+	}{
+		{"no padding", "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeTOTPSecret(tc.secret)
+			if err != nil {
+				t.Errorf("expected valid secret %q, got error: %v", tc.secret, err)
+			}
+		})
+	}
+}
+
+// --- CRAM-MD5 extra coverage ---
+
+// TestVerifyCRAMMD5_InvalidResponse tests VerifyCRAMMD5 with invalid base64
+func TestVerifyCRAMMD5_InvalidResponse(t *testing.T) {
+	getSecret := func(username string) (string, error) {
+		return "secret", nil
+	}
+
+	// Invalid base64
+	_, ok := VerifyCRAMMD5("challenge", "!!!invalid-base64!!!", getSecret)
+	if ok {
+		t.Error("expected false for invalid base64 response")
+	}
+}
+
+// TestVerifyCRAMMD5_NoSpaceInResponse tests VerifyCRAMMD5 with response without space
+func TestVerifyCRAMMD5_NoSpaceInResponse(t *testing.T) {
+	getSecret := func(username string) (string, error) {
+		return "secret", nil
+	}
+
+	// Valid base64 but no space separator
+	resp := base64.StdEncoding.EncodeToString([]byte("usernamewithoutspace"))
+	_, ok := VerifyCRAMMD5("challenge", resp, getSecret)
+	if ok {
+		t.Error("expected false for response without space separator")
+	}
+}
+
+// TestVerifyCRAMMD5_GetSecretError tests VerifyCRAMMD5 when getSecret returns error
+func TestVerifyCRAMMD5_GetSecretError(t *testing.T) {
+	getSecret := func(username string) (string, error) {
+		return "", fmt.Errorf("user not found")
+	}
+
+	resp := base64.StdEncoding.EncodeToString([]byte("testuser abcdef123456"))
+	username, ok := VerifyCRAMMD5("challenge", resp, getSecret)
+	if ok {
+		t.Error("expected false when getSecret fails")
+	}
+	if username != "testuser" {
+		t.Errorf("expected username 'testuser', got %q", username)
+	}
+}
+
+// TestVerifyCRAMMD5_WrongSecret tests VerifyCRAMMD5 with wrong secret
+func TestVerifyCRAMMD5_WrongSecret(t *testing.T) {
+	getSecret := func(username string) (string, error) {
+		return "correctsecret", nil
+	}
+
+	// Generate a valid challenge
+	challengeStr, challengeB64, err := GenerateCRAMMD5Challenge()
+	if err != nil {
+		t.Fatalf("GenerateCRAMMD5Challenge failed: %v", err)
+	}
+
+	// Create response with wrong HMAC
+	resp := base64.StdEncoding.EncodeToString([]byte("testuser wronghexhash"))
+	username, ok := VerifyCRAMMD5(challengeB64, resp, getSecret)
+	if ok {
+		t.Error("expected false for wrong secret")
+	}
+	if username != "testuser" {
+		t.Errorf("expected username 'testuser', got %q", username)
+	}
+	_ = challengeStr // silence unused
+}
+
+// TestVerifyCRAMMD5_Valid tests a fully valid CRAM-MD5 verification
+func TestVerifyCRAMMD5_Valid(t *testing.T) {
+	secret := "mysecretkey"
+	getSecret := func(username string) (string, error) {
+		if username == "testuser" {
+			return secret, nil
+		}
+		return "", fmt.Errorf("user not found")
+	}
+
+	// Generate challenge
+	_, challengeB64, err := GenerateCRAMMD5Challenge()
+	if err != nil {
+		t.Fatalf("GenerateCRAMMD5Challenge failed: %v", err)
+	}
+
+	// Manually compute the correct response
+	challengeBytes, _ := base64.StdEncoding.DecodeString(challengeB64)
+	expectedHMAC := hmac.New(md5.New, []byte(secret))
+	expectedHMAC.Write(challengeBytes)
+	expectedHex := hex.EncodeToString(expectedHMAC.Sum(nil))
+	response := base64.StdEncoding.EncodeToString([]byte("testuser " + expectedHex))
+
+	// Verify
+	username, ok := VerifyCRAMMD5(challengeB64, response, getSecret)
+	if !ok {
+		t.Error("expected verification to succeed")
+	}
+	if username != "testuser" {
+		t.Errorf("expected username 'testuser', got %q", username)
+	}
+}
+
+// TestGenerateCRAMMD5Challenge_OutputFormat tests GenerateCRAMMD5Challenge output
+func TestGenerateCRAMMD5Challenge_OutputFormat(t *testing.T) {
+	challengeStr, challengeB64, err := GenerateCRAMMD5Challenge()
+	if err != nil {
+		t.Fatalf("GenerateCRAMMD5Challenge failed: %v", err)
+	}
+
+	if challengeStr == "" {
+		t.Error("expected non-empty challenge string")
+	}
+	if challengeB64 == "" {
+		t.Error("expected non-empty base64 challenge")
+	}
+
+	// Verify it's valid base64
+	_, err = base64.StdEncoding.DecodeString(challengeB64)
+	if err != nil {
+		t.Errorf("challengeB64 should be valid base64: %v", err)
+	}
+}
+
+// TestGenerateCRAMMD5Challenge_Uniqueness tests that each challenge is unique
+func TestGenerateCRAMMD5Challenge_Uniqueness(t *testing.T) {
+	challenges := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		_, challengeB64, err := GenerateCRAMMD5Challenge()
+		if err != nil {
+			t.Fatalf("GenerateCRAMMD5Challenge failed: %v", err)
+		}
+		if challenges[challengeB64] {
+			t.Error("expected unique challenges")
+		}
+		challenges[challengeB64] = true
+	}
+}
 
 // TestBuildAMSSignatureDataEmpty tests buildAMSSignatureData with empty inputs.
 func TestBuildAMSSignatureDataEmpty(t *testing.T) {

@@ -654,7 +654,7 @@ func (s *AVStage) Process(ctx *MessageContext) PipelineResult {
 // DefaultLogger implements Logger interface
 type defaultLogger struct{}
 
-func (l *defaultLogger) Debug(msg string, args ...interface{}) {}
-func (l *defaultLogger) Info(msg string, args ...interface{})  {}
-func (l *defaultLogger) Warn(msg string, args ...interface{})  {}
-func (l *defaultLogger) Error(msg string, args ...interface{}) {}
+func (l *defaultLogger) Debug(msg string, args ...interface{}) { _ = msg }
+func (l *defaultLogger) Info(msg string, args ...interface{})  { _ = msg }
+func (l *defaultLogger) Warn(msg string, args ...interface{})  { _ = msg }
+func (l *defaultLogger) Error(msg string, args ...interface{}) { _ = msg }

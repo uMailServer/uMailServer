@@ -239,6 +239,34 @@ func TestNoopLogger(t *testing.T) {
 	logger.Error("test", "key", "value")
 }
 
+func TestResourceMonitor_SetGoroutineLimitCallback(t *testing.T) {
+	limits := DefaultResourceLimits()
+	monitor := NewResourceMonitor(limits, nil)
+
+	monitor.SetGoroutineLimitCallback(func() {
+		// callback set
+	})
+
+	// Verify setter worked
+	if monitor.onGoroutineLimit == nil {
+		t.Error("goroutine limit callback should be set")
+	}
+}
+
+func TestResourceMonitor_SetConnectionLimitCallback(t *testing.T) {
+	limits := DefaultResourceLimits()
+	monitor := NewResourceMonitor(limits, nil)
+
+	monitor.SetConnectionLimitCallback(func() {
+		// callback set
+	})
+
+	// Verify setter worked
+	if monitor.onConnectionLimit == nil {
+		t.Error("connection limit callback should be set")
+	}
+}
+
 // testLogger is a simple test logger
 type testLogger struct {
 	logs []string
