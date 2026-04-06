@@ -227,6 +227,12 @@ func (s *Server) router() http.Handler {
 	// Admin panel (static files) - admin interface
 	mux.HandleFunc("/admin/", s.handleAdmin)
 
+	// Mozilla-style autoconfig
+	mux.HandleFunc("/.well-known/autoconfig/mail/config-v1.1.xml", s.handleAutoconfig)
+
+	// Microsoft Autodiscover
+	mux.HandleFunc("/autodiscover/autodiscover.xml", s.handleAutodiscover)
+
 	// Health check - use health monitor if available
 	if s.healthMon != nil {
 		mux.HandleFunc("/health", s.healthMon.HTTPHandler())

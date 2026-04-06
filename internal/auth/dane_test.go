@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -687,8 +688,13 @@ func TestGenerateTLSARecordSPKIFull(t *testing.T) {
 func TestGenerateTLSARecordSHA512(t *testing.T) {
 	cert := generateTestCert(t)
 	record := GenerateTLSARecord(cert, TLSAUsageDANEEE, TLSASelectorSPKI, TLSAMatchingTypeSHA512)
-	if record != nil {
-		t.Error("Expected nil for SHA-512 (not implemented)")
+	if record == nil {
+		t.Fatal("Expected non-nil record for SHA-512")
+	}
+	// Certificate should be SHA-512 hash of SPKI
+	expected := computeSHA512(cert.RawSubjectPublicKeyInfo)
+	if !equalBytes(record.Certificate, expected) {
+		t.Error("Expected Certificate to match SHA-512 hash of SPKI")
 	}
 }
 
@@ -785,12 +791,12 @@ func TestValidateRecordSHA512(t *testing.T) {
 		Usage:        TLSAUsageDANEEE,
 		Selector:     TLSASelectorFullCert,
 		MatchingType: TLSAMatchingTypeSHA512,
-		Certificate:  []byte{},
+		Certificate:  computeSHA512(cert.Raw),
 	}
 
 	result := validator.validateRecord(tlsa, cert, &tls.ConnectionState{})
-	if result {
-		t.Error("Expected false for SHA-512 (not implemented)")
+	if !result {
+		t.Error("Expected true for matching SHA-512 certificate")
 	}
 }
 
@@ -867,6 +873,13 @@ func TestParseTLSAHexTooShort(t *testing.T) {
 func computeSHA256(data []byte) []byte {
 	hash := make([]byte, 32)
 	h := sha256.Sum256(data)
+	copy(hash, h[:])
+	return hash
+}
+
+func computeSHA512(data []byte) []byte {
+	hash := make([]byte, 64)
+	h := sha512.Sum512(data)
 	copy(hash, h[:])
 	return hash
 }

@@ -241,6 +241,11 @@ func (m *mockAuthDNSResolver) LookupMX(ctx context.Context, domain string) ([]*n
 	return nil, nil
 }
 
+// LookupTLSA implements auth.TLSAResolver interface
+func (m *mockAuthDNSResolver) LookupTLSA(domain string) ([]*auth.TLSARecord, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // AuthSPFStage.Process tests
 // ---------------------------------------------------------------------------

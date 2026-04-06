@@ -1,10 +1,268 @@
 package spam
 
 import (
+	"encoding/binary"
+	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"unicode"
+
+	"go.etcd.io/bbolt"
 )
+
+// SpamBucket is the bbolt bucket name for spam token counts
+const SpamBucket = "spam_tokens"
+
+// HamBucket is the bbolt bucket name for ham token counts
+const HamBucket = "ham_tokens"
+
+// StatsBucket is the bbolt bucket name for total counts
+const StatsBucket = "spam_stats"
+
+// Classifier performs Bayesian spam classification
+type Classifier struct {
+	bolt      *bbolt.DB
+	tokenizer *Tokenizer
+	mu        sync.RWMutex
+}
+
+// NewClassifier creates a new Bayesian classifier
+func NewClassifier(bolt *bbolt.DB) *Classifier {
+	return &Classifier{
+		bolt:      bolt,
+		tokenizer: NewTokenizer(),
+	}
+}
+
+// Initialize sets up the bbolt buckets if needed
+func (c *Classifier) Initialize() error {
+	if c.bolt == nil {
+		return nil
+	}
+	return c.bolt.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(SpamBucket))
+		if err != nil {
+			return err
+		}
+		_, err = tx.CreateBucketIfNotExists([]byte(HamBucket))
+		if err != nil {
+			return err
+		}
+		_, err = tx.CreateBucketIfNotExists([]byte(StatsBucket))
+		return err
+	})
+}
+
+// tokenKey creates a bucket key for a token
+func tokenKey(token string) []byte {
+	return []byte(token)
+}
+
+// GetTotalCounts returns total ham and spam token counts
+func (c *Classifier) GetTotalCounts() (totalHam uint64, totalSpam uint64, err error) {
+	if c.bolt == nil {
+		return 1, 1, nil
+	}
+	err = c.bolt.View(func(tx *bbolt.Tx) error {
+		spamBucket := tx.Bucket([]byte(SpamBucket))
+		hamBucket := tx.Bucket([]byte(HamBucket))
+		statsBucket := tx.Bucket([]byte(StatsBucket))
+
+		if spamBucket != nil {
+			totalSpam = countAllTokens(spamBucket)
+		}
+		if hamBucket != nil {
+			totalHam = countAllTokens(hamBucket)
+		}
+		if statsBucket != nil {
+			if v := statsBucket.Get([]byte("total_ham")); len(v) == 8 {
+				totalHam = binary.BigEndian.Uint64(v)
+			}
+			if v := statsBucket.Get([]byte("total_spam")); len(v) == 8 {
+				totalSpam = binary.BigEndian.Uint64(v)
+			}
+		}
+		return nil
+	})
+	return
+}
+
+// countAllTokens counts all tokens in a bucket
+func countAllTokens(bucket *bbolt.Bucket) uint64 {
+	var count uint64
+	cursor := bucket.Cursor()
+	for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+		if len(v) >= 4 {
+			count += uint64(binary.BigEndian.Uint32(v))
+		}
+	}
+	return count
+}
+
+// IncrementToken increments the count for a token in the given bucket
+func (c *Classifier) IncrementToken(bucketName string, token string, delta uint32) error {
+	if c.bolt == nil {
+		return nil
+	}
+	return c.bolt.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(bucketName))
+		if bucket == nil {
+			return fmt.Errorf("bucket %s not found", bucketName)
+		}
+		key := tokenKey(token)
+		var count uint32
+		if v := bucket.Get(key); len(v) >= 4 {
+			count = binary.BigEndian.Uint32(v)
+		}
+		count += delta
+		var buf [4]byte
+		binary.BigEndian.PutUint32(buf[:], count)
+		return bucket.Put(key, buf[:])
+	})
+}
+
+// UpdateStats updates the total ham/spam counts in stats bucket
+func (c *Classifier) UpdateStats() error {
+	if c.bolt == nil {
+		return nil
+	}
+	totalHam, totalSpam, err := c.GetTotalCounts()
+	if err != nil {
+		return err
+	}
+	return c.bolt.Update(func(tx *bbolt.Tx) error {
+		statsBucket := tx.Bucket([]byte(StatsBucket))
+		if statsBucket == nil {
+			return nil
+		}
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], totalHam)
+		if err := statsBucket.Put([]byte("total_ham"), buf[:]); err != nil {
+			return err
+		}
+		binary.BigEndian.PutUint64(buf[:], totalSpam)
+		return statsBucket.Put([]byte("total_spam"), buf[:])
+	})
+}
+
+// TrainSpam trains the classifier with a spam email
+func (c *Classifier) TrainSpam(tokens []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, token := range tokens {
+		if err := c.IncrementToken(SpamBucket, token, 1); err != nil {
+			return err
+		}
+	}
+	return c.UpdateStats()
+}
+
+// TrainHam trains the classifier with a ham (non-spam) email
+func (c *Classifier) TrainHam(tokens []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, token := range tokens {
+		if err := c.IncrementToken(HamBucket, token, 1); err != nil {
+			return err
+		}
+	}
+	return c.UpdateStats()
+}
+
+// GetTokenFrequency retrieves the ham and spam counts for a token
+func (c *Classifier) GetTokenFrequency(token string) (hamCount, spamCount uint32, err error) {
+	if c.bolt == nil {
+		return 1, 1, nil
+	}
+	err = c.bolt.View(func(tx *bbolt.Tx) error {
+		spamBucket := tx.Bucket([]byte(SpamBucket))
+		hamBucket := tx.Bucket([]byte(HamBucket))
+
+		if hamBucket != nil {
+			if v := hamBucket.Get(tokenKey(token)); len(v) >= 4 {
+				hamCount = binary.BigEndian.Uint32(v)
+			}
+		}
+		if spamBucket != nil {
+			if v := spamBucket.Get(tokenKey(token)); len(v) >= 4 {
+				spamCount = binary.BigEndian.Uint32(v)
+			}
+		}
+		return nil
+	})
+	return
+}
+
+// Classify classifies a message as spam or ham based on tokens
+func (c *Classifier) Classify(tokens []string) (*ClassifyResult, error) {
+	if c.bolt == nil || len(tokens) == 0 {
+		return &ClassifyResult{
+			SpamProbability: 0.5,
+			IsSpam:          false,
+			Confidence:      0.0,
+		}, nil
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	totalHam, totalSpam, err := c.GetTotalCounts()
+	if err != nil {
+		return nil, err
+	}
+
+	// If we have no training data, return neutral
+	if totalHam < 10 || totalSpam < 10 {
+		return &ClassifyResult{
+			SpamProbability: 0.5,
+			IsSpam:          false,
+			Confidence:      0.0,
+		}, nil
+	}
+
+	var probs []float64
+	for _, token := range tokens {
+		hamCount, spamCount, err := c.GetTokenFrequency(token)
+		if err != nil {
+			continue
+		}
+		prob := tokenProbability(hamCount, spamCount, totalHam, totalSpam)
+		probs = append(probs, prob)
+	}
+
+	// Use only the most significant tokens (highest information gain)
+	// Sort by distance from 0.5 (most informative)
+	if len(probs) > 20 {
+		// Simple approach: use first 20 tokens
+		probs = probs[:20]
+	}
+
+	spamProb := CombinedProbability(probs)
+
+	// Calculate confidence based on how many tokens we processed
+	confidence := math.Min(float64(len(tokens))/50.0, 1.0)
+
+	return &ClassifyResult{
+		SpamProbability: spamProb,
+		IsSpam:          spamProb > 0.7,
+		Confidence:      confidence,
+	}, nil
+}
+
+// TrainFromEmail trains the classifier from email headers and body
+func (c *Classifier) TrainFromEmail(isSpam bool, headers map[string][]string, body []byte) error {
+	var tokens []string
+	tokens = append(tokens, ExtractTokensFromHeaders(headers)...)
+	tokens = append(tokens, ExtractTokensFromBody(body)...)
+
+	if isSpam {
+		return c.TrainSpam(tokens)
+	}
+	return c.TrainHam(tokens)
+}
 
 // Tokenizer splits text into tokens for Bayesian classification
 type Tokenizer struct {

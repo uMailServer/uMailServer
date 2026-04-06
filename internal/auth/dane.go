@@ -5,8 +5,8 @@ package auth
 // in internal/queue/manager.go deliverToMX function after STARTTLS.
 
 import (
-	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/miekg/dns"
 )
 
 // DANEResult represents the result of DANE validation
@@ -138,32 +140,53 @@ func (v *DANEValidator) LookupTLSA(domain string, port int) ([]*TLSARecord, erro
 
 // lookupTLSARecords performs the actual TLSA lookup
 func (v *DANEValidator) lookupTLSARecords(query string) ([]*TLSARecord, error) {
-	// Use standard DNS lookup for TLSA records
-	// Note: This requires a DNS resolver that supports TLSA record types
-	// For now, we use TXT lookup as a placeholder
-
-	// In production, you would use:
-	// r, err := net.LookupTLSA(query) or custom resolver
-
-	// For this implementation, we'll use the resolver interface
-	// but note that standard Go net package doesn't have TLSA lookup
-	txtRecords, err := v.resolver.LookupTXT(context.Background(), query)
-	if err != nil {
-		if isTemporaryError(err) {
-			return nil, err
+	// Use resolver's TLSA lookup if available
+	if v.resolver != nil {
+		if tlsaResolver, ok := v.resolver.(TLSAResolver); ok {
+			return tlsaResolver.LookupTLSA(query)
 		}
-		return nil, nil
+	}
+
+	// Fallback: use miekg/dns for proper TLSA (type 52) lookups
+	client := &dns.Client{
+		Net: "udp",
+	}
+
+	msg := new(dns.Msg)
+	msg.SetQuestion(dns.Fqdn(query), dns.TypeTLSA)
+
+	// Use Google's DNS
+	resolverAddr := "8.8.8.8:53"
+
+	// Perform the TLSA query
+	reply, _, err := client.Exchange(msg, resolverAddr)
+	if err != nil {
+		// Try TCP fallback
+		client.Net = "tcp"
+		reply, _, err = client.Exchange(msg, resolverAddr)
+		if err != nil {
+			return nil, fmt.Errorf("TLSA lookup failed: %w", err)
+		}
 	}
 
 	var records []*TLSARecord
-	for _, txt := range txtRecords {
-		record, err := parseTLSARecord(txt)
-		if err == nil && record != nil {
-			records = append(records, record)
+	for _, rr := range reply.Answer {
+		if tlsaRR, ok := rr.(*dns.TLSA); ok {
+			records = append(records, &TLSARecord{
+				Usage:        TLSAUsage(tlsaRR.Usage),
+				Selector:     TLSASelector(tlsaRR.Selector),
+				MatchingType: TLSAMatchingType(tlsaRR.MatchingType),
+				Certificate:  []byte(tlsaRR.Certificate),
+			})
 		}
 	}
 
 	return records, nil
+}
+
+// TLSAResolver interface for DNS resolvers that support TLSA lookups
+type TLSAResolver interface {
+	LookupTLSA(domain string) ([]*TLSARecord, error)
 }
 
 // parseTLSARecord parses a TLSA record from wire format
@@ -263,8 +286,9 @@ func (v *DANEValidator) validateRecord(tlsa *TLSARecord, cert *x509.Certificate,
 		hash := sha256.Sum256(dataToMatch)
 		computedData = hash[:]
 	case TLSAMatchingTypeSHA512:
-		// SHA-512 hash (not implemented in this simplified version)
-		return false
+		// SHA-512 hash
+		hash := sha512.Sum512(dataToMatch)
+		computedData = hash[:]
 	default:
 		// Unsupported matching type
 		return false
@@ -352,8 +376,8 @@ func GenerateTLSARecord(cert *x509.Certificate, usage TLSAUsage, selector TLSASe
 		hash := sha256.Sum256(dataToMatch)
 		certData = hash[:]
 	case TLSAMatchingTypeSHA512:
-		// SHA-512 not implemented in this simplified version
-		return nil
+		hash := sha512.Sum512(dataToMatch)
+		certData = hash[:]
 	}
 
 	return &TLSARecord{

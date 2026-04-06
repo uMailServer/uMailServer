@@ -102,9 +102,18 @@ type QueueEntry struct {
 	NextRetry   time.Time `json:"next_retry"`
 	RetryCount  int       `json:"retry_count"`
 	LastError   string    `json:"last_error"`
-	Status      string        `json:"status"` // pending, sending, failed, delivered
+	Status      string    `json:"status"` // pending, sending, failed, delivered, bounced
 	Priority    QueuePriority `json:"priority"` // 0=low, 1=normal, 2=high, 3=urgent
+	// DSN fields
+	Notify DSNNotify `json:"notify"` // DSN notification preferences (NEVER, SUCCESS, FAILURE, DELAY)
+	Ret    DSNRet    `json:"ret"`    // What to return in DSN (FULL or HDRS)
 }
+
+// DSNNotify represents delivery status notification preferences
+type DSNNotify int32
+
+// DSNRet represents what to return in DSN
+type DSNRet int32
 
 // AliasData holds email alias information
 type AliasData struct {

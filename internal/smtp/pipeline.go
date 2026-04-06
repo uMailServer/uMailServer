@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/spam"
 )
 
 // MessageContext holds the context for a message being processed
@@ -615,6 +616,68 @@ func defaultHeuristicRules() []HeuristicRule {
 			},
 		},
 	}
+}
+
+// BayesianStage implements Bayesian spam classification
+type BayesianStage struct {
+	classifier *spam.Classifier
+	enabled    bool
+}
+
+// NewBayesianStage creates a new Bayesian spam classification stage
+func NewBayesianStage(classifier *spam.Classifier) *BayesianStage {
+	return &BayesianStage{
+		classifier: classifier,
+		enabled:    classifier != nil,
+	}
+}
+
+func (s *BayesianStage) Name() string { return "Bayesian" }
+
+func (s *BayesianStage) Process(ctx *MessageContext) PipelineResult {
+	if !s.enabled || s.classifier == nil {
+		return ResultAccept
+	}
+
+	// Extract tokens from headers and body
+	headerTokens := spam.ExtractTokensFromHeaders(ctx.Headers)
+	bodyTokens := spam.ExtractTokensFromBody(ctx.Data)
+
+	// Combine tokens
+	var allTokens []string
+	allTokens = append(allTokens, headerTokens...)
+	allTokens = append(allTokens, bodyTokens...)
+
+	if len(allTokens) == 0 {
+		return ResultAccept
+	}
+
+	// Classify
+	result, err := s.classifier.Classify(allTokens)
+	if err != nil {
+		// On error, don't reject - let other stages decide
+		return ResultAccept
+	}
+
+	// Add to spam score based on probability
+	// Probability of 0.7+ adds 3.0, 0.5-0.7 adds 1.5, etc.
+	if result.SpamProbability > 0.9 {
+		ctx.SpamScore += 4.0
+		if ctx.SpamResult.Reasons == nil {
+			ctx.SpamResult.Reasons = make([]string, 0)
+		}
+		ctx.SpamResult.Reasons = append(ctx.SpamResult.Reasons, fmt.Sprintf("bayesian=%.2f", result.SpamProbability))
+	} else if result.SpamProbability > 0.7 {
+		ctx.SpamScore += 3.0
+		if ctx.SpamResult.Reasons == nil {
+			ctx.SpamResult.Reasons = make([]string, 0)
+		}
+		ctx.SpamResult.Reasons = append(ctx.SpamResult.Reasons, fmt.Sprintf("bayesian=%.2f", result.SpamProbability))
+	} else if result.SpamProbability > 0.5 {
+		ctx.SpamScore += 1.0
+	}
+
+	return ResultAccept
 }
 
 // ScoreStage determines final spam verdict

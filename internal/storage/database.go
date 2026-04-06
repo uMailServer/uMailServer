@@ -37,6 +37,11 @@ func (db *Database) Close() error {
 	return nil
 }
 
+// Bolt returns the underlying bbolt.DB for use by other packages
+func (db *Database) Bolt() *bbolt.DB {
+	return db.bolt
+}
+
 // AuthenticateUser validates user credentials against the account database.
 // NOTE: This is a fallback — the primary auth path is via SetAuthFunc injected
 // from the server orchestrator. This method should NOT be relied upon for

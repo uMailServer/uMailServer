@@ -51,20 +51,23 @@ type Session struct {
 	username    string
 
 	// Message data
-	mailFrom   string
-	rcptTo     []string
-	data       []byte
-	bdatBuffer *bytes.Buffer
+	mailFrom     string
+	mailFromRet  string // RET parameter (FULL or HDRS)
+	rcptTo       []string
+	rcptToNotify []string // NOTIFY parameter per recipient
+	data         []byte
+	bdatBuffer   *bytes.Buffer
 }
 
 // NewSession creates a new SMTP session
 func NewSession(conn net.Conn, server *Server) *Session {
 	return &Session{
-		id:     uuid.New().String(),
-		conn:   conn,
-		server: server,
-		state:  StateNew,
-		rcptTo: make([]string, 0),
+		id:           uuid.New().String(),
+		conn:         conn,
+		server:       server,
+		state:        StateNew,
+		rcptTo:       make([]string, 0),
+		rcptToNotify: make([]string, 0),
 	}
 }
 
@@ -202,6 +205,7 @@ func (s *Session) handleEHLO(arg string) error {
 		"ENHANCEDSTATUSCODES",
 		"SMTPUTF8",
 		"CHUNKING",
+		"DELIVERYSTATUS",
 	}
 
 	if s.server.config.TLSConfig != nil && !s.isTLS {
@@ -251,7 +255,7 @@ func (s *Session) handleMAIL(arg string) error {
 	}
 
 	// Parse MAIL FROM:<address> [params]
-	from, err := parseMailFrom(arg)
+	from, ret, err := parseMailFromWithRet(arg)
 	if err != nil {
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
@@ -266,6 +270,7 @@ func (s *Session) handleMAIL(arg string) error {
 	}
 
 	s.mailFrom = from
+	s.mailFromRet = ret
 	s.state = StateMailFrom
 
 	return s.WriteResponse(250, "OK")
@@ -281,8 +286,8 @@ func (s *Session) handleRCPT(arg string) error {
 		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
-	// Parse RCPT TO:<address>
-	to, err := parseRcptTo(arg)
+	// Parse RCPT TO:<address> [NOTIFY=<notify>]
+	to, notify, err := parseRcptToWithNotify(arg)
 	if err != nil {
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
@@ -299,6 +304,7 @@ func (s *Session) handleRCPT(arg string) error {
 	}
 
 	s.rcptTo = append(s.rcptTo, validated)
+	s.rcptToNotify = append(s.rcptToNotify, notify)
 	s.state = StateRcptTo
 
 	return s.WriteResponse(250, "OK")
@@ -962,6 +968,41 @@ func parseMailFrom(arg string) (string, error) {
 	return arg, nil
 }
 
+// parseMailFromWithRet parses MAIL FROM with DSN RET parameter
+// Format: FROM:<address> [RET=<FULL|HDRS>]
+func parseMailFromWithRet(arg string) (string, string, error) {
+	// Format: FROM:<address> [SIZE=nnnn] [BODY=8BITMIME] [RET=<FULL|HDRS>] etc.
+	if !strings.HasPrefix(strings.ToUpper(arg), "FROM:") {
+		return "", "", fmt.Errorf("invalid MAIL FROM format")
+	}
+
+	arg = arg[5:] // Remove "FROM:"
+	arg = strings.TrimSpace(arg)
+
+	// Parse optional RET parameter
+	ret := ""
+	for _, part := range strings.Fields(arg) {
+		upper := strings.ToUpper(part)
+		if strings.HasPrefix(upper, "RET=") {
+			ret = strings.TrimPrefix(upper, "RET=")
+			// Remove the param from arg
+			arg = strings.TrimSpace(strings.Replace(arg, part, "", 1))
+			break
+		}
+	}
+
+	// Find end of address (space or end of string)
+	idx := strings.IndexAny(arg, " ")
+	if idx > 0 {
+		arg = arg[:idx]
+	}
+
+	// Remove < and >
+	arg = strings.Trim(arg, "<>")
+
+	return arg, ret, nil
+}
+
 // parseRcptTo parses the RCPT TO command argument
 func parseRcptTo(arg string) (string, error) {
 	// Format: TO:<address> [params]
@@ -984,6 +1025,41 @@ func parseRcptTo(arg string) (string, error) {
 	arg = strings.Trim(arg, "<>")
 
 	return arg, nil
+}
+
+// parseRcptToWithNotify parses RCPT TO with DSN NOTIFY parameter
+// Format: TO:<address> [NOTIFY=<notify>]
+func parseRcptToWithNotify(arg string) (string, string, error) {
+	// Format: TO:<address> [params]
+	if !strings.HasPrefix(strings.ToUpper(arg), "TO:") {
+		return "", "", fmt.Errorf("invalid RCPT TO format")
+	}
+
+	arg = arg[3:] // Remove "TO:"
+	arg = strings.TrimSpace(arg)
+
+	// Parse optional parameters (NOTIFY=)
+	notify := ""
+	for _, part := range strings.Fields(arg) {
+		upper := strings.ToUpper(part)
+		if strings.HasPrefix(upper, "NOTIFY=") {
+			notify = strings.TrimPrefix(upper, "NOTIFY=")
+			// Remove the param from arg
+			arg = strings.TrimSpace(strings.Replace(arg, part, "", 1))
+			break
+		}
+	}
+
+	// Find end of address (space or end of string)
+	idx := strings.IndexAny(arg, " ")
+	if idx > 0 {
+		arg = arg[:idx]
+	}
+
+	// Remove < and >
+	arg = strings.Trim(arg, "<>")
+
+	return arg, notify, nil
 }
 
 // Ensure io.Reader is implemented

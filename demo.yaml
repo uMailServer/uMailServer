@@ -1,0 +1,54 @@
+# Demo Configuration - No TLS/ACME
+server:
+  hostname: localhost
+  data_dir: ./data
+
+tls:
+  enabled: false
+
+smtp:
+  inbound:
+    enabled: true
+    port: 25
+    max_message_size: 52428800
+    max_recipients: 100
+  submission:
+    enabled: true
+    port: 587
+    require_auth: true
+    require_tls: false
+  submission_tls:
+    enabled: false
+    port: 465
+
+imap:
+  enabled: true
+  port: 143
+  starttls_port: 993
+
+http:
+  enabled: true
+  port: 8080
+  http_port: 8081
+
+admin:
+  enabled: true
+  port: 8082
+  bind: 127.0.0.1
+
+metrics:
+  enabled: true
+  port: 9090
+  path: /metrics
+
+database:
+  path: ./data/umailserver.db
+
+mcp:
+  enabled: true
+  port: 3000
+
+domains:
+  - name: test.com
+    max_accounts: 100
+    max_mailbox_size: 5368709120

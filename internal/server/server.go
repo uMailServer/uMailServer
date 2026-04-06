@@ -31,7 +31,9 @@ import (
 	"github.com/umailserver/umailserver/internal/pop3"
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/search"
+	"github.com/umailserver/umailserver/internal/sieve"
 	"github.com/umailserver/umailserver/internal/smtp"
+	"github.com/umailserver/umailserver/internal/spam"
 	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/tls"
 	"github.com/umailserver/umailserver/internal/webhook"
@@ -51,6 +53,7 @@ type Server struct {
 	tlsManager    *tls.Manager
 	webhookMgr    *webhook.Manager
 	searchSvc     *search.Service
+	sieveManager  *sieve.Manager
 	storageDB     *storage.Database
 	mailstore     *imap.BboltMailstore
 	pop3Server    *pop3.Server
@@ -111,6 +114,7 @@ func New(cfg *config.Config) (*Server, error) {
 		logger: logger,
 		ctx:    ctx,
 		cancel: cancel,
+		sieveManager: sieve.NewManager(),
 	}
 
 	// Initialize database
@@ -290,7 +294,23 @@ func (s *Server) startSMTP() {
 		pipeline.AddStage(smtp.NewRBLStage(s.config.Spam.RBLServers, smtp.NewRealRBLDNSResolver()))
 	}
 	pipeline.AddStage(smtp.NewHeuristicStage())
+
+	// Bayesian spam classification (if storage available)
+	if s.storageDB != nil {
+		classifier := spam.NewClassifier(s.storageDB.Bolt())
+		if err := classifier.Initialize(); err != nil {
+			s.logger.Error("failed to initialize Bayesian classifier", "error", err)
+		} else {
+			pipeline.AddStage(smtp.NewBayesianStage(classifier))
+		}
+	}
+
 	pipeline.AddStage(smtp.NewScoreStage(s.config.Spam.RejectThreshold, s.config.Spam.JunkThreshold))
+
+	// Sieve mail filtering (if sieve manager available)
+	if s.sieveManager != nil {
+		pipeline.AddStage(smtp.NewSieveStage(s.sieveManager))
+	}
 
 	// Antivirus scanning stage
 	if s.config.AV.Enabled {

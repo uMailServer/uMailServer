@@ -70,6 +70,30 @@ func (m *mockDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.M
 	return records, nil
 }
 
+// LookupTLSA implements TLSAResolver for testing
+// It parses TXT records as TLSA data for backward compatibility
+func (m *mockDNSResolver) LookupTLSA(domain string) ([]*TLSARecord, error) {
+	// Permanent lookup failure returns no records (swallow error)
+	if m.failLookup[domain] {
+		return nil, nil
+	}
+	// Temporary failures return error
+	if m.tempFail[domain] {
+		return nil, errors.New("timeout")
+	}
+	// Use TXT records as TLSA fallback for tests
+	if txtRecords, ok := m.txtRecords[domain]; ok {
+		var records []*TLSARecord
+		for _, txt := range txtRecords {
+			if record, err := parseTLSARecord(txt); err == nil && record != nil {
+				records = append(records, record)
+			}
+		}
+		return records, nil
+	}
+	return nil, nil
+}
+
 func TestSPFResultString(t *testing.T) {
 	tests := []struct {
 		result   SPFResult
