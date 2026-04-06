@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import {
   ArrowLeft,
@@ -10,6 +11,7 @@ import {
   Star,
   Printer,
   Download,
+  Mail,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -18,6 +20,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
@@ -44,31 +47,31 @@ interface EmailDetail {
 
 const mockEmailDetail: EmailDetail = {
   id: "1",
-  from: "Ahmet Yılmaz",
-  fromEmail: "ahmet@example.com",
+  from: "John Smith",
+  fromEmail: "john@example.com",
   to: ["user@example.com"],
-  cc: ["mehmet@example.com"],
-  subject: "Proje Toplantısı Hakkında",
-  date: "4 Nisan 2025, 10:30",
+  cc: ["mike@example.com"],
+  subject: "Project Meeting Discussion",
+  date: "April 4, 2025, 10:30",
   starred: true,
   content: `
-    <p>Merhaba,</p>
+    <p>Hi,</p>
 
-    <p>Yarın saat 14:00'teki toplantıyı hatırlatmak istedim. Gündemde önemli konular var:</p>
+    <p>I wanted to remind you about the meeting tomorrow at 2pm. There are important topics to discuss:</p>
 
     <ul>
-      <li>Q1 raporunun değerlendirilmesi</li>
-      <li>Yeni proje planlaması</li>
-      <li>Bütçe revizyonu</li>
+      <li>Q1 report evaluation</li>
+      <li>New project planning</li>
+      <li>Budget revision</li>
     </ul>
 
-    <p>Lütfen hazırlıklı gelin. Ekte gerekli dosyaları bulabilirsiniz.</p>
+    <p>Please come prepared. You can find the relevant documents attached.</p>
 
-    <p>İyi çalışmalar,<br>Ahmet</p>
+    <p>Best regards,<br>John</p>
   `,
   attachments: [
-    { name: "Q1_Raporu.pdf", size: "2.4 MB", type: "pdf" },
-    { name: "Proje_Plani.xlsx", size: "156 KB", type: "xlsx" },
+    { name: "Q1_Report.pdf", size: "2.4 MB", type: "pdf" },
+    { name: "Project_Plan.xlsx", size: "156 KB", type: "xlsx" },
   ],
 }
 
@@ -76,34 +79,69 @@ export function EmailDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const email = mockEmailDetail
+  const [isStarred, setIsStarred] = useState(email.starred)
 
   const handleArchive = () => {
-    toast.success("E-posta arşivlendi")
+    toast.success("Email archived")
   }
 
   const handleDelete = () => {
-    toast.success("E-posta çöp kutusuna taşındı")
+    toast.success("Email moved to trash")
     navigate("/trash")
+  }
+
+  const handleDownload = (attachment: Attachment) => {
+    toast.success(`Downloading ${attachment.name}`)
+  }
+
+  const handleToggleStar = () => {
+    setIsStarred(!isStarred)
+    toast.success(isStarred ? "Star removed" : "Starred")
+  }
+
+  const getAttachmentIcon = (type: string) => {
+    switch (type) {
+      case "pdf":
+        return "📄"
+      case "xlsx":
+      case "xls":
+        return "📊"
+      case "docx":
+      case "doc":
+        return "📝"
+      case "jpg":
+      case "png":
+      case "gif":
+        return "🖼️"
+      case "zip":
+      case "rar":
+        return "📦"
+      default:
+        return "📎"
+    }
   }
 
   return (
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <Button variant="ghost" size="icon" onClick={handleArchive}>
+          <Button variant="ghost" size="icon" onClick={handleArchive} title="Archive">
             <Archive className="h-5 w-5" />
           </Button>
-          <Button variant="ghost" size="icon" className="text-destructive" onClick={handleDelete}>
+          <Button variant="ghost" size="icon" className="text-destructive" onClick={handleDelete} title="Delete">
             <Trash2 className="h-5 w-5" />
           </Button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon">
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={handleToggleStar} title={isStarred ? "Remove star" : "Star"}>
+            <Star className={cn("h-5 w-5", isStarred && "fill-amber-400 text-amber-400")} />
+          </Button>
+          <Button variant="ghost" size="icon" title="Print">
             <Printer className="h-5 w-5" />
           </Button>
           <DropdownMenu>
@@ -113,53 +151,50 @@ export function EmailDetailPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem>Kaynak kodunu göster</DropdownMenuItem>
-              <DropdownMenuItem>Yeni sekmede aç</DropdownMenuItem>
-              <DropdownMenuItem>İleti başlığını görüntüle</DropdownMenuItem>
+              <DropdownMenuItem>View headers</DropdownMenuItem>
+              <DropdownMenuItem>Open in new tab</DropdownMenuItem>
+              <DropdownMenuItem>Show original</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="text-destructive">
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
 
       {/* Email Content */}
-      <div className="rounded-lg border bg-card p-6">
+      <div className="rounded-lg border bg-card">
         {/* Header */}
-        <div className="space-y-4">
+        <div className="p-6 pb-0">
           <div className="flex items-start justify-between gap-4">
-            <h1 className="text-xl font-semibold">{email.subject}</h1>
-            <Button variant="ghost" size="icon">
-              <Star
-                className={`h-5 w-5 ${
-                  email.starred
-                    ? "fill-amber-400 text-amber-400"
-                    : "text-muted-foreground"
-                }`}
-              />
-            </Button>
+            <h1 className="text-2xl font-semibold leading-tight">{email.subject}</h1>
           </div>
 
-          <div className="flex items-start gap-4">
-            <Avatar className="h-10 w-10">
-              <AvatarFallback className="bg-gradient-to-br from-primary to-primary/80 text-primary-foreground">
-                {email.from
-                  .split(" ")
-                  .map((n) => n[0])
-                  .join("")}
+          <div className="flex items-start gap-4 mt-6">
+            <Avatar className="h-12 w-12 ring-2 ring-primary/10">
+              <AvatarFallback className="bg-gradient-to-br from-primary to-primary/80 text-primary-foreground font-semibold text-lg">
+                {email.from.split(" ").map((n) => n[0]).join("")}
               </AvatarFallback>
             </Avatar>
 
             <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">{email.from}</span>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-semibold text-lg">{email.from}</span>
                 <span className="text-sm text-muted-foreground">
                   &lt;{email.fromEmail}&gt;
                 </span>
               </div>
 
-              <div className="mt-1 text-sm text-muted-foreground">
-                <span>Kime: {email.to.join(", ")}</span>
+              <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                <span>
+                  <span className="font-medium text-foreground">To:</span> {email.to.join(", ")}
+                </span>
                 {email.cc && (
-                  <span className="ml-2">Cc: {email.cc.join(", ")}</span>
+                  <span>
+                    <span className="font-medium text-foreground">Cc:</span> {email.cc.join(", ")}
+                  </span>
                 )}
               </div>
 
@@ -173,33 +208,39 @@ export function EmailDetailPage() {
         <Separator className="my-6" />
 
         {/* Body */}
-        <div
-          className="prose prose-sm max-w-none dark:prose-invert"
-          dangerouslySetInnerHTML={{ __html: email.content }}
-        />
+        <div className="px-6 pb-6">
+          <div
+            className="prose prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-p:leading-relaxed prose-ul:leading-relaxed"
+            dangerouslySetInnerHTML={{ __html: email.content }}
+          />
+        </div>
 
         {/* Attachments */}
         {email.attachments && email.attachments.length > 0 && (
           <>
             <Separator className="my-6" />
-            <div className="space-y-3">
-              <h3 className="text-sm font-semibold">
-                Ekler ({email.attachments.length})
+            <div className="px-6 pb-6">
+              <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                <Paperclip className="h-4 w-4" />
+                Attachments ({email.attachments.length})
               </h3>
               <div className="flex flex-wrap gap-3">
                 {email.attachments.map((attachment) => (
                   <div
                     key={attachment.name}
-                    className="flex items-center gap-3 rounded-lg border p-3 hover:bg-accent cursor-pointer"
+                    className="flex items-center gap-3 rounded-lg border bg-muted/50 hover:bg-muted transition-colors cursor-pointer group"
+                    onClick={() => handleDownload(attachment)}
                   >
-                    <Paperclip className="h-5 w-5 text-muted-foreground" />
-                    <div>
-                      <p className="text-sm font-medium">{attachment.name}</p>
+                    <span className="text-2xl pl-3">{getAttachmentIcon(attachment.type)}</span>
+                    <div className="py-3 pr-4">
+                      <p className="text-sm font-medium group-hover:text-primary transition-colors">
+                        {attachment.name}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         {attachment.size}
                       </p>
                     </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 mr-2 opacity-0 group-hover:opacity-100">
                       <Download className="h-4 w-4" />
                     </Button>
                   </div>
@@ -211,7 +252,7 @@ export function EmailDetailPage() {
       </div>
 
       {/* Reply Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 pl-2">
         <Button
           className="gap-2"
           onClick={() =>
@@ -219,7 +260,7 @@ export function EmailDetailPage() {
           }
         >
           <Reply className="h-4 w-4" />
-          Yanıtla
+          Reply
         </Button>
         <Button
           variant="outline"
@@ -229,9 +270,13 @@ export function EmailDetailPage() {
           }
         >
           <Forward className="h-4 w-4" />
-          İlet
+          Forward
         </Button>
       </div>
     </div>
   )
+}
+
+function cn(...classes: (string | boolean | undefined)[]) {
+  return classes.filter(Boolean).join(" ")
 }

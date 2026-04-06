@@ -11,6 +11,9 @@ import {
   ChevronRight,
   Filter,
   MoreHorizontal,
+  List,
+  LayoutGrid,
+  ArrowUpDown,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -22,6 +25,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -41,13 +45,16 @@ interface Email {
   labels: string[]
 }
 
+type ViewMode = "list" | "compact"
+type SortOption = "date" | "from" | "subject"
+
 const mockEmails: Email[] = [
   {
     id: "1",
     from: "John Smith",
     fromEmail: "john@example.com",
     subject: "Project Meeting Discussion",
-    preview: "I wanted to remind you about the meeting tomorrow at 2pm. There are important topics...",
+    preview: "I wanted to remind you about the meeting tomorrow at 2pm. There are important topics to discuss...",
     date: "10:30",
     read: false,
     starred: true,
@@ -86,7 +93,7 @@ const mockEmails: Email[] = [
     from: "System",
     fromEmail: "noreply@umailserver.com",
     subject: "Security Alert",
-    preview: "New device sign-in detected. If this wasn't you, please...",
+    preview: "New device sign-in detected. If this wasn't you, please review your account activity...",
     date: "Yesterday",
     read: true,
     starred: false,
@@ -99,7 +106,7 @@ const mockEmails: Email[] = [
     from: "Mike Wilson",
     fromEmail: "mike.wilson@gmail.com",
     subject: "Weekend Party",
-    preview: "Everyone is invited to my party this Saturday. Can you make it?",
+    preview: "Everyone is invited to my party this Saturday. Can you make it? It will be fun...",
     date: "2 days ago",
     read: true,
     starred: true,
@@ -121,6 +128,8 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
   const [activeFilter, setActiveFilter] = useState("all")
   const [loading, setLoading] = useState(false)
+  const [viewMode, setViewMode] = useState<ViewMode>("list")
+  const [sortBy, setSortBy] = useState<SortOption>("date")
 
   const toggleSelectAll = () => {
     if (selectedEmails.size === emails.length) {
@@ -156,7 +165,10 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
 
   const handleRefresh = () => {
     setLoading(true)
-    setTimeout(() => setLoading(false), 1000)
+    setTimeout(() => {
+      setLoading(false)
+      toast.success(" inbox refreshed")
+    }, 1000)
   }
 
   const handleArchive = () => {
@@ -186,11 +198,117 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
     setSelectedEmails(new Set())
   }
 
-  const filteredEmails = emails.filter((email) => {
-    if (activeFilter === "unread") return !email.read
-    if (activeFilter === "starred") return email.starred
-    return true
-  })
+  const filteredEmails = emails
+    .filter((email) => {
+      if (activeFilter === "unread") return !email.read
+      if (activeFilter === "starred") return email.starred
+      return true
+    })
+    .sort((a, b) => {
+      if (sortBy === "date") return 0 // Keep original order for date
+      if (sortBy === "from") return a.from.localeCompare(b.from)
+      if (sortBy === "subject") return a.subject.localeCompare(b.subject)
+      return 0
+    })
+
+  const unreadCount = emails.filter((e) => !e.read).length
+
+  const EmailRow = ({ email }: { email: Email }) => (
+    <div
+      className={cn(
+        "group flex cursor-pointer items-center gap-3 transition-all duration-200",
+        viewMode === "list" ? "p-4 hover:bg-accent/50" : "p-2 hover:bg-accent/50",
+        !email.read && viewMode === "list" && "bg-accent/5",
+        selectedEmails.has(email.id) && "bg-primary/5"
+      )}
+      onClick={() => navigate(`/email/${email.id}`)}
+    >
+      <Checkbox
+        checked={selectedEmails.has(email.id)}
+        onCheckedChange={() => toggleSelect(email.id)}
+        onClick={(e) => e.stopPropagation()}
+      />
+
+      <Button
+        variant="ghost"
+        size="icon"
+        className={cn(
+          "h-8 w-8 shrink-0 transition-colors",
+          email.starred ? "text-amber-500" : "text-muted-foreground hover:text-foreground"
+        )}
+        onClick={(e) => toggleStar(email.id, e)}
+      >
+        <Star className={cn("h-4 w-4", email.starred && "fill-current")} />
+      </Button>
+
+      <div className={cn("flex-1 min-w-0", viewMode === "compact" && "flex items-center gap-4")}>
+        <div className="flex items-center gap-2">
+          <span className={cn("text-sm", !email.read ? "font-semibold" : "font-normal")}>
+            {viewMode === "list" ? email.from : email.from.split(" ")[0]}
+          </span>
+          {email.labels.slice(0, viewMode === "compact" ? 0 : 1).map((label) => (
+            <Badge key={label} variant="secondary" className="text-[10px] px-1.5 py-0">
+              {label}
+            </Badge>
+          ))}
+        </div>
+        {viewMode === "list" && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span className={cn(!email.read && "text-foreground font-medium")}>
+              {email.subject}
+            </span>
+            <span className="truncate">— {email.preview}</span>
+          </div>
+        )}
+      </div>
+
+      <div className={cn("flex items-center gap-2 shrink-0", viewMode === "compact" && "flex-row-reverse")}>
+        {email.hasAttachments && (
+          <Paperclip className="h-4 w-4 text-muted-foreground" />
+        )}
+        {!email.read && viewMode === "list" && (
+          <span className="h-2 w-2 rounded-full bg-primary" />
+        )}
+        <span className={cn(
+          "text-xs text-muted-foreground whitespace-nowrap",
+          viewMode === "compact" && "w-12 text-right"
+        )}>
+          {email.date}
+        </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 opacity-0 group-hover:opacity-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={(e) => markAsRead(email.id, e)}>
+              <MailOpen className="mr-2 h-4 w-4" />
+              Mark as read
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={(e) => toggleStar(email.id, e)}>
+              <Star className={cn("mr-2 h-4 w-4", email.starred && "fill-current")} />
+              {email.starred ? "Remove star" : "Add star"}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleArchive}>
+              <Archive className="mr-2 h-4 w-4" />
+              Archive
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive" onClick={handleDelete}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  )
 
   return (
     <div className="space-y-4">
@@ -202,7 +320,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
           />
 
           {selectedEmails.size > 0 ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 animate-in fade-in slide-in-from-left-2">
               <span className="text-sm text-muted-foreground">
                 {selectedEmails.size} selected
               </span>
@@ -222,26 +340,78 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
           )}
+
+          {unreadCount > 0 && activeFilter === "all" && (
+            <Badge variant="secondary" className="ml-2">
+              {unreadCount} unread
+            </Badge>
+          )}
         </div>
 
-        <Tabs value={activeFilter} onValueChange={setActiveFilter}>
-          <TabsList>
-            <TabsTrigger value="all">All</TabsTrigger>
-            <TabsTrigger value="unread">Unread</TabsTrigger>
-            <TabsTrigger value="starred">Starred</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="flex items-center gap-2">
+          <Tabs value={activeFilter} onValueChange={setActiveFilter}>
+            <TabsList>
+              <TabsTrigger value="all">All</TabsTrigger>
+              <TabsTrigger value="unread">Unread</TabsTrigger>
+              <TabsTrigger value="starred">Starred</TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <Separator orientation="vertical" className="h-6" />
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-8 w-8" title="Sort">
+                <ArrowUpDown className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setSortBy("date")}>
+                Date {sortBy === "date" && "✓"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSortBy("from")}>
+                Sender {sortBy === "from" && "✓"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSortBy("subject")}>
+                Subject {sortBy === "subject" && "✓"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <div className="flex border rounded-md">
+            <Button
+              variant={viewMode === "list" ? "secondary" : "ghost"}
+              size="icon"
+              className="h-8 w-8 rounded-r-none"
+              onClick={() => setViewMode("list")}
+            >
+              <List className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={viewMode === "compact" ? "secondary" : "ghost"}
+              size="icon"
+              className="h-8 w-8 rounded-l-none"
+              onClick={() => setViewMode("compact")}
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </div>
 
-      <div className="rounded-lg border bg-card">
+      <div className={cn(
+        "rounded-lg border bg-card",
+        viewMode === "compact" && "divide-y"
+      )}>
         {loading ? (
-          <div className="divide-y">
+          <div className={cn(viewMode === "list" ? "divide-y" : "")}>
             {[1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="flex items-start gap-4 p-4">
+              <div key={i} className={cn("flex items-start gap-4", viewMode === "list" ? "p-4" : "p-2")}>
+                <Skeleton className="h-4 w-4" />
                 <Skeleton className="h-4 w-4" />
                 <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-64" />
-                  <Skeleton className="h-3 w-full" />
+                  <Skeleton className="h-4 w-32" />
+                  {viewMode === "list" && <Skeleton className="h-3 w-full" />}
                 </div>
               </div>
             ))}
@@ -257,85 +427,9 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
             </p>
           </div>
         ) : (
-          <div className="divide-y">
+          <div className={cn(viewMode === "list" ? "divide-y" : "")}>
             {filteredEmails.map((email) => (
-              <div
-                key={email.id}
-                className={cn(
-                  "group flex cursor-pointer items-start gap-3 p-4 transition-colors hover:bg-accent/50",
-                  !email.read && "bg-accent/10"
-                )}
-                onClick={() => navigate(`/email/${email.id}`)}
-              >
-                <Checkbox
-                  checked={selectedEmails.has(email.id)}
-                  onCheckedChange={() => toggleSelect(email.id)}
-                  onClick={(e) => e.stopPropagation()}
-                />
-
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className={cn("h-8 w-8 shrink-0", email.starred ? "text-amber-500" : "text-muted-foreground")}
-                  onClick={(e) => toggleStar(email.id, e)}
-                >
-                  <Star className={cn("h-4 w-4", email.starred && "fill-current")} />
-                </Button>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={cn("font-medium", !email.read && "font-semibold")}>
-                      {email.from}
-                    </span>
-                    {email.labels.map((label) => (
-                      <Badge key={label} variant="secondary" className="text-[10px]">
-                        {label}
-                      </Badge>
-                    ))}
-                    {email.hasAttachments && (
-                      <Paperclip className="h-3 w-3 text-muted-foreground" />
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <span className={cn(!email.read && "text-foreground font-medium")}>
-                      {email.subject}
-                    </span>
-                    <span className="truncate">— {email.preview}</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <span className="whitespace-nowrap text-sm text-muted-foreground">
-                    {email.date}
-                  </span>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 opacity-0 group-hover:opacity-100"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={(e) => markAsRead(email.id, e)}>
-                        <MailOpen className="mr-2 h-4 w-4" />
-                        Mark as read
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={(e) => toggleStar(email.id, e)}>
-                        <Star className={cn("mr-2 h-4 w-4", email.starred && "fill-current")} />
-                        {email.starred ? "Remove star" : "Add star"}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem>
-                        <Archive className="mr-2 h-4 w-4" />
-                        Archive
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
+              <EmailRow key={email.id} email={email} />
             ))}
           </div>
         )}

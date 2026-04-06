@@ -1,10 +1,12 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   Search,
   Mail,
   X,
   Filter,
+  Clock,
+  ArrowRight,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -12,6 +14,8 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Separator } from "@/components/ui/separator"
+import { toast } from "sonner"
 
 interface SearchEmail {
   id: string
@@ -57,6 +61,12 @@ const mockSearchResults: SearchEmail[] = [
   },
 ]
 
+const recentSearches = [
+  "project meeting",
+  "invoice",
+  "newsletter",
+]
+
 export function SearchPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -70,6 +80,7 @@ export function SearchPage() {
     archive: true,
     trash: false,
   })
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const q = searchParams.get("q")
@@ -81,11 +92,28 @@ export function SearchPage() {
     }
   }, [searchParams])
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault()
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  const handleSearch = (e?: React.FormEvent) => {
+    e?.preventDefault()
     if (!query.trim()) return
     setLoading(true)
     setHasSearched(true)
+    setTimeout(() => setLoading(false), 1000)
+  }
+
+  const handleClear = () => {
+    setQuery("")
+    setHasSearched(false)
+    inputRef.current?.focus()
+  }
+
+  const handleRecentSearch = (term: string) => {
+    setQuery(term)
+    setHasSearched(true)
+    setLoading(true)
     setTimeout(() => setLoading(false), 1000)
   }
 
@@ -103,14 +131,27 @@ export function SearchPage() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
-              className="pl-9"
+              ref={inputRef}
+              className="pl-9 pr-20"
               placeholder="Search emails, contacts, or files..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              autoFocus
             />
+            {query && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                onClick={handleClear}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
           </div>
-          <Button type="submit">Search</Button>
+          <Button type="submit" disabled={loading}>
+            {loading ? "Searching..." : "Search"}
+          </Button>
         </form>
 
         <div className="flex items-center gap-4">
@@ -171,15 +212,40 @@ export function SearchPage() {
           ))}
         </div>
       ) : !hasSearched ? (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <div className="rounded-full bg-muted p-4">
-            <Search className="h-8 w-8 text-muted-foreground" />
+        <div className="space-y-6">
+          {/* Initial State */}
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="rounded-full bg-primary/10 p-6">
+              <Search className="h-12 w-12 text-primary" />
+            </div>
+            <h3 className="mt-6 text-xl font-semibold">Search your mail</h3>
+            <p className="mt-2 text-muted-foreground max-w-md">
+              Search by sender, subject, or keywords in your messages.
+            </p>
           </div>
-          <h3 className="mt-4 text-lg font-semibold">Search emails</h3>
-          <p className="text-sm text-muted-foreground max-w-md">
-            Search by subject, sender, or message content.
-            Use filters to narrow down results.
-          </p>
+
+          {/* Recent Searches */}
+          {recentSearches.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                <Clock className="h-4 w-4" />
+                Recent searches
+              </h4>
+              <div className="space-y-1">
+                {recentSearches.map((term) => (
+                  <Button
+                    key={term}
+                    variant="ghost"
+                    className="w-full justify-start text-muted-foreground hover:text-foreground"
+                    onClick={() => handleRecentSearch(term)}
+                  >
+                    <ArrowRight className="h-4 w-4 mr-2" />
+                    {term}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       ) : results.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -187,14 +253,19 @@ export function SearchPage() {
             <Mail className="h-8 w-8 text-muted-foreground" />
           </div>
           <h3 className="mt-4 text-lg font-semibold">No results found</h3>
-          <p className="text-sm text-muted-foreground">
-            No results for "{query}". Try different keywords.
+          <p className="text-sm text-muted-foreground mt-1">
+            No results for "<span className="font-medium">{query}</span>".
+            <br />
+            Try different keywords or check your spelling.
           </p>
+          <Button variant="link" className="mt-4" onClick={handleClear}>
+            Clear search
+          </Button>
         </div>
       ) : (
         <div className="space-y-2">
-          <div className="text-sm text-muted-foreground">
-            {results.length} result{results.length !== 1 ? "s" : ""} found
+          <div className="text-sm text-muted-foreground px-2">
+            {results.length} result{results.length !== 1 ? "s" : ""} for "<span className="font-medium">{query}</span>"
           </div>
           <div className="rounded-lg border bg-card divide-y">
             {results.map((email) => (
