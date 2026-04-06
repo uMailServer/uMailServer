@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useState, useEffect } from "react"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   Search,
   Mail,
@@ -61,7 +61,8 @@ const mockSearchResults: SearchEmail[] = [
 
 export function SearchPage() {
   const navigate = useNavigate()
-  const [query, setQuery] = useState("")
+  const [searchParams] = useSearchParams()
+  const [query, setQuery] = useState(searchParams.get("q") || "")
   const [loading, setLoading] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
   const [filters, setFilters] = useState({
@@ -71,6 +72,17 @@ export function SearchPage() {
     archive: true,
     trash: false,
   })
+
+  // Auto-search when coming from header
+  useEffect(() => {
+    const q = searchParams.get("q")
+    if (q && q !== query) {
+      setQuery(q)
+      setHasSearched(true)
+      setLoading(true)
+      setTimeout(() => setLoading(false), 500)
+    }
+  }, [searchParams])
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
