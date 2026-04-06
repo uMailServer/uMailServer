@@ -340,9 +340,12 @@ func fetchARCPublicKey(resolver DNSResolver, domain, selector string) (*rsa.Publ
 	}
 
 	for _, record := range txtRecords {
-		pubKey, err := parseDKIMPublicKey(record)
+		pubKey, _, err := parseDKIMPublicKey(record)
 		if err == nil && pubKey != nil {
-			return pubKey, nil
+			rsaKey, ok := pubKey.(*rsa.PublicKey)
+			if ok {
+				return rsaKey, nil
+			}
 		}
 	}
 

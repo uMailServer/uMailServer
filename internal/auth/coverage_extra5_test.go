@@ -289,7 +289,7 @@ func TestDKIMFetchPublicKey_NonexistentDomain_Cov5(t *testing.T) {
 	verifier := NewDKIMVerifier(resolver)
 
 	// This domain won't exist in DNS, so net.LookupTXT should fail
-	_, err := verifier.fetchPublicKey("nonexistent.invalid", "selector")
+	_, _, err := verifier.fetchPublicKey("nonexistent.invalid", "selector")
 	if err == nil {
 		t.Error("Expected error for nonexistent domain")
 	}
@@ -339,29 +339,27 @@ func TestGenerateTOTPSecret_Uniqueness_Cov5(t *testing.T) {
 
 // TestParseDKIMPublicKey_EmptyPValue tests the empty p= tag path.
 func TestParseDKIMPublicKey_EmptyPValue_Cov5(t *testing.T) {
-	_, err := parseDKIMPublicKey("v=DKIM1; k=rsa; p=")
+	_, _, err := parseDKIMPublicKey("v=DKIM1; k=rsa; p=")
 	if err == nil {
 		t.Error("Expected error for empty p= value")
 	}
 }
 
-// TestParseDKIMPublicKey_Ed25519KeyType tests parsing with unsupported key type.
+// TestParseDKIMPublicKey_Ed25519KeyType tests parsing with ed25519 key type.
 func TestParseDKIMPublicKey_Ed25519KeyType_Cov5(t *testing.T) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	// Generate a valid ed25519 key pair using the package function
+	privKey, _, _ := GenerateEd25519DKIMKeyPair()
+	// Use GetEd25519PublicKeyForDNS which properly extracts the 32-byte public key
+	pubKeyDNS := GetEd25519PublicKeyForDNS(privKey)
+	_, _, err := parseDKIMPublicKey("v=DKIM1; k=ed25519; p=" + pubKeyDNS)
 	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-	pubKeyDNS := GetPublicKeyForDNS(privateKey)
-
-	_, err = parseDKIMPublicKey("v=DKIM1; k=ed25519; p=" + pubKeyDNS)
-	if err == nil {
-		t.Error("Expected error for unsupported key type")
+		t.Errorf("Expected no error for valid ed25519 key, got: %v", err)
 	}
 }
 
 // TestParseDKIMPublicKey_InvalidBase64 tests parsing with invalid base64 key data.
 func TestParseDKIMPublicKey_InvalidBase64_Cov5(t *testing.T) {
-	_, err := parseDKIMPublicKey("v=DKIM1; k=rsa; p=!!!invalid!!!")
+	_, _, err := parseDKIMPublicKey("v=DKIM1; k=rsa; p=!!!invalid!!!")
 	if err == nil {
 		t.Error("Expected error for invalid base64")
 	}
@@ -375,7 +373,7 @@ func TestParseDKIMPublicKey_UnsupportedVersion_Cov5(t *testing.T) {
 	}
 	pubKeyDNS := GetPublicKeyForDNS(privateKey)
 
-	_, err = parseDKIMPublicKey("v=DKIM2; k=rsa; p=" + pubKeyDNS)
+	_, _, err = parseDKIMPublicKey("v=DKIM2; k=rsa; p=" + pubKeyDNS)
 	if err == nil {
 		t.Error("Expected error for unsupported version")
 	}

@@ -909,7 +909,7 @@ func TestParseDKIMPublicKey_NonRSAPublicKey_Cov3(t *testing.T) {
 
 	// Parse it and verify it returns an valid RSA key
 	record := "v=DKIM1; k=rsa; p=" + GetPublicKeyForDNS(privateKey)
-	key, err := parseDKIMPublicKey(record)
+	key, _, err := parseDKIMPublicKey(record)
 	if err != nil {
 		t.Fatalf("parseDKIMPublicKey: %v", err)
 	}
@@ -1141,7 +1141,7 @@ func TestParseMTASTSPolicy_TestingMode_Cov3(t *testing.T) {
 
 func TestParseDKIMPublicKey_RevokedKey_Cov3(t *testing.T) {
 	record := "v=DKIM1; k=rsa; p="
-	_, err := parseDKIMPublicKey(record)
+	_, _, err := parseDKIMPublicKey(record)
 	if err == nil {
 		t.Error("expected error for empty/revoked public key")
 	}

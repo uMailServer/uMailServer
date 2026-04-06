@@ -1,6 +1,7 @@
 package imap
 
 import (
+	"compress/gzip"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/storage"
 )
 
 // handleCommand parses and handles an IMAP command
@@ -55,6 +58,8 @@ func (s *Session) handleNotAuthenticated(command string, args []string, line str
 		return s.handleNoop()
 	case "LOGOUT":
 		return s.handleLogout()
+	case "COMPRESS":
+		return s.handleCompress(args)
 	default:
 		s.WriteResponse(s.tag, "BAD Command not allowed in this state")
 		return nil
@@ -70,6 +75,8 @@ func (s *Session) handleAuthenticated(command string, args []string, line string
 		return s.handleNoop()
 	case "LOGOUT":
 		return s.handleLogout()
+	case "COMPRESS":
+		return s.handleCompress(args)
 	case "SELECT":
 		return s.handleSelect(args)
 	case "EXAMINE":
@@ -115,6 +122,8 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 		return s.handleNoop()
 	case "LOGOUT":
 		return s.handleLogout()
+	case "COMPRESS":
+		return s.handleCompress(args)
 	case "SELECT":
 		return s.handleSelect(args)
 	case "EXAMINE":
@@ -147,6 +156,10 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 		return s.handleExpunge()
 	case "SEARCH":
 		return s.handleSearch(args, line)
+	case "SORT":
+		return s.handleSort(args, line)
+	case "THREAD":
+		return s.handleThread(args, line)
 	case "FETCH":
 		return s.handleFetch(args, line)
 	case "STORE":
@@ -221,6 +234,38 @@ func (s *Session) handleStartTLS() error {
 	s.reader.Reset(tlsConn)
 	s.writer.Reset(tlsConn)
 	s.tlsActive = true
+
+	return nil
+}
+
+// handleCompress enables compression using DEFLATE algorithm (RFC 4978)
+func (s *Session) handleCompress(args []string) error {
+	if s.compressActive {
+		s.WriteResponse(s.tag, "BAD Compression already active")
+		return nil
+	}
+
+	if len(args) < 1 || strings.ToUpper(args[0]) != "DEFLATE" {
+		s.WriteResponse(s.tag, "BAD COMPRESS requires DEFLATE argument")
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK Compression active")
+
+	// Create gzip writer for compressing responses to client
+	s.compressWriter = gzip.NewWriter(s.conn)
+	s.writer.Reset(s.compressWriter)
+
+	// Create gzip reader for decompressing requests from client
+	gzReader, err := gzip.NewReader(s.conn)
+	if err != nil {
+		s.WriteResponse(s.tag, "BAD Compression initialization failed")
+		return nil
+	}
+	s.compressReader = gzReader
+	s.reader.Reset(s.compressReader)
+
+	s.compressActive = true
 
 	return nil
 }
@@ -1014,6 +1059,316 @@ func (s *Session) handleSearch(args []string, line string) error {
 	return nil
 }
 
+// SORT command (RFC 5256)
+func (s *Session) handleSort(args []string, line string) error {
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	// Parse sort criteria - args[0] is the charset, then criteria
+	var criteriaArgs []string
+	if len(args) > 0 && strings.ToUpper(args[0]) != "CHARSET" {
+		// No charset specified, use args as criteria
+		criteriaArgs = args
+	} else {
+		// Skip charset if specified
+		if len(args) > 1 {
+			criteriaArgs = args[1:]
+		}
+	}
+
+	criteria, err := parseSortCriteria(criteriaArgs)
+	if err != nil {
+		s.WriteResponse(s.tag, "BAD "+err.Error())
+		return nil
+	}
+
+	// Get all messages in mailbox with metadata
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	// Build metadata list with sequence numbers
+	var metas []*storage.MessageMetadata
+	var seqNums []uint32
+	seqNum := uint32(0)
+	for _, msg := range messages {
+		seqNum++
+		seqNums = append(seqNums, seqNum)
+		// Build a minimal MessageMetadata from the Message
+		meta := &storage.MessageMetadata{
+			MessageID:    msg.Envelope.MessageID,
+			UID:          msg.UID,
+			Subject:      msg.Envelope.Subject,
+			From:         addressToString(msg.Envelope.From),
+			Date:         msg.Envelope.Date,
+			InternalDate: msg.InternalDate,
+			Size:         msg.Size,
+		}
+		meta.InReplyTo = msg.Envelope.InReplyTo
+		metas = append(metas, meta)
+	}
+
+	// Sort
+	sortedSeqNums := sortMessagesByCriteria(metas, criteria, seqNums)
+
+	// Output result
+	result := "SORT"
+	for _, seq := range sortedSeqNums {
+		result += fmt.Sprintf(" %d", seq)
+	}
+	s.WriteData(result)
+	s.WriteResponse(s.tag, "OK SORT completed")
+	return nil
+}
+
+// addressToString converts Address slice to string
+func addressToString(addrs []*Address) string {
+	if len(addrs) == 0 {
+		return ""
+	}
+	return addrs[0].MailboxName + "@" + addrs[0].HostName
+}
+
+// THREAD command (RFC 5256)
+func (s *Session) handleThread(args []string, line string) error {
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
+	// Parse thread algorithm
+	algo := ThreadReferences
+	if len(args) > 0 {
+		arg := strings.ToUpper(args[0])
+		if arg == "ORDEREDSUBJECT" {
+			algo = ThreadOrderedSubject
+		} else if arg == "REFERENCES" {
+			algo = ThreadReferences
+		}
+	}
+
+	// Get all messages in mailbox
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	// Build metadata list with sequence numbers
+	var metas []*storage.MessageMetadata
+	var seqNums []uint32
+	seqNum := uint32(0)
+	for _, msg := range messages {
+		seqNum++
+		seqNums = append(seqNums, seqNum)
+		meta := &storage.MessageMetadata{
+			MessageID:    msg.Envelope.MessageID,
+			UID:          msg.UID,
+			Subject:      msg.Envelope.Subject,
+			From:         addressToString(msg.Envelope.From),
+			Date:         msg.Envelope.Date,
+			InternalDate: msg.InternalDate,
+		}
+		meta.InReplyTo = msg.Envelope.InReplyTo
+		metas = append(metas, meta)
+	}
+
+	var children map[uint32][]uint32
+	if algo == ThreadReferences {
+		children = threadMessagesByReferences(metas, seqNums)
+	} else {
+		children = threadMessagesByOrderedSubject(metas, seqNums)
+	}
+
+	// Find all root messages (those that are not children)
+	allChildren := make(map[uint32]bool)
+	for _, kids := range children {
+		for _, child := range kids {
+			allChildren[child] = true
+		}
+	}
+
+	var roots []uint32
+	for _, seq := range seqNums {
+		if !allChildren[seq] {
+			roots = append(roots, seq)
+		}
+	}
+
+	// Output threads
+	visited := make(map[uint32]bool)
+	for _, root := range roots {
+		threadSeqNums := flattenThread(root, children, visited)
+		// Output as space-separated sequence numbers in parentheses
+		threadStr := "("
+		for i, seq := range threadSeqNums {
+			if i > 0 {
+				threadStr += " "
+			}
+			threadStr += fmt.Sprintf("%d", seq)
+		}
+		threadStr += ")"
+		s.WriteData(threadStr)
+	}
+
+	s.WriteResponse(s.tag, "OK THREAD completed")
+	return nil
+}
+
+// UID SORT command
+func (s *Session) handleUIDSort(args []string, line string) error {
+	// Add UID prefix to results
+	// Parse criteria from args
+	var criteriaArgs []string
+	if len(args) > 0 && strings.ToUpper(args[0]) != "CHARSET" {
+		criteriaArgs = args
+	} else {
+		if len(args) > 1 {
+			criteriaArgs = args[1:]
+		}
+	}
+
+	criteria, err := parseSortCriteria(criteriaArgs)
+	if err != nil {
+		s.WriteResponse(s.tag, "BAD "+err.Error())
+		return nil
+	}
+
+	// Get all messages with UID
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	var metas []*storage.MessageMetadata
+	var seqNums []uint32
+	var uids []uint32
+	seqNum := uint32(0)
+	for _, msg := range messages {
+		seqNum++
+		seqNums = append(seqNums, seqNum)
+		uids = append(uids, msg.UID)
+		meta := &storage.MessageMetadata{
+			MessageID:    msg.Envelope.MessageID,
+			UID:          msg.UID,
+			Subject:      msg.Envelope.Subject,
+			From:         addressToString(msg.Envelope.From),
+			Date:         msg.Envelope.Date,
+			InternalDate: msg.InternalDate,
+			Size:         msg.Size,
+		}
+		metas = append(metas, meta)
+	}
+
+	sortedSeqNums := sortMessagesByCriteria(metas, criteria, seqNums)
+
+	// Convert sequence numbers to UIDs
+	result := "SORT"
+	for _, seq := range sortedSeqNums {
+		// Find corresponding UID
+		for i, s := range seqNums {
+			if s == seq {
+				result += fmt.Sprintf(" %d", uids[i])
+				break
+			}
+		}
+	}
+	s.WriteData(result)
+	s.WriteResponse(s.tag, "OK UID SORT completed")
+	return nil
+}
+
+// UID THREAD command
+func (s *Session) handleUIDThread(args []string, line string) error {
+	// Parse thread algorithm
+	algo := ThreadReferences
+	if len(args) > 0 {
+		arg := strings.ToUpper(args[0])
+		if arg == "ORDEREDSUBJECT" {
+			algo = ThreadOrderedSubject
+		} else if arg == "REFERENCES" {
+			algo = ThreadReferences
+		}
+	}
+
+	// Get all messages
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	var metas []*storage.MessageMetadata
+	var seqNums []uint32
+	var uids []uint32
+	seqNum := uint32(0)
+	for _, msg := range messages {
+		seqNum++
+		seqNums = append(seqNums, seqNum)
+		uids = append(uids, msg.UID)
+		meta := &storage.MessageMetadata{
+			MessageID:    msg.Envelope.MessageID,
+			UID:          msg.UID,
+			Subject:      msg.Envelope.Subject,
+			From:         addressToString(msg.Envelope.From),
+			Date:         msg.Envelope.Date,
+			InternalDate: msg.InternalDate,
+		}
+		meta.InReplyTo = msg.Envelope.InReplyTo
+		metas = append(metas, meta)
+	}
+
+	var children map[uint32][]uint32
+	if algo == ThreadReferences {
+		children = threadMessagesByReferences(metas, seqNums)
+	} else {
+		children = threadMessagesByOrderedSubject(metas, seqNums)
+	}
+
+	// Find roots and build seq->uid mapping
+	allChildren := make(map[uint32]bool)
+	for _, kids := range children {
+		for _, child := range kids {
+			allChildren[child] = true
+		}
+	}
+
+	var roots []uint32
+	for _, seq := range seqNums {
+		if !allChildren[seq] {
+			roots = append(roots, seq)
+		}
+	}
+
+	// seq to uid mapping
+	seqToUID := make(map[uint32]uint32)
+	for i, seq := range seqNums {
+		seqToUID[seq] = uids[i]
+	}
+
+	visited := make(map[uint32]bool)
+	for _, root := range roots {
+		threadSeqNums := flattenThread(root, children, visited)
+		threadStr := "("
+		for i, seq := range threadSeqNums {
+			if i > 0 {
+				threadStr += " "
+			}
+			threadStr += fmt.Sprintf("%d", seqToUID[seq])
+		}
+		threadStr += ")"
+		s.WriteData(threadStr)
+	}
+
+	s.WriteResponse(s.tag, "OK UID THREAD completed")
+	return nil
+}
+
 // FETCH command
 func (s *Session) handleFetch(args []string, line string) error {
 	if len(args) < 2 {
@@ -1174,6 +1529,10 @@ func (s *Session) handleUID(args []string, line string) error {
 		return s.handleUIDMove(uidArgs)
 	case "SEARCH":
 		return s.handleUIDSearch(uidArgs, line)
+	case "SORT":
+		return s.handleUIDSort(uidArgs, line)
+	case "THREAD":
+		return s.handleUIDThread(uidArgs, line)
 	case "EXPUNGE":
 		return s.handleUIDExpunge(uidArgs)
 	default:
@@ -1268,10 +1627,100 @@ func parseSearchCriteria(args []string) SearchCriteria {
 				criteria.UIDSet = args[i+1]
 				i++
 			}
+		case "CC":
+			if i+1 < len(args) {
+				criteria.Cc = args[i+1]
+				i++
+			}
+		case "BCC":
+			if i+1 < len(args) {
+				criteria.Bcc = args[i+1]
+				i++
+			}
+		case "BODY":
+			if i+1 < len(args) {
+				criteria.Body = args[i+1]
+				i++
+			}
+		case "TEXT":
+			if i+1 < len(args) {
+				criteria.Text = args[i+1]
+				i++
+			}
+		case "HEADER":
+			if i+2 < len(args) {
+				if criteria.Header == nil {
+					criteria.Header = make(map[string]string)
+				}
+				criteria.Header[args[i+1]] = args[i+2]
+				i += 2
+			}
+		case "BEFORE":
+			if i+1 < len(args) {
+				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+					criteria.Before = t
+				}
+				i++
+			}
+		case "ON":
+			if i+1 < len(args) {
+				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+					criteria.On = t
+				}
+				i++
+			}
+		case "SINCE":
+			if i+1 < len(args) {
+				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+					criteria.Since = t
+				}
+				i++
+			}
+		case "SENTBEFORE":
+			if i+1 < len(args) {
+				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+					criteria.SentBefore = t
+				}
+				i++
+			}
+		case "SENTON":
+			if i+1 < len(args) {
+				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+					criteria.SentOn = t
+				}
+				i++
+			}
+		case "SENTSINCE":
+			if i+1 < len(args) {
+				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+					criteria.SentSince = t
+				}
+				i++
+			}
+		case "LARGER":
+			if i+1 < len(args) {
+				if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
+					criteria.Larger = size
+				}
+				i++
+			}
+		case "SMALLER":
+			if i+1 < len(args) {
+				if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
+					criteria.Smaller = size
+				}
+				i++
+			}
 		}
 	}
 
 	return criteria
+}
+
+// parseIMAPDate parses an IMAP date in format "DD-Mon-YYYY" (e.g., "01-Jan-2024")
+func parseIMAPDate(dateStr string) (time.Time, error) {
+	// IMAP date format: 01-Jan-2024
+	return time.Parse("02-Jan-2006", dateStr)
 }
 
 func parseFetchItems(args []string) []string {

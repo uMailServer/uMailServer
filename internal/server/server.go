@@ -287,7 +287,7 @@ func (s *Server) startSMTP() {
 		pipeline.AddStage(smtp.NewGreylistStage())
 	}
 	if len(s.config.Spam.RBLServers) > 0 {
-		pipeline.AddStage(smtp.NewRBLStage(s.config.Spam.RBLServers))
+		pipeline.AddStage(smtp.NewRBLStage(s.config.Spam.RBLServers, smtp.NewRealRBLDNSResolver()))
 	}
 	pipeline.AddStage(smtp.NewHeuristicStage())
 	pipeline.AddStage(smtp.NewScoreStage(s.config.Spam.RejectThreshold, s.config.Spam.JunkThreshold))
@@ -420,6 +420,7 @@ func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	}
 	pop3Server := pop3.NewServer(pop3Addr, pop3Adapter, s.logger)
 	pop3Server.SetAuthFunc(s.authenticate)
+	pop3Server.SetAPOPSecretHandler(s.getAPOPSecret)
 	pop3Server.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	pop3Server.SetReadTimeout(10 * time.Minute)
 	pop3Server.SetWriteTimeout(10 * time.Minute)
@@ -709,6 +710,19 @@ func (s *Server) getUserSecret(username string) (string, error) {
 		return "", fmt.Errorf("user not found or inactive")
 	}
 	return account.PasswordHash, nil
+}
+
+// getAPOPSecret returns the APOP hash (MD5 of password) for a user, used by APOP authentication
+func (s *Server) getAPOPSecret(username string) (string, error) {
+	user, domain := parseEmail(username)
+	account, err := s.database.GetAccount(domain, user)
+	if err != nil {
+		return "", err
+	}
+	if account == nil || !account.IsActive {
+		return "", fmt.Errorf("user not found or inactive")
+	}
+	return account.APOPHash, nil
 }
 
 // deliverMessage delivers an incoming message

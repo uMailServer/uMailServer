@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -49,9 +50,12 @@ type MessageContext struct {
 
 // SpamResult holds spam check results
 type SpamResult struct {
-	Score   float64
-	Verdict string // inbox, junk, quarantine, reject
-	Reasons []string
+	Score          float64
+	Verdict        string  // inbox, junk, quarantine, reject
+	Reasons        []string
+	BayesianProb   float64 // 0-1 probability from Bayesian classifier
+	RBLListed      bool    // True if listed on any RBL
+	BayesianSpam   bool    // True if Bayesian classified as spam
 }
 
 // DKIMResult holds DKIM verification results
@@ -418,12 +422,50 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 
 // RBLStage checks DNS blocklists
 type RBLStage struct {
-	servers []string
+	servers  []string
+	resolver RBLDNSResolver
+}
+
+// RBLDNSResolver interface for RBL DNS lookups
+type RBLDNSResolver interface {
+	LookupHost(ctx context.Context, host string) (net.IP, error)
+}
+
+// realRBLDNSResolver performs actual DNS lookups for RBL checks
+type realRBLDNSResolver struct{}
+
+// NewRealRBLDNSResolver creates a resolver that performs real DNS lookups
+func NewRealRBLDNSResolver() RBLDNSResolver {
+	return &realRBLDNSResolver{}
+}
+
+func (r *realRBLDNSResolver) LookupHost(ctx context.Context, host string) (net.IP, error) {
+	// Use net.LookupIP which returns A/AAAA records
+	// We use the first returned IP as the RBL response
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no DNS records found")
+	}
+	return ips[0], nil
+}
+
+// RBLResult codes (first octet of returned IP indicates listing type)
+var rblResultCodes = map[string]string{
+	"127.0.0.1": "generic positive",
+	"127.0.0.2": "confirmed spam source",
+	"127.0.0.3": "confirmed spam source (alternative)",
+	"127.0.0.4": "spam domain",
+	"127.0.0.5": "phishing domain",
+	"127.0.0.6": "malware domain",
+	"127.0.0.7": "botnet server",
 }
 
 // NewRBLStage creates a new RBL check stage
-func NewRBLStage(servers []string) *RBLStage {
-	return &RBLStage{servers: servers}
+func NewRBLStage(servers []string, resolver RBLDNSResolver) *RBLStage {
+	return &RBLStage{servers: servers, resolver: resolver}
 }
 
 func (s *RBLStage) Name() string { return "RBL" }
@@ -433,18 +475,48 @@ func (s *RBLStage) Process(ctx *MessageContext) PipelineResult {
 		return ResultAccept
 	}
 
-	// Reverse IP
+	// Reverse IP (IPv4 only for now)
 	ip := ctx.RemoteIP.String()
 	reversedIP := reverseIP(ip)
+	if reversedIP == "" {
+		return ResultAccept
+	}
 
 	// Check each RBL
 	for _, server := range s.servers {
-		lookup := fmt.Sprintf("%s.%s", reversedIP, server)
-		// In production, perform actual DNS lookup
-		// For now, just check format
-		if lookup != "" {
-			// If listed, add to spam score
-			// ctx.SpamScore += 2.0
+		lookupHost := fmt.Sprintf("%s.%s", reversedIP, server)
+
+		ip, err := s.resolver.LookupHost(context.Background(), lookupHost)
+		if err != nil {
+			// Not listed or DNS error - continue to next RBL
+			continue
+		}
+
+		// IP is listed in this RBL
+		ipStr := ip.String()
+		resultCode := "listed"
+		if code, ok := rblResultCodes[ipStr]; ok {
+			resultCode = code
+		}
+
+		// RBL listing detected - spam score added above
+		_ = resultCode // resultCode available for future logging
+
+		// Add spam score based on listing type
+		// Higher scores for more severe listings
+		switch ipStr {
+		case "127.0.0.2", "127.0.0.3":
+			ctx.SpamScore += 3.0 // confirmed spam source
+		case "127.0.0.4":
+			ctx.SpamScore += 2.0 // spam domain
+		case "127.0.0.5":
+			ctx.SpamScore += 2.5 // phishing domain
+		case "127.0.0.6":
+			ctx.SpamScore += 3.0 // malware domain
+		case "127.0.0.7":
+			ctx.SpamScore += 3.0 // botnet server
+		default:
+			ctx.SpamScore += 1.5 // generic positive or unknown
 		}
 	}
 

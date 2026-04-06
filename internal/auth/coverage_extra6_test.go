@@ -191,7 +191,7 @@ func TestParseDKIMPublicKey_NoValidKey_Cov6(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key, err := parseDKIMPublicKey(tt.record)
+			key, _, err := parseDKIMPublicKey(tt.record)
 			if err == nil && key != nil {
 				t.Error("Expected error or nil key for invalid record")
 			}
@@ -325,7 +325,7 @@ func TestParseDKIMPublicKey_ValidRSAKey_Cov6(t *testing.T) {
 	)
 	record := "v=DKIM1; k=rsa; p=" + pubKeyB64
 
-	key, err := parseDKIMPublicKey(record)
+	key, _, err := parseDKIMPublicKey(record)
 	if err != nil {
 		t.Fatalf("parseDKIMPublicKey: %v", err)
 	}

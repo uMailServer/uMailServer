@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
@@ -18,16 +20,19 @@ import (
 // --- DKIM parseDKIMPublicKey extra coverage ---
 
 // TestParseDKIMPublicKeyNonRSAParsedKey tests the branch where x509.ParsePKIXPublicKey
-// succeeds but returns a non-RSA key (e.g., an Ed25519 key).
+// succeeds but returns a non-RSA key (e.g., an ECDSA key).
 func TestParseDKIMPublicKeyNonRSAParsedKey(t *testing.T) {
-	// Generate an Ed25519-like scenario by creating a record that has valid PKIX
-	// bytes but is not an RSA key. We use a crafted record.
-	// Since we can't easily generate non-RSA PKIX bytes with the stdlib in a unit test
-	// for this package, we test the "unsupported key type" branch instead.
-	record := "v=DKIM1; k=ed25519; p=c29tZWtleQ=="
-	_, err := parseDKIMPublicKey(record)
+	// Generate an ECDSA P-256 key and use its PKIX-encoded form
+	// ECDSA keys go through x509.ParsePKIXPublicKey path and return "unsupported key type"
+	ecdsaPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Skipf("skipping: could not generate ECDSA key: %v", err)
+	}
+	pubKeyBytes, _ := x509.MarshalPKIXPublicKey(&ecdsaPriv.PublicKey)
+	record := "v=DKIM1; k=ec; p=" + base64.StdEncoding.EncodeToString(pubKeyBytes)
+	_, _, err = parseDKIMPublicKey(record)
 	if err == nil {
-		t.Error("Expected error for ed25519 key type")
+		t.Error("Expected error for ec key type")
 	}
 	if !strings.Contains(err.Error(), "unsupported key type") {
 		t.Errorf("Expected 'unsupported key type' error, got: %v", err)
@@ -37,7 +42,7 @@ func TestParseDKIMPublicKeyNonRSAParsedKey(t *testing.T) {
 // TestParseDKIMPublicKeyInvalidBase64 tests the branch where base64 decoding fails.
 func TestParseDKIMPublicKeyInvalidBase64(t *testing.T) {
 	record := "v=DKIM1; k=rsa; p=!!!not-valid-base64!!!"
-	_, err := parseDKIMPublicKey(record)
+	_, _, err := parseDKIMPublicKey(record)
 	if err == nil {
 		t.Error("Expected error for invalid base64 key data")
 	}
@@ -49,7 +54,7 @@ func TestParseDKIMPublicKeyInvalidBase64(t *testing.T) {
 // TestParseDKIMPublicKeyEmptyP tests the branch where p= tag is empty (revoked key).
 func TestParseDKIMPublicKeyEmptyP(t *testing.T) {
 	record := "v=DKIM1; k=rsa; p="
-	_, err := parseDKIMPublicKey(record)
+	_, _, err := parseDKIMPublicKey(record)
 	if err == nil {
 		t.Error("Expected error for empty public key data")
 	}
@@ -63,7 +68,7 @@ func TestParseDKIMPublicKeyEmptyP(t *testing.T) {
 func TestParseDKIMPublicKeyGarbageBytes(t *testing.T) {
 	garbage := base64.StdEncoding.EncodeToString([]byte("this is garbage, not a key"))
 	record := "v=DKIM1; k=rsa; p=" + garbage
-	_, err := parseDKIMPublicKey(record)
+	_, _, err := parseDKIMPublicKey(record)
 	if err == nil {
 		t.Error("Expected error for garbage key data")
 	}
@@ -91,14 +96,18 @@ func TestParseDKIMPublicKeyWithPEMBlock(t *testing.T) {
 	pemB64 := base64.StdEncoding.EncodeToString([]byte(pemData))
 
 	record := "v=DKIM1; k=rsa; p=" + pemB64
-	parsedKey, err := parseDKIMPublicKey(record)
+	parsedKey, _, err := parseDKIMPublicKey(record)
 	if err != nil {
 		t.Fatalf("parseDKIMPublicKey failed with PEM-wrapped key: %v", err)
 	}
 	if parsedKey == nil {
 		t.Fatal("Expected non-nil parsed key")
 	}
-	if parsedKey.N.Cmp(privateKey.N) != 0 {
+	rsaKey, ok := parsedKey.(*rsa.PublicKey)
+	if !ok {
+		t.Fatal("Expected RSA public key")
+	}
+	if rsaKey.N.Cmp(privateKey.N) != 0 {
 		t.Error("Parsed key modulus does not match original")
 	}
 }
@@ -113,13 +122,18 @@ func TestParseDKIMPublicKeyDefaultKeyType(t *testing.T) {
 	pubKeyDNS := GetPublicKeyForDNS(privateKey)
 	// Omit k= tag entirely - should default to rsa
 	record := "v=DKIM1; p=" + pubKeyDNS
-	parsedKey, err := parseDKIMPublicKey(record)
+	parsedKey, _, err := parseDKIMPublicKey(record)
 	if err != nil {
 		t.Fatalf("parseDKIMPublicKey failed without k= tag: %v", err)
 	}
 	if parsedKey == nil {
 		t.Fatal("Expected non-nil parsed key")
 	}
+	rsaKey, ok := parsedKey.(*rsa.PublicKey)
+	if !ok {
+		t.Fatal("Expected RSA public key")
+	}
+	_ = rsaKey // rsaKey available for future use
 }
 
 // --- DKIM Verify extra coverage ---

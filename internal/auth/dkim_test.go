@@ -672,7 +672,7 @@ func TestFetchPublicKey(t *testing.T) {
 
 	// Test parseDKIMPublicKey with valid key
 	record := "v=DKIM1; k=rsa; p=" + pubKeyDNS
-	pubKey, err := parseDKIMPublicKey(record)
+	pubKey, _, err := parseDKIMPublicKey(record)
 	if err != nil {
 		t.Errorf("parseDKIMPublicKey failed: %v", err)
 	}
@@ -730,7 +730,7 @@ func TestParseDKIMPublicKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key, err := parseDKIMPublicKey(tt.record)
+			key, _, err := parseDKIMPublicKey(tt.record)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("Expected error, got nil")
@@ -1487,16 +1487,20 @@ func TestGenerateDKIMKeyPairAndDNSRoundTrip(t *testing.T) {
 	dnsRecord := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pubKeyBytes)
 
 	// Parse it back
-	parsedKey, err := parseDKIMPublicKey(dnsRecord)
+	parsedKey, _, err := parseDKIMPublicKey(dnsRecord)
 	if err != nil {
 		t.Fatalf("parseDKIMPublicKey failed: %v", err)
 	}
 
 	// Verify the parsed key matches the original
-	if parsedKey.N.Cmp(privateKey.N) != 0 {
+	rsaKey, ok := parsedKey.(*rsa.PublicKey)
+	if !ok {
+		t.Fatal("Expected RSA public key")
+	}
+	if rsaKey.N.Cmp(privateKey.N) != 0 {
 		t.Error("Parsed key modulus does not match original")
 	}
-	if parsedKey.E != privateKey.E {
+	if rsaKey.E != privateKey.E {
 		t.Error("Parsed key exponent does not match original")
 	}
 }

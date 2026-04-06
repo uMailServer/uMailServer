@@ -2,6 +2,7 @@ package imap
 
 import (
 	"bufio"
+	"compress/gzip"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -310,6 +311,11 @@ type Session struct {
 	tlsConn   *tls.Conn
 	tlsActive bool
 
+	// Compression
+	compressActive bool
+	compressReader *gzip.Reader
+	compressWriter *gzip.Writer
+
 	// Capabilities
 	capabilities []string
 
@@ -462,6 +468,10 @@ func defaultCapabilities() []string {
 		"SASL-IR",
 		"ESEARCH",
 		"ID",
+		"COMPRESS=DEFLATE",
+		"SORT",
+		"THREAD=REFERENCES",
+		"THREAD=ORDEREDSUBJECT",
 	}
 }
 

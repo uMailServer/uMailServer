@@ -36,6 +36,7 @@ type AccountData struct {
 	LocalPart        string    `json:"local_part"`
 	Domain           string    `json:"domain"`
 	PasswordHash     string    `json:"password_hash"`
+	APOPHash         string    `json:"apop_hash,omitempty"` // MD5(password) for APOP authentication
 	TOTPSecret       string    `json:"totp_secret,omitempty"`
 	TOTPEnabled      bool      `json:"totp_enabled"`
 	QuotaUsed        int64     `json:"quota_used"`

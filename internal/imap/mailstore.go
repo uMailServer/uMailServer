@@ -532,8 +532,17 @@ func (m *BboltMailstore) SearchMessages(user, mailbox string, criteria SearchCri
 			continue
 		}
 
+		// Load message data for content-based criteria (CC, BCC, BODY, TEXT, HEADER)
+		var msgData []byte
+		if criteria.Cc != "" || criteria.Bcc != "" || criteria.Body != "" || criteria.Text != "" || len(criteria.Header) > 0 {
+			msgData, err = m.msgStore.ReadMessage(user, meta.MessageID)
+			if err != nil {
+				continue
+			}
+		}
+
 		// Check criteria
-		if matchesCriteria(meta, &criteria) {
+		if matchesCriteria(meta, msgData, &criteria) {
 			results = append(results, seqNum)
 		}
 	}
@@ -542,17 +551,17 @@ func (m *BboltMailstore) SearchMessages(user, mailbox string, criteria SearchCri
 }
 
 // matchesCriteria checks if a message matches search criteria
-func matchesCriteria(meta *storage.MessageMetadata, criteria *SearchCriteria) bool {
+func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *SearchCriteria) bool {
 	// Handle NOT
 	if criteria.Not != nil {
-		if matchesCriteria(meta, criteria.Not) {
+		if matchesCriteria(meta, msgData, criteria.Not) {
 			return false
 		}
 	}
 
 	// Handle OR
 	if criteria.Or[0] != nil && criteria.Or[1] != nil {
-		if !matchesCriteria(meta, criteria.Or[0]) && !matchesCriteria(meta, criteria.Or[1]) {
+		if !matchesCriteria(meta, msgData, criteria.Or[0]) && !matchesCriteria(meta, msgData, criteria.Or[1]) {
 			return false
 		}
 	}
@@ -620,7 +629,170 @@ func matchesCriteria(meta *storage.MessageMetadata, criteria *SearchCriteria) bo
 		return false
 	}
 
+	// Check internal date criteria
+	if !criteria.Before.IsZero() && !meta.InternalDate.Before(criteria.Before) {
+		return false
+	}
+	if !criteria.On.IsZero() {
+		metaDate := time.Date(meta.InternalDate.Year(), meta.InternalDate.Month(), meta.InternalDate.Day(), 0, 0, 0, 0, meta.InternalDate.Location())
+		critDate := time.Date(criteria.On.Year(), criteria.On.Month(), criteria.On.Day(), 0, 0, 0, 0, criteria.On.Location())
+		if !metaDate.Equal(critDate) {
+			return false
+		}
+	}
+	if !criteria.Since.IsZero() && !meta.InternalDate.After(criteria.Since) {
+		return false
+	}
+
+	// Check sent date criteria (from Date header)
+	if !criteria.SentBefore.IsZero() {
+		if sentDate, err := parseMessageDate(meta.Date); err == nil {
+			if !sentDate.Before(criteria.SentBefore) {
+				return false
+			}
+		}
+	}
+	if !criteria.SentOn.IsZero() {
+		if sentDate, err := parseMessageDate(meta.Date); err == nil {
+			metaDate := time.Date(sentDate.Year(), sentDate.Month(), sentDate.Day(), 0, 0, 0, 0, sentDate.Location())
+			critDate := time.Date(criteria.SentOn.Year(), criteria.SentOn.Month(), criteria.SentOn.Day(), 0, 0, 0, 0, criteria.SentOn.Location())
+			if !metaDate.Equal(critDate) {
+				return false
+			}
+		}
+	}
+	if !criteria.SentSince.IsZero() {
+		if sentDate, err := parseMessageDate(meta.Date); err == nil {
+			if !sentDate.After(criteria.SentSince) {
+				return false
+			}
+		}
+	}
+
+	// Check content-based criteria (requires message data)
+	if msgData != nil {
+		msgStr := strings.ToLower(string(msgData))
+
+		// CC criteria
+		if criteria.Cc != "" {
+			ccIdx := strings.Index(msgStr, "\r\ncc:")
+			if ccIdx == -1 {
+				ccIdx = strings.Index(msgStr, "\r\ncc :")
+			}
+			if ccIdx == -1 {
+				ccIdx = strings.Index(msgStr, "\ncc:")
+			}
+			if ccIdx == -1 {
+				ccIdx = strings.Index(msgStr, "\ncc :")
+			}
+			if ccIdx == -1 {
+				return false
+			}
+			// Extract CC line content
+			lineEnd := strings.Index(msgStr[ccIdx:], "\r\n")
+			if lineEnd == -1 {
+				lineEnd = strings.Index(msgStr[ccIdx:], "\n")
+			}
+			if lineEnd == -1 {
+				lineEnd = len(msgStr)
+			}
+			ccLine := msgStr[ccIdx:ccIdx+lineEnd]
+			if !strings.Contains(ccLine, strings.ToLower(criteria.Cc)) {
+				return false
+			}
+		}
+
+		// BCC criteria (not actually in received messages, but we check headers before send)
+		// BCC is never visible to recipients, so we check the raw envelope
+		if criteria.Bcc != "" {
+			// BCC is typically removed during delivery, but for search we check if it was ever present
+			// This would require examining the original SMTP envelope, not the message itself
+			// For now, we return false as BCC cannot be determined from the message content
+			return false
+		}
+
+		// BODY criteria - search entire message body (after headers)
+		if criteria.Body != "" {
+			// Find headers separator
+			headerEnd := strings.Index(msgStr, "\r\n\r\n")
+			if headerEnd == -1 {
+				headerEnd = strings.Index(msgStr, "\n\n")
+			}
+			bodyStr := ""
+			if headerEnd != -1 {
+				bodyStr = msgStr[headerEnd:]
+			} else {
+				bodyStr = msgStr
+			}
+			if !strings.Contains(bodyStr, strings.ToLower(criteria.Body)) {
+				return false
+			}
+		}
+
+		// TEXT criteria - search entire message (headers + body)
+		if criteria.Text != "" {
+			if !strings.Contains(msgStr, strings.ToLower(criteria.Text)) {
+				return false
+			}
+		}
+
+		// HEADER criteria - search specific header
+		for headerName, headerValue := range criteria.Header {
+			headerLine := strings.ToLower(headerName) + ":"
+			headerIdx := strings.Index(msgStr, "\r\n"+headerLine)
+			if headerIdx == -1 {
+				headerIdx = strings.Index(msgStr, "\n"+headerLine)
+			}
+			if headerIdx == -1 {
+				headerIdx = strings.Index(msgStr, headerLine) // For first header without leading newline
+			}
+			if headerIdx == -1 {
+				return false
+			}
+			// Extract header value
+			valueStart := headerIdx + len(headerLine)
+			lineEnd := strings.Index(msgStr[valueStart:], "\r\n")
+			if lineEnd == -1 {
+				lineEnd = strings.Index(msgStr[valueStart:], "\n")
+			}
+			if lineEnd == -1 {
+				lineEnd = len(msgStr)
+			}
+			headerVal := strings.TrimSpace(msgStr[valueStart : valueStart+lineEnd])
+			if !strings.Contains(headerVal, strings.ToLower(headerValue)) {
+				return false
+			}
+		}
+	}
+
 	return true
+}
+
+// parseMessageDate parses an email Date header (RFC 2822 format)
+// Format: "Mon, 01 Jan 2024 10:00:00 +0000" or similar variants
+func parseMessageDate(dateStr string) (time.Time, error) {
+	// Try RFC 2822 format first
+	t, err := time.Parse("Mon, 02 Jan 2006 15:04:05 -0700", dateStr)
+	if err == nil {
+		return t, nil
+	}
+	// Try without timezone
+	t, err = time.Parse("Mon, 02 Jan 2006 15:04:05", dateStr)
+	if err == nil {
+		return t, nil
+	}
+	// Try date only
+	t, err = time.Parse("Mon, 02 Jan 2006", dateStr)
+	if err == nil {
+		return t, nil
+	}
+	// Try ISO-like format
+	t, err = time.Parse("02 Jan 2006 15:04:05 -0700", dateStr)
+	if err == nil {
+		return t, nil
+	}
+	// Fallback to basic date
+	return time.Parse("02-Jan-2006", dateStr)
 }
 
 // CopyMessages copies messages to another mailbox

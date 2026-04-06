@@ -2,11 +2,12 @@ package api
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/x509"
-	"io"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -571,23 +572,33 @@ func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
 		webmailFS = NewEmbedFSAdapter(umailserver.WebmailFS)
 	}
 
+	// Also use admin FS for fallback (shared /assets/ paths)
+	adminFS := s.adminFS
+	if adminFS == nil {
+		adminFS = NewEmbedFSAdapter(umailserver.AdminFS)
+	}
+
 	// Handle SPA routing - serve index.html for non-existent paths
 	path := strings.TrimPrefix(r.URL.Path, "/")
 	if path == "" {
 		path = "index.html"
 	}
 
-	// Try to open the file
+	// Try to open the file from webmail FS
 	file, err := webmailFS.Open(path)
 	if err != nil {
-		// If file not found, serve index.html for SPA routing
-		file, err = webmailFS.Open("index.html")
+		// Fallback: check admin FS for shared assets (e.g., /assets/...)
+		file, err = adminFS.Open(path)
 		if err != nil {
-			s.logger.Error("Failed to open index.html", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
+			// If file not found, serve index.html for SPA routing
+			file, err = webmailFS.Open("index.html")
+			if err != nil {
+				s.logger.Error("Failed to open index.html", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			path = "index.html"
 		}
-		path = "index.html"
 	}
 	defer file.Close()
 
@@ -1245,6 +1256,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		LocalPart:    user,
 		Domain:       domain,
 		PasswordHash: string(hashedPassword),
+		APOPHash:     fmt.Sprintf("%x", md5.Sum([]byte(req.Password))),
 		IsAdmin:      req.IsAdmin,
 		IsActive:     true,
 		CreatedAt:    time.Now(),
@@ -1303,6 +1315,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 			return
 		}
 		account.PasswordHash = string(hashedPassword)
+		account.APOPHash = fmt.Sprintf("%x", md5.Sum([]byte(req.Password)))
 	}
 	account.IsAdmin = req.IsAdmin
 	account.IsActive = req.IsActive

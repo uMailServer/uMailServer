@@ -6,6 +6,7 @@ package auth
 
 import (
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -68,19 +69,32 @@ type DKIMSignature struct {
 
 // DKIMSigner handles DKIM signing and verification
 type DKIMSigner struct {
-	resolver   DNSResolver
-	privateKey *rsa.PrivateKey
-	domain     string
-	selector   string
+	resolver     DNSResolver
+	privateKey   any // *rsa.PrivateKey or ed25519.PrivateKey
+	domain       string
+	selector     string
+	keyAlgorithm string // "rsa-sha256" or "ed25519-sha256"
 }
 
-// NewDKIMSigner creates a new DKIM signer
+// NewDKIMSigner creates a new DKIM signer with RSA key
 func NewDKIMSigner(resolver DNSResolver, privateKey *rsa.PrivateKey, domain, selector string) *DKIMSigner {
 	return &DKIMSigner{
-		resolver:   resolver,
-		privateKey: privateKey,
-		domain:     domain,
-		selector:   selector,
+		resolver:     resolver,
+		privateKey:   privateKey,
+		domain:       domain,
+		selector:     selector,
+		keyAlgorithm: "rsa-sha256",
+	}
+}
+
+// NewDKIMSignerEd25519 creates a new DKIM signer with Ed25519 key
+func NewDKIMSignerEd25519(resolver DNSResolver, privateKey ed25519.PrivateKey, domain, selector string) *DKIMSigner {
+	return &DKIMSigner{
+		resolver:     resolver,
+		privateKey:   privateKey,
+		domain:       domain,
+		selector:     selector,
+		keyAlgorithm: "ed25519-sha256",
 	}
 }
 
@@ -98,8 +112,22 @@ func NewDKIMVerifier(resolver DNSResolver) *DKIMVerifier {
 
 // Sign signs a message with DKIM
 func (s *DKIMSigner) Sign(headers map[string][]string, body []byte) (string, error) {
+	// Check if privateKey is nil (handles both nil interface and nil pointer)
 	if s.privateKey == nil {
 		return "", errors.New("no private key configured")
+	}
+
+	// For RSA key, check if the underlying pointer is nil
+	if s.keyAlgorithm == "rsa-sha256" {
+		if pk, ok := s.privateKey.(*rsa.PrivateKey); !ok || pk == nil {
+			return "", errors.New("no private key configured")
+		}
+	}
+	// For Ed25519 key, check if the underlying pointer is nil
+	if s.keyAlgorithm == "ed25519-sha256" {
+		if pk, ok := s.privateKey.(ed25519.PrivateKey); !ok || pk == nil || len(pk) == 0 {
+			return "", errors.New("no private key configured")
+		}
 	}
 
 	// Default canonicalization
@@ -116,7 +144,7 @@ func (s *DKIMSigner) Sign(headers map[string][]string, body []byte) (string, err
 	sig := DKIMSignature{
 		Domain:        s.domain,
 		Selector:      s.selector,
-		Algorithm:     "rsa-sha256",
+		Algorithm:     s.keyAlgorithm,
 		Canonicalize:  headerCanon + "/" + bodyCanon,
 		HeaderCanon:   headerCanon,
 		BodyCanon:     bodyCanon,
@@ -147,12 +175,12 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 	sig.OriginalHeader = dkimHeader
 
 	// Validate algorithm
-	if sig.Algorithm != "rsa-sha256" {
+	if sig.Algorithm != "rsa-sha256" && sig.Algorithm != "ed25519-sha256" {
 		return DKIMFail, sig, fmt.Errorf("unsupported algorithm: %s", sig.Algorithm)
 	}
 
 	// Fetch public key from DNS
-	pubKey, err := v.fetchPublicKey(sig.Domain, sig.Selector)
+	pubKey, keyType, err := v.fetchPublicKey(sig.Domain, sig.Selector)
 	if err != nil {
 		if isTemporaryError(err) {
 			return DKIMTempError, sig, fmt.Errorf("DNS lookup failed: %w", err)
@@ -177,7 +205,14 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 	canonicalHeaders := canonicalizeHeaders(headers, sig.SignedHeaders, sig.HeaderCanon)
 	sigData := canonicalHeaders + dkimHeaderWithoutSig(dkimHeader)
 
-	err = verifyRSASignature(pubKey, []byte(sigData), sig.Signature)
+	switch keyType {
+	case "ed25519":
+		err = verifyEd25519Signature(pubKey.(ed25519.PublicKey), []byte(sigData), sig.Signature)
+	case "rsa":
+		err = verifyRSASignature(pubKey.(*rsa.PublicKey), []byte(sigData), sig.Signature)
+	default:
+		return DKIMFail, sig, fmt.Errorf("unsupported key type: %s", keyType)
+	}
 	if err != nil {
 		return DKIMFail, sig, fmt.Errorf("signature verification failed: %w", err)
 	}
@@ -530,8 +565,18 @@ func (s *DKIMSigner) computeSignature(headers map[string][]string, body []byte, 
 	partialHeader := s.buildHeaderWithoutSig(sig)
 	sigData := canonicalHeaders + partialHeader
 
-	// Sign with RSA-SHA256
-	signature, err := signRSA(s.privateKey, []byte(sigData))
+	// Sign based on algorithm
+	var signature string
+	var err error
+
+	switch sig.Algorithm {
+	case "ed25519-sha256":
+		signature, err = signEd25519(s.privateKey.(ed25519.PrivateKey), []byte(sigData))
+	case "rsa-sha256":
+		signature, err = signRSA(s.privateKey.(*rsa.PrivateKey), []byte(sigData))
+	default:
+		return "", fmt.Errorf("unsupported algorithm: %s", sig.Algorithm)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -582,6 +627,12 @@ func signRSA(privateKey *rsa.PrivateKey, data []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
+// signEd25519 signs data using Ed25519
+func signEd25519(privateKey ed25519.PrivateKey, data []byte) (string, error) {
+	signature := ed25519.Sign(privateKey, data)
+	return base64.StdEncoding.EncodeToString(signature), nil
+}
+
 // verifyRSASignature verifies an RSA-SHA256 signature
 func verifyRSASignature(publicKey *rsa.PublicKey, data []byte, signatureB64 string) error {
 	signature, err := base64.StdEncoding.DecodeString(signatureB64)
@@ -598,35 +649,49 @@ func verifyRSASignature(publicKey *rsa.PublicKey, data []byte, signatureB64 stri
 	return nil
 }
 
+// verifyEd25519Signature verifies an Ed25519 signature
+func verifyEd25519Signature(publicKey ed25519.PublicKey, data []byte, signatureB64 string) error {
+	signature, err := base64.StdEncoding.DecodeString(signatureB64)
+	if err != nil {
+		return fmt.Errorf("failed to decode signature: %w", err)
+	}
+
+	if !ed25519.Verify(publicKey, data, signature) {
+		return fmt.Errorf("ed25519 verification failed")
+	}
+
+	return nil
+}
+
 // fetchPublicKey fetches the DKIM public key from DNS
-func (v *DKIMVerifier) fetchPublicKey(domain, selector string) (*rsa.PublicKey, error) {
+func (v *DKIMVerifier) fetchPublicKey(domain, selector string) (any, string, error) {
 	// DNS query: selector._domainkey.domain
 	query := fmt.Sprintf("%s._domainkey.%s", selector, domain)
 
 	// Look up TXT record
 	txtRecords, err := net.LookupTXT(query)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	for _, record := range txtRecords {
-		pubKey, err := parseDKIMPublicKey(record)
+		pubKey, keyType, err := parseDKIMPublicKey(record)
 		if err == nil && pubKey != nil {
-			return pubKey, nil
+			return pubKey, keyType, nil
 		}
 	}
 
-	return nil, errors.New("no valid DKIM public key found")
+	return nil, "", errors.New("no valid DKIM public key found")
 }
 
 // parseDKIMPublicKey parses a DKIM public key from DNS TXT record
-func parseDKIMPublicKey(record string) (*rsa.PublicKey, error) {
+func parseDKIMPublicKey(record string) (any, string, error) {
 	// Parse tag-value pairs
 	tags := parseTagValueList(record)
 
 	// Check version
 	if v, ok := tags["v"]; ok && v != "DKIM1" {
-		return nil, fmt.Errorf("unsupported DKIM key version: %s", v)
+		return nil, "", fmt.Errorf("unsupported DKIM key version: %s", v)
 	}
 
 	// Get key type
@@ -635,43 +700,46 @@ func parseDKIMPublicKey(record string) (*rsa.PublicKey, error) {
 		keyType = "rsa" // Default
 	}
 
-	if keyType != "rsa" {
-		return nil, fmt.Errorf("unsupported key type: %s", keyType)
-	}
-
 	// Get public key data
 	keyData := tags["p"]
 	if keyData == "" {
-		return nil, errors.New("no public key data")
-	}
-
-	// Check for revoked key (empty p=)
-	if keyData == "" {
-		return nil, errors.New("key has been revoked")
+		return nil, "", errors.New("no public key data")
 	}
 
 	// Decode base64 key
 	keyBytes, err := base64.StdEncoding.DecodeString(keyData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode key: %w", err)
+		return nil, "", fmt.Errorf("failed to decode key: %w", err)
 	}
 
-	// Parse RSA public key
-	pubKey, err := x509.ParsePKIXPublicKey(keyBytes)
-	if err != nil {
-		// Try parsing as RSA key directly
-		pubKey, err = parseRSAPublicKey(keyBytes)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse public key: %w", err)
+	switch keyType {
+	case "ed25519":
+		// Ed25519 public key is 32 bytes
+		if len(keyBytes) != 32 {
+			return nil, "", fmt.Errorf("invalid ed25519 key length: %d", len(keyBytes))
 		}
-	}
+		return ed25519.PublicKey(keyBytes), "ed25519", nil
 
-	rsaKey, ok := pubKey.(*rsa.PublicKey)
-	if !ok {
-		return nil, errors.New("not an RSA public key")
-	}
+	case "rsa":
+		// Parse RSA public key
+		pubKey, err := x509.ParsePKIXPublicKey(keyBytes)
+		if err != nil {
+			// Try parsing as RSA key directly
+			pubKey, err = parseRSAPublicKey(keyBytes)
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to parse public key: %w", err)
+			}
+		}
 
-	return rsaKey, nil
+		rsaKey, ok := pubKey.(*rsa.PublicKey)
+		if !ok {
+			return nil, "", errors.New("not an RSA public key")
+		}
+		return rsaKey, "rsa", nil
+
+	default:
+		return nil, "", fmt.Errorf("unsupported key type: %s", keyType)
+	}
 }
 
 // parseRSAPublicKey parses an RSA public key from raw bytes
@@ -715,8 +783,25 @@ func GenerateDKIMKeyPair(bits int) (*rsa.PrivateKey, []byte, error) {
 	return privateKey, pubKeyBytes, nil
 }
 
+// GenerateEd25519DKIMKeyPair generates a new Ed25519 key pair for DKIM
+func GenerateEd25519DKIMKeyPair() (ed25519.PrivateKey, []byte, error) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate key: %w", err)
+	}
+
+	return privateKey, publicKey, nil
+}
+
 // GetPublicKeyForDNS returns the public key in base64 format suitable for DNS TXT record
 func GetPublicKeyForDNS(privateKey *rsa.PrivateKey) string {
 	pubKeyBytes, _ := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
 	return base64.StdEncoding.EncodeToString(pubKeyBytes)
+}
+
+// GetEd25519PublicKeyForDNS returns the Ed25519 public key in base64 format suitable for DNS TXT record
+func GetEd25519PublicKeyForDNS(privateKey ed25519.PrivateKey) string {
+	// Ed25519 private key: first 32 bytes are the seed, last 32 bytes are the public key
+	pubKey := ed25519.PrivateKey(privateKey).Public()
+	return base64.StdEncoding.EncodeToString([]byte(pubKey.(ed25519.PublicKey)))
 }
