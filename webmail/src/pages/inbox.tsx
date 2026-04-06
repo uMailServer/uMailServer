@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   ArrowUpDown,
 } from "lucide-react"
+import { WelcomeBanner } from "@/components/welcome-banner"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -130,6 +131,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   const [loading, setLoading] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>("list")
   const [sortBy, setSortBy] = useState<SortOption>("date")
+  const [showWelcome, setShowWelcome] = useState(true)
 
   const toggleSelectAll = () => {
     if (selectedEmails.size === emails.length) {
@@ -312,6 +314,9 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
 
   return (
     <div className="space-y-4">
+      {showWelcome && folder === "inbox" && (
+        <WelcomeBanner onDismiss={() => setShowWelcome(false)} />
+      )}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
           <Checkbox
