@@ -1,6 +1,7 @@
 # Binaries
 umailserver
 umailserver.exe
+umailserver.yaml
 *.exe
 *.dll
 *.so
