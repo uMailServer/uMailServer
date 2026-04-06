@@ -57,7 +57,7 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
-              placeholder="E-posta ara..."
+              placeholder="Search emails..."
               className="pl-10 bg-muted/50 border-0 focus:bg-background focus:ring-2 focus:ring-primary/20"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -92,14 +92,14 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-80">
-              <DropdownMenuLabel>Bildirimler</DropdownMenuLabel>
+              <DropdownMenuLabel>Notifications</DropdownMenuLabel>
               <DropdownMenuSeparator />
               <div className="max-h-80 overflow-y-auto">
                 {[1, 2, 3].map((i) => (
                   <DropdownMenuItem key={i} className="flex flex-col items-start gap-1 p-3 cursor-pointer">
-                    <span className="font-medium text-sm">Yeni e-posta</span>
-                    <span className="text-xs text-muted-foreground">test@example.com gönderdi</span>
-                    <span className="text-xs text-muted-foreground">{i} dakika önce</span>
+                    <span className="font-medium text-sm">New email</span>
+                    <span className="text-xs text-muted-foreground">From: test@example.com</span>
+                    <span className="text-xs text-muted-foreground">{i} minutes ago</span>
                   </DropdownMenuItem>
                 ))}
               </div>
@@ -121,23 +121,23 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>
                 <div className="flex flex-col">
-                  <span className="font-semibold">Kullanıcı Adı</span>
+                  <span className="font-semibold">User Name</span>
                   <span className="text-xs text-muted-foreground">user@example.com</span>
                 </div>
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem>
                 <User className="mr-2 h-4 w-4" />
-                Profil
+                Profile
               </DropdownMenuItem>
               <DropdownMenuItem>
                 <ChevronDown className="mr-2 h-4 w-4" />
-                Hesap Ayarları
+                Account Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="text-destructive">
                 <LogOut className="mr-2 h-4 w-4" />
-                Çıkış Yap
+                Sign Out
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

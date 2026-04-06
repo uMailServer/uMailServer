@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
+import { toast } from "sonner"
 
 interface TrashEmail {
   id: string
@@ -26,9 +27,9 @@ const mockTrashEmails: TrashEmail[] = [
   {
     id: "t1",
     from: "Spam Sender",
-    subject: "Kazandınız!",
-    preview: "Tıklayın ve ödülünüzü kazanın...",
-    date: "3 gün önce",
+    subject: "You Won!",
+    preview: "Click here to claim your prize...",
+    date: "3 days ago",
   },
 ]
 
@@ -58,12 +59,19 @@ export function TrashPage() {
 
   const handleRestore = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
+    toast.success("Message restored")
     setEmails(emails.filter((email) => email.id !== id))
   }
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
+    toast.success("Message permanently deleted")
     setEmails(emails.filter((email) => email.id !== id))
+  }
+
+  const handleEmptyTrash = () => {
+    toast.success("Trash emptied")
+    setEmails([])
   }
 
   return (
@@ -74,20 +82,20 @@ export function TrashPage() {
             checked={selectedEmails.size === emails.length && emails.length > 0}
             onCheckedChange={toggleSelectAll}
           />
-          {selectedEmails.size > 0 && (
+          {selectedEmails.size > 0 ? (
             <>
               <span className="text-sm text-muted-foreground">
-                {selectedEmails.size} seçildi
+                {selectedEmails.size} selected
               </span>
               <Separator orientation="vertical" className="h-4" />
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleEmptyTrash}>
                 <RotateCcw className="h-4 w-4" />
               </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive">
                 <Trash2 className="h-4 w-4" />
               </Button>
             </>
-          )}
+          ) : null}
         </div>
         <Button
           variant="ghost"
@@ -117,9 +125,9 @@ export function TrashPage() {
             <div className="rounded-full bg-muted p-4">
               <Trash2 className="h-8 w-8 text-muted-foreground" />
             </div>
-            <h3 className="mt-4 text-lg font-semibold">Çöp kutusu boş</h3>
+            <h3 className="mt-4 text-lg font-semibold">Trash is empty</h3>
             <p className="text-sm text-muted-foreground">
-              Silinen e-postalar 30 gün sonra kalıcı olarak silinir.
+              Deleted messages will appear here. Messages are permanently deleted after 30 days.
             </p>
           </div>
         ) : (
@@ -127,9 +135,7 @@ export function TrashPage() {
             {emails.map((email) => (
               <div
                 key={email.id}
-                className={cn(
-                  "group flex cursor-pointer items-start gap-3 p-4 transition-colors hover:bg-accent/50"
-                )}
+                className="group flex cursor-pointer items-start gap-3 p-4 transition-colors hover:bg-accent/50"
                 onClick={() => navigate(`/email/${email.id}`)}
               >
                 <Checkbox
@@ -152,7 +158,7 @@ export function TrashPage() {
                     size="icon"
                     className="h-8 w-8 opacity-0 group-hover:opacity-100"
                     onClick={(e) => handleRestore(email.id, e)}
-                    title="Geri yükle"
+                    title="Restore"
                   >
                     <RotateCcw className="h-4 w-4" />
                   </Button>
@@ -161,7 +167,7 @@ export function TrashPage() {
                     size="icon"
                     className="h-8 w-8 opacity-0 group-hover:opacity-100 text-destructive"
                     onClick={(e) => handleDelete(email.id, e)}
-                    title="Kalıcı sil"
+                    title="Delete permanently"
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -177,7 +183,7 @@ export function TrashPage() {
 
       <div className="flex items-center justify-between">
         <span className="text-sm text-muted-foreground">
-          {emails.length} ileti
+          {emails.length} message{emails.length !== 1 ? "s" : ""}
         </span>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon" disabled>

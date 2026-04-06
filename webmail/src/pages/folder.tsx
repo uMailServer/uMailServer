@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { toast } from "sonner"
 
 interface FolderEmail {
   id: string
@@ -32,32 +33,32 @@ interface FolderEmail {
 }
 
 const folderConfig: Record<string, { label: string; icon: string; color: string }> = {
-  work: { label: "İş", icon: "💼", color: "text-blue-500" },
-  personal: { label: "Kişisel", icon: "🏠", color: "text-green-500" },
+  work: { label: "Work", icon: "💼", color: "text-blue-500" },
+  personal: { label: "Personal", icon: "🏠", color: "text-green-500" },
 }
 
 const tagConfig: Record<string, { label: string; icon: string; color: string }> = {
-  important: { label: "Önemli", icon: "⭐", color: "text-amber-500" },
+  important: { label: "Important", icon: "⭐", color: "text-amber-500" },
 }
 
 const mockFolderEmails: FolderEmail[] = [
   {
     id: "f1",
-    from: "İK Departmanı",
-    fromEmail: "ik@company.com",
-    subject: "Yıllık izin planlaması",
-    preview: "Yıllık izinlerinizi planlamamız gerekiyor...",
-    date: "Bugün",
+    from: "HR Department",
+    fromEmail: "hr@company.com",
+    subject: "Annual Leave Planning",
+    preview: "We need to plan your annual leave...",
+    date: "Today",
     read: false,
     starred: true,
   },
   {
     id: "f2",
-    from: "Muhasebe",
-    fromEmail: "muhasebe@company.com",
-    subject: "Mart ayı ekstreniz",
-    preview: "Mart ayı hesap ekstreniz ektedir...",
-    date: "Dün",
+    from: "Accounting",
+    fromEmail: "accounting@company.com",
+    subject: "March Statement",
+    preview: "Your March account statement is attached...",
+    date: "Yesterday",
     read: true,
     starred: false,
   },
@@ -72,7 +73,7 @@ export function FolderPage() {
 
   const isTag = window.location.pathname.startsWith("/tag")
   const config = isTag ? tagConfig[type || ""] : folderConfig[type || ""]
-  const pageTitle = config?.label || (isTag ? "Etiket" : "Klasör")
+  const pageTitle = config?.label || (isTag ? "Tag" : "Folder")
   const pageColor = config?.color || "text-muted-foreground"
 
   const toggleSelect = (id: string) => {
@@ -86,21 +87,21 @@ export function FolderPage() {
   }
 
   const handleDelete = () => {
-    setLoading(true)
-    setTimeout(() => setLoading(false), 500)
+    toast.success(`${selected.size} message${selected.size !== 1 ? "s" : ""} removed from folder`)
+    setSelected(new Set())
   }
 
   if (!config) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <FolderOpen className="h-12 w-12 text-muted-foreground" />
-        <h3 className="mt-4 text-lg font-semibold">Klasör bulunamadı</h3>
+        <h3 className="mt-4 text-lg font-semibold">Folder not found</h3>
         <p className="text-sm text-muted-foreground">
-          "{type}" klasörü mevcut değil.
+          Folder "{type}" does not exist.
         </p>
         <Button variant="outline" className="mt-4" onClick={() => navigate("/inbox")}>
           <ChevronLeft className="h-4 w-4 mr-1" />
-          Geri Dön
+          Go Back
         </Button>
       </div>
     )
@@ -108,7 +109,6 @@ export function FolderPage() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <FolderOpen className={cn("h-5 w-5", pageColor)} />
@@ -125,12 +125,11 @@ export function FolderPage() {
             disabled={selected.size === 0 || loading}
           >
             <Trash2 className="h-4 w-4 mr-1" />
-            Sil
+            Remove
           </Button>
         </div>
       </div>
 
-      {/* Email List */}
       {loading ? (
         <div className="space-y-4">
           {[1, 2].map((i) => (
@@ -148,9 +147,9 @@ export function FolderPage() {
           <div className="rounded-full bg-muted p-4">
             <FolderOpen className="h-8 w-8 text-muted-foreground" />
           </div>
-          <h3 className="mt-4 text-lg font-semibold">{pageTitle} boş</h3>
+          <h3 className="mt-4 text-lg font-semibold">{pageTitle} is empty</h3>
           <p className="text-sm text-muted-foreground">
-            Bu klasörde henüz mesaj yok.
+            No messages in this folder yet.
           </p>
         </div>
       ) : (
@@ -199,7 +198,7 @@ export function FolderPage() {
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem className="text-destructive">
                     <Trash2 className="h-4 w-4 mr-2" />
-                    Klasörden Çıkar
+                    Remove from Folder
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

@@ -37,20 +37,20 @@ interface NavItem {
 }
 
 const mainNavItems: NavItem[] = [
-  { icon: Inbox, label: "Gelen Kutusu", path: "/inbox" },
-  { icon: Search, label: "Arama", path: "/search" },
-  { icon: Star, label: "Yıldızlı", path: "/starred" },
-  { icon: Send, label: "Gönderilenler", path: "/sent" },
-  { icon: FileText, label: "Taslaklar", path: "/drafts", count: 2 },
-  { icon: Trash2, label: "Çöp Kutusu", path: "/trash" },
-  { icon: Users, label: "Kişiler", path: "/contacts" },
+  { icon: Inbox, label: "Inbox", path: "/inbox" },
+  { icon: Search, label: "Search", path: "/search" },
+  { icon: Star, label: "Starred", path: "/starred" },
+  { icon: Send, label: "Sent", path: "/sent" },
+  { icon: FileText, label: "Drafts", path: "/drafts", count: 2 },
+  { icon: Trash2, label: "Trash", path: "/trash" },
+  { icon: Users, label: "Contacts", path: "/contacts" },
 ]
 
 const folderItems: NavItem[] = [
   { icon: AlertCircle, label: "Spam", path: "/spam", count: 5, color: "text-red-500" },
-  { icon: FolderOpen, label: "İş", path: "/folder/work" },
-  { icon: FolderOpen, label: "Kişisel", path: "/folder/personal" },
-  { icon: Tag, label: "Önemli", path: "/tag/important", color: "text-amber-500" },
+  { icon: FolderOpen, label: "Work", path: "/folder/work" },
+  { icon: FolderOpen, label: "Personal", path: "/folder/personal" },
+  { icon: Tag, label: "Important", path: "/tag/important", color: "text-amber-500" },
 ]
 
 export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) {
@@ -110,7 +110,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
           onClick={() => navigate("/compose")}
         >
           <PenSquare className="h-4 w-4" />
-          {isExpanded && <span className="ml-2">Yeni E-posta</span>}
+          {isExpanded && <span className="ml-2">New Email</span>}
         </Button>
       </div>
 
@@ -163,7 +163,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
 
         {isExpanded && (
           <p className="px-3 pb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            Klasörler
+            Folders
           </p>
         )}
 
@@ -217,7 +217,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
           }
         >
           <Settings className="h-5 w-5 shrink-0" />
-          {isExpanded && <span>Ayarlar</span>}
+          {isExpanded && <span>Settings</span>}
         </NavLink>
       </div>
 

@@ -20,6 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { toast } from "sonner"
 
 interface SpamEmail {
   id: string
@@ -37,9 +38,9 @@ const mockSpamEmails: SpamEmail[] = [
     id: "s1",
     from: "Casino Winner",
     fromEmail: "winner@casino-spam.com",
-    subject: "Tebrikler! 1 Milyon Euro Kazandınız!",
-    preview: "Bu epostayı aldığınız için çok şanslısınız...",
-    date: "2 Nis",
+    subject: "Congratulations! You Won 1 Million Euro!",
+    preview: "You are very lucky to receive this email...",
+    date: "2 days ago",
     read: false,
     spamScore: 95,
   },
@@ -47,9 +48,9 @@ const mockSpamEmails: SpamEmail[] = [
     id: "s2",
     from: "Nigerian Prince",
     fromEmail: "prince@nigeria-fund.com",
-    subject: " yardım",
-    preview: "Sevgili dostum, büyük bir miras...",
-    date: "1 Nis",
+    subject: "Urgent Assistance Needed",
+    preview: "Dear friend, I have a large inheritance...",
+    date: "1 day ago",
     read: false,
     spamScore: 88,
   },
@@ -57,9 +58,9 @@ const mockSpamEmails: SpamEmail[] = [
     id: "s3",
     from: "Fake Store",
     fromEmail: "deals@fake-store99.com",
-    subject: "Saatlerde %90 İndirim!",
-    preview: "Sadece bugün, tüm ürünlerde büyük indirim...",
-    date: "31 Mar",
+    subject: "90% Off All Items!",
+    preview: "Today only, huge discounts on all products...",
+    date: "3 days ago",
     read: true,
     spamScore: 72,
   },
@@ -82,20 +83,17 @@ export function SpamPage() {
   }
 
   const handleDelete = () => {
-    // Simulate delete
-    setLoading(true)
-    setTimeout(() => setLoading(false), 500)
+    toast.success(`${selected.size} message${selected.size !== 1 ? "s" : ""} permanently deleted`)
+    setSelected(new Set())
   }
 
   const handleNotSpam = () => {
-    // Simulate mark as not spam
-    setLoading(true)
-    setTimeout(() => setLoading(false), 500)
+    toast.success(`${selected.size} message${selected.size !== 1 ? "s" : ""} marked as not spam`)
+    setSelected(new Set())
   }
 
   return (
     <div className="space-y-4">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <AlertCircle className="h-5 w-5 text-red-500" />
@@ -110,7 +108,7 @@ export function SpamPage() {
             disabled={selected.size === 0 || loading}
           >
             <Archive className="h-4 w-4 mr-1" />
-            Spam Değil
+            Not Spam
           </Button>
           <Button
             variant="outline"
@@ -120,20 +118,18 @@ export function SpamPage() {
             disabled={selected.size === 0 || loading}
           >
             <Trash2 className="h-4 w-4 mr-1" />
-            Sil
+            Delete
           </Button>
         </div>
       </div>
 
-      {/* Info Banner */}
       <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-4">
         <p className="text-sm text-destructive">
-          Spam klasöründeki mesajlar otomatik olarak 30 gün sonra silinir.
-          Gerçek spam olmayan mesajları "Spam Değil" butonuyla kurtarabilirsiniz.
+          Spam messages are automatically deleted after 30 days.
+          Use "Not Spam" to rescue legitimate emails.
         </p>
       </div>
 
-      {/* Email List */}
       {loading ? (
         <div className="space-y-4">
           {[1, 2, 3].map((i) => (
@@ -151,9 +147,9 @@ export function SpamPage() {
           <div className="rounded-full bg-muted p-4">
             <AlertCircle className="h-8 w-8 text-muted-foreground" />
           </div>
-          <h3 className="mt-4 text-lg font-semibold">Spam yok</h3>
+          <h3 className="mt-4 text-lg font-semibold">No spam</h3>
           <p className="text-sm text-muted-foreground">
-            Spam klasörünüz boş. Tüm spam mesajları burada görünür.
+            Your spam folder is empty. All spam messages appear here.
           </p>
         </div>
       ) : (
@@ -179,7 +175,7 @@ export function SpamPage() {
                   )}
                   <span className="font-medium">{email.from}</span>
                   <Badge variant="destructive" className="text-[10px]">
-                    %{email.spamScore}
+                    {email.spamScore}%
                   </Badge>
                 </div>
                 <div className="text-sm">
@@ -202,13 +198,13 @@ export function SpamPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => handleNotSpam()}>
+                  <DropdownMenuItem onClick={handleNotSpam}>
                     <Archive className="h-4 w-4 mr-2" />
-                    Spam Değil
+                    Not Spam
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={handleDelete} className="text-destructive">
                     <Trash2 className="h-4 w-4 mr-2" />
-                    Sil
+                    Delete
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

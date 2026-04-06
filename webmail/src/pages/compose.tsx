@@ -6,7 +6,6 @@ import {
   Save,
   Paperclip,
   X,
-  ChevronDown,
   Plus,
   Trash2,
 } from "lucide-react"
@@ -38,10 +37,10 @@ interface Recipient {
 }
 
 const mockContacts: Recipient[] = [
-  { id: "1", name: "Ahmet Yılmaz", email: "ahmet@example.com" },
-  { id: "2", name: "Ayşe Demir", email: "ayse.demir@company.com" },
-  { id: "3", name: "Mehmet Kaya", email: "mehmet.k@gmail.com" },
-  { id: "4", name: "Zeynep Ak", email: "zeynep@outlook.com" },
+  { id: "1", name: "John Smith", email: "john@example.com" },
+  { id: "2", name: "Sarah Johnson", email: "sarah.johnson@company.com" },
+  { id: "3", name: "Mike Wilson", email: "mike.wilson@gmail.com" },
+  { id: "4", name: "Emily Brown", email: "emily.brown@outlook.com" },
 ]
 
 export function ComposePage() {
@@ -51,10 +50,8 @@ export function ComposePage() {
   const [cc, setCc] = useState<Recipient[]>([])
   const [bcc, setBcc] = useState<Recipient[]>([])
 
-  // Handle reply/forward from URL params
   useEffect(() => {
     const replyTo = searchParams.get("replyTo")
-    const subject = searchParams.get("subject")
     const forward = searchParams.get("forward")
 
     if (replyTo) {
@@ -65,10 +62,8 @@ export function ComposePage() {
         setTo([{ id: "reply", name: replyTo, email: replyTo }])
       }
     }
-    if (subject) {
-      // Subject is already set from searchParams
-    }
   }, [searchParams])
+
   const [subject, setSubject] = useState("")
   const [body, setBody] = useState("")
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -136,26 +131,25 @@ export function ComposePage() {
 
   const handleSend = () => {
     if (to.length === 0) {
-      toast.error("Lütfen alıcı seçin")
+      toast.error("Please select a recipient")
       return
     }
     setSending(true)
-    toast.success("E-posta gönderiliyor...")
-    // Simulate sending
+    toast.success("Sending email...")
     setTimeout(() => {
       setSending(false)
-      toast.success("E-posta gönderildi")
+      toast.success("Email sent")
       navigate("/sent")
     }, 1500)
   }
 
   const handleSaveDraft = () => {
-    toast.success("Taslak kaydedildi")
+    toast.success("Draft saved")
     navigate("/drafts")
   }
 
   const handleDiscard = () => {
-    toast.info("E-posta iptal edildi")
+    toast.info("Email discarded")
     navigate("/inbox")
   }
 
@@ -167,10 +161,10 @@ export function ComposePage() {
           <Button variant="ghost" size="icon" onClick={handleDiscard}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <span className="font-medium">Yeni İleti</span>
+          <span className="font-medium">New Message</span>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={handleSaveDraft} title="Taslak olarak kaydet">
+          <Button variant="ghost" size="icon" onClick={handleSaveDraft} title="Save as draft">
             <Save className="h-5 w-5" />
           </Button>
           <Button
@@ -179,7 +173,7 @@ export function ComposePage() {
             disabled={sending || to.length === 0}
           >
             <Send className="h-4 w-4" />
-            {sending ? "Gönderiliyor..." : "Gönder"}
+            {sending ? "Sending..." : "Send"}
           </Button>
         </div>
       </div>
@@ -189,7 +183,7 @@ export function ComposePage() {
         <div className="space-y-3">
           {/* To */}
           <div className="flex items-center gap-2">
-            <span className="w-12 text-sm text-muted-foreground">Kime:</span>
+            <span className="w-12 text-sm text-muted-foreground">To:</span>
             <div className="flex flex-1 flex-wrap items-center gap-1 rounded border px-2 py-1.5 min-h-[40px]">
               {to.map((r) => (
                 <Badge key={r.id} variant="secondary" className="gap-1 pr-1">
@@ -211,7 +205,7 @@ export function ComposePage() {
                 <DropdownMenuContent align="start" className="w-64">
                   <div className="p-2">
                     <Input
-                      placeholder="Kişi ara..."
+                      placeholder="Search contacts..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                     />
@@ -277,7 +271,7 @@ export function ComposePage() {
                   <DropdownMenuContent align="start" className="w-64">
                     <div className="p-2">
                       <Input
-                        placeholder="Kişi ara..."
+                        placeholder="Search contacts..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                       />
@@ -328,7 +322,7 @@ export function ComposePage() {
                   <DropdownMenuContent align="start" className="w-64">
                     <div className="p-2">
                       <Input
-                        placeholder="Kişi ara..."
+                        placeholder="Search contacts..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                       />
@@ -356,10 +350,10 @@ export function ComposePage() {
 
           {/* Subject */}
           <div className="flex items-center gap-2">
-            <span className="w-12 text-sm text-muted-foreground">Konu:</span>
+            <span className="w-12 text-sm text-muted-foreground">Subject:</span>
             <Input
               className="flex-1 border-0 shadow-none focus-visible:ring-0 px-0"
-              placeholder="Konu yazın..."
+              placeholder="Enter subject..."
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
             />
@@ -370,7 +364,7 @@ export function ComposePage() {
           {/* Body */}
           <Textarea
             className="min-h-[300px] resize-none border-0 shadow-none focus-visible:ring-0"
-            placeholder="İletinizi yazın..."
+            placeholder="Write your message..."
             value={body}
             onChange={(e) => setBody(e.target.value)}
           />
@@ -419,7 +413,7 @@ export function ComposePage() {
           <kbd className="rounded border px-1.5 py-0.5 text-xs">Ctrl</kbd>
           <span>+</span>
           <kbd className="rounded border px-1.5 py-0.5 text-xs">Enter</kbd>
-          <span>Gönder</span>
+          <span>to send</span>
         </div>
       </div>
     </div>

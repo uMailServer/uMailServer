@@ -1,12 +1,14 @@
 import { useState } from "react"
 import { Moon, Sun, Bell, Shield, Palette } from "lucide-react"
+import { useTheme } from "@/components/theme-provider"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
+import { toast } from "sonner"
 
 export function SettingsPage() {
-  const [theme, setTheme] = useState<"light" | "dark" | "system">("system")
+  const { theme, setTheme, resolvedTheme } = useTheme()
   const [settings, setSettings] = useState({
     emailNotifications: true,
     browserNotifications: false,
@@ -19,14 +21,15 @@ export function SettingsPage() {
 
   const handleToggle = (key: keyof typeof settings) => {
     setSettings({ ...settings, [key]: !settings[key] })
+    toast.success("Setting updated")
   }
 
   return (
     <div className="space-y-6 max-w-2xl">
       <div>
-        <h2 className="text-2xl font-bold">Ayarlar</h2>
+        <h2 className="text-2xl font-bold">Settings</h2>
         <p className="text-muted-foreground">
-          E-posta ayarlarınızı yönetin.
+          Manage your email preferences.
         </p>
       </div>
 
@@ -37,9 +40,9 @@ export function SettingsPage() {
             <Palette className="h-5 w-5" />
           </div>
           <div className="flex-1">
-            <h3 className="font-semibold">Görünüm</h3>
+            <h3 className="font-semibold">Appearance</h3>
             <p className="text-sm text-muted-foreground">
-              Tema ve görsel tercihlerinizi seçin.
+              Choose your preferred theme.
             </p>
           </div>
           <div className="flex gap-2">
@@ -68,9 +71,9 @@ export function SettingsPage() {
             <Bell className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="font-semibold">Bildirimler</h3>
+            <h3 className="font-semibold">Notifications</h3>
             <p className="text-sm text-muted-foreground">
-              Yeni e-postalar için bildirim ayarları.
+              Configure notification preferences for new emails.
             </p>
           </div>
         </div>
@@ -78,9 +81,9 @@ export function SettingsPage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">E-posta bildirimleri</p>
+              <p className="font-medium">Email notifications</p>
               <p className="text-sm text-muted-foreground">
-                Yeni e-posta geldiğinde bildirim al.
+                Receive notifications for new emails.
               </p>
             </div>
             <Switch
@@ -91,9 +94,9 @@ export function SettingsPage() {
           <Separator />
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">Tarayıcı bildirimleri</p>
+              <p className="font-medium">Browser notifications</p>
               <p className="text-sm text-muted-foreground">
-                Tarayıcı üzerinden bildirim al.
+                Show notifications in your browser.
               </p>
             </div>
             <Switch
@@ -104,9 +107,9 @@ export function SettingsPage() {
           <Separator />
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">Sesli bildirimler</p>
+              <p className="font-medium">Sound notifications</p>
               <p className="text-sm text-muted-foreground">
-                Yeni e-posta için ses çal.
+                Play a sound for new messages.
               </p>
             </div>
             <Switch
@@ -114,19 +117,32 @@ export function SettingsPage() {
               onCheckedChange={() => handleToggle("soundNotifications")}
             />
           </div>
+          <Separator />
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">Desktop notifications</p>
+              <p className="text-sm text-muted-foreground">
+                Show desktop notifications when the app is in background.
+              </p>
+            </div>
+            <Switch
+              checked={settings.desktopNotifications}
+              onCheckedChange={() => handleToggle("desktopNotifications")}
+            />
+          </div>
         </div>
       </div>
 
-      {/* Privacy */}
+      {/* Email Settings */}
       <div className="rounded-lg border bg-card p-6">
         <div className="flex items-center gap-4 mb-4">
           <div className="rounded-full bg-muted p-2">
             <Shield className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="font-semibold">Gizlilik ve Güvenlik</h3>
+            <h3 className="font-semibold">Email Settings</h3>
             <p className="text-sm text-muted-foreground">
-              Okuma ve teslim raporları.
+              Configure email behavior.
             </p>
           </div>
         </div>
@@ -134,9 +150,9 @@ export function SettingsPage() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">Otomatik taslak kaydetme</p>
+              <p className="font-medium">Auto-save drafts</p>
               <p className="text-sm text-muted-foreground">
-                Her 30 saniyede taslakları otomatik kaydet.
+                Automatically save drafts while composing.
               </p>
             </div>
             <Switch
@@ -147,9 +163,9 @@ export function SettingsPage() {
           <Separator />
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">Okuma raporları</p>
+              <p className="font-medium">Read receipts</p>
               <p className="text-sm text-muted-foreground">
-                Alıcı mesajı okuduğunda bilgi al.
+                Request read receipts for sent emails.
               </p>
             </div>
             <Switch
@@ -160,9 +176,9 @@ export function SettingsPage() {
           <Separator />
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">Teslim raporları</p>
+              <p className="font-medium">Delivery receipts</p>
               <p className="text-sm text-muted-foreground">
-                Mesaj teslim edildiğinde bilgi al.
+                Request delivery confirmations for sent emails.
               </p>
             </div>
             <Switch
@@ -170,26 +186,6 @@ export function SettingsPage() {
               onCheckedChange={() => handleToggle("deliveryReceipts")}
             />
           </div>
-        </div>
-      </div>
-
-      {/* Account */}
-      <div className="rounded-lg border bg-card p-6">
-        <h3 className="font-semibold mb-4">Hesap</h3>
-        <div className="space-y-2">
-          <Button variant="outline" className="w-full justify-start">
-            Profili Düzenle
-          </Button>
-          <Button variant="outline" className="w-full justify-start">
-            Şifre Değiştir
-          </Button>
-          <Button variant="outline" className="w-full justify-start">
-            İki Aşamalı Doğrulama
-          </Button>
-          <Separator />
-          <Button variant="outline" className="w-full justify-start text-destructive">
-            Oturumu Kapat
-          </Button>
         </div>
       </div>
     </div>
