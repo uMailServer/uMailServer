@@ -15,6 +15,7 @@ import {
   FolderOpen,
   Tag,
   Users,
+  Search,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -37,6 +38,7 @@ interface NavItem {
 
 const mainNavItems: NavItem[] = [
   { icon: Inbox, label: "Gelen Kutusu", path: "/inbox" },
+  { icon: Search, label: "Arama", path: "/search" },
   { icon: Star, label: "Yıldızlı", path: "/starred" },
   { icon: Send, label: "Gönderilenler", path: "/sent" },
   { icon: FileText, label: "Taslaklar", path: "/drafts", count: 2 },

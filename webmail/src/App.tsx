@@ -9,6 +9,7 @@ import { DraftsPage } from "@/pages/drafts"
 import { TrashPage } from "@/pages/trash"
 import { ContactsPage } from "@/pages/contacts"
 import { SettingsPage } from "@/pages/settings"
+import { SearchPage } from "@/pages/search"
 import { Toaster } from "@/components/ui/sonner"
 
 function App() {
@@ -26,6 +27,7 @@ function App() {
             <Route path="trash" element={<TrashPage />} />
             <Route path="contacts" element={<ContactsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="search" element={<SearchPage />} />
             <Route path="email/:id" element={<EmailDetailPage />} />
           </Route>
         </Routes>
