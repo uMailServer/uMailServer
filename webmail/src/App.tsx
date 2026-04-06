@@ -10,6 +10,8 @@ import { TrashPage } from "@/pages/trash"
 import { ContactsPage } from "@/pages/contacts"
 import { SettingsPage } from "@/pages/settings"
 import { SearchPage } from "@/pages/search"
+import { SpamPage } from "@/pages/spam"
+import { FolderPage } from "@/pages/folder"
 import { Toaster } from "@/components/ui/sonner"
 
 function App() {
@@ -28,6 +30,9 @@ function App() {
             <Route path="contacts" element={<ContactsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="search" element={<SearchPage />} />
+            <Route path="spam" element={<SpamPage />} />
+            <Route path="folder/:type" element={<FolderPage />} />
+            <Route path="tag/:type" element={<FolderPage />} />
             <Route path="email/:id" element={<EmailDetailPage />} />
           </Route>
         </Routes>
