@@ -159,6 +159,31 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
     setTimeout(() => setLoading(false), 1000)
   }
 
+  const handleArchive = () => {
+    // Simulate archive
+    setSelectedEmails(new Set())
+  }
+
+  const handleDelete = () => {
+    // Simulate delete - move to trash
+    setEmails(emails.filter((e) => !selectedEmails.has(e.id)))
+    setSelectedEmails(new Set())
+  }
+
+  const handleMarkRead = () => {
+    setEmails(emails.map((e) =>
+      selectedEmails.has(e.id) ? { ...e, read: true } : e
+    ))
+    setSelectedEmails(new Set())
+  }
+
+  const handleMarkUnread = () => {
+    setEmails(emails.map((e) =>
+      selectedEmails.has(e.id) ? { ...e, read: false } : e
+    ))
+    setSelectedEmails(new Set())
+  }
+
   const filteredEmails = emails.filter((email) => {
     if (activeFilter === "unread") return !email.read
     if (activeFilter === "starred") return email.starred
@@ -181,13 +206,13 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
                 {selectedEmails.size} seçildi
               </span>
               <Separator orientation="vertical" className="h-4" />
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleArchive} title="Arşivle">
                 <Archive className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={handleDelete} title="Sil">
                 <Trash2 className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleMarkRead} title="Okundu işaretle">
                 <MailOpen className="h-4 w-4" />
               </Button>
             </div>

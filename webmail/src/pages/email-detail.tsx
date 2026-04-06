@@ -76,6 +76,16 @@ export function EmailDetailPage() {
   const navigate = useNavigate()
   const email = mockEmailDetail
 
+  const handleArchive = () => {
+    // Simulate archive action
+    console.log("Archive email:", id)
+  }
+
+  const handleDelete = () => {
+    // Simulate delete action - go to trash
+    navigate("/trash")
+  }
+
   return (
     <div className="space-y-4">
       {/* Toolbar */}
@@ -84,10 +94,10 @@ export function EmailDetailPage() {
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <Button variant="ghost" size="icon">
+          <Button variant="ghost" size="icon" onClick={handleArchive}>
             <Archive className="h-5 w-5" />
           </Button>
-          <Button variant="ghost" size="icon" className="text-destructive">
+          <Button variant="ghost" size="icon" className="text-destructive" onClick={handleDelete}>
             <Trash2 className="h-5 w-5" />
           </Button>
         </div>
