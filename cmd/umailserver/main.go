@@ -625,9 +625,18 @@ func cmdAccount(args []string) {
 			os.Exit(1)
 		}
 
-		// Get password
-		fmt.Print("Enter password: ")
-		password := readPassword()
+		// Get password (from flag or prompt)
+		var password string
+		for i, arg := range args {
+			if arg == "--password" && i+1 < len(args) {
+				password = args[i+1]
+				break
+			}
+		}
+		if password == "" {
+			fmt.Print("Enter password: ")
+			password = readPassword()
+		}
 		if len(password) < 8 {
 			fmt.Fprintf(os.Stderr, "Password must be at least 8 characters\n")
 			os.Exit(1)

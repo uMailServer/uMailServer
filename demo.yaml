@@ -1,19 +1,26 @@
-# Demo Configuration - No TLS/ACME
+# uMailServer Demo Configuration
+# ==============================
+# For local testing and demonstration
+# Usage: ./umailserver.exe serve --config demo.yaml
+
 server:
   hostname: localhost
   data_dir: ./data
+  max_message_size: 10MB
 
 tls:
-  enabled: false
+  enabled: false  # Disable TLS for demo
 
 smtp:
   inbound:
     enabled: true
+    bind: "0.0.0.0"
     port: 25
-    max_message_size: 52428800
-    max_recipients: 100
+    max_connections: 50
+    max_recipients: 50
   submission:
     enabled: true
+    bind: "0.0.0.0"
     port: 587
     require_auth: true
     require_tls: false
@@ -23,32 +30,84 @@ smtp:
 
 imap:
   enabled: true
+  bind: "0.0.0.0"
   port: 143
-  starttls_port: 993
+  starttls_port: 0
+
+pop3:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 110
 
 http:
   enabled: true
+  bind: "0.0.0.0"
   port: 8080
-  http_port: 8081
+  tls: false
 
 admin:
   enabled: true
+  bind: "127.0.0.1"
   port: 8082
-  bind: 127.0.0.1
+  tls: false
+
+webmail:
+  enabled: true
+
+sieve:
+  enabled: true
+  port: 4190
+
+autoconfig:
+  enabled: true
+
+autodiscover:
+  enabled: true
+
+spam:
+  enabled: true
+  threshold: 5.0
+  bayesian:
+    enabled: true
+  greylisting:
+    enabled: false
+  rbl:
+    enabled: false
+
+security:
+  jwt_secret: "demo-secret-key-for-local-testing-32ch"
+  max_login_attempts: 10
+  lockout_duration: 5m
+  rate_limit:
+    smtp_per_minute: 100
+    smtp_per_hour: 1000
+    http_requests_per_minute: 200
+
+queue:
+  max_retries: 3
+  retry_delays:
+    - 1m
+    - 5m
+
+domains:
+  - name: localhost
+    max_accounts: 10
+    max_mailbox_size: 1GB
+
+logging:
+  level: debug
+  format: text
+  output: stdout
 
 metrics:
   enabled: true
+  bind: "127.0.0.1"
   port: 9090
-  path: /metrics
-
-database:
-  path: ./data/umailserver.db
 
 mcp:
   enabled: true
+  bind: "127.0.0.1"
   port: 3000
 
-domains:
-  - name: test.com
-    max_accounts: 100
-    max_mailbox_size: 5368709120
+database:
+  path: ./data/umailserver.db
