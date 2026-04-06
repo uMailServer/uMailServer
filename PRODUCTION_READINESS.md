@@ -142,6 +142,19 @@ This document tracks the production readiness status of uMailServer.
 | API Documentation | ✅ Complete | N/A | OpenAPI spec |
 | Code Comments | ✅ Complete | N/A | Go doc style |
 
+## ✅ RFC Compliance
+
+| Feature | Status | Coverage | Notes |
+|---------|--------|----------|-------|
+| Sieve Mail Filtering | ✅ Complete | 85%+ | RFC 5228 |
+| ManageSieve Protocol | ✅ Complete | 85%+ | RFC 5804, port 4190 |
+| S/MIME Encryption | ✅ Complete | 85%+ | RFC 8551 |
+| OpenPGP Encryption | ✅ Complete | 85%+ | RFC 3156 |
+| DSN Support | ✅ Complete | 85%+ | RFC 3461, NOTIFY/RET |
+| MDN Support | ✅ Complete | 85%+ | RFC 3798 |
+| Mozilla Autoconfig | ✅ Complete | 90%+ | Thunderbird |
+| Microsoft Autodiscover | ✅ Complete | 90%+ | Outlook |
+
 ## 📊 Performance Benchmarks
 
 | Operation | Latency | Notes |

@@ -142,6 +142,12 @@ build-web:
 	@echo "Building admin panel..."
 	cd web/admin && npm ci && npm run build
 
+# Build benchmark client
+build-client:
+	@echo "Building umailclient..."
+	$(GOBUILD) -o umailclient ./cmd/umailclient
+	@echo "Client built: umailclient"
+
 # Install development tools
 install-tools:
 	@echo "Installing development tools..."

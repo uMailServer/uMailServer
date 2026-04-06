@@ -39,6 +39,11 @@
 - **Modern Protocols**: SMTP, IMAP, POP3 with full TLS support
 - **Automatic TLS**: Let's Encrypt integration with auto-renewal
 - **Spam Protection**: SPF, DKIM, DMARC, ARC, RBL, Bayesian filtering, greylisting
+- **Server-side Mail Filtering**: Sieve (RFC 5228) with ManageSieve (RFC 5804)
+- **Email Encryption**: S/MIME (RFC 8551) and OpenPGP (RFC 3156)
+- **Delivery Notifications**: DSN (RFC 3461) - Success, Failure, Delay
+- **Read Receipts**: MDN (RFC 3798) - Message Disposition Notifications
+- **Auto Configuration**: Mozilla Autoconfig & Microsoft Autodiscover
 - **Webmail**: Modern React-based web interface with real-time updates
 - **Admin Panel**: Manage domains, accounts, queues, certificates
 - **MCP Server**: Model Context Protocol for AI assistants
@@ -46,6 +51,8 @@
 - **Full-text Search**: TF-IDF based email search
 - **Webhooks**: Event notifications for integrations
 - **Metrics**: Prometheus-compatible metrics endpoint
+- **CalDAV/CardDAV**: Calendar and contacts synchronization
+- **JMAP**: Modern email API (HTTP-based)
 - **Docker**: First-class container support
 
 ## Quick Start
@@ -85,10 +92,28 @@ docker run -d \
   -p 587:587 \
   -p 465:465 \
   -p 993:993 \
+  -p 995:995 \
+  -p 4190:4190 \
+  -p 8080:8080 \
+  -p 8081:8081 \
   -p 8443:8443 \
   -v umail_data:/data \
   ghcr.io/umailserver/umailserver:latest
 ```
+
+### Port Reference
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| 25 | SMTP | Inbound mail (MX) |
+| 587 | SMTP | Submission (authenticated) |
+| 465 | SMTP | SMTP over TLS |
+| 993 | IMAP | IMAPS (TLS) |
+| 995 | POP3 | POP3S (TLS) |
+| 4190 | ManageSieve | Sieve script management |
+| 8080 | HTTP | Webmail |
+| 8081 | HTTP | Account settings |
+| 8443 | HTTPS | Admin API |
 
 ## Configuration
 

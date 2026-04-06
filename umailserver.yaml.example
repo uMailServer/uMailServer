@@ -60,7 +60,7 @@ http:
 admin:
   enabled: true
   bind: "127.0.0.1"
-  port: 8443
+  port: 9443
 
 # Spam Filter
 spam:
