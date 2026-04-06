@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { NavLink, useLocation } from "react-router-dom"
+import { NavLink, useLocation, useNavigate } from "react-router-dom"
 import {
   Inbox,
   Send,
@@ -39,7 +39,6 @@ const mainNavItems: NavItem[] = [
   { icon: Star, label: "Yıldızlı", path: "/starred" },
   { icon: Send, label: "Gönderilenler", path: "/sent" },
   { icon: FileText, label: "Taslaklar", path: "/drafts", count: 2 },
-  { icon: Archive, label: "Arşiv", path: "/archive" },
   { icon: Trash2, label: "Çöp Kutusu", path: "/trash" },
 ]
 
@@ -52,6 +51,7 @@ const folderItems: NavItem[] = [
 
 export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) {
   const location = useLocation()
+  const navigate = useNavigate()
   const [hovered, setHovered] = useState(false)
 
   const isExpanded = !collapsed || hovered
@@ -103,6 +103,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
             !isExpanded && "px-0 justify-center"
           )}
           size={isExpanded ? "default" : "icon"}
+          onClick={() => navigate("/compose")}
         >
           <PenSquare className="h-4 w-4" />
           {isExpanded && <span className="ml-2">Yeni E-posta</span>}

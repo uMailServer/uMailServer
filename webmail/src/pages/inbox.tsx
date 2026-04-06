@@ -109,9 +109,15 @@ const mockEmails: Email[] = [
   },
 ]
 
-export function InboxPage() {
+interface InboxPageProps {
+  folder?: string
+}
+
+export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   const navigate = useNavigate()
-  const [emails, setEmails] = useState<Email[]>(mockEmails)
+  const [emails, setEmails] = useState<Email[]>(
+    mockEmails.filter((e) => e.folder === folder || (folder === "starred" && e.starred))
+  )
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
   const [activeFilter, setActiveFilter] = useState("all")
   const [loading, setLoading] = useState(false)
