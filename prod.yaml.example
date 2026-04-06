@@ -1,0 +1,445 @@
+# uMailServer Production Configuration
+# ================================
+# This is a comprehensive production-ready configuration example.
+# Copy to umailserver.yaml and customize for your environment.
+
+# ============================================
+# SERVER SETTINGS
+# ============================================
+server:
+  hostname: mail.example.com
+  data_dir: /var/lib/umailserver
+  max_message_size: 50MB
+
+# ============================================
+# TLS / SSL CERTIFICATES
+# ============================================
+tls:
+  # Manual certificate mode (leave empty to use ACME/Let's Encrypt)
+  cert_file: ""
+  key_file: ""
+  min_version: "1.2"  # Options: "1.2", "1.3"
+
+  # ACME/Let's Encrypt Automatic TLS
+  acme:
+    enabled: true
+    email: admin@example.com
+    directory: https://acme-v02.api.letsencrypt.org/directory
+    accept_tos: true
+    # DNS challenge provider (for wildcard certificates)
+    # provider: cloudflare
+    # cloudflare_api_token: ""
+
+# ============================================
+# SMTP SERVERS
+# ============================================
+smtp:
+  # Inbound SMTP (port 25 - MX record)
+  inbound:
+    enabled: true
+    bind: "0.0.0.0"
+    port: 25
+    max_connections: 200
+    max_recipients: 200
+    timeout: 5m
+
+  # Submission (port 587 - authenticated SMTP)
+  submission:
+    enabled: true
+    bind: "0.0.0.0"
+    port: 587
+    require_auth: true
+    require_tls: true
+    max_connections: 200
+    timeout: 5m
+
+  # Submission over TLS (port 465 - legacy SMTP)
+  submission_tls:
+    enabled: true
+    bind: "0.0.0.0"
+    port: 465
+    require_auth: true
+    max_connections: 200
+    timeout: 5m
+
+  # SMTP Pipeline Stages (order matters!)
+  pipeline:
+    stages:
+      - spf          # SPF validation
+      - dkim         # DKIM signing
+      - dmarc        # DMARC validation
+      - arc          # ARC validation
+      - greylisting  # Temporary rejection for new senders
+      - rbl          # RBL/DNSBL checks
+      - heuristic    # Heuristic spam scoring
+      - bayesian     # Bayesian spam filtering
+      - antivirus    # Antivirus scanning (if enabled)
+      - sieve        # Sieve mail filtering
+
+# ============================================
+# IMAP SERVER
+# ============================================
+imap:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 993              # IMAPS (TLS)
+  starttls_port: 143     # STARTTLS IMAP
+  max_connections: 10000
+  idle_timeout: 30m
+  # IMAP Extensions enabled:
+  # - ID (server identification)
+  # - SORT (server-side sorting)
+  # - THREAD (message threading)
+  # - COMPRESS (compression)
+  # - MOVE (move messages)
+
+# ============================================
+# POP3 SERVER
+# ============================================
+pop3:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 995              # POP3S (TLS)
+  starttls_port: 110     # STARTTLS POP3
+  max_connections: 5000
+  timeout: 10m
+  # Enable APOP authentication
+  apop_enabled: true
+
+# ============================================
+# SIEVE MAIL FILTERING (RFC 5228)
+# ============================================
+sieve:
+  enabled: true
+  port: 4190            # ManageSieve port
+  max_script_size: 1MB
+  max_actions: 100
+  # Default sieve extensions available to users
+  default_extensions:
+    - fileinto
+    - reject
+    - vacation
+    - body
+    - envelope
+    - date
+    - index
+    - imap4flags
+    - spamtest
+    - extlists
+
+# ============================================
+# HTTP SERVERS (Web UI & API)
+# ============================================
+http:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8080
+  tls: false
+
+admin:
+  enabled: true
+  bind: "127.0.0.1"
+  port: 8082
+  tls: true
+
+# ============================================
+# WEBMAIL
+# ============================================
+webmail:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8081
+
+# ============================================
+# AUTOCONFIG & AUTODISCOVER
+# ============================================
+autoconfig:
+  enabled: true
+  # Mozilla Thunderbird style autoconfig
+  # Endpoint: /.well-known/autoconfig/mail/config-v1.1.xml
+  ssl_incoming: true
+  port_imap: 993
+  port_smtp_submission: 587
+  port_smtp_smtps: 465
+
+autodiscover:
+  enabled: true
+  # Microsoft Outlook autodiscover
+  # Endpoint: /autodiscover/autodiscover.xml
+  ssl_incoming: true
+
+# ============================================
+# SPAM FILTERING
+# ============================================
+spam:
+  enabled: true
+  threshold: 5.0        # Score above this = spam
+  junk_folder: true     # Deliver to Junk folder instead of rejecting
+
+  # Bayesian spam filtering
+  bayesian:
+    enabled: true
+    auto_learn: true    # Learn from user feedback (spam/notspam)
+    min_ham: 200        # Minimum ham messages to train
+    min_spam: 200       # Minimum spam messages to train
+
+  # Greylisting (temporary reject for unknown senders)
+  greylisting:
+    enabled: true
+    delay: 30s          # How long to temp-reject
+    whitelist_after: 1h # After this time, sender is whitelisted
+
+  # Real-time Blackhole Lists
+  rbl:
+    enabled: true
+    check_evildomain: true
+    check_multi: true
+    servers:
+      - zen.spamhaus.org
+      - bl.spamcop.net
+      - b.barracudacentral.org
+    whitelist:
+      - gmail.com
+      - yahoo.com
+      - outlook.com
+      - hotmail.com
+
+  # Heuristic rules
+  heuristic:
+    enabled: true
+    rules:
+      - name: excessive_caps
+        score: 2.0
+      - name: common_spam_words
+        score: 1.5
+      - name: suspicious_attached
+        score: 3.0
+
+# ============================================
+# ANTIVIRUS SCANNING
+# ============================================
+av:
+  enabled: false        # Enable if you have ClamAV
+  socket: /var/run/clamav/clamd.sock
+  timeout: 30s
+  # Or use TCP mode:
+  # host: localhost
+  # port: 3310
+
+# ============================================
+# DSN (Delivery Status Notifications) - RFC 3461
+# ============================================
+dsn:
+  enabled: true
+  # Support for MAIL FROM RET= parameter
+  support_ret_full: true
+  support_ret_hdrs: true
+  # Support for RCPT TO NOTIFY= parameter
+  support_notify_never: true
+  support_notify_success: true
+  support_notify_failure: true
+  support_notify_delay: true
+  # Default DSN for messages without explicit request
+  default_notify: SUCCESS,FAILURE
+  # DSN generation
+  generate_success: true
+  generate_failure: true
+  generate_delay: true
+
+# ============================================
+# SECURITY SETTINGS
+# ============================================
+security:
+  jwt_secret: "CHANGE-THIS-TO-A-32+CHARACTER-SECRET-KEY"
+  max_login_attempts: 5
+  lockout_duration: 15m
+
+  # Rate limiting
+  rate_limit:
+    smtp_per_minute: 30      # SMTP AUTH attempts per IP
+    smtp_per_hour: 500       # SMTP connections per IP
+    imap_per_minute: 60       # IMAP commands per IP
+    pop3_per_minute: 60       # POP3 commands per IP
+    http_requests_per_minute: 120
+
+  # Connection limits per IP
+  connection_limits:
+    max_smtp_per_ip: 10
+    max_imap_per_ip: 5
+    max_pop3_per_ip: 3
+
+  # SPF / DKIM / DMARC
+  auth:
+    spf_enabled: true
+    dkim_enabled: true
+    dmarc_enabled: true
+    arc_enabled: true
+    dane_enabled: true        # DNS-based TLSA records
+
+# ============================================
+# QUEUE / MAIL DELIVERY
+# ============================================
+queue:
+  max_retries: 10
+  retry_delays:
+    - 5m
+    - 15m
+    - 1h
+    - 4h
+    - 8h
+    - 24h
+  max_queue_age: 7d          # After this, bounce or delete
+  deliver_concurrency: 10    # Parallel delivery threads
+  # Destination controls
+  max_remote_connections: 100
+  remote_timeout: 30s
+
+# ============================================
+# DOMAINS
+# ============================================
+domains:
+  - name: example.com
+    max_accounts: 1000
+    max_mailbox_size: 10GB
+    dkim:
+      selector: mail
+      algorithm: rsa-sha256
+    # SPF record (auto-generated)
+    spf_record: "v=spf1 mx -all"
+    # DMARC record (auto-generated)
+    dmarc_record: "v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com"
+
+  # Additional domains...
+  # - name: example.org
+  #   max_accounts: 500
+  #   max_mailbox_size: 5GB
+
+# ============================================
+# STORAGE
+# ============================================
+storage:
+  type: maildir++          # Options: maildir++, maildir
+  path: /var/lib/umailserver/mail
+  # Search indexing
+  search:
+    enabled: true
+    type: trigram         # Options: trigram, bleve
+  # Quota enforcement
+  enforce_quota: true
+
+# ============================================
+# BACKUP SETTINGS
+# ============================================
+backup:
+  enabled: true
+  path: /var/lib/umailserver/backups
+  schedule: "0 2 * * *"   # Daily at 2 AM (cron format)
+  retention_days: 30
+  compress: true
+  # What to backup
+  include:
+    - database
+    - emails
+    - config
+    - tls_certs
+
+# ============================================
+# LOGGING
+# ============================================
+logging:
+  level: info             # debug, info, warn, error
+  format: json            # json, text
+  output: stdout           # stdout, stderr, file
+  # file: /var/log/umailserver/app.log
+  # rotation:
+  #   max_size_mb: 100
+  #   max_backups: 10
+  #   max_age_days: 30
+
+# ============================================
+# METRICS & MONITORING
+# ============================================
+metrics:
+  enabled: true
+  path: /metrics
+  # Prometheus-compatible metrics:
+  # - smtp_connections_total
+  # - imap_connections_total
+  # - messages_received_total
+  # - messages_delivered_total
+  # - messages_bounced_total
+  # - spam_score_histogram
+  # - delivery_latency_seconds
+
+# ============================================
+# WEBHOOKS (Event Notifications)
+# ============================================
+webhooks:
+  enabled: false
+  events:
+    - message_received
+    - message_delivered
+    - message_bounced
+    - spam_detected
+    - user_created
+    - user_deleted
+  # url: https://your-webhook-endpoint.com/events
+  # secret: webhook_secret_key
+  # retry_attempts: 3
+  # retry_delay: 5s
+
+# ============================================
+# MCP SERVER (AI Assistant Integration)
+# ============================================
+mcp:
+  enabled: true
+  bind: "127.0.0.1"
+  port: 3000
+  # Generate a secure token: openssl rand -hex 32
+  auth_token: ""
+
+# ============================================
+# CALDAV / CARDDAV (Calendar & Contacts)
+# ============================================
+caldav:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8084
+
+carddav:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8085
+
+# ============================================
+# JMAP (Modern Email API)
+# ============================================
+jmap:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8086
+  # Requires JWT authentication
+  jwt_secret: "CHANGE-THIS-TO-A-32+CHARACTER-SECRET-KEY"
+
+# ============================================
+# HEALTH CHECKS
+# ============================================
+health:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8087
+  # TLS check for external monitoring
+  tls_check:
+    enabled: true
+    warn_expiry_days: 30
+
+# ============================================
+# REMOTE BLACKLIST MONITORING
+# ============================================
+monitoring:
+  enabled: true
+  # Send metrics to external systems
+  # prometheus:
+  #   remote_write_url: https://prometheus.example.com/api/v1/write
+  #   basic_auth_user: prom_user
+  #   basic_auth_password: prom_pass

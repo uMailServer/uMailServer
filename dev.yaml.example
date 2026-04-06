@@ -1,0 +1,110 @@
+# uMailServer Development Configuration
+# ===================================
+# Minimal config for local development/testing
+
+server:
+  hostname: localhost
+  data_dir: ./data
+  max_message_size: 10MB
+
+tls:
+  # Development mode - self-signed certificates
+  cert_file: ./certs/localhost.crt
+  key_file: ./certs/localhost.key
+  min_version: "1.2"
+
+smtp:
+  inbound:
+    enabled: true
+    bind: "0.0.0.0"
+    port: 25
+  submission:
+    enabled: true
+    bind: "0.0.0.0"
+    port: 587
+    require_auth: true
+    require_tls: false
+  submission_tls:
+    enabled: true
+    bind: "0.0.0.0"
+    port: 465
+    require_auth: true
+
+imap:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 993
+  starttls_port: 143
+
+pop3:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 995
+
+http:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8080
+
+admin:
+  enabled: true
+  bind: "127.0.0.1"
+  port: 8082
+
+webmail:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 8081
+
+sieve:
+  enabled: true
+  port: 4190
+
+autoconfig:
+  enabled: true
+
+autodiscover:
+  enabled: true
+
+spam:
+  enabled: true
+  threshold: 5.0
+  bayesian:
+    enabled: true
+  greylisting:
+    enabled: false    # Disable for local dev
+  rbl:
+    enabled: false    # Disable for local dev
+
+security:
+  jwt_secret: "dev-secret-key-change-in-production-32ch"
+  rate_limit:
+    smtp_per_minute: 1000
+    smtp_per_hour: 10000
+    http_requests_per_minute: 1000
+
+queue:
+  max_retries: 3
+  retry_delays:
+    - 1m
+    - 5m
+    - 15m
+
+domains:
+  - name: localhost
+    max_accounts: 10
+    max_mailbox_size: 1GB
+
+logging:
+  level: debug
+  format: text
+  output: stdout
+
+metrics:
+  enabled: true
+  path: /metrics
+
+mcp:
+  enabled: true
+  bind: "127.0.0.1"
+  port: 3000
