@@ -110,11 +110,6 @@ func cmdServe(args []string) {
 	fs.StringVar(&dataDir, "data-dir", "", "Override data directory")
 	fs.Parse(args)
 
-	// Determine data directory
-	if dataDir == "" {
-		dataDir = config.GetDefaultDataDir()
-	}
-
 	// Check if this is first run (no config exists)
 	if configPath == "" && config.CheckFirstRun(dataDir) {
 		fmt.Println()
@@ -150,7 +145,7 @@ func cmdServe(args []string) {
 		os.Exit(1)
 	}
 
-	// Override data directory if specified
+	// Override data directory if explicitly specified via flag
 	if dataDir != "" {
 		cfg.Server.DataDir = dataDir
 	}
@@ -430,6 +425,29 @@ func readPassword() string {
 	return password
 }
 
+// getDataDir returns the data directory from config file, or default
+func getDataDir() string {
+	// Try to load config to get data_dir
+	configPaths := []string{"./umailserver.yaml", "./umailserver.yml", "./demo.yaml"}
+	var cfg *config.Config
+	for _, p := range configPaths {
+		// Check if config file actually exists before trying to load
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			continue
+		}
+		var err error
+		cfg, err = config.Load(p)
+		if err == nil {
+			break
+		}
+	}
+	if cfg != nil && cfg.Server.DataDir != "" {
+		return cfg.Server.DataDir
+	}
+	// Fallback to default
+	return config.GetDefaultDataDir()
+}
+
 func cmdDomain(args []string) {
 	if len(args) < 1 {
 		fmt.Println("Usage: umailserver domain <subcommand>")
@@ -439,8 +457,8 @@ func cmdDomain(args []string) {
 
 	subcmd := args[0]
 
-	// Load database
-	dataDir := "./data"
+	// Load database using config's data_dir
+	dataDir := getDataDir()
 	dbPath := filepath.Join(dataDir, "umailserver.db")
 	database, err := db.Open(dbPath)
 	if err != nil {
@@ -577,8 +595,8 @@ func cmdAccount(args []string) {
 
 	subcmd := args[0]
 
-	// Load database
-	dataDir := "./data"
+	// Load database using config's data_dir
+	dataDir := getDataDir()
 	dbPath := filepath.Join(dataDir, "umailserver.db")
 	database, err := db.Open(dbPath)
 	if err != nil {
@@ -766,8 +784,8 @@ func cmdQueue(args []string) {
 
 	subcmd := args[0]
 
-	// Open database for real operations
-	dataDir := "./data"
+	// Open database using config's data_dir
+	dataDir := getDataDir()
 	dbPath := filepath.Join(dataDir, "umailserver.db")
 	database, err := db.Open(dbPath)
 	if err != nil {
@@ -1008,7 +1026,6 @@ func cmdMigrate(args []string) {
 	}
 
 	// Load config and database
-	dataDir := "./data"
 	configPath := "./umailserver.yaml"
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -1016,6 +1033,7 @@ func cmdMigrate(args []string) {
 		os.Exit(1)
 	}
 
+	dataDir := cfg.Server.DataDir
 	dbPath := filepath.Join(dataDir, "umailserver.db")
 	database, err := db.Open(dbPath)
 	if err != nil {

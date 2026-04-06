@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -248,6 +249,18 @@ func (m *mockDNSResolver) LookupTXT(domain string) ([]string, error) {
 	return []string{}, nil
 }
 
+// mockRBLResolver is a mock RBL DNS resolver for testing
+type mockRBLResolver struct {
+	results map[string]net.IP // host -> listed IP (nil means not listed)
+}
+
+func (m *mockRBLResolver) LookupHost(ctx context.Context, host string) (net.IP, error) {
+	if ip, ok := m.results[host]; ok && ip != nil {
+		return ip, nil
+	}
+	return nil, fmt.Errorf("not listed")
+}
+
 func TestSPFStage(t *testing.T) {
 	mockResolver := &mockDNSResolver{
 		records: map[string][]string{
@@ -291,7 +304,8 @@ func TestSPFStage(t *testing.T) {
 }
 
 func TestRBLStage(t *testing.T) {
-	stage := NewRBLStage([]string{}) // Empty servers list
+	mockResolver := &mockRBLResolver{results: make(map[string]net.IP)}
+	stage := NewRBLStage([]string{}, mockResolver) // Empty servers list
 
 	t.Run("Name", func(t *testing.T) {
 		if stage.Name() != "RBL" {
@@ -503,7 +517,8 @@ func TestSPFStage_Process_EmptyFrom(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRBLStage_Process_WithServers(t *testing.T) {
-	stage := NewRBLStage([]string{"zen.spamhaus.org", "bl.spamcop.net"})
+	mockResolver := &mockRBLResolver{results: make(map[string]net.IP)}
+	stage := NewRBLStage([]string{"zen.spamhaus.org", "bl.spamcop.net"}, mockResolver)
 
 	ip := net.ParseIP("192.168.1.1")
 	ctx := NewMessageContext(ip, "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))

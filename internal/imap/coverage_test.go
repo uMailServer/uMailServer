@@ -1336,7 +1336,7 @@ func TestMatchesCriteria_FlagChecks(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := matchesCriteria(tt.meta, &tt.criteria)
+			got := matchesCriteria(tt.meta, nil, &tt.criteria)
 			if got != tt.expected {
 				t.Errorf("matchesCriteria() = %v, want %v", got, tt.expected)
 			}
