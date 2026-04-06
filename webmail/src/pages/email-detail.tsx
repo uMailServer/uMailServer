@@ -202,11 +202,22 @@ export function EmailDetailPage() {
 
       {/* Reply Actions */}
       <div className="flex items-center gap-2">
-        <Button className="gap-2">
+        <Button
+          className="gap-2"
+          onClick={() =>
+            navigate(`/compose?replyTo=${encodeURIComponent(email.fromEmail)}&subject=${encodeURIComponent("Re: " + email.subject)}`)
+          }
+        >
           <Reply className="h-4 w-4" />
           Yanıtla
         </Button>
-        <Button variant="outline" className="gap-2">
+        <Button
+          variant="outline"
+          className="gap-2"
+          onClick={() =>
+            navigate(`/compose?forward=true&subject=${encodeURIComponent("Fwd: " + email.subject)}`)
+          }
+        >
           <Forward className="h-4 w-4" />
           İlet
         </Button>

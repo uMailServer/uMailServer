@@ -14,6 +14,7 @@ import {
   PenSquare,
   FolderOpen,
   Tag,
+  Users,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -40,6 +41,7 @@ const mainNavItems: NavItem[] = [
   { icon: Send, label: "Gönderilenler", path: "/sent" },
   { icon: FileText, label: "Taslaklar", path: "/drafts", count: 2 },
   { icon: Trash2, label: "Çöp Kutusu", path: "/trash" },
+  { icon: Users, label: "Kişiler", path: "/contacts" },
 ]
 
 const folderItems: NavItem[] = [

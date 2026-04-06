@@ -1,5 +1,5 @@
-import { useState, useRef } from "react"
-import { useNavigate } from "react-router-dom"
+import { useState, useRef, useEffect } from "react"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   ArrowLeft,
   Send,
@@ -45,9 +45,29 @@ const mockContacts: Recipient[] = [
 
 export function ComposePage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [to, setTo] = useState<Recipient[]>([])
   const [cc, setCc] = useState<Recipient[]>([])
   const [bcc, setBcc] = useState<Recipient[]>([])
+
+  // Handle reply/forward from URL params
+  useEffect(() => {
+    const replyTo = searchParams.get("replyTo")
+    const subject = searchParams.get("subject")
+    const forward = searchParams.get("forward")
+
+    if (replyTo) {
+      const contact = mockContacts.find((c) => c.email === replyTo)
+      if (contact) {
+        setTo([contact])
+      } else {
+        setTo([{ id: "reply", name: replyTo, email: replyTo }])
+      }
+    }
+    if (subject) {
+      // Subject is already set from searchParams
+    }
+  }, [searchParams])
   const [subject, setSubject] = useState("")
   const [body, setBody] = useState("")
   const [attachments, setAttachments] = useState<Attachment[]>([])

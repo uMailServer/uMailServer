@@ -7,6 +7,8 @@ import { ComposePage } from "@/pages/compose"
 import { SentPage } from "@/pages/sent"
 import { DraftsPage } from "@/pages/drafts"
 import { TrashPage } from "@/pages/trash"
+import { ContactsPage } from "@/pages/contacts"
+import { SettingsPage } from "@/pages/settings"
 import { Toaster } from "@/components/ui/sonner"
 
 function App() {
@@ -22,6 +24,8 @@ function App() {
             <Route path="sent" element={<SentPage />} />
             <Route path="drafts" element={<DraftsPage />} />
             <Route path="trash" element={<TrashPage />} />
+            <Route path="contacts" element={<ContactsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
             <Route path="email/:id" element={<EmailDetailPage />} />
           </Route>
         </Routes>
