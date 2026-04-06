@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 interface SidebarProps {
   collapsed: boolean
@@ -34,15 +35,16 @@ interface NavItem {
   path: string
   count?: number
   color?: string
+  shortcut?: string
 }
 
 const mainNavItems: NavItem[] = [
-  { icon: Inbox, label: "Inbox", path: "/inbox" },
-  { icon: Search, label: "Search", path: "/search" },
-  { icon: Star, label: "Starred", path: "/starred" },
-  { icon: Send, label: "Sent", path: "/sent" },
-  { icon: FileText, label: "Drafts", path: "/drafts", count: 2 },
-  { icon: Trash2, label: "Trash", path: "/trash" },
+  { icon: Inbox, label: "Inbox", path: "/inbox", shortcut: "gi" },
+  { icon: Search, label: "Search", path: "/search", shortcut: "/" },
+  { icon: Star, label: "Starred", path: "/starred", shortcut: "gs" },
+  { icon: Send, label: "Sent", path: "/sent", shortcut: "gt" },
+  { icon: FileText, label: "Drafts", path: "/drafts", shortcut: "gd" },
+  { icon: Trash2, label: "Trash", path: "/trash", shortcut: "gT" },
   { icon: Users, label: "Contacts", path: "/contacts" },
 ]
 
@@ -52,6 +54,76 @@ const folderItems: NavItem[] = [
   { icon: FolderOpen, label: "Personal", path: "/folder/personal" },
   { icon: Tag, label: "Important", path: "/tag/important", color: "text-amber-500" },
 ]
+
+const NavItemComponent = ({ item, isExpanded }: { item: NavItem; isExpanded: boolean }) => {
+  const location = useLocation()
+  const isActive = location.pathname === item.path
+
+  const content = (
+    <NavLink
+      to={item.path}
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 group relative",
+        isActive
+          ? "bg-primary/10 text-primary shadow-sm"
+          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+      )}
+    >
+      <item.icon
+        className={cn(
+          "h-5 w-5 shrink-0 transition-colors",
+          item.color || (isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground")
+        )}
+      />
+      {isExpanded && (
+        <>
+          <span className="flex-1">{item.label}</span>
+          {item.shortcut && (
+            <kbd className="hidden group-hover:inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground bg-muted">
+              <span>⌘</span>{item.shortcut}
+            </kbd>
+          )}
+          {(item.count !== undefined || (item.path === "/inbox" && item.path === "/inbox")) && (
+            <Badge
+              variant={isActive ? "default" : "secondary"}
+              className="h-5 min-w-[20px] px-1.5 text-xs"
+            >
+              {item.path === "/inbox" ? 12 : item.count}
+            </Badge>
+          )}
+        </>
+      )}
+      {!isExpanded && (item.count !== undefined || item.path === "/inbox") && (
+        <Badge
+          variant="default"
+          className="absolute -right-1 -top-1 h-4 w-4 p-0 flex items-center justify-center text-[10px]"
+        >
+          {item.path === "/inbox" ? 12 : item.count}
+        </Badge>
+      )}
+    </NavLink>
+  )
+
+  if (!isExpanded) {
+    return (
+      <Tooltip delayDuration={0}>
+        <TooltipTrigger asChild>
+          {content}
+        </TooltipTrigger>
+        <TooltipContent side="right" className="flex items-center gap-3">
+          {item.label}
+          {item.shortcut && (
+            <kbd className="rounded border px-1.5 py-0.5 text-xs font-mono bg-muted">
+              ⌘{item.shortcut}
+            </kbd>
+          )}
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return content
+}
 
 export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) {
   const location = useLocation()
@@ -110,53 +182,14 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
           onClick={() => navigate("/compose")}
         >
           <PenSquare className="h-4 w-4" />
-          {isExpanded && <span className="ml-2">New Email</span>}
+          {isExpanded && <span className="ml-2">Compose</span>}
         </Button>
       </div>
 
       {/* Main Navigation */}
       <nav className="flex-1 space-y-1 px-2 py-2 overflow-y-auto">
         {mainNavItems.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 group relative",
-                isActive
-                  ? "bg-primary/10 text-primary shadow-sm"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              )
-            }
-          >
-            <item.icon
-              className={cn(
-                "h-5 w-5 shrink-0 transition-colors",
-                location.pathname === item.path ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-              )}
-            />
-            {isExpanded && (
-              <>
-                <span className="flex-1">{item.label}</span>
-                {(item.count !== undefined || (item.path === "/inbox" && unreadCount > 0)) && (
-                  <Badge
-                    variant={location.pathname === item.path ? "default" : "secondary"}
-                    className="h-5 min-w-[20px] px-1.5 text-xs"
-                  >
-                    {item.path === "/inbox" ? unreadCount : item.count}
-                  </Badge>
-                )}
-              </>
-            )}
-            {!isExpanded && (item.count !== undefined || (item.path === "/inbox" && unreadCount > 0)) && (
-              <Badge
-                variant="default"
-                className="absolute -right-1 -top-1 h-4 w-4 p-0 flex items-center justify-center text-[10px]"
-              >
-                {item.path === "/inbox" ? unreadCount : item.count}
-              </Badge>
-            )}
-          </NavLink>
+          <NavItemComponent key={item.path} item={item} isExpanded={isExpanded} />
         ))}
 
         <Separator className="my-3" />
@@ -168,38 +201,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
         )}
 
         {folderItems.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 group relative",
-                isActive
-                  ? "bg-primary/10 text-primary shadow-sm"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              )
-            }
-          >
-            <item.icon
-              className={cn(
-                "h-5 w-5 shrink-0 transition-colors",
-                item.color || (location.pathname === item.path ? "text-primary" : "text-muted-foreground group-hover:text-foreground")
-              )}
-            />
-            {isExpanded && (
-              <>
-                <span className="flex-1">{item.label}</span>
-                {item.count !== undefined && (
-                  <Badge
-                    variant={location.pathname === item.path ? "default" : "secondary"}
-                    className="h-5 min-w-[20px] px-1.5 text-xs"
-                  >
-                    {item.count}
-                  </Badge>
-                )}
-              </>
-            )}
-          </NavLink>
+          <NavItemComponent key={item.path} item={item} isExpanded={isExpanded} />
         ))}
       </nav>
 
@@ -226,7 +228,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
         <Button
           variant="ghost"
           size="icon"
-          className="absolute -right-3 top-20 h-6 w-6 rounded-full border bg-background shadow-md"
+          className="absolute -right-3 top-20 h-6 w-6 rounded-full border bg-background shadow-md hover:bg-accent"
           onClick={onToggle}
         >
           <ChevronRight className="h-3 w-3" />

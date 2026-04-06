@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Search, Bell, Sun, Moon, Menu, User, LogOut, ChevronDown } from "lucide-react"
+import { Search, Bell, Sun, Moon, Menu, User, LogOut, ChevronDown, Keyboard } from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -79,6 +79,17 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
             ) : (
               <Moon className="h-5 w-5" />
             )}
+          </Button>
+
+          {/* Keyboard Shortcuts */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="relative"
+            onClick={() => document.dispatchEvent(new CustomEvent("toggle-shortcuts"))}
+            title="Keyboard shortcuts (?)"
+          >
+            <Keyboard className="h-5 w-5" />
           </Button>
 
           {/* Notifications */}
