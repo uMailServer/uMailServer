@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
+import { toast } from "sonner"
 
 interface Attachment {
   name: string
@@ -77,12 +78,11 @@ export function EmailDetailPage() {
   const email = mockEmailDetail
 
   const handleArchive = () => {
-    // Simulate archive action
-    console.log("Archive email:", id)
+    toast.success("E-posta arşivlendi")
   }
 
   const handleDelete = () => {
-    // Simulate delete action - go to trash
+    toast.success("E-posta çöp kutusuna taşındı")
     navigate("/trash")
   }
 

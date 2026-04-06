@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
+import { toast } from "sonner"
 
 interface Attachment {
   id: string
@@ -135,22 +136,26 @@ export function ComposePage() {
 
   const handleSend = () => {
     if (to.length === 0) {
-      alert("Lütfen alıcı seçin")
+      toast.error("Lütfen alıcı seçin")
       return
     }
     setSending(true)
+    toast.success("E-posta gönderiliyor...")
     // Simulate sending
     setTimeout(() => {
       setSending(false)
+      toast.success("E-posta gönderildi")
       navigate("/sent")
     }, 1500)
   }
 
   const handleSaveDraft = () => {
+    toast.success("Taslak kaydedildi")
     navigate("/drafts")
   }
 
   const handleDiscard = () => {
+    toast.info("E-posta iptal edildi")
     navigate("/inbox")
   }
 

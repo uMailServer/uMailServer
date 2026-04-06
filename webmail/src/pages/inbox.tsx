@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { toast } from "sonner"
 
 interface Email {
   id: string
@@ -160,17 +161,18 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   }
 
   const handleArchive = () => {
-    // Simulate archive
+    toast.success(`${selectedEmails.size} ileti arşivlendi`)
     setSelectedEmails(new Set())
   }
 
   const handleDelete = () => {
-    // Simulate delete - move to trash
+    toast.success(`${selectedEmails.size} ileti çöp kutusuna taşındı`)
     setEmails(emails.filter((e) => !selectedEmails.has(e.id)))
     setSelectedEmails(new Set())
   }
 
   const handleMarkRead = () => {
+    toast.success(`${selectedEmails.size} ileti okundu olarak işaretlendi`)
     setEmails(emails.map((e) =>
       selectedEmails.has(e.id) ? { ...e, read: true } : e
     ))
@@ -178,6 +180,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   }
 
   const handleMarkUnread = () => {
+    toast.success(`${selectedEmails.size} ileti okunmadı olarak işaretlendi`)
     setEmails(emails.map((e) =>
       selectedEmails.has(e.id) ? { ...e, read: false } : e
     ))

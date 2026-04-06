@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { useNavigate } from "react-router-dom"
 import { Search, Bell, Sun, Moon, Menu, User, LogOut, ChevronDown } from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
@@ -22,7 +23,16 @@ interface HeaderProps {
 
 export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
   const { theme, setTheme, resolvedTheme } = useTheme()
+  const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState("")
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (searchQuery.trim()) {
+      navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`)
+      setSearchQuery("")
+    }
+  }
 
   return (
     <header
@@ -43,7 +53,7 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
             <Menu className="h-5 w-5" />
           </Button>
 
-          <div className="relative max-w-md flex-1 hidden md:block">
+          <form onSubmit={handleSearch} className="relative max-w-md flex-1 hidden md:block">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search"
@@ -52,7 +62,7 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
-          </div>
+          </form>
         </div>
 
         {/* Right: Actions */}
