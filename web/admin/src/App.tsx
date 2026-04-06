@@ -82,27 +82,25 @@ function App() {
   return (
     <ThemeProvider defaultTheme="system" storageKey="umail-admin-theme">
       <TooltipProvider>
-        <BrowserRouter>
-          <Layout user={user} onLogout={handleLogout} isConnected={isConnected}>
-            <Routes>
-              <Route
-                path="/"
-                element={
-                  <Dashboard
-                    isConnected={isConnected}
-                    metrics={metrics}
-                    activities={activities}
-                  />
-                }
-              />
-              <Route path="/domains" element={<Domains />} />
-              <Route path="/accounts" element={<Accounts />} />
-              <Route path="/queue" element={<Queue />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Layout>
-        </BrowserRouter>
+        <Layout user={user} onLogout={handleLogout} isConnected={isConnected}>
+          <Routes>
+            <Route
+              path="/"
+              element={
+                <Dashboard
+                  isConnected={isConnected}
+                  metrics={metrics}
+                  activities={activities}
+                />
+              }
+            />
+            <Route path="/domains" element={<Domains />} />
+            <Route path="/accounts" element={<Accounts />} />
+            <Route path="/queue" element={<Queue />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
         <Toaster />
       </TooltipProvider>
     </ThemeProvider>
