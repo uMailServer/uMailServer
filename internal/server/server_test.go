@@ -2351,7 +2351,7 @@ func TestDeliverLocal_StoreMessageError(t *testing.T) {
 	helperCreateAccount(t, srv, "alice", "test.example.com", true, 0, 0)
 
 	// Remove the message store directory to cause StoreMessage to fail
-	msgStorePath := srv.config.Server.DataDir + "/messages"
+	msgStorePath := srv.config.Server.DataDir + "/mail/messages"
 	os.RemoveAll(msgStorePath)
 	// Also make the parent directory read-only so MkdirAll fails
 	// Instead, close the msgStore basePath and make it a file to prevent recreation

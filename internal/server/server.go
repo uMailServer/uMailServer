@@ -129,8 +129,8 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 	s.database = database
 
-	// Initialize message store
-	msgStorePath := cfg.Server.DataDir + "/messages"
+	// Initialize message store (use same path as IMAP mailstore)
+	msgStorePath := s.config.Server.DataDir + "/mail/messages"
 	msgStore, err := storage.NewMessageStore(msgStorePath)
 	if err != nil {
 		database.Close()
@@ -161,7 +161,8 @@ func New(cfg *config.Config) (*Server, error) {
 	s.webhookMgr = webhookMgr
 
 	// Initialize storage database for search
-	storageDB, err := storage.OpenDatabase(dbPath)
+	storageDBPath := s.config.Server.DataDir + "/mail/mail.db"
+	storageDB, err := storage.OpenDatabase(storageDBPath)
 	if err != nil {
 		tlsManager.Close()
 		msgStore.Close()
@@ -217,12 +218,8 @@ func (s *Server) Start() error {
 	s.queue.Start(s.ctx)
 	s.logger.Info("Queue manager started")
 
-	// Create mailstore for IMAP
-	mailstore, err := imap.NewBboltMailstore(s.config.Server.DataDir + "/mail")
-	if err != nil {
-		return fmt.Errorf("failed to create mailstore: %w", err)
-	}
-	s.mailstore = mailstore
+	// Create mailstore for IMAP using shared storage
+	s.mailstore = imap.NewBboltMailstoreWithInterfaces(s.storageDB, s.msgStore)
 
 	s.startSMTP()
 
@@ -234,11 +231,11 @@ func (s *Server) Start() error {
 		}
 	}
 
-	if err := s.startIMAP(mailstore); err != nil {
+	if err := s.startIMAP(s.mailstore); err != nil {
 		return err
 	}
 
-	if err := s.startPOP3(mailstore); err != nil {
+	if err := s.startPOP3(s.mailstore); err != nil {
 		return err
 	}
 
@@ -558,10 +555,10 @@ func (s *Server) setupHealthChecks() {
 	s.logger.Info("Health checks configured")
 }
 
-// startAPI creates and starts the admin HTTP API server.
+// startAPI creates and starts the HTTP API server (webmail + admin).
 func (s *Server) startAPI() {
 	apiCfg := api.Config{
-		Addr:        fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
+		Addr:        fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
 		JWTSecret:   s.config.Security.JWTSecret,
 		CorsOrigins: s.config.HTTP.CorsOrigins,
 	}
@@ -573,6 +570,14 @@ func (s *Server) startAPI() {
 	// Set health monitor
 	if s.healthMonitor != nil {
 		s.apiServer.SetHealthMonitor(s.healthMonitor)
+	}
+	// Set mail database for email operations
+	if s.storageDB != nil {
+		s.apiServer.SetMailDB(s.storageDB)
+	}
+	// Set message store for email operations
+	if s.msgStore != nil {
+		s.apiServer.SetMsgStore(s.msgStore)
 	}
 	// Configure API rate limiting
 	s.apiServer.SetAPIRateLimit(s.config.Security.RateLimit.HTTPRequestsPerMinute)

@@ -1489,23 +1489,6 @@ func TestDropQueueEntryNotFound(t *testing.T) {
 	}
 }
 
-// Test router
-func TestRouter(t *testing.T) {
-	database, err := db.Open(t.TempDir() + "/test.db")
-	if err != nil {
-		t.Fatalf("failed to create database: %v", err)
-	}
-	defer database.Close()
-
-	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
-
-	// Test router function exists and works
-	mux := server.router()
-	if mux == nil {
-		t.Error("expected router to return a mux")
-	}
-}
-
 // Test ServeHTTP
 func TestServeHTTP(t *testing.T) {
 	database, err := db.Open(t.TempDir() + "/test.db")

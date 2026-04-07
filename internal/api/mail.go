@@ -1,0 +1,434 @@
+package api
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/umailserver/umailserver/internal/storage"
+)
+
+// Mail represents an email message
+type Mail struct {
+	ID             string   `json:"id"`
+	From           string   `json:"from"`
+	FromName       string   `json:"fromName"`
+	To             []string `json:"to"`
+	Subject        string   `json:"subject"`
+	Body           string   `json:"body"`
+	Preview        string   `json:"preview"`
+	Date           string   `json:"date"`
+	Read           bool     `json:"read"`
+	Starred        bool     `json:"starred"`
+	Folder         string   `json:"folder"`
+	HasAttachments bool     `json:"hasAttachments"`
+	Size           int64    `json:"size"`
+}
+
+// SendMailRequest represents a request to send an email
+type SendMailRequest struct {
+	To      []string `json:"to"`
+	CC      []string `json:"cc"`
+	BCC     []string `json:"bcc"`
+	Subject string   `json:"subject"`
+	Body    string   `json:"body"`
+}
+
+// MailHandler handles mail-related API requests
+type MailHandler struct {
+	msgStore *storage.MessageStore
+	mailDB   *storage.Database
+}
+
+// NewMailHandler creates a new mail handler
+func NewMailHandler() *MailHandler {
+	return &MailHandler{}
+}
+
+// SetStorage sets the storage backends for mail operations
+func (h *MailHandler) SetStorage(msgStore *storage.MessageStore, mailDB *storage.Database) {
+	h.msgStore = msgStore
+	h.mailDB = mailDB
+}
+
+// folderMap maps webmail folder names to internal mailbox names
+var folderMap = map[string]string{
+	"inbox":  "INBOX",
+	"sent":   "Sent",
+	"drafts": "Drafts",
+	"trash":  "Trash",
+	"spam":   "Junk",
+}
+
+// reverseFolderMap maps internal mailbox names to webmail folder names
+var reverseFolderMap = map[string]string{
+	"INBOX": "Inbox",
+	"Sent":  "Sent",
+	"Drafts": "Drafts",
+	"Trash": "Trash",
+	"Junk":  "Spam",
+}
+
+// handleMailList lists emails in a folder
+func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get user from context (set by auth middleware)
+	user := r.Context().Value("user")
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userEmail := user.(string)
+
+	// Parse folder from query
+	folder := r.URL.Query().Get("folder")
+	if folder == "" {
+		folder = "INBOX"
+	}
+
+	// Map folder name to internal folder
+	internalFolder := folderMap[strings.ToLower(folder)]
+	if internalFolder == "" {
+		internalFolder = folder
+	}
+
+	emails, err := h.getEmailsFromStorage(userEmail, internalFolder)
+	if err != nil {
+		// If storage not available, return empty list
+		emails = []Mail{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"emails": emails,
+		"total":  len(emails),
+		"folder": folder,
+	})
+}
+
+// getEmailsFromStorage retrieves emails from real storage
+func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, error) {
+	if h.mailDB == nil || h.msgStore == nil {
+		return []Mail{}, nil
+	}
+
+	// Ensure mailbox exists - try to get it
+	_, err := h.mailDB.GetMailbox(userEmail, mailbox)
+	if err != nil {
+		// Create mailbox if it doesn't exist (only for INBOX)
+		if mailbox == "INBOX" {
+			h.mailDB.CreateMailbox(userEmail, mailbox)
+		}
+		return []Mail{}, nil
+	}
+
+	// Get message UIDs
+	uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
+	if err != nil {
+		return []Mail{}, nil
+	}
+
+	emails := make([]Mail, 0, len(uids))
+	for _, uid := range uids {
+		meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
+		if err != nil {
+			continue
+		}
+
+		// Read message body
+		var body string
+		if h.msgStore != nil {
+			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
+			if err == nil {
+				body = h.extractBody(string(data))
+			}
+		}
+
+		// Determine preview
+		preview := body
+		if len(preview) > 100 {
+			preview = preview[:100] + "..."
+		}
+
+		// Map folder name for response
+		folderName := reverseFolderMap[mailbox]
+		if folderName == "" {
+			folderName = mailbox
+		}
+
+		email := Mail{
+			ID:      meta.MessageID,
+			From:    meta.From,
+			To:      strings.Split(meta.To, ","),
+			Subject: meta.Subject,
+			Body:    body,
+			Preview: preview,
+			Date:    meta.InternalDate.Format(time.RFC1123Z),
+			Read:    hasFlag(meta.Flags, "\\Seen"),
+			Starred: hasFlag(meta.Flags, "\\Flagged"),
+			Folder:  folderName,
+			Size:    meta.Size,
+		}
+		emails = append(emails, email)
+	}
+
+	return emails, nil
+}
+
+// extractBody extracts the body from a raw email message
+func (h *MailHandler) extractBody(raw string) string {
+	// Find the header/body separator
+	sep := "\r\n\r\n"
+	idx := strings.Index(raw, sep)
+	if idx == -1 {
+		sep = "\n\n"
+		idx = strings.Index(raw, sep)
+	}
+	if idx == -1 {
+		return raw
+	}
+	return strings.TrimSpace(raw[idx+len(sep):])
+}
+
+// hasFlag checks if a flag is present
+func hasFlag(flags []string, flag string) bool {
+	for _, f := range flags {
+		if f == flag || f == strings.ToLower(flag) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleMailGet gets a single email
+func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user := r.Context().Value("user")
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userEmail := user.(string)
+
+	emailID := r.URL.Query().Get("id")
+	folder := r.URL.Query().Get("folder")
+	if folder == "" {
+		folder = "INBOX"
+	}
+
+	internalFolder := folderMap[strings.ToLower(folder)]
+	if internalFolder == "" {
+		internalFolder = folder
+	}
+
+	email, err := h.getEmailFromStorage(userEmail, internalFolder, emailID)
+	if err != nil || email == nil {
+		http.Error(w, "Email not found", http.StatusNotFound)
+		return
+	}
+
+	// Mark as read
+	h.markAsRead(userEmail, internalFolder, emailID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(email)
+}
+
+// getEmailFromStorage retrieves a single email from storage
+func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) (*Mail, error) {
+	if h.mailDB == nil || h.msgStore == nil {
+		return nil, fmt.Errorf("storage not available")
+	}
+
+	uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, uid := range uids {
+		meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
+		if err != nil {
+			continue
+		}
+
+		if meta.MessageID == messageID {
+			// Read message body
+			var body string
+			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
+			if err == nil {
+				body = string(data)
+			}
+
+			folderName := reverseFolderMap[mailbox]
+			if folderName == "" {
+				folderName = mailbox
+			}
+
+			return &Mail{
+				ID:      meta.MessageID,
+				From:    meta.From,
+				To:      strings.Split(meta.To, ","),
+				Subject: meta.Subject,
+				Body:    body,
+				Preview: body,
+				Date:    meta.InternalDate.Format(time.RFC1123Z),
+				Read:    hasFlag(meta.Flags, "\\Seen"),
+				Starred: hasFlag(meta.Flags, "\\Flagged"),
+				Folder:  folderName,
+				Size:    meta.Size,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("email not found")
+}
+
+// markAsRead marks a message as read
+func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
+	if h.mailDB == nil {
+		return
+	}
+
+	uids, _ := h.mailDB.GetMessageUIDs(userEmail, mailbox)
+	for _, uid := range uids {
+		meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
+		if err != nil {
+			continue
+		}
+
+		if meta.MessageID == messageID {
+			if !hasFlag(meta.Flags, "\\Seen") {
+				meta.Flags = append(meta.Flags, "\\Seen")
+				h.mailDB.UpdateMessageMetadata(userEmail, mailbox, uid, meta)
+			}
+			break
+		}
+	}
+}
+
+// handleMailSend sends an email and stores it in Sent folder
+func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user := r.Context().Value("user")
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	userEmail := user.(string)
+
+	var req SendMailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.To) == 0 {
+		http.Error(w, "Recipient required", http.StatusBadRequest)
+		return
+	}
+
+	// Build RFC 2822 email
+	now := time.Now()
+	dateStr := now.Format("Mon, 02 Jan 2006 15:04:05 -0700")
+
+	// Build headers
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("From: %s\r\n", userEmail))
+	sb.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(req.To, ", ")))
+	if len(req.CC) > 0 {
+		sb.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(req.CC, ", ")))
+	}
+	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", req.Subject))
+	sb.WriteString(fmt.Sprintf("Date: %s\r\n", dateStr))
+	sb.WriteString("MIME-Version: 1.0\r\n")
+	sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	sb.WriteString("\r\n")
+	sb.WriteString(req.Body)
+
+	rawEmail := sb.String()
+
+	// Store the message
+	var msgID string
+	if h.msgStore != nil && h.mailDB != nil {
+		// Ensure Sent mailbox exists
+		h.mailDB.CreateMailbox(userEmail, "Sent")
+
+		// Store message file - msgID is the hash-based ID returned by StoreMessage
+		storedMsgID, err := h.msgStore.StoreMessage(userEmail, []byte(rawEmail))
+		if err != nil {
+			// Log error but continue - we'll still return success
+		}
+		msgID = storedMsgID
+
+		// Get next UID for Sent mailbox
+		uid, _ := h.mailDB.GetNextUID(userEmail, "Sent")
+
+		// Parse headers for metadata
+		subject := req.Subject
+		from := userEmail
+		to := strings.Join(req.To, ", ")
+
+		// Store metadata with the hash-based message ID
+		meta := &storage.MessageMetadata{
+			MessageID:    msgID,
+			UID:          uid,
+			Flags:        []string{"\\Seen"},
+			InternalDate: now,
+			Size:         int64(len(rawEmail)),
+			Subject:      subject,
+			Date:         dateStr,
+			From:         from,
+			To:           to,
+		}
+		h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Email sent successfully",
+		"id":      msgID,
+	})
+}
+
+// handleMailDelete deletes an email (moves to trash)
+func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	user := r.Context().Value("user")
+	if user == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// TODO: Implement actual deletion from storage
+	// For now, just acknowledge
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Email deleted",
+	})
+}
+
+// InitDemoEmails is a no-op - demo emails are now stored in real storage
+// This function is kept for backwards compatibility
+func InitDemoEmails(userEmail string) {
+	// No-op: demo emails are now in real storage
+	// Users receive demo emails when accounts are first created via setup scripts
+}

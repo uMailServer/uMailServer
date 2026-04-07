@@ -55,6 +55,7 @@ type Server struct {
 	sseServer  *websocket.SSEServer
 	searchSvc  *search.Service
 	msgStore   *storage.MessageStore
+	mailDB     *storage.Database
 	queueMgr   *queue.Manager
 	httpServer *http.Server
 	healthMon  HealthMonitor
@@ -67,6 +68,12 @@ type Server struct {
 	// File system abstraction for embed.FS
 	webmailFS FileSystem
 	adminFS   FileSystem
+
+	// Mail handler for user email operations
+	mailHandler *MailHandler
+
+	// HTTP router (cached)
+	router http.Handler
 
 	// Login rate limiting
 	loginMu      sync.Mutex
@@ -213,11 +220,14 @@ func NewServerWithInterfaces(
 
 // ServeHTTP implements the http.Handler interface
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.router().ServeHTTP(w, r)
+	if s.router == nil {
+		s.initRouter()
+	}
+	s.router.ServeHTTP(w, r)
 }
 
-// router sets up the HTTP routes
-func (s *Server) router() http.Handler {
+// initRouter sets up the HTTP routes (called once on first request)
+func (s *Server) initRouter() {
 	mux := http.NewServeMux()
 
 	// Webmail (static files) - user interface
@@ -249,7 +259,7 @@ func (s *Server) router() http.Handler {
 	mux.HandleFunc("/api/v1/events", s.sseServer.Handler())
 
 	// MCP endpoint (protected by auth)
-	mux.HandleFunc("/mcp", s.authMiddleware(http.HandlerFunc(s.mcpServer.HandleHTTP)).ServeHTTP)
+	mux.Handle("/mcp", s.authMiddleware(http.HandlerFunc(s.mcpServer.HandleHTTP)))
 
 	// Authentication
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
@@ -307,11 +317,26 @@ func (s *Server) router() http.Handler {
 	api.HandleFunc("/api/v1/admin/queue", s.adminMiddleware(http.HandlerFunc(s.handleQueue)).ServeHTTP)
 	api.HandleFunc("/api/v1/admin/queue/", s.adminMiddleware(http.HandlerFunc(s.handleQueueDetail)).ServeHTTP)
 
+	// Mail (user-facing, uses same auth as API)
+	// Ensure mailHandler is initialized
+	if s.mailHandler == nil {
+		s.mailHandler = NewMailHandler()
+		s.mailHandler.SetStorage(s.msgStore, s.mailDB)
+	}
+
+	api.HandleFunc("/api/v1/mail/inbox", s.mailHandler.handleMailList)
+	api.HandleFunc("/api/v1/mail/sent", http.HandlerFunc(s.mailHandler.handleMailList).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/drafts", http.HandlerFunc(s.mailHandler.handleMailList).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/trash", http.HandlerFunc(s.mailHandler.handleMailList).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/spam", http.HandlerFunc(s.mailHandler.handleMailList).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/send", http.HandlerFunc(s.mailHandler.handleMailSend).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/delete", http.HandlerFunc(s.mailHandler.handleMailDelete).ServeHTTP)
+
 	// Wrap API with auth middleware and mount to main mux
 	apiHandler := s.rateLimitMiddleware(s.limitBodyMiddleware(s.corsMiddleware(s.authMiddleware(api))))
 	mux.Handle("/api/v1/", apiHandler)
 
-	return mux
+	s.router = mux
 }
 
 // limitBodyMiddleware restricts request body size to prevent DoS.
@@ -754,6 +779,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"token":     tokenString,
 		"expiresIn": int(s.config.TokenExpiry.Seconds()),
 	})
+
+	// Initialize demo emails for the user on first login
+	InitDemoEmails(account.Email)
 }
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
@@ -1007,6 +1035,28 @@ func (s *Server) SetQueueManager(qm *queue.Manager) {
 // SetHealthMonitor sets the health monitor for health endpoints
 func (s *Server) SetHealthMonitor(mon HealthMonitor) {
 	s.healthMon = mon
+}
+
+// SetMailDB sets the mail database for email operations
+func (s *Server) SetMailDB(db *storage.Database) {
+	s.mailDB = db
+	s.initMailHandler()
+}
+
+// SetMsgStore sets the message store for email operations
+func (s *Server) SetMsgStore(msgStore *storage.MessageStore) {
+	s.msgStore = msgStore
+	s.initMailHandler()
+}
+
+// initMailHandler initializes the mail handler with storage backends
+func (s *Server) initMailHandler() {
+	if s.mailHandler == nil && (s.msgStore != nil || s.mailDB != nil) {
+		s.mailHandler = NewMailHandler()
+		s.mailHandler.SetStorage(s.msgStore, s.mailDB)
+	} else if s.mailHandler != nil {
+		s.mailHandler.SetStorage(s.msgStore, s.mailDB)
+	}
 }
 
 // SetAPIRateLimit sets the HTTP API rate limit (requests per minute, 0 = disabled)

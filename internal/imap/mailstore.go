@@ -46,6 +46,15 @@ func NewBboltMailstore(dataDir string) (*BboltMailstore, error) {
 	}, nil
 }
 
+// NewBboltMailstoreWithInterfaces creates a mailstore using existing storage instances
+func NewBboltMailstoreWithInterfaces(db *storage.Database, msgStore *storage.MessageStore) *BboltMailstore {
+	return &BboltMailstore{
+		dataDir:  "shared",
+		db:       db,
+		msgStore: msgStore,
+	}
+}
+
 // Close closes the mailstore
 func (m *BboltMailstore) Close() error {
 	if m.msgStore != nil {
