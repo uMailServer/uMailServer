@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -505,6 +506,13 @@ func TestSSEServerGetConnectedCountWithClients(t *testing.T) {
 type mockResponseRecorder struct {
 	*httptest.ResponseRecorder
 	flushed bool
+	headerMu sync.Mutex
+}
+
+func (m *mockResponseRecorder) Header() http.Header {
+	m.headerMu.Lock()
+	defer m.headerMu.Unlock()
+	return m.ResponseRecorder.Header()
 }
 
 func (m *mockResponseRecorder) Flush() {
