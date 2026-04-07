@@ -20,7 +20,7 @@ COPY web/admin/ .
 RUN npm run build
 
 # Stage 3: Build the Go binary
-FROM golang:1.24-alpine AS go-builder
+FROM golang:1.25-alpine AS go-builder
 
 RUN apk add --no-cache git make
 

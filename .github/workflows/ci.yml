@@ -8,7 +8,7 @@ on:
     branches: [main, master, develop]
 
 env:
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.25'
   NODE_VERSION: '20'
 
 jobs:
