@@ -45,7 +45,6 @@ jobs:
           files: dist/*
           draft: false
           prerelease: false
-          generate_release_notes: true
           body: |
             ## uMailServer ${{ github.ref_name }}
 
