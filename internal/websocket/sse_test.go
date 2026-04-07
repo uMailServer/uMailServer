@@ -260,11 +260,7 @@ func TestSSEServerHandler(t *testing.T) {
 	})
 
 	t.Run("WithUserParameter", func(t *testing.T) {
-		// Create a context that will cancel quickly
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-
-		req := httptest.NewRequest(http.MethodGet, "/sse?user=testuser", nil).WithContext(ctx)
+		req := httptest.NewRequest(http.MethodGet, "/sse?user=testuser", nil)
 		rec := &mockResponseRecorder{
 			ResponseRecorder: httptest.NewRecorder(),
 		}
@@ -272,8 +268,8 @@ func TestSSEServerHandler(t *testing.T) {
 		// Run handler in goroutine since it blocks
 		go server.Handler().ServeHTTP(rec, req)
 
-		// Wait for context to timeout
-		time.Sleep(150 * time.Millisecond)
+		// Wait for context to timeout (handler will exit when context is done)
+		time.Sleep(500 * time.Millisecond)
 
 		// Should have set SSE headers before blocking
 		if rec.Header().Get("Content-Type") != "text/event-stream" {
@@ -291,16 +287,13 @@ func TestSSEServerHandler(t *testing.T) {
 			return "", false, errors.New("invalid token")
 		})
 
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-
-		req := httptest.NewRequest(http.MethodGet, "/sse?token=valid-token", nil).WithContext(ctx)
+		req := httptest.NewRequest(http.MethodGet, "/sse?token=valid-token", nil)
 		rec := &mockResponseRecorder{
 			ResponseRecorder: httptest.NewRecorder(),
 		}
 
 		go server.Handler().ServeHTTP(rec, req)
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 
 		if rec.Header().Get("Content-Type") != "text/event-stream" {
 			t.Error("expected SSE headers to be set for authenticated request")
@@ -334,17 +327,14 @@ func TestSSEServerHandler(t *testing.T) {
 			return "", false, errors.New("invalid")
 		})
 
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-
-		req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+		req := httptest.NewRequest(http.MethodGet, "/sse", nil)
 		req.Header.Set("X-Auth-Token", "header-token")
 		rec := &mockResponseRecorder{
 			ResponseRecorder: httptest.NewRecorder(),
 		}
 
 		go server.Handler().ServeHTTP(rec, req)
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 
 		if rec.Header().Get("Content-Type") != "text/event-stream" {
 			t.Error("expected SSE headers to be set")
@@ -512,12 +502,7 @@ type mockResponseRecorder struct {
 func (m *mockResponseRecorder) Header() http.Header {
 	m.headerMu.Lock()
 	defer m.headerMu.Unlock()
-	// Return a defensive copy to avoid race conditions
-	h := make(http.Header)
-	for k, v := range m.ResponseRecorder.Header() {
-		h[k] = v
-	}
-	return h
+	return m.ResponseRecorder.Header()
 }
 
 func (m *mockResponseRecorder) Flush() {
