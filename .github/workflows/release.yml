@@ -35,7 +35,7 @@ jobs:
 
       - name: Build account panel
         run: |
-          cd web/account && npm ci && npm run build
+          cd web/account && npm install && npm run build
 
       - name: Build binaries
         run: |
