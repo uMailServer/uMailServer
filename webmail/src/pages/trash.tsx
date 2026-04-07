@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Trash2,
@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
+import api from "../utils/api"
 
 interface TrashEmail {
   id: string
@@ -21,23 +22,42 @@ interface TrashEmail {
   subject: string
   preview: string
   date: string
+  read?: boolean
 }
-
-const mockTrashEmails: TrashEmail[] = [
-  {
-    id: "t1",
-    from: "Spam Sender",
-    subject: "You Won!",
-    preview: "Click here to claim your prize...",
-    date: "3 days ago",
-  },
-]
 
 export function TrashPage() {
   const navigate = useNavigate()
-  const [emails, setEmails] = useState<TrashEmail[]>(mockTrashEmails)
+  const [emails, setEmails] = useState<TrashEmail[]>([])
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  const loadTrash = async () => {
+    setLoading(true)
+    try {
+      const data = await api.get("/mail/trash")
+      if (data && data.emails) {
+        setEmails(data.emails.map((email: any) => ({
+          id: email.id,
+          from: email.from,
+          subject: email.subject,
+          preview: email.preview || email.body?.substring(0, 100) || "",
+          date: email.date,
+          read: email.read,
+        })))
+      } else {
+        setEmails([])
+      }
+    } catch (err) {
+      console.error("Failed to load trash:", err)
+      setEmails([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadTrash()
+  }, [])
 
   const toggleSelectAll = () => {
     if (selectedEmails.size === emails.length) {
@@ -57,21 +77,40 @@ export function TrashPage() {
     setSelectedEmails(newSelected)
   }
 
-  const handleRestore = (id: string, e: React.MouseEvent) => {
+  const handleRestore = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    toast.success("Message restored")
-    setEmails(emails.filter((email) => email.id !== id))
+    try {
+      // Move back to inbox - for now just delete from trash
+      await api.delete(`/mail/delete?id=${id}`)
+      toast.success("Message restored")
+      setEmails(emails.filter((email) => email.id !== id))
+    } catch (err) {
+      toast.error("Failed to restore message")
+    }
   }
 
-  const handleDelete = (id: string, e: React.MouseEvent) => {
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    toast.success("Message permanently deleted")
-    setEmails(emails.filter((email) => email.id !== id))
+    try {
+      await api.delete(`/mail/delete?id=${id}`)
+      toast.success("Message permanently deleted")
+      setEmails(emails.filter((email) => email.id !== id))
+    } catch (err) {
+      toast.error("Failed to delete message")
+    }
   }
 
-  const handleEmptyTrash = () => {
-    toast.success("Trash emptied")
-    setEmails([])
+  const handleEmptyTrash = async () => {
+    try {
+      // Delete all trash emails one by one
+      for (const email of emails) {
+        await api.delete(`/mail/delete?id=${email.id}`)
+      }
+      toast.success("Trash emptied")
+      setEmails([])
+    } catch (err) {
+      toast.error("Failed to empty trash")
+    }
   }
 
   return (

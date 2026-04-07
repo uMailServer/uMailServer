@@ -406,24 +406,78 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 
 // handleMailDelete deletes an email (moves to trash)
 func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	user := r.Context().Value("user")
-	if user == nil {
+	userVal := r.Context().Value("user")
+	if userVal == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	userEmail := userVal.(string)
 
-	// TODO: Implement actual deletion from storage
-	// For now, just acknowledge
+	// Extract message ID from query string or request body
+	var messageID string
+
+	// Try query string first (DELETE /api/v1/mail/delete?id=xxx)
+	messageID = r.URL.Query().Get("id")
+
+	// If not in query, try form/body
+	if messageID == "" {
+		if r.FormValue("id") != "" {
+			messageID = r.FormValue("id")
+		}
+	}
+
+	if messageID == "" {
+		http.Error(w, "Message ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Delete from message store (actual file)
+	if h.msgStore != nil {
+		if err := h.msgStore.DeleteMessage(userEmail, messageID); err != nil {
+			// Log but don't fail - message might already be deleted
+			fmt.Printf("Warning: failed to delete message file: %v\n", err)
+		}
+	}
+
+	// Also remove from mailDB metadata (find and delete by messageID)
+	if h.mailDB != nil {
+		// Search through all mailboxes to find the message
+		h.deleteMessageMetadata(userEmail, messageID)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"message": "Email deleted",
+		"id":      messageID,
 	})
+}
+
+// deleteMessageMetadata finds and deletes message metadata by messageID
+func (h *MailHandler) deleteMessageMetadata(userEmail, messageID string) {
+	mailboxes := []string{"INBOX", "Sent", "Drafts", "Trash", "Junk", "Archive"}
+	for _, mailbox := range mailboxes {
+		// Get all UIDs in this mailbox
+		uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
+		if err != nil {
+			continue
+		}
+		// Find the message with matching ID and delete it
+		for _, uid := range uids {
+			meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
+			if err != nil {
+				continue
+			}
+			if meta.MessageID == messageID {
+				h.mailDB.DeleteMessage(userEmail, mailbox, uid)
+				return
+			}
+		}
+	}
 }
 
 // InitDemoEmails is a no-op - demo emails are now stored in real storage

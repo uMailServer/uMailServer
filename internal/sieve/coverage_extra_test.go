@@ -201,7 +201,7 @@ func TestManager_CompileScript(t *testing.T) {
 func TestManager_SetActiveScript(t *testing.T) {
 	m := NewManager()
 
-	err := m.SetActiveScript("user1", `keep;`)
+	err := m.SetActiveScript("user1", "main", `keep;`)
 	if err != nil {
 		t.Fatalf("SetActiveScript error: %v", err)
 	}
@@ -222,8 +222,8 @@ func TestManager_SetActiveScript(t *testing.T) {
 func TestManager_DeleteScript(t *testing.T) {
 	m := NewManager()
 
-	m.SetActiveScript("user1", `keep;`)
-	m.DeleteScript("user1")
+	m.SetActiveScript("user1", "main", `keep;`)
+	m.DeleteScript("user1", "main")
 
 	if m.HasActiveScript("user1") {
 		t.Error("Expected user1 to not have active script after delete")
@@ -233,7 +233,7 @@ func TestManager_DeleteScript(t *testing.T) {
 func TestManager_InvalidScript(t *testing.T) {
 	m := NewManager()
 
-	err := m.SetActiveScript("user1", `if header {`)
+	err := m.SetActiveScript("user1", "main", `if header {`)
 	if err == nil {
 		t.Error("Expected error for invalid script")
 	}

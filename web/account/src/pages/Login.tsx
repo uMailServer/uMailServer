@@ -1,17 +1,46 @@
 import { useState } from 'react'
 import { Mail } from 'lucide-react'
 
+const API_URL = window.location.origin + '/api/v1'
+
+async function loginApi(email: string, password: string) {
+  const response = await fetch(`${API_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  })
+
+  if (!response.ok) {
+    throw new Error('Invalid credentials')
+  }
+
+  const data = await response.json()
+  if (data.token) {
+    localStorage.setItem('token', data.token)
+    localStorage.setItem('user', JSON.stringify(data.user || { email }))
+  }
+  return data
+}
+
 function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-    // TODO: Implement login
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    setLoading(false)
+    setError('')
+
+    try {
+      await loginApi(email, password)
+      window.location.href = '/'
+    } catch (err) {
+      setError('Invalid email or password')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (

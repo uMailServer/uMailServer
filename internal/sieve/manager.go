@@ -1,13 +1,22 @@
 package sieve
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
 
+// StoredScript holds both source and compiled script
+type StoredScript struct {
+	Name   string
+	Source string
+	Script *Script
+}
+
 // Manager handles Sieve script storage and execution
 type Manager struct {
-	scripts   map[string]*Script // userID -> active script
+	scripts   map[string]map[string]*StoredScript // userID -> scriptName -> stored script
+	activeScripts map[string]string          // userID -> activeScriptName
 	scriptsMu sync.RWMutex
 
 	// Vacation cache: prevents spamming the same sender
@@ -18,7 +27,8 @@ type Manager struct {
 // NewManager creates a new Sieve manager
 func NewManager() *Manager {
 	return &Manager{
-		scripts:       make(map[string]*Script),
+		scripts:       make(map[string]map[string]*StoredScript),
+		activeScripts: make(map[string]string),
 		vacationCache: make(map[string]time.Time),
 	}
 }
@@ -29,8 +39,8 @@ func (m *Manager) CompileScript(source string) (*Script, error) {
 	return p.Parse()
 }
 
-// SetActiveScript sets the active script for a user
-func (m *Manager) SetActiveScript(userID string, source string) error {
+// StoreScript stores a script for a user without activating it
+func (m *Manager) StoreScript(userID string, scriptName string, source string) error {
 	script, err := m.CompileScript(source)
 	if err != nil {
 		return err
@@ -38,31 +48,131 @@ func (m *Manager) SetActiveScript(userID string, source string) error {
 
 	m.scriptsMu.Lock()
 	defer m.scriptsMu.Unlock()
-	m.scripts[userID] = script
+
+	if m.scripts[userID] == nil {
+		m.scripts[userID] = make(map[string]*StoredScript)
+	}
+	m.scripts[userID][scriptName] = &StoredScript{
+		Name:   scriptName,
+		Source: source,
+		Script: script,
+	}
 	return nil
+}
+
+// SetActiveScriptByName sets the active script for a user by name
+func (m *Manager) SetActiveScriptByName(userID string, scriptName string) error {
+	m.scriptsMu.Lock()
+	defer m.scriptsMu.Unlock()
+
+	if userScripts, ok := m.scripts[userID]; ok {
+		if _, exists := userScripts[scriptName]; !exists {
+			return fmt.Errorf("script %q not found", scriptName)
+		}
+		m.activeScripts[userID] = scriptName
+		return nil
+	}
+	return fmt.Errorf("no scripts found for user")
+}
+
+// SetActiveScript sets the active script for a user (stores script with given name and activates)
+func (m *Manager) SetActiveScript(userID string, scriptName string, source string) error {
+	if err := m.StoreScript(userID, scriptName, source); err != nil {
+		return err
+	}
+	return m.SetActiveScriptByName(userID, scriptName)
 }
 
 // GetActiveScript gets the active script for a user
 func (m *Manager) GetActiveScript(userID string) (*Script, bool) {
 	m.scriptsMu.RLock()
 	defer m.scriptsMu.RUnlock()
-	script, ok := m.scripts[userID]
-	return script, ok
+
+	activeName, hasActive := m.activeScripts[userID]
+	if !hasActive {
+		return nil, false
+	}
+
+	userScripts, ok := m.scripts[userID]
+	if !ok {
+		return nil, false
+	}
+
+	stored, ok := userScripts[activeName]
+	if !ok {
+		return nil, false
+	}
+	return stored.Script, true
 }
 
 // HasActiveScript returns true if user has a sieve script
 func (m *Manager) HasActiveScript(userID string) bool {
 	m.scriptsMu.RLock()
 	defer m.scriptsMu.RUnlock()
-	_, ok := m.scripts[userID]
+	_, ok := m.activeScripts[userID]
 	return ok
 }
 
-// DeleteScript removes the active script for a user
-func (m *Manager) DeleteScript(userID string) {
+// DeleteScript removes a script for a user (by name)
+func (m *Manager) DeleteScript(userID string, scriptName string) {
 	m.scriptsMu.Lock()
 	defer m.scriptsMu.Unlock()
-	delete(m.scripts, userID)
+
+	if userScripts, ok := m.scripts[userID]; ok {
+		delete(userScripts, scriptName)
+		if m.activeScripts[userID] == scriptName {
+			delete(m.activeScripts, userID)
+		}
+	}
+}
+
+// ListScripts returns all script names for a user
+func (m *Manager) ListScripts(userID string) []string {
+	m.scriptsMu.RLock()
+	defer m.scriptsMu.RUnlock()
+
+	var result []string
+	if userScripts, ok := m.scripts[userID]; ok {
+		for name := range userScripts {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+// GetActiveScriptName returns the name of the active script for a user
+func (m *Manager) GetActiveScriptName(userID string) string {
+	m.scriptsMu.RLock()
+	defer m.scriptsMu.RUnlock()
+	return m.activeScripts[userID]
+}
+
+// GetScript returns a specific script by name for a user
+func (m *Manager) GetScript(userID string, scriptName string) (*Script, bool) {
+	m.scriptsMu.RLock()
+	defer m.scriptsMu.RUnlock()
+
+	if userScripts, ok := m.scripts[userID]; ok {
+		stored, exists := userScripts[scriptName]
+		if !exists {
+			return nil, false
+		}
+		return stored.Script, true
+	}
+	return nil, false
+}
+
+// GetScriptSource returns the source of a specific script by name for a user
+func (m *Manager) GetScriptSource(userID string, scriptName string) string {
+	m.scriptsMu.RLock()
+	defer m.scriptsMu.RUnlock()
+
+	if userScripts, ok := m.scripts[userID]; ok {
+		if stored, exists := userScripts[scriptName]; exists {
+			return stored.Source
+		}
+	}
+	return ""
 }
 
 // ProcessMessage runs the Sieve script for a user and returns actions

@@ -230,7 +230,6 @@ func (s *ManageSieveServer) cmdPutScript(conn net.Conn, args []string, reader *m
 
 	scriptName := args[0]
 	scriptSize := 0
-	_ = scriptName // TODO: Use for per-user script storage in real implementation
 	fmt.Sscanf(args[1], "%d", &scriptSize)
 
 	if scriptSize <= 0 || scriptSize > 1024*1024 {
@@ -258,8 +257,12 @@ func (s *ManageSieveServer) cmdPutScript(conn net.Conn, args []string, reader *m
 		return fmt.Errorf("script validation failed: %w", err)
 	}
 
-	// Store script (in real implementation, would store per-user)
-	// For now, just validate
+	// Store script (note: per-user storage requires session management)
+	// Store with script name as the script identifier
+	if err := s.manager.StoreScript("default", scriptName, scriptContent); err != nil {
+		return fmt.Errorf("failed to store script: %w", err)
+	}
+
 	s.sendResponse(conn, "OK \"Script stored\"")
 	return nil
 }
@@ -267,10 +270,18 @@ func (s *ManageSieveServer) cmdPutScript(conn net.Conn, args []string, reader *m
 // cmdListScripts handles LISTSCRIPTS command
 // Format: LISTSCRIPTS
 func (s *ManageSieveServer) cmdListScripts(conn net.Conn, _ []string) error {
-	// In real implementation, would list scripts for authenticated user
-	// For now, return empty list
+	// List scripts for the authenticated user (using "default" for now)
+	scripts := s.manager.ListScripts("default")
+	activeName := s.manager.GetActiveScriptName("default")
+
 	s.sendResponse(conn, "OK \"List scripts\"")
-	s.sendResponse(conn, "NIL \"active script\"")
+	for _, name := range scripts {
+		if name == activeName {
+			s.sendResponse(conn, "%s \"active script\"", name)
+		} else {
+			s.sendResponse(conn, "%s", name)
+		}
+	}
 	s.sendResponse(conn, "OK \"List scripts complete\"")
 	return nil
 }
@@ -287,7 +298,11 @@ func (s *ManageSieveServer) cmdSetActive(conn net.Conn, args []string) error {
 		return fmt.Errorf("script name cannot be empty")
 	}
 
-	// In real implementation, would set active script for user
+	// Set active script for the user
+	if err := s.manager.SetActiveScriptByName("default", scriptName); err != nil {
+		return fmt.Errorf("failed to set active script: %w", err)
+	}
+
 	s.sendResponse(conn, "OK \"Set active script\"")
 	return nil
 }
