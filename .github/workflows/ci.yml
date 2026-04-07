@@ -53,6 +53,17 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build web UIs
+        run: |
+          cd webmail && npm ci && npm run build
+          cd ../web/admin && npm ci && npm run build
+          cd ../web/account && npm install && npm run build
+
       - name: Download dependencies
         run: go mod download
 
