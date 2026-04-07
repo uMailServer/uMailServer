@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/ratelimit"
 	"github.com/umailserver/umailserver/internal/spam"
 )
 
@@ -198,59 +199,67 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 
 // Default pipeline stages
 
-// RateLimitStage checks rate limits
+// RateLimitStage checks rate limits using the comprehensive ratelimit package
 type RateLimitStage struct {
-	mu          sync.Mutex
-	limits      map[string]*rateLimiter
-	lastCleanup time.Time
+	limiter *ratelimit.RateLimiter
 }
 
-type rateLimiter struct {
-	count  int
-	window time.Time
-}
-
-// NewRateLimitStage creates a new rate limit stage
-func NewRateLimitStage() *RateLimitStage {
+// NewRateLimitStage creates a new rate limit stage with the provided RateLimiter
+func NewRateLimitStage(limiter *ratelimit.RateLimiter) *RateLimitStage {
 	return &RateLimitStage{
-		limits:      make(map[string]*rateLimiter),
-		lastCleanup: time.Now(),
+		limiter: limiter,
+	}
+}
+
+// NewRateLimitStageWithDefaults creates a new rate limit stage with default in-memory limits
+// Deprecated: Use NewRateLimitStage with a properly configured RateLimiter instead
+func NewRateLimitStageWithDefaults() *RateLimitStage {
+	return &RateLimitStage{
+		limiter: ratelimit.New(nil, nil), // nil bbolt, nil config (uses defaults)
 	}
 }
 
 func (s *RateLimitStage) Name() string { return "RateLimit" }
 
 func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.limiter == nil {
+		return ResultAccept // No rate limiting configured
+	}
 
-	key := ctx.RemoteIP.String()
-	now := time.Now()
+	// For authenticated users, check user-based rate limits
+	if ctx.Authenticated && ctx.Username != "" {
+		result := s.limiter.CheckUser(ctx.Username)
+		if !result.Allowed {
+			ctx.Rejected = true
+			ctx.RejectionCode = 421
+			ctx.RejectionMessage = result.Reason
+			if result.RetryAfter > 0 {
+				ctx.RejectionMessage = fmt.Sprintf("%s (retry in %ds)", ctx.RejectionMessage, result.RetryAfter)
+			}
+			return ResultReject
+		}
 
-	// Periodically clean up expired rate limit entries to prevent unbounded growth
-	if now.Sub(s.lastCleanup) > 5*time.Minute {
-		for k, l := range s.limits {
-			if now.Sub(l.window) > time.Minute {
-				delete(s.limits, k)
+		// Also check recipient limit for authenticated users
+		if len(ctx.To) > 0 {
+			recipResult := s.limiter.CheckRecipients(ctx.Username, len(ctx.To))
+			if !recipResult.Allowed {
+				ctx.Rejected = true
+				ctx.RejectionCode = 421
+				ctx.RejectionMessage = recipResult.Reason
+				return ResultReject
 			}
 		}
-		s.lastCleanup = now
 	}
 
-	limiter, exists := s.limits[key]
-	if !exists || now.Sub(limiter.window) > time.Minute {
-		s.limits[key] = &rateLimiter{
-			count:  1,
-			window: now,
-		}
-		return ResultAccept
-	}
-
-	limiter.count++
-	if limiter.count > 30 { // 30 messages per minute per IP
+	// For all connections, check IP-based rate limits
+	result := s.limiter.CheckIP(ctx.RemoteIP.String())
+	if !result.Allowed {
 		ctx.Rejected = true
 		ctx.RejectionCode = 421
-		ctx.RejectionMessage = "Rate limit exceeded"
+		ctx.RejectionMessage = result.Reason
+		if result.RetryAfter > 0 {
+			ctx.RejectionMessage = fmt.Sprintf("%s (retry in %ds)", ctx.RejectionMessage, result.RetryAfter)
+		}
 		return ResultReject
 	}
 
@@ -356,6 +365,7 @@ type GreylistStage struct {
 	mu          sync.Mutex
 	greylist    map[string]*greylistEntry
 	lastCleanup time.Time
+	maxEntries  int // Maximum entries before emergency cleanup
 }
 
 type greylistEntry struct {
@@ -368,6 +378,7 @@ func NewGreylistStage() *GreylistStage {
 	return &GreylistStage{
 		greylist:    make(map[string]*greylistEntry),
 		lastCleanup: time.Now(),
+		maxEntries:  100000, // Maximum entries before emergency cleanup
 	}
 }
 
@@ -378,6 +389,20 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 	defer s.mu.Unlock()
 
 	now := time.Now()
+
+	// Emergency cleanup if we've exceeded max entries
+	if len(s.greylist) >= s.maxEntries {
+		// Remove oldest 50% of entries
+		cutoff := now.Add(-5 * time.Minute) // Keep entries newer than 5 minutes
+		for key, entry := range s.greylist {
+			if entry.firstSeen.Before(cutoff) {
+				delete(s.greylist, key)
+			}
+			if len(s.greylist) < s.maxEntries/2 {
+				break // Stop when we've removed enough
+			}
+		}
+	}
 
 	// Periodically clean up stale greylist entries to prevent unbounded growth
 	if now.Sub(s.lastCleanup) > 10*time.Minute {
@@ -525,11 +550,37 @@ func (s *RBLStage) Process(ctx *MessageContext) PipelineResult {
 }
 
 func reverseIP(ip string) string {
+	// Check if IPv4
 	parts := strings.Split(ip, ".")
-	if len(parts) != 4 {
+	if len(parts) == 4 {
+		return fmt.Sprintf("%s.%s.%s.%s", parts[3], parts[2], parts[1], parts[0])
+	}
+
+	// IPv6: use nibble-based reverse (RFC 3596)
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil || parsedIP.To4() != nil {
+		return "" // Invalid or IPv4
+	}
+
+	ipv6 := parsedIP.To16()
+	if ipv6 == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s.%s.%s.%s", parts[3], parts[2], parts[1], parts[0])
+
+	// Build reversed nibble string per RFC 3596
+	// Each nibble (4 bits) of the IPv6 address is reversed
+	// For 2001:db8::1 (20010db80000000000000000000000001):
+	// nibble 31 is low nibble of last byte, nibble 0 is high nibble of first byte
+	var reversed strings.Builder
+	for i := 15; i >= 0; i-- {
+		high := (ipv6[i] >> 4) & 0x0F
+		low := ipv6[i] & 0x0F
+		// RFC 3596: nibble N+1 is high nibble, nibble N is low nibble
+		// When building reverse, we go byte-by-byte: low nibble first, then high
+		reversed.WriteString(fmt.Sprintf("%d.%d.", low, high))
+	}
+	reversed.WriteString("ip6.arpa")
+	return reversed.String()
 }
 
 func extractDomain(email string) string {

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/storage"
@@ -17,6 +18,21 @@ type BboltMailstore struct {
 	dataDir  string
 	db       *storage.Database
 	msgStore *storage.MessageStore
+
+	// MDN tracking
+	mdnSent     map[string]bool // Message-Id -> true if MDN sent
+	mdnSentMu   sync.Mutex
+	mdnHandler  func(from, to, messageID, inReplyTo string, msg []byte) error
+}
+
+// MDNHandler defines the interface for sending MDN notifications
+type MDNHandler interface {
+	SendMDN(from, to, messageID, inReplyTo string, msg []byte) error
+}
+
+// SetMDNHandler sets the handler for sending MDN notifications
+func (m *BboltMailstore) SetMDNHandler(handler func(from, to, messageID, inReplyTo string, msg []byte) error) {
+	m.mdnHandler = handler
 }
 
 // NewBboltMailstore creates a new mailstore backed by bbolt
@@ -43,6 +59,7 @@ func NewBboltMailstore(dataDir string) (*BboltMailstore, error) {
 		dataDir:  dataDir,
 		db:       db,
 		msgStore: msgStore,
+		mdnSent:  make(map[string]bool),
 	}, nil
 }
 
@@ -52,6 +69,7 @@ func NewBboltMailstoreWithInterfaces(db *storage.Database, msgStore *storage.Mes
 		dataDir:  "shared",
 		db:       db,
 		msgStore: msgStore,
+		mdnSent:  make(map[string]bool),
 	}
 }
 
@@ -238,10 +256,84 @@ func (m *BboltMailstore) getMessage(user, mailbox string, seqNum, uid uint32, it
 		data, err := m.msgStore.ReadMessage(user, meta.MessageID)
 		if err == nil {
 			msg.Data = data
+			// Check for MDN request and send if needed
+			m.checkAndSendMDN(user, meta.MessageID, meta.From, meta.To, data)
 		}
 	}
 
 	return msg, nil
+}
+
+// checkAndSendMDN checks if an MDN should be sent for this message
+func (m *BboltMailstore) checkAndSendMDN(user, messageID, from, to string, msgData []byte) {
+	if m.mdnHandler == nil {
+		return
+	}
+
+	// Check if MDN already sent for this message
+	m.mdnSentMu.Lock()
+	if m.mdnSent == nil {
+		m.mdnSent = make(map[string]bool)
+	}
+	if m.mdnSent[messageID] {
+		m.mdnSentMu.Unlock()
+		return
+	}
+	m.mdnSentMu.Unlock()
+
+	// Parse message to check for Disposition-Notification-To header
+	header := parseDispositionHeader(string(msgData))
+	if header == "" {
+		return
+	}
+
+	// Parse the MDN address
+	mdnTo, err := parseMDNAddress(header)
+	if err != nil || mdnTo == "" {
+		return
+	}
+
+	// Extract In-Reply-To for the MDN
+	inReplyTo := messageID
+
+	// Mark as sent before sending to prevent duplicate sends
+	m.mdnSentMu.Lock()
+	m.mdnSent[messageID] = true
+	m.mdnSentMu.Unlock()
+
+	// Send MDN asynchronously
+	go func() {
+		if err := m.mdnHandler(from, mdnTo, messageID, inReplyTo, msgData); err != nil {
+			// Log error but don't fail the fetch
+			m.mdnSentMu.Lock()
+			delete(m.mdnSent, messageID) // Allow retry on failure
+			m.mdnSentMu.Unlock()
+		}
+	}()
+}
+
+// parseDispositionHeader extracts Disposition-Notification-To header value
+func parseDispositionHeader(msgStr string) string {
+	for _, line := range strings.Split(msgStr, "\r\n") {
+		if strings.HasPrefix(strings.ToLower(line), "disposition-notification-to:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "disposition-notification-to:"))
+		}
+	}
+	return ""
+}
+
+// parseMDNAddress extracts the email address from Disposition-Notification-To
+func parseMDNAddress(header string) (string, error) {
+	header = strings.TrimSpace(header)
+	// Remove angle brackets if present
+	if strings.HasPrefix(header, "<") && strings.HasSuffix(header, ">") {
+		header = header[1 : len(header)-1]
+	}
+	// If it contains @, it's likely an email
+	if strings.Contains(header, "@") {
+		return header, nil
+	}
+	return "", fmt.Errorf("invalid MDN address")
 }
 
 // StoreFlags updates message flags

@@ -25,8 +25,9 @@ type Config struct {
 	AV       AVConfig       `yaml:"av"`
 	Security SecurityConfig `yaml:"security"`
 	LDAP     LDAPConfig     `yaml:"ldap"`
-	MCP      MCPConfig      `yaml:"mcp"`
-	Domains  []DomainConfig `yaml:"domains"`
+	MCP        MCPConfig        `yaml:"mcp"`
+	ManageSieve ManageSieveConfig `yaml:"managesieve"`
+	Domains    []DomainConfig    `yaml:"domains"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Metrics  MetricsConfig  `yaml:"metrics"`
 	Database DatabaseConfig `yaml:"database"`
@@ -169,6 +170,23 @@ type SecurityConfig struct {
 
 // RateLimitConfig holds rate limiting settings
 type RateLimitConfig struct {
+	// Per-IP limits (inbound connections/messages)
+	IPPerMinute       int `yaml:"ip_per_minute"`        // messages per minute per IP (inbound)
+	IPPerHour         int `yaml:"ip_per_hour"`          // messages per hour per IP
+	IPPerDay          int `yaml:"ip_per_day"`           // messages per day per IP
+	IPConnections     int `yaml:"ip_connections"`      // concurrent connections per IP
+
+	// Per-user limits (authenticated outbound sending)
+	UserPerMinute     int `yaml:"user_per_minute"`     // messages per minute per user
+	UserPerHour       int `yaml:"user_per_hour"`       // messages per hour per user
+	UserPerDay        int `yaml:"user_per_day"`        // messages per day per user (daily quota)
+	UserMaxRecipients int `yaml:"user_max_recipients"` // max recipients per message
+
+	// Global limits
+	GlobalPerMinute   int `yaml:"global_per_minute"`  // global messages per minute
+	GlobalPerHour     int `yaml:"global_per_hour"`    // global messages per hour
+
+	// Legacy aliases (for backwards compatibility)
 	SMTPPerMinute         int `yaml:"smtp_per_minute"`
 	SMTPPerHour           int `yaml:"smtp_per_hour"`
 	IMAPConnections       int `yaml:"imap_connections"`
@@ -198,6 +216,13 @@ type MCPConfig struct {
 	Port      int    `yaml:"port"`
 	AuthToken string `yaml:"auth_token"`
 	Bind      string `yaml:"bind"`
+}
+
+// ManageSieveConfig holds ManageSieve server settings
+type ManageSieveConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Port    int    `yaml:"port"`
+	Bind    string `yaml:"bind"`
 }
 
 // DomainConfig holds per-domain settings

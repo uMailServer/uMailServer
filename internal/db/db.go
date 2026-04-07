@@ -268,15 +268,6 @@ func AccountKey(domain, localPart string) string {
 	return fmt.Sprintf("%s/%s", domain, localPart)
 }
 
-// splitEmail splits an email address into localPart and domain
-func splitEmail(email string) (localPart, domain string) {
-	at := strings.LastIndex(email, "@")
-	if at == -1 {
-		return email, ""
-	}
-	return email[:at], email[at+1:]
-}
-
 // CreateAccount creates a new account
 func (d *DB) CreateAccount(account *AccountData) error {
 	if account.CreatedAt.IsZero() {

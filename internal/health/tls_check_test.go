@@ -120,25 +120,6 @@ func TestTLSCertificateCheck_ReadError(t *testing.T) {
 	t.Logf("TLS check with unreadable path: status=%s, message=%s", check.Status, check.Message)
 }
 
-func TestTLSConfiguration(t *testing.T) {
-	config := TLSConfiguration{
-		CertPath:     "/etc/certs/cert.pem",
-		KeyPath:      "/etc/certs/key.pem",
-		WarningDays:  30,
-		CriticalDays: 7,
-	}
-
-	if config.CertPath != "/etc/certs/cert.pem" {
-		t.Error("CertPath mismatch")
-	}
-	if config.WarningDays != 30 {
-		t.Error("WarningDays mismatch")
-	}
-	if config.CriticalDays != 7 {
-		t.Error("CriticalDays mismatch")
-	}
-}
-
 // Test with expired certificate
 func TestTLSCertificateCheck_Expired(t *testing.T) {
 	// Create an expired certificate

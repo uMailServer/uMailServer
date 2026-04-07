@@ -100,6 +100,20 @@ func DefaultConfig() *Config {
 			LockoutDuration:  Duration(15 * time.Minute),
 			JWTSecret:        "change-me-in-production-32-char-secret",
 			RateLimit: RateLimitConfig{
+				// Per-IP limits (inbound)
+				IPPerMinute:       30,
+				IPPerHour:         500,
+				IPPerDay:          5000,
+				IPConnections:     10,
+				// Per-user limits (outbound authenticated)
+				UserPerMinute:     60,
+				UserPerHour:       1000,
+				UserPerDay:        5000,
+				UserMaxRecipients: 100,
+				// Global limits
+				GlobalPerMinute:   10000,
+				GlobalPerHour:     100000,
+				// Legacy aliases
 				SMTPPerMinute:         30,
 				SMTPPerHour:           500,
 				IMAPConnections:       50,
@@ -111,6 +125,11 @@ func DefaultConfig() *Config {
 			Port:      3000,
 			AuthToken: "",
 			Bind:      "127.0.0.1",
+		},
+		ManageSieve: ManageSieveConfig{
+			Enabled: true,
+			Port:    4190,
+			Bind:    "0.0.0.0",
 		},
 		Domains: []DomainConfig{},
 		Logging: LoggingConfig{

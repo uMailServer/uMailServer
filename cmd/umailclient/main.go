@@ -75,6 +75,16 @@ Examples:
 
 // ========== SMTP Client ==========
 
+// formatAddr formats host:port correctly for both IPv4 and IPv6
+func formatAddr(host string, port int) string {
+	// Check if host is an IP address
+	if ip := net.ParseIP(host); ip != nil {
+		// IPv6 addresses need to be wrapped in brackets
+		return fmt.Sprintf("[%s]:%d", host, port)
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
 type SMTPClient struct {
 	Host     string
 	Port     int
@@ -88,7 +98,7 @@ func NewSMTPClient(host string, port int, user, pass string, tls bool) *SMTPClie
 }
 
 func (c *SMTPClient) Send(from, to, subject, body string) error {
-	addr := fmt.Sprintf("%s:%d", c.Host, c.Port)
+	addr := formatAddr(c.Host, c.Port)
 
 	var conn net.Conn
 	var err error
@@ -344,7 +354,7 @@ func runInbox() {
 
 	cmd.Parse(os.Args[2:])
 
-	addr := fmt.Sprintf("%s:%d", *host, *port)
+	addr := formatAddr(*host, *port)
 	fmt.Printf("Testing IMAP connection to %s (TLS=%v)...\n", addr, *useTLS)
 
 	var conn net.Conn
@@ -459,7 +469,7 @@ func runDSN() {
 	}
 
 	// Test DSN by sending with NOTIFY parameter
-	addr := fmt.Sprintf("%s:%d", *host, *port)
+	addr := formatAddr(*host, *port)
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		fmt.Printf("Connect failed: %v\n", err)

@@ -3,7 +3,6 @@ package auth
 import (
 	"encoding/base64"
 	"fmt"
-	"os"
 	"time"
 )
 
@@ -221,14 +220,4 @@ func (d *OpenPGPDecryptor) DecryptAndVerify(msg []byte, signer *OpenPGPSigner) (
 	_ = signer
 
 	return decrypted, signatureVerified, nil
-}
-
-// LoadOpenPGPPublicKey loads a public key from a file
-func LoadOpenPGPPublicKey(filename string) ([]byte, error) {
-	return os.ReadFile(filename)
-}
-
-// LoadOpenPGPPrivateKey loads a private key from a file
-func LoadOpenPGPPrivateKey(filename string) ([]byte, error) {
-	return os.ReadFile(filename)
 }

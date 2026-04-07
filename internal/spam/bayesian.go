@@ -442,7 +442,7 @@ func CombinedProbability(probs []float64) float64 {
 		return 0.01
 	}
 
-	return 1.0 / (1.0 + math.Exp(h-s))
+	return 1.0 / (1.0 + math.Exp(s-h))
 }
 
 // ClassifyResult holds the result of Bayesian classification

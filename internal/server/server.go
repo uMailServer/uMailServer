@@ -30,6 +30,7 @@ import (
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/pop3"
 	"github.com/umailserver/umailserver/internal/queue"
+	"github.com/umailserver/umailserver/internal/ratelimit"
 	"github.com/umailserver/umailserver/internal/search"
 	"github.com/umailserver/umailserver/internal/sieve"
 	"github.com/umailserver/umailserver/internal/smtp"
@@ -57,8 +58,14 @@ type Server struct {
 	storageDB     *storage.Database
 	mailstore     *imap.BboltMailstore
 	pop3Server    *pop3.Server
-	mcpHTTPServer *http.Server
-	healthMonitor *health.Monitor
+	mcpHTTPServer     *http.Server
+	healthMonitor     *health.Monitor
+	rateLimiter       *ratelimit.RateLimiter
+	manageSieveServer *sieve.ManageSieveServer
+
+	// S/MIME and OpenPGP keystores
+	smimeKeystore   *smtp.SMIMEKeystore
+	openpgpKeystore *smtp.OpenPGPKeystore
 
 	// Submission SMTP servers (ports 587/465)
 	submissionServer    *smtp.Server
@@ -115,6 +122,8 @@ func New(cfg *config.Config) (*Server, error) {
 		ctx:    ctx,
 		cancel: cancel,
 		sieveManager: sieve.NewManager(),
+		smimeKeystore:   smtp.NewSMIMEKeystore(),
+		openpgpKeystore: smtp.NewOpenPGPKeystore(),
 	}
 
 	// Initialize database
@@ -176,6 +185,22 @@ func New(cfg *config.Config) (*Server, error) {
 	s.searchSvc = searchSvc
 	s.indexWork = make(chan indexJob, 1000)
 
+	// Initialize rate limiter with config
+	rateLimiterConfig := &ratelimit.Config{
+		IPPerMinute:       cfg.Security.RateLimit.IPPerMinute,
+		IPPerHour:         cfg.Security.RateLimit.IPPerHour,
+		IPPerDay:          cfg.Security.RateLimit.IPPerDay,
+		IPConnections:     cfg.Security.RateLimit.IPConnections,
+		UserPerMinute:     cfg.Security.RateLimit.UserPerMinute,
+		UserPerHour:       cfg.Security.RateLimit.UserPerHour,
+		UserPerDay:        cfg.Security.RateLimit.UserPerDay,
+		UserMaxRecipients: cfg.Security.RateLimit.UserMaxRecipients,
+		GlobalPerMinute:   cfg.Security.RateLimit.GlobalPerMinute,
+		GlobalPerHour:     cfg.Security.RateLimit.GlobalPerHour,
+		CleanupInterval:   5 * time.Minute,
+	}
+	s.rateLimiter = ratelimit.New(storageDB.Bolt(), rateLimiterConfig)
+
 	// Initialize health monitor
 	s.healthMonitor = health.NewMonitor("1.0.0")
 
@@ -221,6 +246,9 @@ func (s *Server) Start() error {
 	// Create mailstore for IMAP using shared storage
 	s.mailstore = imap.NewBboltMailstoreWithInterfaces(s.storageDB, s.msgStore)
 
+	// Set MDN handler for read receipts
+	s.mailstore.SetMDNHandler(s.sendMDN)
+
 	s.startSMTP()
 
 	// Start search indexing worker pool
@@ -240,6 +268,7 @@ func (s *Server) Start() error {
 	}
 
 	s.startMCP()
+	s.startManageSieve()
 	s.startAPI()
 
 	return nil
@@ -262,7 +291,7 @@ func (s *Server) startSMTP() {
 
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
 	smtpServer.SetAuthHandler(s.authenticate)
-	smtpServer.SetDeliveryHandler(s.deliverMessage)
+	smtpServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
 	smtpServer.SetUserSecretHandler(s.getUserSecret)
 	smtpServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
@@ -282,6 +311,11 @@ func (s *Server) startSMTP() {
 	pipeline.AddStage(smtp.NewAuthDKIMStage(dkimVerifier, s.logger))
 	pipeline.AddStage(smtp.NewAuthDMARCStage(dmarcEvaluator, s.logger))
 	pipeline.AddStage(smtp.NewAuthARCStage(arcValidator, s.logger))
+
+	// Rate limiting stage (uses per-IP and per-user limits)
+	if s.rateLimiter != nil {
+		pipeline.AddStage(smtp.NewRateLimitStage(s.rateLimiter))
+	}
 
 	// Spam filtering stages
 	if s.config.Spam.Greylisting.Enabled {
@@ -308,6 +342,12 @@ func (s *Server) startSMTP() {
 	if s.sieveManager != nil {
 		pipeline.AddStage(smtp.NewSieveStage(s.sieveManager))
 	}
+
+	// S/MIME processing stage
+	pipeline.AddStage(smtp.NewSMIMEStage(s.smimeKeystore))
+
+	// OpenPGP processing stage
+	pipeline.AddStage(smtp.NewOpenPGPStage(s.openpgpKeystore))
 
 	// Antivirus scanning stage
 	if s.config.AV.Enabled {
@@ -348,7 +388,7 @@ func (s *Server) startSMTP() {
 
 		submissionServer := smtp.NewServer(submissionCfg, s.logger)
 		submissionServer.SetAuthHandler(s.authenticate)
-		submissionServer.SetDeliveryHandler(s.deliverMessage)
+		submissionServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
 		submissionServer.SetUserSecretHandler(s.getUserSecret)
 		submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
@@ -379,7 +419,7 @@ func (s *Server) startSMTP() {
 
 		submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
 		submissionTLSServer.SetAuthHandler(s.authenticate)
-		submissionTLSServer.SetDeliveryHandler(s.deliverMessage)
+		submissionTLSServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
 		submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
 		submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
@@ -491,6 +531,30 @@ func (s *Server) startMCP() {
 		}
 	}()
 	s.logger.Info("MCP server started", "addr", mcpAddr)
+}
+
+// startManageSieve creates and starts the ManageSieve server on port 4190
+func (s *Server) startManageSieve() {
+	if !s.config.ManageSieve.Enabled {
+		return
+	}
+
+	addr := fmt.Sprintf("%s:%d", s.config.ManageSieve.Bind, s.config.ManageSieve.Port)
+	tlsCfg := s.tlsManager.GetTLSConfig()
+
+	sieveServer := sieve.NewManageSieveServer(s.sieveManager, tlsCfg)
+	// Set auth handler for ManageSieve (uses same auth as submission SMTP)
+	sieveServer.SetAuthHandler(func(user, pass string) bool {
+		ok, _ := s.authenticate(user, pass)
+		return ok
+	})
+	if err := sieveServer.Listen(); err != nil {
+		s.logger.Error("Failed to start ManageSieve server", "error", err)
+		return
+	}
+
+	s.manageSieveServer = sieveServer
+	s.logger.Info("ManageSieve server started", "addr", addr)
 }
 
 // queueStatsAdapter wraps a *queue.Manager to satisfy the health.QueueStats interface.
@@ -650,6 +714,13 @@ func (s *Server) Stop() error {
 		shutdownCancel()
 	}
 
+	// Stop ManageSieve server
+	if s.manageSieveServer != nil {
+		if err := s.manageSieveServer.Close(); err != nil {
+			s.logger.Error("Failed to stop ManageSieve server", "error", err)
+		}
+	}
+
 	// Stop API server
 	if s.apiServer != nil {
 		if err := s.apiServer.Stop(); err != nil {
@@ -752,6 +823,36 @@ func (s *Server) getAPOPSecret(username string) (string, error) {
 
 // deliverMessage delivers an incoming message
 func (s *Server) deliverMessage(from string, to []string, data []byte) error {
+	return s.deliverMessageWithSieve(from, to, data, nil)
+}
+
+// deliverMessageWithSieve delivers an incoming message with optional Sieve filtering actions
+func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, sieveActions []string) error {
+	// Parse sieve actions for fileinto and redirect
+	var targetFolder string
+	var redirectAddrs []string
+
+	for _, action := range sieveActions {
+		if strings.HasPrefix(action, "fileinto:") {
+			targetFolder = strings.TrimPrefix(action, "fileinto:")
+		} else if strings.HasPrefix(action, "redirect:") {
+			redirectAddr := strings.TrimPrefix(action, "redirect:")
+			if redirectAddr != "" {
+				redirectAddrs = append(redirectAddrs, redirectAddr)
+			}
+		}
+	}
+
+	// Handle redirects - queue copies to redirect addresses
+	for _, redirectAddr := range redirectAddrs {
+		if err := s.relayMessage(from, redirectAddr, data); err != nil {
+			s.logger.Error("Failed to queue redirect message", "to", redirectAddr, "error", err)
+			// Continue with other deliveries even if redirect fails
+		} else {
+			s.logger.Debug("Message queued for redirect", "from", from, "to", redirectAddr)
+		}
+	}
+
 	var errs []error
 	for _, recipient := range to {
 		user, domain := parseEmail(recipient)
@@ -778,7 +879,8 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 			}
 		}
 
-		if err := s.deliverLocal(user, domain, from, data); err != nil {
+		// Deliver with optional target folder from sieve
+		if err := s.deliverLocal(user, domain, from, data, targetFolder); err != nil {
 			s.logger.Error("Failed to deliver locally", "user", user, "domain", domain, "error", err)
 			errs = append(errs, fmt.Errorf("deliver %s: %w", recipient, err))
 		}
@@ -806,8 +908,14 @@ func (s *Server) relayMessage(from, to string, data []byte) error {
 }
 
 // deliverLocal delivers a message to a local mailbox
-func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
+func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFolders ...string) error {
 	email := user + "@" + domain
+
+	// Determine target folder - default to INBOX if not specified
+	folder := "INBOX"
+	if len(targetFolders) > 0 && targetFolders[0] != "" {
+		folder = targetFolders[0]
+	}
 
 	// Check if user exists
 	account, err := s.database.GetAccount(domain, user)
@@ -820,7 +928,7 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 		if domainData, derr := s.database.GetDomain(domain); derr == nil && domainData != nil && domainData.CatchAllTarget != "" {
 			tUser, tDomain := parseEmail(domainData.CatchAllTarget)
 			if tUser != "" && tDomain != "" {
-				return s.deliverLocal(tUser, tDomain, from, data)
+				return s.deliverLocal(tUser, tDomain, from, data, targetFolders...)
 			}
 		}
 		return fmt.Errorf("user does not exist or is not active: %s", email)
@@ -874,7 +982,7 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 
 	// Store metadata and index message for search
 	if s.storageDB != nil {
-		uid, uidErr := s.storageDB.GetNextUID(email, "INBOX")
+		uid, uidErr := s.storageDB.GetNextUID(email, folder)
 		if uidErr == nil {
 			subject, fromAddr, toAddr, dateStr := parseBasicHeaders(data)
 			meta := &storage.MessageMetadata{
@@ -888,8 +996,8 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte) error {
 				From:         fromAddr,
 				To:           toAddr,
 			}
-			if err := s.storageDB.StoreMessageMetadata(email, "INBOX", uid, meta); err != nil {
-					s.logger.Error("Failed to store message metadata", "email", email, "uid", uid, "error", err)
+			if err := s.storageDB.StoreMessageMetadata(email, folder, uid, meta); err != nil {
+					s.logger.Error("Failed to store message metadata", "email", email, "uid", uid, "folder", folder, "error", err)
 				}
 
 			if s.searchSvc != nil {
@@ -953,6 +1061,27 @@ func (s *Server) GetDatabase() *db.DB {
 // GetQueue returns the queue manager
 func (s *Server) GetQueue() *queue.Manager {
 	return s.queue
+}
+
+// sendMDN sends a Message Disposition Notification (read receipt)
+func (s *Server) sendMDN(from, to, messageID, inReplyTo string, msgData []byte) error {
+	// Generate MDN
+	mdn, err := queue.GenerateMDN(msgData, from, to, messageID, inReplyTo, queue.MDNDispositionDisplayed, "umailserver")
+	if err != nil {
+		s.logger.Error("failed to generate MDN", "error", err)
+		return err
+	}
+
+	// Enqueue MDN to be sent
+	if s.queue != nil {
+		if _, err := s.queue.Enqueue(from, []string{to}, mdn); err != nil {
+			s.logger.Error("failed to enqueue MDN", "error", err)
+			return err
+		}
+		s.logger.Info("MDN queued", "from", from, "to", to, "messageID", messageID)
+	}
+
+	return nil
 }
 
 // avScannerAdapter wraps an *av.Scanner to satisfy the smtp.AVScanner interface.
@@ -1156,4 +1285,21 @@ func (s *Server) cleanupVacationReplies() {
 			delete(s.vacationReplies, key)
 		}
 	}
+}
+
+// rateLimitAdapter adapts *ratelimit.RateLimiter to satisfy the api.RateLimitManager interface.
+type rateLimitAdapter struct {
+	rl *ratelimit.RateLimiter
+}
+
+func (a *rateLimitAdapter) GetConfig() *ratelimit.Config {
+	return a.rl.GetConfig()
+}
+
+func (a *rateLimitAdapter) GetIPStats(ip string) map[string]any {
+	return a.rl.GetIPStats(ip)
+}
+
+func (a *rateLimitAdapter) GetUserStats(user string) map[string]any {
+	return a.rl.GetUserStats(user)
 }

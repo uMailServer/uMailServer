@@ -32,6 +32,7 @@ type Server struct {
 	onAuth          func(username, password string) (bool, error)
 	onValidate      func(from string, to []string) error
 	onDeliver       func(from string, to []string, data []byte) error
+	onDeliverWithSieve func(from string, to []string, data []byte, sieveActions []string) error
 	onGetUserSecret func(username string) (string, error) // Get user's shared secret for CRAM-MD5
 	pipeline        *Pipeline
 
@@ -88,6 +89,30 @@ func (s *Server) recordAuthFailure(ip string) {
 	s.authFailuresMu.Lock()
 	defer s.authFailuresMu.Unlock()
 	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+
+	// Periodic cleanup when map gets large (every 100 entries)
+	if len(s.authFailures)%100 == 0 {
+		s.cleanupAuthFailuresLocked()
+	}
+}
+
+// cleanupAuthFailuresLocked removes old entries from authFailures map
+// Must be called with authFailuresMu held
+func (s *Server) cleanupAuthFailuresLocked() {
+	cutoff := time.Now().Add(-s.lockoutDuration)
+	for ip, times := range s.authFailures {
+		var recent []time.Time
+		for _, t := range times {
+			if t.After(cutoff) {
+				recent = append(recent, t)
+			}
+		}
+		if len(recent) > 0 {
+			s.authFailures[ip] = recent
+		} else {
+			delete(s.authFailures, ip)
+		}
+	}
 }
 
 // clearAuthFailures removes recorded failures for the given IP
@@ -142,6 +167,11 @@ func (s *Server) SetValidateHandler(handler func(from string, to []string) error
 // SetDeliveryHandler sets the message delivery handler
 func (s *Server) SetDeliveryHandler(handler func(from string, to []string, data []byte) error) {
 	s.onDeliver = handler
+}
+
+// SetDeliveryHandlerWithSieve sets the message delivery handler with sieve action support
+func (s *Server) SetDeliveryHandlerWithSieve(handler func(from string, to []string, data []byte, sieveActions []string) error) {
+	s.onDeliverWithSieve = handler
 }
 
 // SetPipeline sets the message processing pipeline

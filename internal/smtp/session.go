@@ -57,6 +57,9 @@ type Session struct {
 	rcptToNotify []string // NOTIFY parameter per recipient
 	data         []byte
 	bdatBuffer   *bytes.Buffer
+
+	// Sieve actions from pipeline processing
+	sieveActions []string
 }
 
 // NewSession creates a new SMTP session
@@ -375,6 +378,9 @@ func (s *Session) handleDATA() error {
 			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 		}
 
+		// Store sieve actions for delivery processing
+		s.sieveActions = ctx.SpamResult.Reasons
+
 		switch result {
 		case ResultReject:
 			s.resetTransaction()
@@ -459,7 +465,12 @@ func (s *Session) handleDATA() error {
 	}
 
 	// Deliver message
-	if s.server.onDeliver != nil {
+	if s.server.onDeliverWithSieve != nil {
+		if err := s.server.onDeliverWithSieve(s.mailFrom, s.rcptTo, s.data, s.sieveActions); err != nil {
+			s.resetTransaction()
+			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+		}
+	} else if s.server.onDeliver != nil {
 		if err := s.server.onDeliver(s.mailFrom, s.rcptTo, s.data); err != nil {
 			s.resetTransaction()
 			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")

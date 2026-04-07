@@ -7,13 +7,10 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
-	"math/big"
-	"net/mail"
 	"os"
 	"strings"
 	"time"
@@ -408,50 +405,4 @@ func LoadPrivateKeyFromFile(filename string) (*rsa.PrivateKey, error) {
 		return nil, err
 	}
 	return ParsePrivateKey(data)
-}
-
-// CreateSelfSignedCert creates a self-signed certificate for testing
-func CreateSelfSignedCert() (*x509.Certificate, *rsa.PrivateKey, error) {
-	// Generate private key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Create certificate template
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Test Organization"},
-			CommonName:   "localhost",
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageEmailProtection},
-		BasicConstraintsValid: true,
-	}
-
-	// Create certificate
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return cert, privateKey, nil
-}
-
-// AddrFromHeader extracts email address from From header
-func AddrFromHeader(header string) (string, error) {
-	msg, err := mail.ReadMessage(strings.NewReader(header))
-	if err != nil {
-		return "", err
-	}
-	addr := msg.Header.Get("From")
-	return addr, nil
 }

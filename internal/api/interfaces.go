@@ -5,6 +5,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/push"
 	"github.com/umailserver/umailserver/internal/queue"
+	"github.com/umailserver/umailserver/internal/ratelimit"
 	"github.com/umailserver/umailserver/internal/vacation"
 )
 
@@ -38,6 +39,14 @@ type FilterManager interface {
 	SaveFilter(filter *EmailFilter) error
 	DeleteFilter(userID, filterID string) error
 	ReorderFilters(userID string, filterIDs []string) error
+}
+
+// RateLimitManager interface for rate limiting
+type RateLimitManager interface {
+	GetConfig() *ratelimit.Config
+	SetConfig(cfg *ratelimit.Config)
+	GetIPStats(ip string) map[string]any
+	GetUserStats(user string) map[string]any
 }
 
 // FileSystem interface for embed.FS abstraction

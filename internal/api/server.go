@@ -64,6 +64,7 @@ type Server struct {
 	vacationMgr VacationManager
 	filterMgr   FilterManager
 	pushSvc     PushService
+	rateLimitMgr RateLimitManager
 
 	// File system abstraction for embed.FS
 	webmailFS FileSystem
@@ -286,6 +287,11 @@ func (s *Server) initRouter() {
 	// Stats (admin only)
 	api.HandleFunc("/api/v1/stats", s.adminMiddleware(http.HandlerFunc(s.handleStats)).ServeHTTP)
 
+	// Rate limits (admin only)
+	api.HandleFunc("/api/v1/admin/ratelimits/config", s.adminMiddleware(http.HandlerFunc(s.handleRateLimitConfig)).ServeHTTP)
+	api.HandleFunc("/api/v1/admin/ratelimits/ip/", s.adminMiddleware(http.HandlerFunc(s.handleRateLimitIPStats)).ServeHTTP)
+	api.HandleFunc("/api/v1/admin/ratelimits/user/", s.adminMiddleware(http.HandlerFunc(s.handleRateLimitUserStats)).ServeHTTP)
+
 	// Search
 	api.HandleFunc("/api/v1/search", s.handleSearch)
 
@@ -381,6 +387,11 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 // SetSearchService injects the search service into the API server
 func (s *Server) SetSearchService(svc *search.Service) {
 	s.searchSvc = svc
+}
+
+// SetRateLimitManager injects the rate limit manager into the API server
+func (s *Server) SetRateLimitManager(mgr RateLimitManager) {
+	s.rateLimitMgr = mgr
 }
 
 // Start starts the API server

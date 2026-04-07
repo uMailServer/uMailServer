@@ -59,16 +59,3 @@ func TestOpenPGPDecryptor(t *testing.T) {
 		t.Error("Expected error when decrypting without keys")
 	}
 }
-
-func TestOpenPGPLoadKeys(t *testing.T) {
-	// Test loading non-existent files
-	_, err := LoadOpenPGPPublicKey("nonexistent_key.pub")
-	if err == nil {
-		t.Error("Expected error when loading non-existent public key")
-	}
-
-	_, err = LoadOpenPGPPrivateKey("nonexistent_key.priv")
-	if err == nil {
-		t.Error("Expected error when loading non-existent private key")
-	}
-}

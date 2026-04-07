@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/smtp"
 	"strings"
@@ -237,6 +238,9 @@ func (m *Manager) sendWebhook(alert Alert) error {
 		return fmt.Errorf("webhook request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Drain and discard response body to allow connection reuse
+	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)

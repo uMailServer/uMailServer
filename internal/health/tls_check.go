@@ -75,11 +75,3 @@ func TLSCertificateCheck(certPath, keyPath string, warningDays, criticalDays int
 		return check
 	}
 }
-
-// TLSConfiguration holds paths to TLS files
-type TLSConfiguration struct {
-	CertPath     string
-	KeyPath      string
-	WarningDays  int // Days before expiry to trigger warning
-	CriticalDays int // Days before expiry to trigger critical
-}

@@ -3,6 +3,7 @@ package sieve
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -14,16 +15,21 @@ import (
 // ManageSieveListenAddr is the default ManageSieve server address
 const ManageSieveListenAddr = "0.0.0.0:4190"
 
+// ManageSieveTLSListenAddr is the TLS listener address
+const ManageSieveTLSListenAddr = "0.0.0.0:4191"
+
 // ManageSieveServer implements RFC 5804 - Protocol for Managing Sieve Scripts
 type ManageSieveServer struct {
-	ln      net.Listener
-	tlsLn   net.Listener
-	tlsCfg  *tls.Config
-	manager *Manager
-	done    chan struct{}
-	wg      sync.WaitGroup
-	mu      sync.Mutex
-	running bool
+	ln           net.Listener
+	tlsLn        net.Listener
+	tlsCfg       *tls.Config
+	manager      *Manager
+	done         chan struct{}
+	wg           sync.WaitGroup
+	mu           sync.Mutex
+	running      bool
+	sessionUser  string       // Authenticated user for this session
+	authHandler  func(user, pass string) bool  // Auth validation function
 }
 
 // NewManageSieveServer creates a new ManageSieve server
@@ -33,6 +39,11 @@ func NewManageSieveServer(manager *Manager, tlsCfg *tls.Config) *ManageSieveServ
 		tlsCfg:  tlsCfg,
 		done:    make(chan struct{}),
 	}
+}
+
+// SetAuthHandler sets the authentication handler for ManageSieve
+func (s *ManageSieveServer) SetAuthHandler(handler func(user, pass string) bool) {
+	s.authHandler = handler
 }
 
 // Listen starts the ManageSieve server
@@ -45,18 +56,45 @@ func (s *ManageSieveServer) Listen() error {
 	s.running = true
 	s.mu.Unlock()
 
-	// Start TLS listener if TLS config is provided
+	// Start plain TCP listener
+	ln, err := net.Listen("tcp", ManageSieveListenAddr)
+	if err != nil {
+		return fmt.Errorf("failed to start listener: %w", err)
+	}
+	s.ln = ln
+	s.wg.Add(1)
+	go s.serve(ln)
+
+	// Start TLS listener if TLS config is provided (on separate port)
 	if s.tlsCfg != nil {
-		ln, err := tls.Listen("tcp", ManageSieveListenAddr, s.tlsCfg)
+		tlsLn, err := tls.Listen("tcp", ManageSieveTLSListenAddr, s.tlsCfg)
 		if err != nil {
 			return fmt.Errorf("failed to start TLS listener: %w", err)
 		}
-		s.tlsLn = ln
+		s.tlsLn = tlsLn
 		s.wg.Add(1)
-		go s.serveTLS(ln)
+		go s.serveTLS(tlsLn)
 	}
 
 	return nil
+}
+
+// serve handles plain TCP connections
+func (s *ManageSieveServer) serve(ln net.Listener) {
+	defer s.wg.Done()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			select {
+			case <-s.done:
+				return
+			default:
+				continue
+			}
+		}
+		s.wg.Add(1)
+		go s.handleConn(conn)
+	}
 }
 
 // serveTLS handles TLS connections
@@ -82,6 +120,14 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 	defer s.wg.Done()
 	defer conn.Close()
 
+	// Create session state for this connection
+	session := &manageSieveSession{
+		conn:    conn,
+		reader:  &manageSieveReader{r: conn},
+		user:    "",  // Not authenticated yet
+		manager: s.manager,
+	}
+
 	// Set read timeout
 	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
@@ -90,9 +136,8 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 		return
 	}
 
-	reader := &manageSieveReader{r: conn}
 	for {
-		line, err := reader.ReadLine()
+		line, err := session.reader.ReadLine()
 		if err == io.EOF {
 			return
 		}
@@ -103,11 +148,19 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 		// Reset read deadline on command
 		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
-		if err := s.processCommand(conn, line, reader); err != nil {
+		if err := s.processCommandSession(session, line); err != nil {
 			s.sendResponse(conn, "NO %s", err.Error())
 			return
 		}
 	}
+}
+
+// manageSieveSession holds state for a single ManageSieve session
+type manageSieveSession struct {
+	conn    net.Conn
+	reader  *manageSieveReader
+	user    string  // Authenticated username
+	manager *Manager
 }
 
 type manageSieveReader struct {
@@ -134,8 +187,8 @@ func (r *manageSieveReader) ReadLine() (string, error) {
 	return strings.TrimRight(string(line), "\r"), nil
 }
 
-// processCommand processes a single ManageSieve command
-func (s *ManageSieveServer) processCommand(conn net.Conn, line string, reader *manageSieveReader) error {
+// processCommandSession processes a single ManageSieve command using session state
+func (s *ManageSieveServer) processCommandSession(session *manageSieveSession, line string) error {
 	// Parse command and arguments
 	parts := parseManageSieveLine(line)
 	if len(parts) == 0 {
@@ -147,24 +200,24 @@ func (s *ManageSieveServer) processCommand(conn net.Conn, line string, reader *m
 
 	switch cmd {
 	case "AUTHENTICATE":
-		return s.cmdAuthenticate(conn, args, reader)
+		return s.cmdAuthenticate(session, args)
 	case "LOGOUT":
-		s.sendResponse(conn, "OK \"Logout successful\"")
+		s.sendResponse(session.conn, "OK \"Logout successful\"")
 		return io.EOF
 	case "PUTSCRIPT":
-		return s.cmdPutScript(conn, args, reader)
+		return s.cmdPutScript(session, args)
 	case "LISTSCRIPTS":
-		return s.cmdListScripts(conn, args)
+		return s.cmdListScripts(session, args)
 	case "SETACTIVE":
-		return s.cmdSetActive(conn, args)
+		return s.cmdSetActive(session, args)
 	case "DELETESCRIPT":
-		return s.cmdDeleteScript(conn, args)
+		return s.cmdDeleteScript(session, args)
 	case "GETSCRIPT":
-		return s.cmdGetScript(conn, args)
+		return s.cmdGetScript(session, args)
 	case "CHECKSCRIPT":
-		return s.cmdCheckScript(conn, args, reader)
+		return s.cmdCheckScript(session, args)
 	case "NOOP":
-		return s.cmdNoop(conn)
+		return s.cmdNoop(session.conn)
 	default:
 		return fmt.Errorf("unknown command: %s", cmd)
 	}
@@ -198,32 +251,120 @@ func parseManageSieveLine(line string) []string {
 }
 
 // cmdAuthenticate handles AUTHENTICATE command
-// Format: AUTHENTICATE <mechanisms> <initial-response>
-func (s *ManageSieveServer) cmdAuthenticate(conn net.Conn, args []string, reader *manageSieveReader) error {
+// Format: AUTHENTICATE <mechanism> <initial-response>
+func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("AUTHENTICATE requires mechanism")
 	}
 
-	// Send continuation request for SASL mechanism
-	if err := s.sendResponse(conn, "OK \"Continue authentication\""); err != nil {
-		return err
-	}
+	mechanism := strings.ToUpper(args[0])
 
-	// Read authentication data (simplified - real implementation would use SASL)
-	_, err := reader.ReadLine()
-	if err != nil {
+	// Handle PLAIN authentication mechanism
+	if mechanism == "PLAIN" {
+		// Send continuation request
+		if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
+			return err
+		}
+
+		// Read the authentication data
+		data, err := session.reader.ReadLine()
+		if err != nil {
+			return fmt.Errorf("authentication failed: %w", err)
+		}
+
+		// Decode PLAIN auth: [authzid]\x00authcid\x00password
+		// The data is base64 encoded
+		decoded, err := decodeBase64(data)
+		if err != nil {
+			return fmt.Errorf("invalid authentication data")
+		}
+
+		parts := strings.Split(string(decoded), "\x00")
+		if len(parts) < 3 {
+			return fmt.Errorf("invalid PLAIN authentication format")
+		}
+
+		// parts[0] = authzid (authorization identity, can be empty)
+		// parts[1] = authcid (authentication identity/username)
+		// parts[2] = password
+		authcid := parts[1]
+		password := parts[2]
+
+		// Validate credentials using auth handler
+		if s.authHandler != nil && s.authHandler(authcid, password) {
+			session.user = authcid
+			s.sendResponse(session.conn, "OK \"Authentication successful\"")
+			return nil
+		}
+
 		return fmt.Errorf("authentication failed")
 	}
 
-	// For now, accept any authentication (simplified - real implementation would use SASL)
-	// In production, this would validate credentials
-	s.sendResponse(conn, "OK \"Authentication successful\"")
-	return nil
+	// Handle LOGIN authentication mechanism
+	if mechanism == "LOGIN" {
+		// Request username
+		if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
+			return err
+		}
+
+		// Read username (base64)
+		username64, err := session.reader.ReadLine()
+		if err != nil {
+			return fmt.Errorf("authentication failed")
+		}
+
+		username, err := decodeBase64(username64)
+		if err != nil {
+			return fmt.Errorf("invalid username")
+		}
+
+		// Request password
+		if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
+			return err
+		}
+
+		// Read password (base64)
+		password64, err := session.reader.ReadLine()
+		if err != nil {
+			return fmt.Errorf("authentication failed")
+		}
+
+		password, err := decodeBase64(password64)
+		if err != nil {
+			return fmt.Errorf("invalid password")
+		}
+
+		// Validate credentials
+		if s.authHandler != nil && s.authHandler(string(username), string(password)) {
+			session.user = string(username)
+			s.sendResponse(session.conn, "OK \"Authentication successful\"")
+			return nil
+		}
+
+		return fmt.Errorf("authentication failed")
+	}
+
+	return fmt.Errorf("unsupported authentication mechanism: %s", mechanism)
+}
+
+// decodeBase64 decodes a base64 string
+func decodeBase64(s string) ([]byte, error) {
+	// First try to decode as base64
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err == nil {
+		return decoded, nil
+	}
+	// If it fails, return the original string as-is (some clients send plain text)
+	return []byte(s), nil
 }
 
 // cmdPutScript handles PUTSCRIPT command
 // Format: PUTSCRIPT <script-name> <script-size>
-func (s *ManageSieveServer) cmdPutScript(conn net.Conn, args []string, reader *manageSieveReader) error {
+func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []string) error {
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
+
 	if len(args) < 2 {
 		return fmt.Errorf("PUTSCRIPT requires script-name and script-size")
 	}
@@ -240,7 +381,7 @@ func (s *ManageSieveServer) cmdPutScript(conn net.Conn, args []string, reader *m
 	scriptBytes := make([]byte, scriptSize)
 	totalRead := 0
 	for totalRead < scriptSize {
-		n, err := reader.r.Read(scriptBytes[totalRead:])
+		n, err := session.reader.r.Read(scriptBytes[totalRead:])
 		if err != nil {
 			return fmt.Errorf("failed to read script: %w", err)
 		}
@@ -248,7 +389,7 @@ func (s *ManageSieveServer) cmdPutScript(conn net.Conn, args []string, reader *m
 	}
 
 	// Consume trailing newline
-	reader.ReadLine()
+	session.reader.ReadLine()
 
 	scriptContent := string(scriptBytes)
 
@@ -257,38 +398,45 @@ func (s *ManageSieveServer) cmdPutScript(conn net.Conn, args []string, reader *m
 		return fmt.Errorf("script validation failed: %w", err)
 	}
 
-	// Store script (note: per-user storage requires session management)
-	// Store with script name as the script identifier
-	if err := s.manager.StoreScript("default", scriptName, scriptContent); err != nil {
+	// Store script for authenticated user
+	if err := s.manager.StoreScript(session.user, scriptName, scriptContent); err != nil {
 		return fmt.Errorf("failed to store script: %w", err)
 	}
 
-	s.sendResponse(conn, "OK \"Script stored\"")
+	s.sendResponse(session.conn, "OK \"Script stored\"")
 	return nil
 }
 
 // cmdListScripts handles LISTSCRIPTS command
 // Format: LISTSCRIPTS
-func (s *ManageSieveServer) cmdListScripts(conn net.Conn, _ []string) error {
-	// List scripts for the authenticated user (using "default" for now)
-	scripts := s.manager.ListScripts("default")
-	activeName := s.manager.GetActiveScriptName("default")
+func (s *ManageSieveServer) cmdListScripts(session *manageSieveSession, _ []string) error {
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
 
-	s.sendResponse(conn, "OK \"List scripts\"")
+	// List scripts for the authenticated user
+	scripts := s.manager.ListScripts(session.user)
+	activeName := s.manager.GetActiveScriptName(session.user)
+
+	s.sendResponse(session.conn, "OK \"List scripts\"")
 	for _, name := range scripts {
 		if name == activeName {
-			s.sendResponse(conn, "%s \"active script\"", name)
+			s.sendResponse(session.conn, "%s \"active script\"", name)
 		} else {
-			s.sendResponse(conn, "%s", name)
+			s.sendResponse(session.conn, "%s", name)
 		}
 	}
-	s.sendResponse(conn, "OK \"List scripts complete\"")
+	s.sendResponse(session.conn, "OK \"List scripts complete\"")
 	return nil
 }
 
 // cmdSetActive handles SETACTIVE command
 // Format: SETACTIVE <script-name>
-func (s *ManageSieveServer) cmdSetActive(conn net.Conn, args []string) error {
+func (s *ManageSieveServer) cmdSetActive(session *manageSieveSession, args []string) error {
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
+
 	if len(args) < 1 {
 		return fmt.Errorf("SETACTIVE requires script-name")
 	}
@@ -299,17 +447,21 @@ func (s *ManageSieveServer) cmdSetActive(conn net.Conn, args []string) error {
 	}
 
 	// Set active script for the user
-	if err := s.manager.SetActiveScriptByName("default", scriptName); err != nil {
+	if err := s.manager.SetActiveScriptByName(session.user, scriptName); err != nil {
 		return fmt.Errorf("failed to set active script: %w", err)
 	}
 
-	s.sendResponse(conn, "OK \"Set active script\"")
+	s.sendResponse(session.conn, "OK \"Set active script\"")
 	return nil
 }
 
 // cmdDeleteScript handles DELETESCRIPT command
 // Format: DELETESCRIPT <script-name>
-func (s *ManageSieveServer) cmdDeleteScript(conn net.Conn, args []string) error {
+func (s *ManageSieveServer) cmdDeleteScript(session *manageSieveSession, args []string) error {
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
+
 	if len(args) < 1 {
 		return fmt.Errorf("DELETESCRIPT requires script-name")
 	}
@@ -320,14 +472,18 @@ func (s *ManageSieveServer) cmdDeleteScript(conn net.Conn, args []string) error 
 	}
 
 	// Delete script for the user
-	s.manager.DeleteScript("default", scriptName)
-	s.sendResponse(conn, "OK \"Script deleted\"")
+	s.manager.DeleteScript(session.user, scriptName)
+	s.sendResponse(session.conn, "OK \"Script deleted\"")
 	return nil
 }
 
 // cmdGetScript handles GETSCRIPT command
 // Format: GETSCRIPT <script-name>
-func (s *ManageSieveServer) cmdGetScript(conn net.Conn, args []string) error {
+func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []string) error {
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
+
 	if len(args) < 1 {
 		return fmt.Errorf("GETSCRIPT requires script-name")
 	}
@@ -335,21 +491,21 @@ func (s *ManageSieveServer) cmdGetScript(conn net.Conn, args []string) error {
 	scriptName := args[0]
 
 	// Get script source for the authenticated user
-	source := s.manager.GetScriptSource("default", scriptName)
+	source := s.manager.GetScriptSource(session.user, scriptName)
 	if source == "" {
 		return fmt.Errorf("script not found: %s", scriptName)
 	}
 
 	// Send script content
-	s.sendResponse(conn, "{%d}", len(source))
-	conn.Write([]byte(source))
-	s.sendResponse(conn, "OK \"Get script complete\"")
+	s.sendResponse(session.conn, "{%d}", len(source))
+	session.conn.Write([]byte(source))
+	s.sendResponse(session.conn, "OK \"Get script complete\"")
 	return nil
 }
 
 // cmdCheckScript handles CHECKSCRIPT command
 // Format: CHECKSCRIPT <script-size>
-func (s *ManageSieveServer) cmdCheckScript(conn net.Conn, args []string, reader *manageSieveReader) error {
+func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("CHECKSCRIPT requires script-size")
 	}
@@ -365,7 +521,7 @@ func (s *ManageSieveServer) cmdCheckScript(conn net.Conn, args []string, reader 
 	scriptBytes := make([]byte, scriptSize)
 	totalRead := 0
 	for totalRead < scriptSize {
-		n, err := reader.r.Read(scriptBytes[totalRead:])
+		n, err := session.reader.r.Read(scriptBytes[totalRead:])
 		if err != nil {
 			return fmt.Errorf("failed to read script: %w", err)
 		}
@@ -373,7 +529,7 @@ func (s *ManageSieveServer) cmdCheckScript(conn net.Conn, args []string, reader 
 	}
 
 	// Consume trailing newline
-	reader.ReadLine()
+	session.reader.ReadLine()
 
 	scriptContent := string(scriptBytes)
 
@@ -382,7 +538,7 @@ func (s *ManageSieveServer) cmdCheckScript(conn net.Conn, args []string, reader 
 		return fmt.Errorf("script validation failed: %w", err)
 	}
 
-	s.sendResponse(conn, "OK \"Script is valid\"")
+	s.sendResponse(session.conn, "OK \"Script is valid\"")
 	return nil
 }
 

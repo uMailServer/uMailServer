@@ -39,7 +39,7 @@ func (fe *FeatureExtractor) addSpecialFeatures(headers map[string][]string, body
 	var features []string
 
 	// Check for suspicious patterns
-	bodyStr := string(body)
+	bodyStr := strings.ToLower(string(body))
 
 	// URL features
 	if strings.Contains(bodyStr, "click here") {

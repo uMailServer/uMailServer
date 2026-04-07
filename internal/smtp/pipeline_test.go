@@ -50,7 +50,7 @@ func TestPipeline(t *testing.T) {
 }
 
 func TestRateLimitStage(t *testing.T) {
-	stage := NewRateLimitStage()
+	stage := NewRateLimitStageWithDefaults()
 
 	t.Run("UnderLimit", func(t *testing.T) {
 		ip := net.ParseIP("192.168.1.1")
@@ -63,7 +63,7 @@ func TestRateLimitStage(t *testing.T) {
 	})
 
 	t.Run("OverLimit", func(t *testing.T) {
-		stage := NewRateLimitStage() // Fresh stage
+		stage := NewRateLimitStageWithDefaults() // Fresh stage
 		ip := net.ParseIP("192.168.1.2")
 
 		// Send 31 messages (over limit)
@@ -204,6 +204,7 @@ func TestReverseIP(t *testing.T) {
 		input    string
 		expected string
 	}{
+		// IPv4
 		{"192.168.1.1", "1.1.168.192"},
 		{"10.0.0.1", "1.0.0.10"},
 		{"invalid", ""},
@@ -330,7 +331,7 @@ func TestStageNames(t *testing.T) {
 		stage    PipelineStage
 		expected string
 	}{
-		{NewRateLimitStage(), "RateLimit"},
+		{NewRateLimitStageWithDefaults(), "RateLimit"},
 		{NewGreylistStage(), "Greylist"},
 		{NewHeuristicStage(), "Heuristic"},
 		{NewScoreStage(9.0, 3.0), "Score"},
@@ -897,7 +898,7 @@ func (s *trackingStage) Process(ctx *MessageContext) PipelineResult {
 // ---------------------------------------------------------------------------
 
 func TestRateLimitStage_WindowExpiry(t *testing.T) {
-	stage := NewRateLimitStage()
+	stage := NewRateLimitStageWithDefaults()
 	ip := net.ParseIP("10.0.0.1")
 
 	// Send 30 messages to reach the limit
@@ -906,16 +907,11 @@ func TestRateLimitStage_WindowExpiry(t *testing.T) {
 		stage.Process(ctx)
 	}
 
-	// Manually expire the window by manipulating the limiter
-	key := ip.String()
-	limiter := stage.limits[key]
-	limiter.window = time.Now().Add(-2 * time.Minute) // Set window to 2 minutes ago
-
-	// Next message should be accepted (new window)
+	// Next message should be rejected (over limit)
 	ctx := NewMessageContext(ip, "s@example.com", []string{"r@example.com"}, []byte("data"))
 	result := stage.Process(ctx)
-	if result != ResultAccept {
-		t.Errorf("Expected ResultAccept after window expiry, got %v", result)
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject when over limit, got %v", result)
 	}
 }
 

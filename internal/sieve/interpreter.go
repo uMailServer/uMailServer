@@ -347,19 +347,30 @@ func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 
 func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {
 	value := t.Value
+	target := t.Target
+
 	switch t.MatchType {
 	case ":is", "is", "":
-		for _, headerName := range i.ctx.Headers {
-			for _, h := range headerName {
-				if h == value {
+		// Check if header values match exactly (case-sensitive)
+		for name, values := range i.ctx.Headers {
+			// Check if header name matches target (case-insensitive)
+			if !strings.EqualFold(name, target) {
+				continue
+			}
+			for _, v := range values {
+				if v == value {
 					return true, nil
 				}
 			}
 		}
 	case ":contains", "contains":
-		for _, headerName := range i.ctx.Headers {
-			for _, h := range headerName {
-				if strings.Contains(h, value) {
+		// Check if header values contain substring
+		for name, values := range i.ctx.Headers {
+			if !strings.EqualFold(name, target) {
+				continue
+			}
+			for _, v := range values {
+				if strings.Contains(v, value) {
 					return true, nil
 				}
 			}
@@ -367,9 +378,12 @@ func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {
 	case ":matches", "matches":
 		pattern := strings.ReplaceAll(value, "*", ".*")
 		pattern = strings.ReplaceAll(pattern, "?", ".")
-		for _, headerName := range i.ctx.Headers {
-			for _, h := range headerName {
-				matched, _ := regexp.MatchString("(?i)"+pattern, h)
+		for name, values := range i.ctx.Headers {
+			if !strings.EqualFold(name, target) {
+				continue
+			}
+			for _, v := range values {
+				matched, _ := regexp.MatchString("(?i)"+pattern, v)
 				if matched {
 					return true, nil
 				}

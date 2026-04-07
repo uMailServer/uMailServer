@@ -501,12 +501,55 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 	entry.Status = "delivered"
 	m.db.UpdateQueueEntry(entry)
 
+	// Send DSN if requested (NOTIFY includes SUCCESS)
+	if entry.Notify != 0 && int(entry.Notify)&int(DSNNotifySuccess) != 0 {
+		m.sendSuccessDSN(entry)
+	}
+
 	// Only delete message file when no other entries reference it
 	m.deleteMessageFileIfUnreferenced(entry.MessagePath)
 
 	// Track metric
 	if m.metrics != nil {
 		m.metrics.DeliverySuccess()
+	}
+}
+
+// sendSuccessDSN sends a DSN success notification
+func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
+	// Read original message for headers if needed (DSNRetFull = 0, DSNRetHeaders = 1)
+	var originalMsg []byte
+	if int(entry.Ret) == 0 { // DSNRetFull
+		originalMsg, _ = readFile(entry.MessagePath)
+	}
+
+	dsn := &DSN{
+		ReportedDomain: "umailserver",
+		ReportedName:   "umailserver",
+		ArrivalDate:    entry.CreatedAt,
+		OriginalFrom:   entry.From,
+		OriginalTo:     entry.To[0],
+		Recipient: DSNRecipient{
+			Original: entry.To[0],
+			Notify:   DSNNotify(entry.Notify),
+			Ret:      DSNRet(entry.Ret),
+		},
+		Action:    "delivered",
+		Status:    "2.0.0",
+		RemoteMTA: "unknown",
+		FinalMTA:  "umailserver",
+		MessageID: GenerateMessageID(),
+	}
+
+	dsnMsg, err := GenerateDSN(dsn, originalMsg, DSNRet(entry.Ret))
+	if err != nil {
+		m.logger.Error("failed to generate DSN", "error", err)
+		return
+	}
+
+	// Enqueue DSN back to sender
+	if _, err := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, dsnMsg); err != nil {
+		m.logger.Error("failed to enqueue DSN", "error", err)
 	}
 }
 
@@ -522,7 +565,11 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 		m.generateBounce(entry)
 	} else {
 		// Calculate retry delay with jitter (±20%)
-		baseDelay := retryDelays[entry.RetryCount-1]
+		idx := entry.RetryCount - 1
+		if idx >= len(retryDelays) {
+			idx = len(retryDelays) - 1 // Use last delay if we've exceeded the array
+		}
+		baseDelay := retryDelays[idx]
 		jitter := time.Duration(float64(baseDelay) * (0.8 + 0.4*rand.Float64()))
 		entry.NextRetry = time.Now().Add(jitter)
 		entry.Status = "pending"
@@ -538,13 +585,70 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 
 // generateBounce generates a bounce message and delivers it back to the sender
 func (m *Manager) generateBounce(entry *db.QueueEntry) {
+	// Check if we should send DSN (NOTIFY never means no bounce)
+	if entry.Notify != 0 && int(entry.Notify)&int(DSNNotifyNever) != 0 {
+		// NOTIFY=NEVER - don't send anything
+		return
+	}
+
 	// Read original message
 	originalMsg, err := readFile(entry.MessagePath)
 	if err != nil {
 		return
 	}
 
-	// Create bounce message
+	// Determine what to include based on RET parameter (DSNRetFull=0, DSNRetHeaders=1)
+	var ret DSNRet
+	if int(entry.Ret)&1 != 0 {
+		ret = DSNRetHeaders
+	} else {
+		ret = DSNRetFull
+	}
+
+	dsn := &DSN{
+		ReportedDomain: "umailserver",
+		ReportedName:   "umailserver",
+		ArrivalDate:    entry.CreatedAt,
+		OriginalFrom:   entry.From,
+		OriginalTo:     entry.To[0],
+		Recipient: DSNRecipient{
+			Original: entry.To[0],
+			Notify:   DSNNotify(entry.Notify),
+			Ret:      ret,
+		},
+		Action:         "failed",
+		Status:         "5.0.0",
+		DiagnosticCode: "smtp; " + entry.LastError,
+		RemoteMTA:      "unknown",
+		FinalMTA:       "umailserver",
+		MessageID:      GenerateMessageID(),
+	}
+
+	// Generate proper DSN bounce message
+	bounceMsg, err := GenerateDSN(dsn, originalMsg, ret)
+	if err != nil {
+		m.logger.Error("failed to generate DSN bounce", "error", err)
+		// Fall back to old-style bounce
+		bounceMsg = m.createFallbackBounce(entry, originalMsg)
+	}
+
+	// Enqueue bounce as a new message back to the sender
+	if m.db != nil {
+		if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, bounceMsg); enqueueErr != nil {
+			m.logger.Error("failed to enqueue bounce message", "error", enqueueErr)
+		}
+	}
+
+	// Only delete message file when no other entries reference it
+	if m.db != nil {
+		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+	} else {
+		deleteFile(entry.MessagePath)
+	}
+}
+
+// createFallbackBounce creates a simple bounce message when DSN generation fails
+func (m *Manager) createFallbackBounce(entry *db.QueueEntry, originalMsg []byte) []byte {
 	bounceMsg := fmt.Sprintf(
 		"From: MAILER-DAEMON@umailserver\r\n"+
 			"To: %s\r\n"+
@@ -583,20 +687,7 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 		entry.LastError,
 		string(originalMsg),
 	)
-
-	// Enqueue bounce as a new message back to the sender
-	if m.db != nil {
-		if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, []byte(bounceMsg)); enqueueErr != nil {
-			m.logger.Error("failed to enqueue bounce message", "error", enqueueErr)
-		}
-	}
-
-	// Only delete message file when no other entries reference it
-	if m.db != nil {
-		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
-	} else {
-		deleteFile(entry.MessagePath)
-	}
+	return []byte(bounceMsg)
 }
 
 // Retry delays for exponential backoff
@@ -763,6 +854,8 @@ func (m *Manager) countMessageRefs(messagePath string) int {
 // deleteMessageFileIfUnreferenced removes the message file only when no queue
 // entries reference it anymore. Returns true if the file was deleted.
 func (m *Manager) deleteMessageFileIfUnreferenced(messagePath string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.countMessageRefs(messagePath) == 0 {
 		os.Remove(messagePath)
 		return true
