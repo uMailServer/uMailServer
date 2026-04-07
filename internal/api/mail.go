@@ -370,12 +370,21 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		// Store message file - msgID is the hash-based ID returned by StoreMessage
 		storedMsgID, err := h.msgStore.StoreMessage(userEmail, []byte(rawEmail))
 		if err != nil {
-			// Log error but continue - we'll still return success
+			http.Error(w, "Failed to store message", http.StatusInternalServerError)
+			return
+		}
+		if storedMsgID == "" {
+			http.Error(w, "Failed to store message: no ID returned", http.StatusInternalServerError)
+			return
 		}
 		msgID = storedMsgID
 
 		// Get next UID for Sent mailbox
-		uid, _ := h.mailDB.GetNextUID(userEmail, "Sent")
+		uid, err := h.mailDB.GetNextUID(userEmail, "Sent")
+		if err != nil {
+			http.Error(w, "Failed to get next UID", http.StatusInternalServerError)
+			return
+		}
 
 		// Parse headers for metadata
 		subject := req.Subject

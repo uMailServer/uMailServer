@@ -1081,6 +1081,12 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		return
 	}
 	s.vacationReplies[key] = time.Now()
+
+	// Cleanup old entries every 100 entries to prevent unbounded growth
+	if len(s.vacationReplies) > 100 {
+		s.cleanupVacationReplies()
+	}
+
 	s.vacationRepliesMu.Unlock()
 
 	var settings struct {
@@ -1140,4 +1146,14 @@ func generateSecureToken() string {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// cleanupVacationReplies removes entries older than 48 hours from vacationReplies map
+func (s *Server) cleanupVacationReplies() {
+	cutoff := time.Now().Add(-48 * time.Hour)
+	for key, lastSent := range s.vacationReplies {
+		if lastSent.Before(cutoff) {
+			delete(s.vacationReplies, key)
+		}
+	}
 }

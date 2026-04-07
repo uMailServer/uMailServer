@@ -49,16 +49,25 @@ func TestOpenDatabaseMultipleTimes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("First OpenDatabase failed: %v", err)
 	}
-	defer db1.Close()
 
+	// Second open should fail because db1 has it locked
 	db2, err := OpenDatabase(dbPath)
-	if err != nil {
-		t.Fatalf("Second OpenDatabase failed: %v", err)
+	if err == nil {
+		db2.Close()
+		t.Fatal("Expected error when opening already-open database, got nil")
 	}
-	defer db2.Close()
 
-	if db1.path != db2.path {
-		t.Errorf("Expected same path, got %q and %q", db1.path, db2.path)
+	// Now close db1 and try again
+	db1.Close()
+
+	db3, err := OpenDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("OpenDatabase after close failed: %v", err)
+	}
+	defer db3.Close()
+
+	if db3.path != filepath.Join(tmpDir, "test.db") {
+		t.Errorf("Expected path %q, got %q", filepath.Join(tmpDir, "test.db"), db3.path)
 	}
 }
 

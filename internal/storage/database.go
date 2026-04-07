@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +24,17 @@ type Database struct {
 
 // OpenDatabase opens the bbolt database
 func OpenDatabase(path string) (*Database, error) {
+	// Create parent directories if they don't exist
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return nil, fmt.Errorf("failed to create database directory: %w", err)
+		}
+	}
+
 	db, err := bbolt.Open(path, 0600, &bbolt.Options{Timeout: 1})
 	if err != nil {
-		return &Database{path: path}, nil
+		return nil, fmt.Errorf("failed to open database at %s: %w", path, err)
 	}
 	return &Database{path: path, bolt: db}, nil
 }
