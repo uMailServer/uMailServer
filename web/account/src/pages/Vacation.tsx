@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { PalmTree, Calendar, Clock, Mail, AlertCircle } from 'lucide-react'
-import { useTranslation } from '../hooks/useI18n'
+import { Palmtree, Calendar, Clock, Mail, AlertCircle } from 'lucide-react'
+import { useI18n } from '../hooks/useI18n'
 
 interface VacationConfig {
   enabled: boolean
@@ -16,7 +16,7 @@ interface VacationConfig {
 }
 
 function VacationPage() {
-  const { t } = useTranslation()
+  const { t } = useI18n()
   const [config, setConfig] = useState<VacationConfig>({
     enabled: false,
     subject: '',
@@ -142,7 +142,7 @@ function VacationPage() {
         {/* Enable/Disable Toggle */}
         <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
           <div className="flex items-center">
-            <PalmTree className="h-5 w-5 text-primary-600 mr-3" />
+            <Palmtree className="h-5 w-5 text-primary-600 mr-3" />
             <div>
               <span className="block text-sm font-medium text-gray-900">
                 {t('vacation.enableVacation')}

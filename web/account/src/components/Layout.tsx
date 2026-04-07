@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { User, Lock, Shield, Forward, PalmTree, LogOut, Filter } from 'lucide-react'
+import { User, Lock, Shield, Forward, Palmtree, LogOut, Filter } from 'lucide-react'
 
 function Layout() {
   const location = useLocation()
@@ -10,7 +10,7 @@ function Layout() {
     { path: '/2fa', label: 'Two-Factor Auth', icon: Shield },
     { path: '/forwarding', label: 'Forwarding', icon: Forward },
     { path: '/filters', label: 'Email Filters', icon: Filter },
-    { path: '/vacation', label: 'Vacation Reply', icon: PalmTree },
+    { path: '/vacation', label: 'Vacation Reply', icon: Palmtree },
   ]
 
   return (

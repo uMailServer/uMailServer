@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Filter, Plus, Trash2, Edit2, Check, X, MoveUp, MoveDown } from 'lucide-react'
-import { useTranslation } from '../hooks/useI18n'
+import { Filter, Plus, Trash2, Edit2, X, MoveUp, MoveDown } from 'lucide-react'
+import { useI18n } from '../hooks/useI18n'
 
 interface FilterCondition {
   field: 'from' | 'to' | 'subject' | 'body' | 'header'
@@ -26,7 +26,7 @@ interface EmailFilter {
 }
 
 function FiltersPage() {
-  const { t } = useTranslation()
+  const { t } = useI18n()
   const [filters, setFilters] = useState<EmailFilter[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -264,7 +264,7 @@ interface FilterEditorProps {
 }
 
 function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
-  const { t } = useTranslation()
+  const { t } = useI18n()
   const [name, setName] = useState(filter?.name || '')
   const [matchAll, setMatchAll] = useState(filter?.matchAll ?? true)
   const [conditions, setConditions] = useState<FilterCondition[]>(
