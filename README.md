@@ -280,20 +280,20 @@ make docker
 
 ## Documentation
 
-- [Quick Start Guide](https://docs.umailserver.com/quickstart)
-- [Configuration Reference](https://docs.umailserver.com/configuration)
-- [DNS Setup Guide](https://docs.umailserver.com/dns-setup)
-- [Migration Guide](https://docs.umailserver.com/migration)
-- [API Documentation](https://docs.umailserver.com/api)
-- [MCP Integration](https://docs.umailserver.com/mcp)
+Local documentation in `docs/`:
+- [Architecture](docs/ARCHITECTURE.md)
+- [Configuration Reference](docs/configuration.md)
+- [DNS Setup Guide](docs/dns-setup.md)
+- [Migration Guide](docs/migration.md)
+- [Quick Start](docs/quickstart.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [API Reference](docs/api-reference.md)
+
+Online documentation at [docs.umailserver.com](https://docs.umailserver.com)
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Security
-
-For security issues, please email security@umailserver.com or see [SECURITY.md](SECURITY.md).
+We welcome contributions! Please see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
 
 ## License
 
