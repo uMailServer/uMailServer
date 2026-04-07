@@ -319,7 +319,8 @@ func (s *ManageSieveServer) cmdDeleteScript(conn net.Conn, args []string) error 
 		return fmt.Errorf("script name cannot be empty")
 	}
 
-	// In real implementation, would delete script for user
+	// Delete script for the user
+	s.manager.DeleteScript("default", scriptName)
 	s.sendResponse(conn, "OK \"Script deleted\"")
 	return nil
 }
@@ -327,16 +328,23 @@ func (s *ManageSieveServer) cmdDeleteScript(conn net.Conn, args []string) error 
 // cmdGetScript handles GETSCRIPT command
 // Format: GETSCRIPT <script-name>
 func (s *ManageSieveServer) cmdGetScript(conn net.Conn, args []string) error {
-	_ = conn // TODO: Use for response in real implementation
 	if len(args) < 1 {
 		return fmt.Errorf("GETSCRIPT requires script-name")
 	}
 
 	scriptName := args[0]
 
-	// In real implementation, would retrieve script for user
-	// For now, return not found
-	return fmt.Errorf("script not found: %s", scriptName)
+	// Get script source for the authenticated user
+	source := s.manager.GetScriptSource("default", scriptName)
+	if source == "" {
+		return fmt.Errorf("script not found: %s", scriptName)
+	}
+
+	// Send script content
+	s.sendResponse(conn, "{%d}", len(source))
+	conn.Write([]byte(source))
+	s.sendResponse(conn, "OK \"Get script complete\"")
+	return nil
 }
 
 // cmdCheckScript handles CHECKSCRIPT command
