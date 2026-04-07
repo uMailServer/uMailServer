@@ -5,9 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2026-04-03
+## [0.1.0] - 2026-04-07
 
-### Added - Production Readiness Release
+### Added
 
 #### Core Email Protocols
 - SMTP server with STARTTLS, PIPELINING, CHUNKING, SMTPUTF8
@@ -31,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DMARC evaluation (RFC 7489)
 - ARC support (RFC 8617)
 - DANE support (RFC 6698)
-- Greylisting anti-spam
-- RBL/DNSBL checking
+- Greylisting anti-spam with 100k entry limit
+- RBL/DNSBL checking with IPv6 support (RFC 3596)
 - TF-IDF spam scoring
 - ClamAV antivirus integration
 
@@ -49,8 +49,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom certificate support
 - Certificate expiry monitoring
 
+#### Server-Side Mail Filtering
+- Sieve mail filtering (RFC 5228)
+- ManageSieve protocol (RFC 5804)
+- Per-user script isolation
+- Actions: fileinto, redirect, discard, reject, vacation, keep
+
+#### Email Encryption
+- S/MIME signing and encryption (RFC 8551)
+- OpenPGP support (RFC 3156)
+
+#### Delivery Notifications
+- DSN - Delivery Status Notifications (RFC 3461)
+- MDN - Message Disposition Notifications (RFC 3798)
+
+#### Auto Configuration
+- Mozilla Thunderbird Autoconfig
+- Microsoft Outlook Autodiscover
+
 #### Observability
-- Prometheus metrics endpoint (100% coverage)
+- Prometheus metrics endpoint
 - Health checks (/health, /live, /ready)
 - Structured logging with rotation
 - OpenTelemetry distributed tracing
@@ -78,21 +96,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Port conflict detection
 - Size/duration type parsing
 
+#### Docker
+- Container support with Docker Compose
+- Multi-stage build for small images
+- Healthcheck and readiness probes
+
 #### Testing
-- 25 packages with ~87% average coverage
+- 35 packages with comprehensive coverage
 - Integration tests for mail flows
 - Performance benchmarks
 - Race detection testing
 - Cross-platform support (Windows/Linux/macOS)
 
-#### Documentation
-- Deployment guide (DEPLOYMENT.md)
-- Security policy (SECURITY.md)
-- Security hardening guide
-- API documentation (OpenAPI)
-- Production readiness checklist
-
 ### Performance Benchmarks
+
 | Operation | Latency |
 |-----------|---------|
 | Maildir Deliver | ~646μs |
@@ -100,33 +117,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 | Account Lookup | ~4.4μs |
 | Password Verify | ~38ms (bcrypt) |
 | SMTP Parse | ~9ns |
-
-### Coverage Summary
-- metrics: 100%
-- tracing: 100%
-- av: 98.8%
-- search: 97.9%
-- tls: 95.9%
-- auth: 94.9%
-- cli: 92.7%
-- store: 92.4%
-- smtp: 91.0%
-- websocket: 91.7%
-- Average: ~87%
-
-## [0.9.0] - 2026-03-15
-
-### Added
-- Initial beta release
-- Basic SMTP/IMAP/POP3 support
-- Simple authentication
-- File-based storage
-
-## [0.8.0] - 2026-02-28
-
-### Added
-- Alpha release
-- Proof of concept implementation
 
 ---
 
