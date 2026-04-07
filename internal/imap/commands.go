@@ -1418,27 +1418,20 @@ func (s *Session) handleStore(args []string) error {
 	// Parse flags
 	flags := parseFlags(flagsStr)
 
-	var add bool
+	var op FlagOperation
 	switch operation {
-	case "FLAGS":
-		add = true
-		// Replace flags - not fully implemented
-	case "+FLAGS":
-		add = true
-	case "-FLAGS":
-		add = false
-	case "FLAGS.SILENT":
-		add = true
-	case "+FLAGS.SILENT":
-		add = true
-	case "-FLAGS.SILENT":
-		add = false
+	case "FLAGS", "FLAGS.SILENT":
+		op = FlagReplace
+	case "+FLAGS", "+FLAGS.SILENT":
+		op = FlagAdd
+	case "-FLAGS", "-FLAGS.SILENT":
+		op = FlagRemove
 	default:
 		s.WriteResponse(s.tag, "BAD Invalid STORE operation")
 		return nil
 	}
 
-	err := s.server.mailstore.StoreFlags(s.user, s.selected.Name, seqSet, flags, add)
+	err := s.server.mailstore.StoreFlags(s.user, s.selected.Name, seqSet, flags, op)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil

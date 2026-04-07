@@ -654,11 +654,11 @@ func (f *failingMailstore) Expunge(user, mailbox string) error {
 	return f.mockMailstore.Expunge(user, mailbox)
 }
 
-func (f *failingMailstore) StoreFlags(user, mailbox string, seqSet string, flags []string, add bool) error {
+func (f *failingMailstore) StoreFlags(user, mailbox string, seqSet string, flags []string, op FlagOperation) error {
 	if f.storeErr != nil {
 		return f.storeErr
 	}
-	return f.mockMailstore.StoreFlags(user, mailbox, seqSet, flags, add)
+	return f.mockMailstore.StoreFlags(user, mailbox, seqSet, flags, op)
 }
 
 func (f *failingMailstore) CopyMessages(user, sourceMailbox, destMailbox string, seqSet string) error {

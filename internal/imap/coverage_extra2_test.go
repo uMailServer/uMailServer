@@ -36,7 +36,7 @@ func TestStoreFlags_RemoveFlagsWithMessages(t *testing.T) {
 	}
 
 	// Remove the \\Seen flag (add=false)
-	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, false)
+	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, FlagRemove)
 	if err != nil {
 		t.Fatalf("StoreFlags remove: %v", err)
 	}
@@ -75,13 +75,13 @@ func TestStoreFlags_AddAlreadyPresent(t *testing.T) {
 	}
 
 	// Add \\Seen again (already present) -- hasFlag returns true, no append
-	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, true)
+	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, FlagAdd)
 	if err != nil {
 		t.Fatalf("StoreFlags add (already present): %v", err)
 	}
 
 	// Add a new flag that is not present -- hasFlag returns false, append
-	err = ms.StoreFlags(user, mbox, "1", []string{"\\Deleted"}, true)
+	err = ms.StoreFlags(user, mbox, "1", []string{"\\Deleted"}, FlagAdd)
 	if err != nil {
 		t.Fatalf("StoreFlags add new flag: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestStoreFlags_InvalidSeqSet(t *testing.T) {
 	ms.CreateMailbox(user, mbox)
 
 	// Invalid sequence set should return error from ParseSequenceSet
-	err = ms.StoreFlags(user, mbox, "abc", []string{"\\Seen"}, true)
+	err = ms.StoreFlags(user, mbox, "abc", []string{"\\Seen"}, FlagAdd)
 	if err == nil {
 		t.Error("expected error for invalid seq set")
 	}

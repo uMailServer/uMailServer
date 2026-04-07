@@ -1027,7 +1027,7 @@ func (a *pop3MailstoreAdapter) GetMessageData(user string, index int) ([]byte, e
 
 func (a *pop3MailstoreAdapter) DeleteMessage(user string, index int) error {
 	seqSet := fmt.Sprintf("%d", index+1)
-	return a.mailstore.StoreFlags(user, "INBOX", seqSet, []string{"\\Deleted"}, true)
+	return a.mailstore.StoreFlags(user, "INBOX", seqSet, []string{"\\Deleted"}, imap.FlagAdd)
 }
 
 func (a *pop3MailstoreAdapter) GetMessageCount(user string) (int, error) {

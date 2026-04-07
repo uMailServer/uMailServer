@@ -945,7 +945,7 @@ func TestStoreFlags_NoMessagesInSet(t *testing.T) {
 	ms.CreateMailbox(user, mbox)
 
 	// StoreFlags with no messages - should not error
-	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, true)
+	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, FlagAdd)
 	if err != nil {
 		t.Logf("StoreFlags with no messages: %v", err)
 	}
@@ -971,7 +971,7 @@ func TestStoreFlags_RemoveFlagFromEmptyFlags(t *testing.T) {
 	}
 
 	// Remove flag from message that has no flags - should work fine
-	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, false)
+	err = ms.StoreFlags(user, mbox, "1", []string{"\\Seen"}, FlagRemove)
 	if err != nil {
 		t.Fatalf("StoreFlags remove from empty: %v", err)
 	}

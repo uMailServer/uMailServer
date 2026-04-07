@@ -245,7 +245,30 @@ func (m *BboltMailstore) getMessage(user, mailbox string, seqNum, uid uint32, it
 }
 
 // StoreFlags updates message flags
-func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags []string, add bool) error {
+// FlagOperation represents the type of flag operation
+type FlagOperation int
+
+const (
+	FlagAdd    FlagOperation = iota // +FLAGS
+	FlagRemove                       // -FLAGS
+	FlagReplace                      // FLAGS (replace all)
+)
+
+func (op FlagOperation) String() string {
+	switch op {
+	case FlagAdd:
+		return "add"
+	case FlagRemove:
+		return "remove"
+	case FlagReplace:
+		return "replace"
+	default:
+		return "unknown"
+	}
+}
+
+// StoreFlags updates flags for messages in a mailbox
+func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags []string, op FlagOperation) error {
 	// Parse sequence set
 	ranges, err := ParseSequenceSet(seqSet)
 	if err != nil {
@@ -281,15 +304,16 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 			continue
 		}
 
-		// Update flags
-		if add {
+		// Update flags based on operation
+		switch op {
+		case FlagAdd:
 			// Add flags
 			for _, flag := range flags {
 				if !hasFlag(meta.Flags, flag) {
 					meta.Flags = append(meta.Flags, flag)
 				}
 			}
-		} else {
+		case FlagRemove:
 			// Remove flags
 			var newFlags []string
 			for _, f := range meta.Flags {
@@ -298,6 +322,9 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 				}
 			}
 			meta.Flags = newFlags
+		case FlagReplace:
+			// Replace all flags
+			meta.Flags = flags
 		}
 
 		// Save updated metadata

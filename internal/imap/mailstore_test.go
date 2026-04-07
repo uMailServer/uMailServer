@@ -477,7 +477,7 @@ func TestBboltMailstoreStoreFlags(t *testing.T) {
 	}
 
 	// Store flags (may not work without actual messages)
-	err = ms.StoreFlags(user, mailbox, "1:*", []string{"\\Seen"}, true)
+	err = ms.StoreFlags(user, mailbox, "1:*", []string{"\\Seen"}, FlagAdd)
 	if err != nil {
 		t.Logf("StoreFlags returned error (may be expected without messages): %v", err)
 	}
@@ -710,13 +710,13 @@ func TestBboltMailstoreStoreFlagsWithMessages(t *testing.T) {
 	}
 
 	// Store flags with add mode
-	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Seen"}, true)
+	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Seen"}, FlagAdd)
 	if err != nil {
 		t.Logf("StoreFlags returned error: %v", err)
 	}
 
 	// Store flags with remove mode
-	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Seen"}, false)
+	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Seen"}, FlagRemove)
 	if err != nil {
 		t.Logf("StoreFlags (remove) returned error: %v", err)
 	}
@@ -799,7 +799,7 @@ func TestBboltMailstoreExpungeWithDeleted(t *testing.T) {
 	}
 
 	// Mark message as deleted
-	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Deleted"}, true)
+	err = ms.StoreFlags(user, mailbox, "1", []string{"\\Deleted"}, FlagAdd)
 	if err != nil {
 		t.Logf("StoreFlags returned error: %v", err)
 	}

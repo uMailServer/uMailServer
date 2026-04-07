@@ -40,7 +40,7 @@ func (m *mockMailstore) FetchMessages(user, mailbox string, seqSet string, items
 	return []*Message{}, nil
 }
 
-func (m *mockMailstore) StoreFlags(user, mailbox string, seqSet string, flags []string, add bool) error {
+func (m *mockMailstore) StoreFlags(user, mailbox string, seqSet string, flags []string, op FlagOperation) error {
 	return nil
 }
 

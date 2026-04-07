@@ -66,7 +66,7 @@ type Mailstore interface {
 
 	// Message operations
 	FetchMessages(user, mailbox string, seqSet string, items []string) ([]*Message, error)
-	StoreFlags(user, mailbox string, seqSet string, flags []string, add bool) error
+	StoreFlags(user, mailbox string, seqSet string, flags []string, op FlagOperation) error
 	Expunge(user, mailbox string) error
 	AppendMessage(user, mailbox string, flags []string, date time.Time, data []byte) error
 	SearchMessages(user, mailbox string, criteria SearchCriteria) ([]uint32, error)
