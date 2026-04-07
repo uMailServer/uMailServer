@@ -512,10 +512,17 @@ type mockResponseRecorder struct {
 func (m *mockResponseRecorder) Header() http.Header {
 	m.headerMu.Lock()
 	defer m.headerMu.Unlock()
-	return m.ResponseRecorder.Header()
+	// Return a defensive copy to avoid race conditions
+	h := make(http.Header)
+	for k, v := range m.ResponseRecorder.Header() {
+		h[k] = v
+	}
+	return h
 }
 
 func (m *mockResponseRecorder) Flush() {
+	m.headerMu.Lock()
+	defer m.headerMu.Unlock()
 	m.flushed = true
 }
 
