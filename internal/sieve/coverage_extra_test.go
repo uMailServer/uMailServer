@@ -1284,3 +1284,203 @@ func TestInterpreter_FileintoAction(t *testing.T) {
 		t.Errorf("Expected FileintoAction, got %T", actions[0])
 	}
 }
+
+// TestInterpreter_StringTest_Is exercises the :is match type
+func TestInterpreter_StringTest_Is(t *testing.T) {
+	script := `
+if header :is "from" "exact@match.com" {
+    keep;
+}
+`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{
+			"from": {"exact@match.com"},
+		},
+		Body: []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+}
+
+// TestInterpreter_StringTest_Matches exercises the :matches match type
+func TestInterpreter_StringTest_Matches(t *testing.T) {
+	script := `
+if header :matches "subject" "*urgent*" {
+    discard;
+}
+`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{
+			"subject": {"URGENT: Action required"},
+		},
+		Body: []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+}
+
+// TestInterpreter_SizeTest_UnderBranch exercises the :under relation
+func TestInterpreter_SizeTest_UnderBranch(t *testing.T) {
+	script := `
+if size :under 1M {
+    keep;
+}
+`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Small message"),
+		Size:    1024, // 1KB - under 1M
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+}
+
+// TestInterpreter_BooleanTest_Empty exercises empty boolean tests
+func TestInterpreter_BooleanTest_Empty(t *testing.T) {
+	script := `
+if true {
+    keep;
+}
+`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+}
+
+// TestInterpreter_StringTest_NoMatch exercises string test with no match
+func TestInterpreter_StringTest_NoMatch(t *testing.T) {
+	script := `
+if header :contains "subject" "money" {
+    discard;
+} else {
+    keep;
+}
+`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{
+			"subject": {"Hello world"},
+		},
+		Body: []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// No match - should execute else block with keep
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action in else branch, got %d", len(actions))
+	}
+}
+
+// TestInterpreter_SizeTest_NoMatch exercises size test with no match
+func TestInterpreter_SizeTest_NoMatch(t *testing.T) {
+	script := `
+if size :over 1M {
+    discard;
+} else {
+    keep;
+}
+`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Small"),
+		Size:    100,
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Size under threshold - should execute else block
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action in else branch, got %d", len(actions))
+	}
+}
