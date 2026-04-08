@@ -9,7 +9,17 @@ RUN npm ci
 COPY webmail/ .
 RUN npm run build
 
-# Stage 2: Build the admin panel
+# Stage 2: Build the account portal
+FROM node:20-alpine AS account-builder
+
+WORKDIR /app/web/account
+COPY web/account/package*.json .
+RUN npm ci
+
+COPY web/account/ .
+RUN npm run build
+
+# Stage 3: Build the admin panel
 FROM node:20-alpine AS admin-builder
 
 WORKDIR /app/web/admin
@@ -19,7 +29,7 @@ RUN npm ci
 COPY web/admin/ .
 RUN npm run build
 
-# Stage 3: Build the Go binary
+# Stage 4: Build the Go binary
 FROM golang:1.25-alpine AS go-builder
 
 RUN apk add --no-cache git make
@@ -35,12 +45,13 @@ COPY . .
 
 # Copy built web assets from previous stages
 COPY --from=webmail-builder /app/webmail/dist ./webmail/dist
+COPY --from=account-builder /app/web/account/dist ./web/account/dist
 COPY --from=admin-builder /app/web/admin/dist ./web/admin/dist
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.Version=$(git describe --tags --always) -X main.BuildDate=$(date -u +%Y-%m-%d)" -o umailserver ./cmd/umailserver
 
-# Stage 4: Final minimal image
+# Stage 5: Final minimal image
 FROM alpine:3.20
 
 LABEL org.opencontainers.image.title="uMailServer"
