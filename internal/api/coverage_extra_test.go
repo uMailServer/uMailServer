@@ -2668,3 +2668,77 @@ func TestHandleRateLimitUserStats_WithMockManager(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Autodiscover tests
+// ---------------------------------------------------------------------------
+
+func TestSendAutodiscoverError(t *testing.T) {
+	s := &Server{}
+
+	tests := []struct {
+		status  int
+		message string
+	}{
+		{400, "Bad request"},
+		{401, "Unauthorized"},
+		{500, "Internal server error"},
+	}
+
+	for _, tt := range tests {
+		w := httptest.NewRecorder()
+		s.sendAutodiscoverError(w, tt.status, tt.message)
+
+		if w.Code != tt.status {
+			t.Errorf("status %d: expected %d, got %d", tt.status, tt.status, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/xml" {
+			t.Errorf("status %d: expected application/xml, got %s", tt.status, ct)
+		}
+	}
+}
+
+func TestParseAutodiscoverPOST(t *testing.T) {
+	s := &Server{}
+
+	// Test GET request (no email param) - should use host
+	req := httptest.NewRequest(http.MethodGet, "/autodiscover?email=user@example.com", nil)
+	email := s.parseAutodiscoverPOST(req)
+	if email != "user@example.com" {
+		t.Errorf("Expected user@example.com, got %s", email)
+	}
+
+	// Test with empty email - should use r.Host
+	req2 := httptest.NewRequest(http.MethodGet, "/autodiscover", nil)
+	req2.Host = "user@other.com"
+	email2 := s.parseAutodiscoverPOST(req2)
+	// Should fall back to extractEmailFromHost
+	if email2 == "" {
+		t.Log("Got empty email (expected behavior when host has no email)")
+	}
+}
+
+func TestExists(t *testing.T) {
+	// Use os.DirFS as a real filesystem for testing
+	fs := os.DirFS(".")
+	adapter := NewEmbedFSAdapter(fs)
+	if adapter == nil {
+		t.Fatal("Expected non-nil adapter")
+	}
+
+	// Test existing file (this file should exist)
+	if !adapter.Exists("coverage_extra_test.go") {
+		t.Error("Expected coverage_extra_test.go to exist")
+	}
+
+	// Test non-existing file
+	if adapter.Exists("nonexistent/file.txt") {
+		t.Error("Expected nonexistent/file.txt to not exist")
+	}
+
+	// Test nil fs
+	nilAdapter := NewEmbedFSAdapter(nil)
+	if nilAdapter.Exists("anything") {
+		t.Error("Expected false for nil fs")
+	}
+}

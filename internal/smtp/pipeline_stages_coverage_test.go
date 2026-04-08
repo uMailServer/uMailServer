@@ -5,6 +5,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/ratelimit"
 	"github.com/umailserver/umailserver/internal/sieve"
 	"github.com/umailserver/umailserver/internal/spam"
@@ -296,4 +297,61 @@ func TestRBLStage_WithServers_Listed(t *testing.T) {
 	// With current implementation, this may still return accept
 	// The RBL check sets spam score but doesn't reject
 	_ = result
+}
+
+// ---------------------------------------------------------------------------
+// AuthARCStage tests
+// ---------------------------------------------------------------------------
+
+func TestNewAuthARCStage(t *testing.T) {
+	validator := auth.NewARCValidator(nil)
+	stage := NewAuthARCStage(validator, nil)
+
+	if stage == nil {
+		t.Fatal("Expected non-nil stage")
+	}
+	if stage.validator == nil {
+		t.Error("Expected validator to be set")
+	}
+	if stage.Name() != "ARC" {
+		t.Errorf("Expected name 'ARC', got %s", stage.Name())
+	}
+}
+
+func TestAuthARCStage_Name(t *testing.T) {
+	validator := auth.NewARCValidator(nil)
+	stage := NewAuthARCStage(validator, nil)
+
+	if stage.Name() != "ARC" {
+		t.Errorf("Expected name 'ARC', got %s", stage.Name())
+	}
+}
+
+func TestAuthARCStage_Process_NoARCHeaders(t *testing.T) {
+	validator := auth.NewARCValidator(nil)
+	stage := NewAuthARCStage(validator, nil)
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+	ctx.Headers = map[string][]string{}
+
+	result := stage.Process(ctx)
+	// Should accept even with no ARC headers
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %d", result)
+	}
+}
+
+func TestAuthARCStage_Process_WithNilLogger(t *testing.T) {
+	validator := auth.NewARCValidator(nil)
+	stage := NewAuthARCStage(validator, nil)
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+	ctx.Headers = map[string][]string{}
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %d", result)
+	}
 }
