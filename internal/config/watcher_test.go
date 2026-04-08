@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -76,11 +77,13 @@ security:
 
 	changeCalled := false
 	var receivedNewCfg *Config
+	var mu sync.Mutex
 
 	watcher := NewWatcher(configPath, nil, func(oldCfg, newCfg *Config) {
+		mu.Lock()
 		changeCalled = true
-		_ = oldCfg
 		receivedNewCfg = newCfg
+		mu.Unlock()
 	})
 
 	err := watcher.Start(50 * time.Millisecond)
@@ -107,12 +110,17 @@ security:
 	// Wait for the change to be detected
 	time.Sleep(200 * time.Millisecond)
 
-	if !changeCalled {
+	mu.Lock()
+	called := changeCalled
+	cfg := receivedNewCfg
+	mu.Unlock()
+
+	if !called {
 		t.Error("change handler should have been called")
 	}
 
-	if receivedNewCfg != nil && receivedNewCfg.Server.Hostname != "test2.example.com" {
-		t.Errorf("expected new hostname 'test2.example.com', got %s", receivedNewCfg.Server.Hostname)
+	if cfg != nil && cfg.Server.Hostname != "test2.example.com" {
+		t.Errorf("expected new hostname 'test2.example.com', got %s", cfg.Server.Hostname)
 	}
 }
 
