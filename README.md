@@ -4,11 +4,11 @@
   <img src="assets/umailserver.jpeg" alt="uMailServer" width="100%">
 </p>
 
-<p align="center">
-  <strong>One binary. Complete email.</strong>
-</p>
 
-<p align="center">
+  <strong>One binary. Complete email.</strong>
+
+
+
   <a href="https://github.com/umailserver/umailserver/releases">
     <img src="https://img.shields.io/github/v/release/umailserver/umailserver?style=flat-square" alt="Release">
   </a>
@@ -24,7 +24,6 @@
   <a href="https://opensource.org/licenses/MIT">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License">
   </a>
-</p>
 
 ---
 

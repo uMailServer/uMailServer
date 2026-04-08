@@ -1,12 +1,15 @@
+//go:build windows
+
 package store
 
 import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestDeliver_RenameFailure tests the error path where the atomic rename
@@ -30,23 +33,23 @@ func TestDeliver_RenameFailure(t *testing.T) {
 
 	if runtime.GOOS == "windows" {
 		// On Windows, lock the new/ directory exclusively to block rename
-		p, err := syscall.UTF16PtrFromString(newDir)
+		p, err := windows.UTF16PtrFromString(newDir)
 		if err != nil {
 			t.Fatalf("UTF16PtrFromString: %v", err)
 		}
-		h, err := syscall.CreateFile(
+		h, err := windows.CreateFile(
 			p,
-			syscall.GENERIC_READ,
+			windows.GENERIC_READ,
 			0, // no sharing -- blocks rename into this directory
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_FLAG_BACKUP_SEMANTICS,
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_BACKUP_SEMANTICS,
 			0,
 		)
 		if err != nil {
 			t.Skipf("could not lock new/ directory: %v", err)
 		}
-		defer syscall.CloseHandle(h)
+		defer windows.CloseHandle(h)
 	} else {
 		// On Unix, make new/ read-only so rename into it fails
 		os.Chmod(newDir, 0555)
@@ -81,23 +84,23 @@ func TestDeliverWithFlags_RenameFailure(t *testing.T) {
 
 	if runtime.GOOS == "windows" {
 		// On Windows, lock the cur/ directory exclusively to block rename
-		p, err := syscall.UTF16PtrFromString(curDir)
+		p, err := windows.UTF16PtrFromString(curDir)
 		if err != nil {
 			t.Fatalf("UTF16PtrFromString: %v", err)
 		}
-		h, err := syscall.CreateFile(
+		h, err := windows.CreateFile(
 			p,
-			syscall.GENERIC_READ,
+			windows.GENERIC_READ,
 			0, // no sharing -- blocks rename into this directory
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_FLAG_BACKUP_SEMANTICS,
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_BACKUP_SEMANTICS,
 			0,
 		)
 		if err != nil {
 			t.Skipf("could not lock cur/ directory: %v", err)
 		}
-		defer syscall.CloseHandle(h)
+		defer windows.CloseHandle(h)
 	} else {
 		// On Unix, make cur/ read-only so rename into it fails
 		os.Chmod(curDir, 0555)
@@ -154,22 +157,22 @@ func TestDeliver_OpenFailure(t *testing.T) {
 			}
 			for _, e := range entries {
 				path := filepath.Join(tmpDirPath, e.Name())
-				p, convErr := syscall.UTF16PtrFromString(path)
+				p, convErr := windows.UTF16PtrFromString(path)
 				if convErr != nil {
 					continue
 				}
 				// Open with no sharing to block subsequent os.Open
-				h, createErr := syscall.CreateFile(p,
-					syscall.GENERIC_ALL,
+				h, createErr := windows.CreateFile(p,
+					windows.GENERIC_ALL,
 					0, // no sharing
 					nil,
-					syscall.OPEN_EXISTING,
-					syscall.FILE_ATTRIBUTE_NORMAL,
+					windows.OPEN_EXISTING,
+					windows.FILE_ATTRIBUTE_NORMAL,
 					0)
 				if createErr == nil {
 					// Hold the lock until the main test signals release
 					<-release
-					syscall.CloseHandle(h)
+					windows.CloseHandle(h)
 					return
 				}
 			}
@@ -217,23 +220,23 @@ func TestMessageCount_ListError(t *testing.T) {
 	var cleanup func()
 	if runtime.GOOS == "windows" {
 		// On Windows, lock the new/ directory exclusively so ReadDir fails
-		p, err := syscall.UTF16PtrFromString(newDir)
+		p, err := windows.UTF16PtrFromString(newDir)
 		if err != nil {
 			t.Fatalf("UTF16PtrFromString: %v", err)
 		}
-		h, err := syscall.CreateFile(
+		h, err := windows.CreateFile(
 			p,
-			syscall.GENERIC_READ,
+			windows.GENERIC_READ,
 			0, // no sharing -- blocks ReadDir
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_FLAG_BACKUP_SEMANTICS,
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_BACKUP_SEMANTICS,
 			0,
 		)
 		if err != nil {
 			t.Skipf("could not lock new/ directory: %v", err)
 		}
-		cleanup = func() { syscall.CloseHandle(h) }
+		cleanup = func() { windows.CloseHandle(h) }
 	} else {
 		// On Unix, replace new/ with a file
 		os.RemoveAll(newDir)
@@ -289,21 +292,21 @@ func TestFetch_ReadFileError(t *testing.T) {
 	// The file is in new/. Lock it exclusively.
 	maildir, _ := store.userMaildirPath(domain, user)
 	filePath := filepath.Join(maildir, "new", fn)
-	p, err := syscall.UTF16PtrFromString(filePath)
+	p, err := windows.UTF16PtrFromString(filePath)
 	if err != nil {
 		t.Fatalf("UTF16PtrFromString: %v", err)
 	}
-	h, err := syscall.CreateFile(p,
-		syscall.GENERIC_ALL,
+	h, err := windows.CreateFile(p,
+		windows.GENERIC_ALL,
 		0, // no sharing
 		nil,
-		syscall.OPEN_EXISTING,
-		syscall.FILE_ATTRIBUTE_NORMAL,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
 		0)
 	if err != nil {
 		t.Skipf("could not lock file: %v", err)
 	}
-	defer syscall.CloseHandle(h)
+	defer windows.CloseHandle(h)
 
 	// Fetch should now fail with a non-IsNotExist error
 	_, err = store.Fetch(domain, user, "INBOX", fn)
@@ -335,21 +338,21 @@ func TestFetchReader_OpenError(t *testing.T) {
 	// The file is in new/. Lock it exclusively.
 	maildir, _ := store.userMaildirPath(domain, user)
 	filePath := filepath.Join(maildir, "new", fn)
-	p, err := syscall.UTF16PtrFromString(filePath)
+	p, err := windows.UTF16PtrFromString(filePath)
 	if err != nil {
 		t.Fatalf("UTF16PtrFromString: %v", err)
 	}
-	h, err := syscall.CreateFile(p,
-		syscall.GENERIC_ALL,
+	h, err := windows.CreateFile(p,
+		windows.GENERIC_ALL,
 		0, // no sharing
 		nil,
-		syscall.OPEN_EXISTING,
-		syscall.FILE_ATTRIBUTE_NORMAL,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
 		0)
 	if err != nil {
 		t.Skipf("could not lock file: %v", err)
 	}
-	defer syscall.CloseHandle(h)
+	defer windows.CloseHandle(h)
 
 	// FetchReader should now fail with a non-IsNotExist error
 	_, err = store.FetchReader(domain, user, "INBOX", fn)
@@ -379,23 +382,23 @@ func TestSetFlags_RenameFailure(t *testing.T) {
 	curDir := filepath.Join(maildir, "cur")
 
 	if runtime.GOOS == "windows" {
-		p, err := syscall.UTF16PtrFromString(curDir)
+		p, err := windows.UTF16PtrFromString(curDir)
 		if err != nil {
 			t.Fatalf("UTF16PtrFromString: %v", err)
 		}
-		h, err := syscall.CreateFile(
+		h, err := windows.CreateFile(
 			p,
-			syscall.GENERIC_READ,
+			windows.GENERIC_READ,
 			0, // no sharing
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_FLAG_BACKUP_SEMANTICS,
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_BACKUP_SEMANTICS,
 			0,
 		)
 		if err != nil {
 			t.Skipf("could not lock cur/ directory: %v", err)
 		}
-		defer syscall.CloseHandle(h)
+		defer windows.CloseHandle(h)
 	} else {
 		os.Chmod(curDir, 0555)
 		defer os.Chmod(curDir, 0755)
@@ -434,21 +437,21 @@ func TestMove_RenameFailure(t *testing.T) {
 	// Lock the source file to prevent rename
 	filePath := filepath.Join(maildir, "new", fn)
 	if runtime.GOOS == "windows" {
-		p, err := syscall.UTF16PtrFromString(filePath)
+		p, err := windows.UTF16PtrFromString(filePath)
 		if err != nil {
 			t.Fatalf("UTF16PtrFromString: %v", err)
 		}
-		h, err := syscall.CreateFile(p,
-			syscall.GENERIC_READ,
-			syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE,
+		h, err := windows.CreateFile(p,
+			windows.GENERIC_READ,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_ATTRIBUTE_NORMAL,
+			windows.OPEN_EXISTING,
+			windows.FILE_ATTRIBUTE_NORMAL,
 			0)
 		if err != nil {
 			t.Skipf("could not lock file: %v", err)
 		}
-		defer syscall.CloseHandle(h)
+		defer windows.CloseHandle(h)
 	} else {
 		// On Unix, make source file read-only
 		os.Chmod(filePath, 0444)
@@ -486,23 +489,23 @@ func TestListFolders_ReadDirError(t *testing.T) {
 
 	// Lock the maildir directory exclusively
 	maildir, _ := store.userMaildirPath(domain, user)
-	p, err := syscall.UTF16PtrFromString(maildir)
+	p, err := windows.UTF16PtrFromString(maildir)
 	if err != nil {
 		t.Fatalf("UTF16PtrFromString: %v", err)
 	}
-	h, err := syscall.CreateFile(
+	h, err := windows.CreateFile(
 		p,
-		syscall.GENERIC_READ,
+		windows.GENERIC_READ,
 		0, // no sharing
 		nil,
-		syscall.OPEN_EXISTING,
-		syscall.FILE_FLAG_BACKUP_SEMANTICS,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
 		0,
 	)
 	if err != nil {
 		t.Skipf("could not lock maildir directory: %v", err)
 	}
-	defer syscall.CloseHandle(h)
+	defer windows.CloseHandle(h)
 
 	// ListFolders should fail with a non-IsNotExist error
 	_, err = store.ListFolders(domain, user)
@@ -534,23 +537,23 @@ func TestQuota_WalkError(t *testing.T) {
 	// Lock the new/ directory exclusively so Walk fails trying to read entries
 	maildir, _ := store.userMaildirPath(domain, user)
 	newDir := filepath.Join(maildir, "new")
-	p, err := syscall.UTF16PtrFromString(newDir)
+	p, err := windows.UTF16PtrFromString(newDir)
 	if err != nil {
 		t.Fatalf("UTF16PtrFromString: %v", err)
 	}
-	h, err := syscall.CreateFile(
+	h, err := windows.CreateFile(
 		p,
-		syscall.GENERIC_READ,
+		windows.GENERIC_READ,
 		0, // no sharing
 		nil,
-		syscall.OPEN_EXISTING,
-		syscall.FILE_FLAG_BACKUP_SEMANTICS,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
 		0,
 	)
 	if err != nil {
 		t.Skipf("could not lock new/ directory: %v", err)
 	}
-	defer syscall.CloseHandle(h)
+	defer windows.CloseHandle(h)
 
 	// Quota should handle the Walk error gracefully
 	used, limit, err := store.Quota(domain, user)
@@ -1316,18 +1319,18 @@ func TestDeleteFolder_RemoveAllError(t *testing.T) {
 
 	// Find the message file and lock it without FILE_SHARE_DELETE
 	maildir := store.folderPath("example.com", "testuser", "ToDelete")
-	var lockedHandle syscall.Handle
+	var lockedHandle windows.Handle
 	filepath.Walk(maildir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
-		p, _ := syscall.UTF16PtrFromString(path)
-		h, e := syscall.CreateFile(p,
-			syscall.GENERIC_READ,
-			syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE,
+		p, _ := windows.UTF16PtrFromString(path)
+		h, e := windows.CreateFile(p,
+			windows.GENERIC_READ,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_ATTRIBUTE_NORMAL,
+			windows.OPEN_EXISTING,
+			windows.FILE_ATTRIBUTE_NORMAL,
 			0)
 		if e == nil {
 			lockedHandle = h
@@ -1338,7 +1341,7 @@ func TestDeleteFolder_RemoveAllError(t *testing.T) {
 	if lockedHandle == 0 {
 		t.Skip("Could not lock file for testing")
 	}
-	defer syscall.CloseHandle(lockedHandle)
+	defer windows.CloseHandle(lockedHandle)
 
 	err = store.DeleteFolder("example.com", "testuser", "ToDelete")
 	if err == nil {
