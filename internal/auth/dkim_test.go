@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -1640,5 +1641,170 @@ func TestParseDKIMSignatureVersion2(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported DKIM version") {
 		t.Errorf("Expected 'unsupported DKIM version' error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Ed25519 DKIM tests
+// ---------------------------------------------------------------------------
+
+func TestNewDKIMSignerEd25519(t *testing.T) {
+	resolver := newMockDNSResolver()
+	privateKey, _, _ := GenerateEd25519DKIMKeyPair()
+
+	signer := NewDKIMSignerEd25519(resolver, privateKey, "example.com", "ed25519-selector")
+
+	if signer == nil {
+		t.Fatal("NewDKIMSignerEd25519 returned nil")
+	}
+	if signer.domain != "example.com" {
+		t.Errorf("Expected domain example.com, got %s", signer.domain)
+	}
+	if signer.selector != "ed25519-selector" {
+		t.Errorf("Expected selector ed25519-selector, got %s", signer.selector)
+	}
+	if signer.keyAlgorithm != "ed25519-sha256" {
+		t.Errorf("Expected algorithm ed25519-sha256, got %s", signer.keyAlgorithm)
+	}
+}
+
+func TestSignEd25519(t *testing.T) {
+	privateKey, _, _ := GenerateEd25519DKIMKeyPair()
+	data := []byte("test data to sign")
+
+	signature, err := signEd25519(privateKey, data)
+	if err != nil {
+		t.Fatalf("signEd25519 failed: %v", err)
+	}
+	if signature == "" {
+		t.Error("Expected non-empty signature")
+	}
+
+	// Verify the signature
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	err = verifyEd25519Signature(publicKey, data, signature)
+	if err != nil {
+		t.Errorf("verifyEd25519Signature failed: %v", err)
+	}
+}
+
+func TestVerifyEd25519Signature_Invalid(t *testing.T) {
+	privateKey, _, _ := GenerateEd25519DKIMKeyPair()
+	data := []byte("test data")
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+
+	// Sign with wrong data
+	wrongSignature, _ := signEd25519(privateKey, []byte("wrong data"))
+
+	err := verifyEd25519Signature(publicKey, data, wrongSignature)
+	if err == nil {
+		t.Error("Expected verification to fail with wrong data")
+	}
+}
+
+func TestVerifyEd25519Signature_InvalidBase64(t *testing.T) {
+	privateKey, _, _ := GenerateEd25519DKIMKeyPair()
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+
+	err := verifyEd25519Signature(publicKey, []byte("data"), "not-valid-base64!!!")
+	if err == nil {
+		t.Error("Expected error for invalid base64")
+	}
+}
+
+func TestDKIMSignerEd25519_Sign(t *testing.T) {
+	resolver := newMockDNSResolver()
+	privateKey, _, _ := GenerateEd25519DKIMKeyPair()
+	signer := NewDKIMSignerEd25519(resolver, privateKey, "example.com", "ed25519-selector")
+
+	headers := map[string][]string{
+		"From":         {"sender@example.com"},
+		"To":           {"recipient@example.com"},
+		"Subject":      {"Test subject"},
+		"Date":         {"Mon, 01 Jan 2024 12:00:00 +0000"},
+		"Message-ID":   {"<abc123@example.com>"},
+	}
+	body := []byte("Test body content")
+
+	signature, err := signer.Sign(headers, body)
+	if err != nil {
+		t.Fatalf("Sign failed: %v", err)
+	}
+	if signature == "" {
+		t.Error("Expected non-empty signature")
+	}
+	if !strings.HasPrefix(signature, "v=1; ") {
+		t.Error("Expected signature to start with v=1; ")
+	}
+}
+
+func TestDKIMSignerEd25519_SignNilKey(t *testing.T) {
+	resolver := newMockDNSResolver()
+	// Create signer with empty Ed25519 key (len 0)
+	signer := NewDKIMSignerEd25519(resolver, ed25519.PrivateKey{}, "example.com", "ed25519-selector")
+
+	headers := map[string][]string{
+		"From": {"sender@example.com"},
+	}
+	body := []byte("Test body")
+
+	_, err := signer.Sign(headers, body)
+	if err == nil {
+		t.Error("Expected error for nil Ed25519 key")
+	}
+	if !strings.Contains(err.Error(), "no private key") {
+		t.Errorf("Expected 'no private key' error, got: %v", err)
+	}
+}
+
+func TestDKIMSignerEd25519_SignNilInterface(t *testing.T) {
+	resolver := newMockDNSResolver()
+	privateKey, _, _ := GenerateEd25519DKIMKeyPair()
+	signer := NewDKIMSignerEd25519(resolver, privateKey, "example.com", "ed25519-selector")
+	// Set privateKey to nil via type assertion
+	signer.privateKey = nil
+
+	headers := map[string][]string{
+		"From": {"sender@example.com"},
+	}
+	body := []byte("Test body")
+
+	_, err := signer.Sign(headers, body)
+	if err == nil {
+		t.Error("Expected error for nil interface")
+	}
+}
+
+func TestGenerateEd25519DKIMKeyPair(t *testing.T) {
+	privateKey, publicKey, err := GenerateEd25519DKIMKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateEd25519DKIMKeyPair failed: %v", err)
+	}
+	if privateKey == nil {
+		t.Fatal("Expected non-nil private key")
+	}
+	if publicKey == nil {
+		t.Fatal("Expected non-nil public key bytes")
+	}
+	if len(privateKey) != ed25519.PrivateKeySize {
+		t.Errorf("Expected private key size %d, got %d", ed25519.PrivateKeySize, len(privateKey))
+	}
+}
+
+func TestGetEd25519PublicKeyForDNS(t *testing.T) {
+	privateKey, _, _ := GenerateEd25519DKIMKeyPair()
+
+	dnsKey := GetEd25519PublicKeyForDNS(privateKey)
+	if dnsKey == "" {
+		t.Error("Expected non-empty DNS key")
+	}
+
+	// Should be valid base64
+	decoded, err := base64.StdEncoding.DecodeString(dnsKey)
+	if err != nil {
+		t.Errorf("Invalid base64 in DNS key: %v", err)
+	}
+	if len(decoded) != ed25519.PublicKeySize {
+		t.Errorf("Expected public key size %d, got %d", ed25519.PublicKeySize, len(decoded))
 	}
 }
