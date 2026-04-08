@@ -50,7 +50,7 @@ type AutodiscoverResponse struct {
 func (s *Server) handleAutodiscover(w http.ResponseWriter, r *http.Request) {
 	// Only allow GET and POST
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		s.sendAutodiscoverError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
@@ -70,14 +70,14 @@ func (s *Server) handleAutodiscover(w http.ResponseWriter, r *http.Request) {
 
 	if email == "" {
 		// Return redirect to the main autodiscover endpoint
-		http.Error(w, "Email address required", http.StatusBadRequest)
+		s.sendAutodiscoverError(w, http.StatusBadRequest, "Email address required")
 		return
 	}
 
 	// Extract domain from email
 	domain := extractDomainFromEmail(email)
 	if domain == "" {
-		http.Error(w, "Invalid email address", http.StatusBadRequest)
+		s.sendAutodiscoverError(w, http.StatusBadRequest, "Invalid email address")
 		return
 	}
 
@@ -184,4 +184,29 @@ func extractDomainFromEmail(email string) string {
 		return strings.ToLower(email[idx+1:])
 	}
 	return ""
+}
+
+// sendAutodiscoverError sends an XML error response
+func (s *Server) sendAutodiscoverError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.WriteHeader(status)
+
+	resp := struct {
+		XMLName xml.Name `xml:"AutodiscoverResponse"`
+		Space   string   `xml:"xmlns,attr"`
+		Error   struct {
+			XMLName    xml.Name `xml:"Error"`
+			Code       int      `xml:"Code"`
+			Message    string   `xml:"Message"`
+			XmlMessage string   `xml:"xml:lang"`
+		} `xml:"Error"`
+	}{
+		Space: "http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006",
+	}
+	resp.Error.Code = status
+	resp.Error.Message = message
+	resp.Error.XmlMessage = "en-US"
+
+	xml.NewEncoder(w).Encode(resp)
 }

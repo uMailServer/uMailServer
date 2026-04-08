@@ -37,14 +37,14 @@ type AutoconfigClientConfig struct {
 func (s *Server) handleAutoconfig(w http.ResponseWriter, r *http.Request) {
 	// Only allow GET requests
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		s.sendAutoconfigError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	// Extract domain from request
 	domain := extractDomainFromRequest(r)
 	if domain == "" {
-		http.Error(w, "Domain required", http.StatusBadRequest)
+		s.sendAutoconfigError(w, http.StatusBadRequest, "Domain required")
 		return
 	}
 
@@ -156,4 +156,29 @@ func extractDomainFromRequest(r *http.Request) string {
 	// Try to extract from the request URL path (for POST requests)
 	// Path format: /autodiscover/autodiscover.xml or /.well-known/autoconfig/mail/config-v1.1.xml
 	return ""
+}
+
+// sendAutoconfigError sends an XML error response for autoconfig
+func (s *Server) sendAutoconfigError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/xml")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.WriteHeader(status)
+
+	resp := struct {
+		XMLName xml.Name `xml:"clientConfig"`
+		Version string   `xml:"version,attr"`
+		Error   struct {
+			XMLName  xml.Name `xml:"error"`
+			Code     int      `xml:"code,attr"`
+			Message  string   `xml:"message"`
+			Language string   `xml:"language,attr"`
+		} `xml:"error"`
+	}{
+		Version: "1.1",
+	}
+	resp.Error.Code = status
+	resp.Error.Message = message
+	resp.Error.Language = "en"
+
+	xml.NewEncoder(w).Encode(resp)
 }
