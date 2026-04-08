@@ -3,6 +3,7 @@ package sieve
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParser_Elsif(t *testing.T) {
@@ -1046,5 +1047,240 @@ keep;
 
 	if len(actions) != 1 {
 		t.Errorf("Expected 1 action (keep), got %d", len(actions))
+	}
+}
+
+// =======================================================================
+// Manager tests for coverage
+// =======================================================================
+
+func TestManager_GetActiveScriptName_Empty(t *testing.T) {
+	m := NewManager()
+	name := m.GetActiveScriptName("nonexistent-user")
+	if name != "" {
+		t.Errorf("Expected empty string, got %q", name)
+	}
+}
+
+func TestManager_GetActiveScriptName_WithScript(t *testing.T) {
+	m := NewManager()
+	m.StoreScript("user@test.com", "myscript", `keep;`)
+	m.SetActiveScriptByName("user@test.com", "myscript")
+
+	name := m.GetActiveScriptName("user@test.com")
+	if name != "myscript" {
+		t.Errorf("Expected 'myscript', got %q", name)
+	}
+}
+
+func TestManager_GetScript_NotFound(t *testing.T) {
+	m := NewManager()
+	script, ok := m.GetScript("nonexistent-user", "script")
+	if ok || script != nil {
+		t.Errorf("Expected not found, got ok=%v", ok)
+	}
+}
+
+func TestManager_GetScript_Found(t *testing.T) {
+	m := NewManager()
+	m.StoreScript("user@test.com", "myscript", `keep;`)
+
+	script, ok := m.GetScript("user@test.com", "myscript")
+	if !ok || script == nil {
+		t.Fatalf("Expected found, got ok=%v", ok)
+	}
+	if len(script.Commands) != 1 {
+		t.Errorf("Expected 1 command, got %d", len(script.Commands))
+	}
+}
+
+func TestManager_GetVacationInterval_Zero(t *testing.T) {
+	m := NewManager()
+	interval := m.GetVacationInterval(0)
+	if interval != 24*time.Hour {
+		t.Errorf("Expected 24h, got %v", interval)
+	}
+}
+
+func TestManager_GetVacationInterval_Negative(t *testing.T) {
+	m := NewManager()
+	interval := m.GetVacationInterval(-5)
+	if interval != 24*time.Hour {
+		t.Errorf("Expected 24h, got %v", interval)
+	}
+}
+
+func TestManager_GetVacationInterval_Positive(t *testing.T) {
+	m := NewManager()
+	interval := m.GetVacationInterval(7)
+	if interval != 7*24*time.Hour {
+		t.Errorf("Expected 7*24h, got %v", interval)
+	}
+}
+
+func TestManager_ShouldSendVacation_NotInCache(t *testing.T) {
+	m := NewManager()
+	if !m.ShouldSendVacation("new-sender@test.com", 1) {
+		t.Error("Expected true for sender not in cache")
+	}
+}
+
+func TestManager_ShouldSendVacation_InCacheRecent(t *testing.T) {
+	m := NewManager()
+	m.RecordVacationSent("recent-sender@test.com")
+	// Immediately after recording, should not send
+	if m.ShouldSendVacation("recent-sender@test.com", 7) {
+		t.Error("Expected false for recently contacted sender")
+	}
+}
+
+func TestManager_ShouldSendVacation_InCacheOld(t *testing.T) {
+	m := NewManager()
+	// Manually add old entry to cache
+	m.vacationCacheMu.Lock()
+	m.vacationCache["old-sender@test.com"] = time.Now().Add(-48 * time.Hour)
+	m.vacationCacheMu.Unlock()
+
+	// After 2 days, should send again for 1-day interval
+	if !m.ShouldSendVacation("old-sender@test.com", 1) {
+		t.Error("Expected true for old sender with 1-day interval")
+	}
+}
+
+func TestManager_ListScripts(t *testing.T) {
+	m := NewManager()
+	m.StoreScript("user@test.com", "script1", `keep;`)
+	m.StoreScript("user@test.com", "script2", `discard;`)
+
+	names := m.ListScripts("user@test.com")
+	if len(names) != 2 {
+		t.Errorf("Expected 2 scripts, got %d", len(names))
+	}
+}
+
+// =======================================================================
+// Interpreter edge cases for coverage
+// =======================================================================
+
+func TestInterpreter_VacationAction_WithDays(t *testing.T) {
+	script := `vacation :days 7 "I'm on vacation";`
+
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+}
+
+func TestInterpreter_SetVariable(t *testing.T) {
+	script := `
+set "testvar" "testvalue";
+keep;
+`
+
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+}
+
+func TestInterpreter_ElsifCondition(t *testing.T) {
+	script := `
+if header :contains "subject" "match1" {
+    discard;
+} elsif header :contains "subject" "match2" {
+    keep;
+}
+`
+
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{
+			"subject": {"match2"},
+		},
+		Body: []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// elsif matches, so keep
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+}
+
+func TestInterpreter_FileintoAction(t *testing.T) {
+	script := `fileinto "Trash";`
+
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action, got %d", len(actions))
+	}
+	if _, ok := actions[0].(FileintoAction); !ok {
+		t.Errorf("Expected FileintoAction, got %T", actions[0])
 	}
 }
