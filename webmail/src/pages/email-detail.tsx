@@ -23,6 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { toast } from "sonner"
+import { sanitizeHTML } from "@/utils/sanitize"
 
 interface Attachment {
   name: string
@@ -209,7 +210,7 @@ export function EmailDetailPage() {
         <div className="px-6 pb-6">
           <div
             className="prose prose-neutral dark:prose-invert max-w-none prose-headings:font-semibold prose-p:leading-relaxed prose-ul:leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: email.content }}
+            dangerouslySetInnerHTML={{ __html: sanitizeHTML(email.content) }}
           />
         </div>
 
