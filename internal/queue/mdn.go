@@ -13,7 +13,7 @@ import (
 type MDNDisposition int
 
 const (
-	MDNDispositionDisplayed   MDNDisposition = iota
+	MDNDispositionDisplayed MDNDisposition = iota
 	MDNDispositionDeleted
 	MDNDispositionDispatched
 	MDNDispositionDenied
@@ -22,16 +22,16 @@ const (
 
 // MDN represents a Message Disposition Notification (RFC 3798)
 type MDN struct {
-	ReportType    string
-	MessageID     string
-	OriginalTo    string
-	Disposition   string
+	ReportType          string
+	MessageID           string
+	OriginalTo          string
+	Disposition         string
 	DispositionModifier string
-	SentBy        string
-	SentByDomain  string
-	ReportingUA   string
-	ArrivalDate   time.Time
-	Extension     map[string]string
+	SentBy              string
+	SentByDomain        string
+	ReportingUA         string
+	ArrivalDate         time.Time
+	Extension           map[string]string
 }
 
 // MDNAddress represents an address from Disposition-Notification-To header

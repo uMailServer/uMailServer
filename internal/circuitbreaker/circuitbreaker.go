@@ -10,7 +10,7 @@ import (
 type State int
 
 const (
-	StateClosed State = iota   // Normal operation
+	StateClosed   State = iota // Normal operation
 	StateOpen                  // Failing, rejecting requests
 	StateHalfOpen              // Testing if service recovered
 )
@@ -30,10 +30,10 @@ func (s State) String() string {
 
 // Config holds circuit breaker configuration
 type Config struct {
-	MaxFailures     int           // Number of failures before opening
-	Timeout         time.Duration // Duration to stay open before half-open
-	SuccessThreshold int          // Success count to close from half-open
-	FailureThreshold int          // Failure count to open from half-open
+	MaxFailures      int           // Number of failures before opening
+	Timeout          time.Duration // Duration to stay open before half-open
+	SuccessThreshold int           // Success count to close from half-open
+	FailureThreshold int           // Failure count to open from half-open
 }
 
 // DefaultConfig returns sensible defaults
@@ -176,10 +176,10 @@ func (cb *CircuitBreaker) Metrics() Metrics {
 	defer cb.mutex.RUnlock()
 
 	return Metrics{
-		State:           cb.state.String(),
-		Failures:        cb.failures,
-		Successes:       cb.successes,
-		LastFailure:     cb.lastFailure,
+		State:            cb.state.String(),
+		Failures:         cb.failures,
+		Successes:        cb.successes,
+		LastFailure:      cb.lastFailure,
 		HalfOpenRequests: cb.halfOpenReq,
 	}
 }

@@ -483,7 +483,7 @@ func TestGenerateSessionID(t *testing.T) {
 
 func TestRequestStruct(t *testing.T) {
 	req := Request{
-		Using:       []string{"urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"},
+		Using: []string{"urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"},
 		MethodCalls: []MethodCall{
 			{Name: "Mailbox/get", Args: map[string]interface{}{"accountId": "user"}, ID: "call-1"},
 		},
@@ -587,16 +587,16 @@ func TestMailCapabilitiesStruct(t *testing.T) {
 
 func TestMailboxStruct(t *testing.T) {
 	mailbox := Mailbox{
-		ID:             "mailbox-123",
-		Name:           "Inbox",
-		Role:           "inbox",
-		SortOrder:      1,
-		TotalEmails:    100,
-		UnreadEmails:   5,
-		TotalThreads:   80,
-		UnreadThreads:  3,
-		MyRights:       MailboxRights{MayReadItems: true, MayAddItems: true},
-		IsSubscribed:   true,
+		ID:            "mailbox-123",
+		Name:          "Inbox",
+		Role:          "inbox",
+		SortOrder:     1,
+		TotalEmails:   100,
+		UnreadEmails:  5,
+		TotalThreads:  80,
+		UnreadThreads: 3,
+		MyRights:      MailboxRights{MayReadItems: true, MayAddItems: true},
+		IsSubscribed:  true,
 	}
 
 	if mailbox.Name != "Inbox" {

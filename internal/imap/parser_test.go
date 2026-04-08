@@ -139,4 +139,3 @@ func TestSeqRangeContainsSwapped(t *testing.T) {
 		t.Error("expected 7 to be in range 10:5")
 	}
 }
-

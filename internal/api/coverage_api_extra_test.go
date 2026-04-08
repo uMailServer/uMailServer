@@ -100,7 +100,6 @@ func TestHandleDeleteFilter_Success(t *testing.T) {
 
 // --- handleFilterToggle Coverage Tests ---
 
-
 // --- handleFilterReorder Coverage Tests ---
 
 func TestHandleFilterReorder_Success(t *testing.T) {
@@ -139,7 +138,6 @@ func TestHandleFilterReorder_Success(t *testing.T) {
 }
 
 // --- Push Handler Coverage Tests ---
-
 
 func TestHandlePushSubscriptions_Success(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
@@ -347,7 +345,6 @@ func TestHandleDeleteFilter_WithDatabaseError(t *testing.T) {
 }
 
 // --- More Tests for Low Coverage Functions ---
-
 
 func TestHandlePushVAPID_NotConfigured(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
@@ -1033,11 +1030,11 @@ func TestHandleSetVacation_WithDates(t *testing.T) {
 	endDate := "2026-01-15T00:00:00Z"
 
 	body := map[string]interface{}{
-		"enabled":     true,
-		"subject":     "Out of Office",
-		"message":     "I am on vacation",
-		"start_date":  startDate,
-		"end_date":    endDate,
+		"enabled":       true,
+		"subject":       "Out of Office",
+		"message":       "I am on vacation",
+		"start_date":    startDate,
+		"end_date":      endDate,
 		"send_interval": 24,
 	}
 	jsonBody, _ := json.Marshal(body)
@@ -1058,11 +1055,11 @@ func TestHandleSetVacation_WithInvalidDates(t *testing.T) {
 	defer database.Close()
 
 	body := map[string]interface{}{
-		"enabled":     true,
-		"subject":     "Out of Office",
-		"message":     "I am on vacation",
-		"start_date":  "invalid-date",
-		"end_date":    "also-invalid",
+		"enabled":    true,
+		"subject":    "Out of Office",
+		"message":    "I am on vacation",
+		"start_date": "invalid-date",
+		"end_date":   "also-invalid",
 	}
 	jsonBody, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/vacation", bytes.NewReader(jsonBody))

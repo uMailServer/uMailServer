@@ -13,23 +13,23 @@ import (
 type DSNNotify int
 
 const (
-	DSNNotifyNever  DSNNotify = 1 << iota // NEVER - never send DSN
-	DSNNotifySuccess                      // SUCCESS - notify on successful delivery
-	DSNNotifyFailure                      // FAILURE - notify on failed delivery
-	DSNNotifyDelay                        // DELAY - notify if delivery is delayed
+	DSNNotifyNever   DSNNotify = 1 << iota // NEVER - never send DSN
+	DSNNotifySuccess                       // SUCCESS - notify on successful delivery
+	DSNNotifyFailure                       // FAILURE - notify on failed delivery
+	DSNNotifyDelay                         // DELAY - notify if delivery is delayed
 )
 
 // DSNRet represents what to return in DSN
 type DSNRet int
 
 const (
-	DSNRetFull   DSNRet = iota // Return full message
-	DSNRetHeaders              // Return headers only
+	DSNRetFull    DSNRet = iota // Return full message
+	DSNRetHeaders               // Return headers only
 )
 
 // DSNAddress represents an address with DSN notification options
 type DSNAddress struct {
-	Original string   // Original address string
+	Original string    // Original address string
 	Notify   DSNNotify // Notification options
 }
 
@@ -82,12 +82,12 @@ type DSN struct {
 	OriginalFrom   string    // Original MAIL FROM
 	OriginalTo     string    // Original RCPT TO
 	Recipient      DSNRecipient
-	Action         string    // failed, delayed, delivered, expanded
-	Status         string    // Status code (e.g., 2.0.0 for success)
-	DiagnosticCode string    // Diagnostic code (smtp, X.400, etc.)
-	RemoteMTA      string    // Remote MTA that attempted delivery
-	FinalMTA       string    // Final MTA
-	MessageID      string    // Message ID of the DSN
+	Action         string // failed, delayed, delivered, expanded
+	Status         string // Status code (e.g., 2.0.0 for success)
+	DiagnosticCode string // Diagnostic code (smtp, X.400, etc.)
+	RemoteMTA      string // Remote MTA that attempted delivery
+	FinalMTA       string // Final MTA
+	MessageID      string // Message ID of the DSN
 }
 
 // DSNRecipient holds per-recipient DSN information

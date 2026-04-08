@@ -8,38 +8,38 @@ import (
 
 // AutodiscoverRequest represents an Autodiscover request
 type AutodiscoverRequest struct {
-	XMLName   xml.Name `xml:"Autodiscover"`
-	Requests  []struct {
-		EMailAddress   string `xml:"EMailAddress"`
+	XMLName  xml.Name `xml:"Autodiscover"`
+	Requests []struct {
+		EMailAddress  string `xml:"EMailAddress"`
 		AcceptableDst string `xml:"AcceptableDst"`
 	} `xml:"Request"`
 }
 
 // AutodiscoverResponse represents an Autodiscover response
 type AutodiscoverResponse struct {
-	XMLName xml.Name `xml:"AutodiscoverResponse"`
-	Space   string  `xml:"xmlns,attr"`
+	XMLName  xml.Name `xml:"AutodiscoverResponse"`
+	Space    string   `xml:"xmlns,attr"`
 	Response struct {
-		XMLName   xml.Name `xml:"Response"`
-		User      struct {
-			XMLName   xml.Name `xml:"User"`
-			DisplayName string `xml:"DisplayName"`
-			EMailAddress string `xml:"EMailAddress"`
+		XMLName xml.Name `xml:"Response"`
+		User    struct {
+			XMLName      xml.Name `xml:"User"`
+			DisplayName  string   `xml:"DisplayName"`
+			EMailAddress string   `xml:"EMailAddress"`
 		} `xml:"User"`
 		Account struct {
-			XMLName   xml.Name `xml:"Account"`
-			AccountType string `xml:"AccountType"`
-			Action     string  `xml:"Action"`
-			Protocol   []struct {
+			XMLName     xml.Name `xml:"Account"`
+			AccountType string   `xml:"AccountType"`
+			Action      string   `xml:"Action"`
+			Protocol    []struct {
 				XMLName   xml.Name `xml:"Protocol"`
-				Type      string  `xml:"Type"`
-				Server    string  `xml:"Server"`
-				Port      int     `xml:"Port"`
-				LoginName string  `xml:"LoginName"`
-				Domain    string  `xml:"Domain"`
-				SPA       string  `xml:"SPA"`
-				SSL       string  `xml:"SSL"`
-				Auth       string  `xml:"Auth"`
+				Type      string   `xml:"Type"`
+				Server    string   `xml:"Server"`
+				Port      int      `xml:"Port"`
+				LoginName string   `xml:"LoginName"`
+				Domain    string   `xml:"Domain"`
+				SPA       string   `xml:"SPA"`
+				SSL       string   `xml:"SSL"`
+				Auth      string   `xml:"Auth"`
 			} `xml:"Protocol"`
 		} `xml:"Account"`
 	} `xml:"Response"`
@@ -117,14 +117,14 @@ func (s *Server) buildAutodiscoverResponse(email, domain string) *AutodiscoverRe
 	// Add IMAP protocol
 	imapProtocol := struct {
 		XMLName   xml.Name `xml:"Protocol"`
-		Type      string  `xml:"Type"`
-		Server    string  `xml:"Server"`
-		Port      int     `xml:"Port"`
-		LoginName string  `xml:"LoginName"`
-		Domain    string  `xml:"Domain"`
-		SPA       string  `xml:"SPA"`
-		SSL       string  `xml:"SSL"`
-		Auth      string  `xml:"Auth"`
+		Type      string   `xml:"Type"`
+		Server    string   `xml:"Server"`
+		Port      int      `xml:"Port"`
+		LoginName string   `xml:"LoginName"`
+		Domain    string   `xml:"Domain"`
+		SPA       string   `xml:"SPA"`
+		SSL       string   `xml:"SSL"`
+		Auth      string   `xml:"Auth"`
 	}{
 		Type:      "IMAP",
 		Server:    "mail." + domain,
@@ -139,14 +139,14 @@ func (s *Server) buildAutodiscoverResponse(email, domain string) *AutodiscoverRe
 	// Add SMTP protocol
 	smtpProtocol := struct {
 		XMLName   xml.Name `xml:"Protocol"`
-		Type      string  `xml:"Type"`
-		Server    string  `xml:"Server"`
-		Port      int     `xml:"Port"`
-		LoginName string  `xml:"LoginName"`
-		Domain    string  `xml:"Domain"`
-		SPA       string  `xml:"SPA"`
-		SSL       string  `xml:"SSL"`
-		Auth      string  `xml:"Auth"`
+		Type      string   `xml:"Type"`
+		Server    string   `xml:"Server"`
+		Port      int      `xml:"Port"`
+		LoginName string   `xml:"LoginName"`
+		Domain    string   `xml:"Domain"`
+		SPA       string   `xml:"SPA"`
+		SSL       string   `xml:"SSL"`
+		Auth      string   `xml:"Auth"`
 	}{
 		Type:      "SMTP",
 		Server:    "mail." + domain,

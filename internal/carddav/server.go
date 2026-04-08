@@ -691,20 +691,20 @@ type PropFilter struct {
 
 // Contact represents a vCard contact
 type Contact struct {
-	UID           string    `json:"uid"`
-	FullName      string    `json:"full_name"`
-	FirstName     string    `json:"first_name,omitempty"`
-	LastName      string    `json:"last_name,omitempty"`
-	Email         []Email   `json:"email,omitempty"`
-	Phone         []Phone   `json:"phone,omitempty"`
-	Address       []Address `json:"address,omitempty"`
-	Organization  string    `json:"organization,omitempty"`
-	Title         string    `json:"title,omitempty"`
-	Note          string    `json:"note,omitempty"`
-	Birthday      *time.Time `json:"birthday,omitempty"`
-	Photo         string    `json:"photo,omitempty"`
-	Created       time.Time `json:"created"`
-	Modified      time.Time `json:"modified"`
+	UID          string     `json:"uid"`
+	FullName     string     `json:"full_name"`
+	FirstName    string     `json:"first_name,omitempty"`
+	LastName     string     `json:"last_name,omitempty"`
+	Email        []Email    `json:"email,omitempty"`
+	Phone        []Phone    `json:"phone,omitempty"`
+	Address      []Address  `json:"address,omitempty"`
+	Organization string     `json:"organization,omitempty"`
+	Title        string     `json:"title,omitempty"`
+	Note         string     `json:"note,omitempty"`
+	Birthday     *time.Time `json:"birthday,omitempty"`
+	Photo        string     `json:"photo,omitempty"`
+	Created      time.Time  `json:"created"`
+	Modified     time.Time  `json:"modified"`
 }
 
 // Email represents an email address
@@ -739,4 +739,3 @@ type Addressbook struct {
 	Created     time.Time `json:"created"`
 	Modified    time.Time `json:"modified"`
 }
-

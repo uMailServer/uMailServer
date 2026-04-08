@@ -1650,42 +1650,42 @@ func parseSearchCriteria(args []string) SearchCriteria {
 			}
 		case "BEFORE":
 			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+				if t, err := parseIMAPDate(args[i+1]); err == nil {
 					criteria.Before = t
 				}
 				i++
 			}
 		case "ON":
 			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+				if t, err := parseIMAPDate(args[i+1]); err == nil {
 					criteria.On = t
 				}
 				i++
 			}
 		case "SINCE":
 			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+				if t, err := parseIMAPDate(args[i+1]); err == nil {
 					criteria.Since = t
 				}
 				i++
 			}
 		case "SENTBEFORE":
 			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+				if t, err := parseIMAPDate(args[i+1]); err == nil {
 					criteria.SentBefore = t
 				}
 				i++
 			}
 		case "SENTON":
 			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+				if t, err := parseIMAPDate(args[i+1]); err == nil {
 					criteria.SentOn = t
 				}
 				i++
 			}
 		case "SENTSINCE":
 			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i + 1]); err == nil {
+				if t, err := parseIMAPDate(args[i+1]); err == nil {
 					criteria.SentSince = t
 				}
 				i++

@@ -25,10 +25,10 @@ type RateLimiter struct {
 // Config holds rate limiting configuration
 type Config struct {
 	// Per-IP limits (inbound connections)
-	IPPerMinute       int // messages per minute per IP
-	IPPerHour         int // messages per hour per IP
-	IPPerDay          int // messages per day per IP
-	IPConnections     int // concurrent connections per IP
+	IPPerMinute   int // messages per minute per IP
+	IPPerHour     int // messages per hour per IP
+	IPPerDay      int // messages per day per IP
+	IPConnections int // concurrent connections per IP
 
 	// Per-user limits (authenticated sending)
 	UserPerMinute     int // messages per minute per user
@@ -37,8 +37,8 @@ type Config struct {
 	UserMaxRecipients int // max recipients per message
 
 	// Global limits
-	GlobalPerMinute   int // global messages per minute
-	GlobalPerHour     int // global messages per hour
+	GlobalPerMinute int // global messages per minute
+	GlobalPerHour   int // global messages per hour
 
 	// Cleanup interval
 	CleanupInterval time.Duration
@@ -84,14 +84,14 @@ type userBucket struct {
 
 // connCounter tracks concurrent connections per IP
 type connCounter struct {
-	count    int
-	until    time.Time
+	count int
+	until time.Time
 }
 
 // Result of a rate limit check
 type Result struct {
-	Allowed   bool
-	Reason    string
+	Allowed    bool
+	Reason     string
 	RetryAfter int // seconds until retry is allowed
 }
 
@@ -486,4 +486,3 @@ func (rl *RateLimiter) saveUserSentToday(user string, count int64) {
 		return bucket.Put(key, buf[:])
 	})
 }
-

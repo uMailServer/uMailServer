@@ -29,12 +29,12 @@ type Server struct {
 	logger      *slog.Logger
 
 	// Hooks for message processing
-	onAuth          func(username, password string) (bool, error)
-	onValidate      func(from string, to []string) error
-	onDeliver       func(from string, to []string, data []byte) error
+	onAuth             func(username, password string) (bool, error)
+	onValidate         func(from string, to []string) error
+	onDeliver          func(from string, to []string, data []byte) error
 	onDeliverWithSieve func(from string, to []string, data []byte, sieveActions []string) error
-	onGetUserSecret func(username string) (string, error) // Get user's shared secret for CRAM-MD5
-	pipeline        *Pipeline
+	onGetUserSecret    func(username string) (string, error) // Get user's shared secret for CRAM-MD5
+	pipeline           *Pipeline
 
 	// Rate limiting
 	rateLimiter ConnectionRateLimiter

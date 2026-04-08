@@ -495,7 +495,7 @@ func TestSSEServerGetConnectedCountWithClients(t *testing.T) {
 // mockResponseRecorder wraps httptest.ResponseRecorder and implements http.Flusher
 type mockResponseRecorder struct {
 	*httptest.ResponseRecorder
-	flushed bool
+	flushed  bool
 	headerMu sync.Mutex
 }
 

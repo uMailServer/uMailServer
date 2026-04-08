@@ -42,7 +42,6 @@ func TestMigrate_WithInitMigrations(t *testing.T) {
 	}
 }
 
-
 // TestMigrate_AlreadyApplied tests Migrate when migrations already applied
 func TestMigrate_AlreadyApplied(t *testing.T) {
 	db := setupTestDB(t)
@@ -155,8 +154,8 @@ func TestRunMigration_NilUp(t *testing.T) {
 	registry.Register(Migration{
 		Version:     "001",
 		Description: "Nil up migration",
-		Up:         nil,
-		Down:       nil,
+		Up:          nil,
+		Down:        nil,
 	})
 
 	m := NewMigrator(db, registry)

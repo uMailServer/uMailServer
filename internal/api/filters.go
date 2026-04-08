@@ -14,8 +14,8 @@ import (
 
 // FilterCondition represents a single filter condition
 type FilterCondition struct {
-	Field      string `json:"field"`      // from, to, subject, body, header
-	Operator   string `json:"operator"`   // contains, equals, startsWith, endsWith, matches
+	Field      string `json:"field"`    // from, to, subject, body, header
+	Operator   string `json:"operator"` // contains, equals, startsWith, endsWith, matches
 	Value      string `json:"value"`
 	HeaderName string `json:"headerName,omitempty"`
 }

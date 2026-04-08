@@ -493,7 +493,6 @@ func TestSendNewMailNotification_NoSubscriptions(t *testing.T) {
 	}
 }
 
-
 // Test loadSubscriptions with various file types
 func TestLoadSubscriptions_VariousFiles(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -503,11 +502,11 @@ func TestLoadSubscriptions_VariousFiles(t *testing.T) {
 
 	// Add a subscription
 	sub := &Subscription{
-		ID:       "test-sub-1",
-		UserID:   "user@example.com",
-		Endpoint: "https://example.com/push",
-		P256dh:   "test-p256dh",
-		Auth:     "test-auth",
+		ID:        "test-sub-1",
+		UserID:    "user@example.com",
+		Endpoint:  "https://example.com/push",
+		P256dh:    "test-p256dh",
+		Auth:      "test-auth",
 		CreatedAt: time.Now(),
 	}
 	service1.Subscribe("user@example.com", sub)
@@ -721,7 +720,6 @@ func TestGetUserSubscriptions_StaleReference(t *testing.T) {
 		t.Errorf("Expected 0 subscriptions for stale reference, got %d", len(subs))
 	}
 }
-
 
 // Test Unsubscribe when deleteSubscriptionFile returns error
 func TestUnsubscribe_DeleteFileError(t *testing.T) {

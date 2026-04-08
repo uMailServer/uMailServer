@@ -10,10 +10,10 @@ import (
 
 // ResourceLimits holds configurable resource limits
 type ResourceLimits struct {
-	MaxMemoryMB       int64         // Maximum memory usage in MB (0 = unlimited)
-	MaxGoroutines     int           // Maximum number of goroutines (0 = unlimited)
-	MaxConnections    int           // Maximum total connections (0 = unlimited)
-	GCPercent         int           // GC target percentage (default 100)
+	MaxMemoryMB         int64         // Maximum memory usage in MB (0 = unlimited)
+	MaxGoroutines       int           // Maximum number of goroutines (0 = unlimited)
+	MaxConnections      int           // Maximum total connections (0 = unlimited)
+	GCPercent           int           // GC target percentage (default 100)
 	MemoryCheckInterval time.Duration // How often to check memory
 }
 
@@ -30,19 +30,19 @@ func DefaultResourceLimits() ResourceLimits {
 
 // ResourceMonitor monitors and enforces resource limits
 type ResourceMonitor struct {
-	limits      ResourceLimits
-	logger      Logger
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
+	limits ResourceLimits
+	logger Logger
+	stopCh chan struct{}
+	wg     sync.WaitGroup
 
 	// Current values
-	currentMemory   int64
-	currentGoroutines int
+	currentMemory      int64
+	currentGoroutines  int
 	currentConnections int64
 
 	// Callbacks
-	onMemoryLimit   func()
-	onGoroutineLimit func()
+	onMemoryLimit     func()
+	onGoroutineLimit  func()
 	onConnectionLimit func()
 
 	mu sync.RWMutex
@@ -182,15 +182,15 @@ func (rm *ResourceMonitor) GetStats() ResourceStats {
 	defer rm.mu.RUnlock()
 
 	return ResourceStats{
-		MemoryAllocated:    m.Alloc,
-		MemoryTotal:        m.TotalAlloc,
-		MemorySystem:       m.Sys,
-		MemoryGC:           m.NumGC,
-		Goroutines:         runtime.NumGoroutine(),
-		Connections:        rm.currentConnections,
-		MemoryLimitMB:      rm.limits.MaxMemoryMB,
-		GoroutineLimit:     rm.limits.MaxGoroutines,
-		ConnectionLimit:    int64(rm.limits.MaxConnections),
+		MemoryAllocated: m.Alloc,
+		MemoryTotal:     m.TotalAlloc,
+		MemorySystem:    m.Sys,
+		MemoryGC:        m.NumGC,
+		Goroutines:      runtime.NumGoroutine(),
+		Connections:     rm.currentConnections,
+		MemoryLimitMB:   rm.limits.MaxMemoryMB,
+		GoroutineLimit:  rm.limits.MaxGoroutines,
+		ConnectionLimit: int64(rm.limits.MaxConnections),
 	}
 }
 
@@ -223,15 +223,15 @@ func (rm *ResourceMonitor) SetMaxMemory(mb int64) {
 
 // ResourceStats holds resource statistics
 type ResourceStats struct {
-	MemoryAllocated   uint64  `json:"memory_allocated_bytes"`
-	MemoryTotal       uint64  `json:"memory_total_bytes"`
-	MemorySystem      uint64  `json:"memory_system_bytes"`
-	MemoryGC          uint32  `json:"gc_count"`
-	Goroutines        int     `json:"goroutines"`
-	Connections       int64   `json:"connections"`
-	MemoryLimitMB     int64   `json:"memory_limit_mb"`
-	GoroutineLimit    int     `json:"goroutine_limit"`
-	ConnectionLimit   int64   `json:"connection_limit"`
+	MemoryAllocated uint64 `json:"memory_allocated_bytes"`
+	MemoryTotal     uint64 `json:"memory_total_bytes"`
+	MemorySystem    uint64 `json:"memory_system_bytes"`
+	MemoryGC        uint32 `json:"gc_count"`
+	Goroutines      int    `json:"goroutines"`
+	Connections     int64  `json:"connections"`
+	MemoryLimitMB   int64  `json:"memory_limit_mb"`
+	GoroutineLimit  int    `json:"goroutine_limit"`
+	ConnectionLimit int64  `json:"connection_limit"`
 }
 
 // String returns a formatted string of resource stats

@@ -85,13 +85,13 @@ func TestHandlePushSubscribe(t *testing.T) {
 	server := NewTestServer(t, tmpDir)
 
 	body := map[string]string{
-		"endpoint": "https://fcm.googleapis.com/fcm/send/test",
-		"p256dh":   "test-p256dh-key",
-		"auth":     "test-auth-secret",
+		"endpoint":   "https://fcm.googleapis.com/fcm/send/test",
+		"p256dh":     "test-p256dh-key",
+		"auth":       "test-auth-secret",
 		"deviceType": "mobile",
-		"os":       "Android",
-		"browser":  "Chrome",
-		"name":     "Test Device",
+		"os":         "Android",
+		"browser":    "Chrome",
+		"name":       "Test Device",
 	}
 	bodyJSON, _ := json.Marshal(body)
 
@@ -358,4 +358,3 @@ func TestHandleAdminPushStats_NotAdmin(t *testing.T) {
 		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
-

@@ -22,6 +22,7 @@ func setupSessionWithPipeRaw(t *testing.T, state State, user string, selected *M
 	session.tlsActive = true
 	return client, session
 }
+
 // selected states.
 // =======================================================================
 

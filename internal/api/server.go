@@ -20,9 +20,9 @@ import (
 	"github.com/umailserver/umailserver"
 	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
-	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/search"
 	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/websocket"
@@ -37,7 +37,7 @@ type loginAttempt struct {
 
 // apiRateAttempt tracks API requests per IP for rate limiting
 type apiRateAttempt struct {
-	count    int
+	count       int
 	windowStart time.Time
 }
 
@@ -61,9 +61,9 @@ type Server struct {
 	healthMon  HealthMonitor
 
 	// Interface abstractions for testability
-	vacationMgr VacationManager
-	filterMgr   FilterManager
-	pushSvc     PushService
+	vacationMgr  VacationManager
+	filterMgr    FilterManager
+	pushSvc      PushService
 	rateLimitMgr RateLimitManager
 
 	// File system abstraction for embed.FS
@@ -77,7 +77,7 @@ type Server struct {
 	router http.Handler
 
 	// Login rate limiting
-	loginMu      sync.Mutex
+	loginMu       sync.Mutex
 	loginAttempts map[string]*loginAttempt
 
 	// API rate limiting (HTTPRequestsPerMinute)
@@ -86,15 +86,15 @@ type Server struct {
 	apiRateLimit    int // requests per minute, 0 = disabled
 
 	// Mock errors for testing (used to test error paths)
-	vacationGetError       error
-	vacationSetError       error
-	vacationDeleteError    error
-	filterSaveError        error
-	filterGetError         error
-	pushSubscribeError     error
-	pushUnsubscribeError   error
-	pushSendError          error
-	queueMgrStatsError     error
+	vacationGetError     error
+	vacationSetError     error
+	vacationDeleteError  error
+	filterSaveError      error
+	filterGetError       error
+	pushSubscribeError   error
+	pushUnsubscribeError error
+	pushSendError        error
+	queueMgrStatsError   error
 }
 
 // Config holds API server configuration
@@ -142,13 +142,13 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	})
 
 	return &Server{
-		db:         database,
-		logger:     logger,
-		config:     config,
-		mcpServer:  mcp.NewServer(database),
-		sseServer:  sseServer,
-		webmailFS:  newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
-		adminFS:    newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+		db:        database,
+		logger:    logger,
+		config:    config,
+		mcpServer: mcp.NewServer(database),
+		sseServer: sseServer,
+		webmailFS: newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
+		adminFS:   newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
 	}
 }
 
@@ -206,16 +206,16 @@ func NewServerWithInterfaces(
 	}
 
 	return &Server{
-		db:           database,
-		logger:       logger,
-		config:       config,
-		mcpServer:    mcp.NewServer(database),
-		sseServer:    sseServer,
-		vacationMgr:  vacationMgr,
-		filterMgr:    filterMgr,
-		pushSvc:      pushSvc,
-		webmailFS:    webmailFS,
-		adminFS:      adminFS,
+		db:          database,
+		logger:      logger,
+		config:      config,
+		mcpServer:   mcp.NewServer(database),
+		sseServer:   sseServer,
+		vacationMgr: vacationMgr,
+		filterMgr:   filterMgr,
+		pushSvc:     pushSvc,
+		webmailFS:   webmailFS,
+		adminFS:     adminFS,
 	}
 }
 
@@ -1036,7 +1036,6 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	stats := metrics.Get().GetStats()
 	s.sendJSON(w, http.StatusOK, stats)
 }
-
 
 // SetQueueManager injects the queue manager for stats
 func (s *Server) SetQueueManager(qm *queue.Manager) {

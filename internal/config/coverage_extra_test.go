@@ -374,7 +374,6 @@ func TestGetDefaultDataDir_Coverage(t *testing.T) {
 	}
 }
 
-
 // TestNewReloadable_Success tests NewReloadable with valid config
 func TestNewReloadable_Success(t *testing.T) {
 	// Create a temp config file
@@ -749,7 +748,6 @@ func TestNewReloadable_InvalidConfig(t *testing.T) {
 	}
 }
 
-
 // Note: Permission-based tests removed as they don't work consistently on Windows
 
 // TestValidate_SpamThresholds tests spam threshold validation
@@ -1036,8 +1034,8 @@ func TestValidate_RateLimits(t *testing.T) {
 					DataDir:  tmpDir,
 				},
 				Security: SecurityConfig{
-					JWTSecret:  "this-is-a-32-character-secret-key!!",
-					RateLimit:  tt.rateLimit,
+					JWTSecret: "this-is-a-32-character-secret-key!!",
+					RateLimit: tt.rateLimit,
 				},
 				Spam: SpamConfig{
 					Enabled:             true,
@@ -1060,54 +1058,54 @@ func TestValidate_ConnectionLimits(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	tests := []struct {
-		name            string
-		imap            IMAPConfig
-		smtpInbound     InboundSMTPConfig
-		smtpSubmission  SubmissionSMTPConfig
+		name              string
+		imap              IMAPConfig
+		smtpInbound       InboundSMTPConfig
+		smtpSubmission    SubmissionSMTPConfig
 		smtpSubmissionTLS SubmissionTLSConfig
-		pop3            POP3Config
-		wantErr         bool
-		errMsg          string
+		pop3              POP3Config
+		wantErr           bool
+		errMsg            string
 	}{
 		{
-			name:            "negative IMAP max connections",
-			imap:            IMAPConfig{Enabled: true, Port: 143, MaxConnections: -1},
-			smtpInbound:     InboundSMTPConfig{Enabled: true, Port: 25},
-			smtpSubmission:  SubmissionSMTPConfig{Enabled: true, Port: 587},
+			name:              "negative IMAP max connections",
+			imap:              IMAPConfig{Enabled: true, Port: 143, MaxConnections: -1},
+			smtpInbound:       InboundSMTPConfig{Enabled: true, Port: 25},
+			smtpSubmission:    SubmissionSMTPConfig{Enabled: true, Port: 587},
 			smtpSubmissionTLS: SubmissionTLSConfig{Enabled: true, Port: 465},
-			pop3:            POP3Config{Enabled: true, Port: 110},
-			wantErr:         true,
-			errMsg:          "imap.max_connections",
+			pop3:              POP3Config{Enabled: true, Port: 110},
+			wantErr:           true,
+			errMsg:            "imap.max_connections",
 		},
 		{
-			name:            "negative SMTP inbound max connections",
-			imap:            IMAPConfig{Enabled: true, Port: 143, MaxConnections: 100},
-			smtpInbound:     InboundSMTPConfig{Enabled: true, Port: 25, MaxConnections: -1},
-			smtpSubmission:  SubmissionSMTPConfig{Enabled: true, Port: 587},
+			name:              "negative SMTP inbound max connections",
+			imap:              IMAPConfig{Enabled: true, Port: 143, MaxConnections: 100},
+			smtpInbound:       InboundSMTPConfig{Enabled: true, Port: 25, MaxConnections: -1},
+			smtpSubmission:    SubmissionSMTPConfig{Enabled: true, Port: 587},
 			smtpSubmissionTLS: SubmissionTLSConfig{Enabled: true, Port: 465},
-			pop3:            POP3Config{Enabled: true, Port: 110},
-			wantErr:         true,
-			errMsg:          "smtp.inbound.max_connections",
+			pop3:              POP3Config{Enabled: true, Port: 110},
+			wantErr:           true,
+			errMsg:            "smtp.inbound.max_connections",
 		},
 		{
-			name:            "negative SMTP submission max connections",
-			imap:            IMAPConfig{Enabled: true, Port: 143, MaxConnections: 100},
-			smtpInbound:     InboundSMTPConfig{Enabled: true, Port: 25, MaxConnections: 100},
-			smtpSubmission:  SubmissionSMTPConfig{Enabled: true, Port: 587, MaxConnections: -1},
+			name:              "negative SMTP submission max connections",
+			imap:              IMAPConfig{Enabled: true, Port: 143, MaxConnections: 100},
+			smtpInbound:       InboundSMTPConfig{Enabled: true, Port: 25, MaxConnections: 100},
+			smtpSubmission:    SubmissionSMTPConfig{Enabled: true, Port: 587, MaxConnections: -1},
 			smtpSubmissionTLS: SubmissionTLSConfig{Enabled: true, Port: 465},
-			pop3:            POP3Config{Enabled: true, Port: 110},
-			wantErr:         true,
-			errMsg:          "smtp.submission.max_connections",
+			pop3:              POP3Config{Enabled: true, Port: 110},
+			wantErr:           true,
+			errMsg:            "smtp.submission.max_connections",
 		},
 		{
-			name:            "negative POP3 max connections",
-			imap:            IMAPConfig{Enabled: true, Port: 143, MaxConnections: 100},
-			smtpInbound:     InboundSMTPConfig{Enabled: true, Port: 25, MaxConnections: 100},
-			smtpSubmission:  SubmissionSMTPConfig{Enabled: true, Port: 587, MaxConnections: 100},
+			name:              "negative POP3 max connections",
+			imap:              IMAPConfig{Enabled: true, Port: 143, MaxConnections: 100},
+			smtpInbound:       InboundSMTPConfig{Enabled: true, Port: 25, MaxConnections: 100},
+			smtpSubmission:    SubmissionSMTPConfig{Enabled: true, Port: 587, MaxConnections: 100},
 			smtpSubmissionTLS: SubmissionTLSConfig{Enabled: true, Port: 465},
-			pop3:            POP3Config{Enabled: true, Port: 110, MaxConnections: -1},
-			wantErr:         true,
-			errMsg:          "pop3.max_connections",
+			pop3:              POP3Config{Enabled: true, Port: 110, MaxConnections: -1},
+			wantErr:           true,
+			errMsg:            "pop3.max_connections",
 		},
 	}
 
@@ -1121,7 +1119,7 @@ func TestValidate_ConnectionLimits(t *testing.T) {
 				Security: SecurityConfig{
 					JWTSecret: "this-is-a-32-character-secret-key!!",
 				},
-				IMAP:   tt.imap,
+				IMAP: tt.imap,
 				SMTP: SMTPConfig{
 					Inbound:       tt.smtpInbound,
 					Submission:    tt.smtpSubmission,

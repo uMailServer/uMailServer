@@ -32,12 +32,12 @@ type Config struct {
 
 // Manager manages vacation auto-reply settings
 type Manager struct {
-	dataDir    string
-	logger     *slog.Logger
-	configs    map[string]*Config // key: email address
-	mu         sync.RWMutex
-	sentCache  map[string]map[string]time.Time // user -> sender -> last sent time
-	cacheMu    sync.RWMutex
+	dataDir   string
+	logger    *slog.Logger
+	configs   map[string]*Config // key: email address
+	mu        sync.RWMutex
+	sentCache map[string]map[string]time.Time // user -> sender -> last sent time
+	cacheMu   sync.RWMutex
 }
 
 // NewManager creates a new vacation manager

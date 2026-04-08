@@ -28,13 +28,13 @@ type Config struct {
 
 // Subscription represents a push subscription from a client
 type Subscription struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	Endpoint  string    `json:"endpoint"`
-	P256dh    string    `json:"p256dh"`
-	Auth      string    `json:"auth"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string     `json:"id"`
+	UserID     string     `json:"user_id"`
+	Endpoint   string     `json:"endpoint"`
+	P256dh     string     `json:"p256dh"`
+	Auth       string     `json:"auth"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 	DeviceInfo DeviceInfo `json:"device_info,omitempty"`
 }
 
@@ -48,15 +48,15 @@ type DeviceInfo struct {
 
 // Notification represents a push notification
 type Notification struct {
-	Title       string            `json:"title"`
-	Body        string            `json:"body"`
-	Icon        string            `json:"icon,omitempty"`
-	Badge       string            `json:"badge,omitempty"`
-	Image       string            `json:"image,omitempty"`
-	Tag         string            `json:"tag,omitempty"`
-	Data        map[string]string `json:"data,omitempty"`
-	RequireInteraction bool       `json:"requireInteraction,omitempty"`
-	Actions     []NotificationAction `json:"actions,omitempty"`
+	Title              string               `json:"title"`
+	Body               string               `json:"body"`
+	Icon               string               `json:"icon,omitempty"`
+	Badge              string               `json:"badge,omitempty"`
+	Image              string               `json:"image,omitempty"`
+	Tag                string               `json:"tag,omitempty"`
+	Data               map[string]string    `json:"data,omitempty"`
+	RequireInteraction bool                 `json:"requireInteraction,omitempty"`
+	Actions            []NotificationAction `json:"actions,omitempty"`
 }
 
 // NotificationAction represents an action button on the notification
@@ -68,12 +68,12 @@ type NotificationAction struct {
 
 // Service manages push notifications
 type Service struct {
-	config     Config
-	logger     *slog.Logger
-	dataDir    string
+	config        Config
+	logger        *slog.Logger
+	dataDir       string
 	subscriptions map[string]*Subscription // key: subscription ID
-	userSubs   map[string][]string        // user ID -> subscription IDs
-	mu         sync.RWMutex
+	userSubs      map[string][]string      // user ID -> subscription IDs
+	mu            sync.RWMutex
 }
 
 // NewService creates a new push notification service

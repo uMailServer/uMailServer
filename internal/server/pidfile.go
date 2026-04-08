@@ -60,4 +60,3 @@ func (p *PIDFile) Read() (int, error) {
 func (p *PIDFile) Remove() error {
 	return os.Remove(p.path)
 }
-

@@ -520,4 +520,3 @@ func TestDMARCEvaluateSPFNotAligned(t *testing.T) {
 		t.Errorf("Expected DMARCFail for unaligned SPF, got %s", eval.Result.String())
 	}
 }
-

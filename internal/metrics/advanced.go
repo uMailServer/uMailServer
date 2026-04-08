@@ -102,20 +102,20 @@ type AdvancedMetrics struct {
 	ActivePOP3Connections Gauge
 
 	// Latency histograms
-	SMTPCommandLatency    *Histogram
-	DeliveryLatency       *Histogram
-	DatabaseQueryLatency  *Histogram
-	APIRequestLatency     *Histogram
+	SMTPCommandLatency   *Histogram
+	DeliveryLatency      *Histogram
+	DatabaseQueryLatency *Histogram
+	APIRequestLatency    *Histogram
 
 	// Message counters
-	MessagesReceived Counter
+	MessagesReceived  Counter
 	MessagesDelivered Counter
-	MessagesQueued Counter
-	MessagesBounced Counter
+	MessagesQueued    Counter
+	MessagesBounced   Counter
 
 	// Error counters
-	SMTPErrors Counter
-	IMAPErrors Counter
+	SMTPErrors     Counter
+	IMAPErrors     Counter
 	DatabaseErrors Counter
 
 	// Rate tracking
@@ -167,10 +167,10 @@ func (am *AdvancedMetrics) GetAdvancedStats() map[string]interface{} {
 			"pop3_active": am.ActivePOP3Connections.Get(),
 		},
 		"latency": map[string]interface{}{
-			"smtp_commands":   am.SMTPCommandLatency.Snapshot(),
-			"delivery":        am.DeliveryLatency.Snapshot(),
-			"database_query":  am.DatabaseQueryLatency.Snapshot(),
-			"api_request":     am.APIRequestLatency.Snapshot(),
+			"smtp_commands":  am.SMTPCommandLatency.Snapshot(),
+			"delivery":       am.DeliveryLatency.Snapshot(),
+			"database_query": am.DatabaseQueryLatency.Snapshot(),
+			"api_request":    am.APIRequestLatency.Snapshot(),
 		},
 		"messages": map[string]interface{}{
 			"received":  am.MessagesReceived.Get(),

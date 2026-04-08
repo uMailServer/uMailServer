@@ -94,7 +94,6 @@ func TestLoadSubscriptions_NonJSONFile(t *testing.T) {
 	}
 }
 
-
 // TestLoadSubscriptions_DirectoryNotExist tests loading when directory doesn't exist
 func TestLoadSubscriptions_DirectoryNotExist(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -151,7 +150,6 @@ func TestDeleteSubscriptionFile_NotExist(t *testing.T) {
 	}
 }
 
-
 // TestLoadOrGenerateConfig_InvalidJSON tests loadOrGenerateConfig with invalid JSON
 func TestLoadOrGenerateConfig_InvalidJSON(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -181,8 +179,8 @@ func TestLoadOrGenerateConfig_NoPrivateKey(t *testing.T) {
 
 	// Create vapid.json with only public key
 	config := map[string]string{
-		"publicKey":  "test-public-key",
-		"subject":    "mailto:test@example.com",
+		"publicKey": "test-public-key",
+		"subject":   "mailto:test@example.com",
 	}
 	data, _ := json.Marshal(config)
 	err := os.WriteFile(filepath.Join(tmpDir, "vapid.json"), data, 0600)

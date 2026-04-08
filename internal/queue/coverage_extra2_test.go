@@ -291,4 +291,3 @@ func TestDeliverFullWithFakeServer(t *testing.T) {
 		t.Error("expected data to be received by fake server")
 	}
 }
-

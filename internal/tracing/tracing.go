@@ -21,8 +21,8 @@ type Span struct {
 
 // Event represents an event in a span
 type Event struct {
-	Name      string
-	Timestamp time.Time
+	Name       string
+	Timestamp  time.Time
 	Attributes map[string]interface{}
 }
 
@@ -135,9 +135,9 @@ func generateID() string {
 
 // Provider manages tracing
 type Provider struct {
-	tracer    *Tracer
-	enabled   bool
-	stopFunc  func()
+	tracer   *Tracer
+	enabled  bool
+	stopFunc func()
 }
 
 // Config holds tracing configuration

@@ -616,9 +616,9 @@ func (s *Server) sendError(w http.ResponseWriter, code int, message string) {
 
 // Propfind represents a PROPFIND request
 type Propfind struct {
-	XMLName xml.Name    `xml:"propfind"`
-	AllProp *struct{}   `xml:"allprop,omitempty"`
-	Prop    *Prop       `xml:"prop,omitempty"`
+	XMLName xml.Name  `xml:"propfind"`
+	AllProp *struct{} `xml:"allprop,omitempty"`
+	Prop    *Prop     `xml:"prop,omitempty"`
 }
 
 // Prop represents properties
@@ -657,9 +657,9 @@ type Property struct {
 
 // CalendarQuery represents a calendar-query REPORT
 type CalendarQuery struct {
-	XMLName      xml.Name `xml:"calendar-query"`
-	CompFilter   *CompFilter `xml:"comp-filter,omitempty"`
-	Prop         *Prop    `xml:"prop,omitempty"`
+	XMLName    xml.Name    `xml:"calendar-query"`
+	CompFilter *CompFilter `xml:"comp-filter,omitempty"`
+	Prop       *Prop       `xml:"prop,omitempty"`
 }
 
 // CompFilter represents a component filter
@@ -695,4 +695,3 @@ type Calendar struct {
 	Created     time.Time `json:"created"`
 	Modified    time.Time `json:"modified"`
 }
-

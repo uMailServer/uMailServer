@@ -72,10 +72,10 @@ func TestGenerateMessageID(t *testing.T) {
 func TestGenerateDSN(t *testing.T) {
 	dsn := &DSN{
 		ReportedDomain: "example.com",
-		ReportedName:  "mail.example.com",
-		ArrivalDate:   testDate(),
-		OriginalFrom:  "sender@example.com",
-		OriginalTo:    "recipient@example.com",
+		ReportedName:   "mail.example.com",
+		ArrivalDate:    testDate(),
+		OriginalFrom:   "sender@example.com",
+		OriginalTo:     "recipient@example.com",
 		Recipient: DSNRecipient{
 			Original: "recipient@example.com",
 			Notify:   DSNNotifyFailure,
@@ -101,10 +101,10 @@ func TestGenerateDSN(t *testing.T) {
 func TestGenerateSuccessDSN(t *testing.T) {
 	dsn := &DSN{
 		ReportedDomain: "example.com",
-		ReportedName:  "mail.example.com",
-		ArrivalDate:   testDate(),
-		OriginalFrom:  "sender@example.com",
-		OriginalTo:    "recipient@example.com",
+		ReportedName:   "mail.example.com",
+		ArrivalDate:    testDate(),
+		OriginalFrom:   "sender@example.com",
+		OriginalTo:     "recipient@example.com",
 		Recipient: DSNRecipient{
 			Original: "recipient@example.com",
 		},
@@ -124,10 +124,10 @@ func TestGenerateSuccessDSN(t *testing.T) {
 func TestGenerateFailureDSN(t *testing.T) {
 	dsn := &DSN{
 		ReportedDomain: "example.com",
-		ReportedName:  "mail.example.com",
-		ArrivalDate:   testDate(),
-		OriginalFrom:  "sender@example.com",
-		OriginalTo:    "recipient@example.com",
+		ReportedName:   "mail.example.com",
+		ArrivalDate:    testDate(),
+		OriginalFrom:   "sender@example.com",
+		OriginalTo:     "recipient@example.com",
 		Recipient: DSNRecipient{
 			Original: "recipient@example.com",
 		},
@@ -147,10 +147,10 @@ func TestGenerateFailureDSN(t *testing.T) {
 func TestGenerateDelayDSN(t *testing.T) {
 	dsn := &DSN{
 		ReportedDomain: "example.com",
-		ReportedName:  "mail.example.com",
-		ArrivalDate:   testDate(),
-		OriginalFrom:  "sender@example.com",
-		OriginalTo:    "recipient@example.com",
+		ReportedName:   "mail.example.com",
+		ArrivalDate:    testDate(),
+		OriginalFrom:   "sender@example.com",
+		OriginalTo:     "recipient@example.com",
 		Recipient: DSNRecipient{
 			Original: "recipient@example.com",
 		},

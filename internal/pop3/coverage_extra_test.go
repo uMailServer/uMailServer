@@ -364,7 +364,6 @@ func generateTestCert(certFile, keyFile string) error {
 	return fmt.Errorf("cert generation not implemented")
 }
 
-
 // TestServer_handleCommand_Unknown tests handling of unknown commands
 func TestServer_handleCommand_Unknown(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -1141,13 +1140,13 @@ func TestHandleAuthorizationCommand_STLS_Error(t *testing.T) {
 // TestGetTLSConfig_InvalidFiles tests getTLSConfig with invalid cert files
 func TestGetTLSConfig_InvalidFiles(t *testing.T) {
 	srv := NewServer("127.0.0.1:0", &mockMailstore{}, nil)
-	
+
 	// Set TLS config with non-existent files
 	srv.SetTLSConfig(&TLSConfig{
 		CertFile: "/nonexistent/cert.pem",
 		KeyFile:  "/nonexistent/key.pem",
 	})
-	
+
 	// Should return error for invalid cert files
 	config, err := srv.getTLSConfig()
 	if err == nil {
@@ -1161,7 +1160,7 @@ func TestGetTLSConfig_InvalidFiles(t *testing.T) {
 // TestStartTLS_NilConfig tests StartTLS with nil config
 func TestStartTLS_NilConfig(t *testing.T) {
 	srv := NewServer("127.0.0.1:0", &mockMailstore{}, nil)
-	
+
 	// Should return error when TLS config is nil
 	err := srv.StartTLS()
 	if err == nil {

@@ -10,9 +10,9 @@ import (
 
 // mockMTASTSDNSResolver implements MTASTSDNSResolver for testing
 type mockMTASTSDNSResolver struct {
-	lookupTXTFunc  func(ctx context.Context, name string) ([]string, error)
-	lookupIPFunc   func(ctx context.Context, host string) ([]net.IP, error)
-	lookupMXFunc   func(ctx context.Context, domain string) ([]*net.MX, error)
+	lookupTXTFunc func(ctx context.Context, name string) ([]string, error)
+	lookupIPFunc  func(ctx context.Context, host string) ([]net.IP, error)
+	lookupMXFunc  func(ctx context.Context, domain string) ([]*net.MX, error)
 }
 
 func (m *mockMTASTSDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {

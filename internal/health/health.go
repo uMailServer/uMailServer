@@ -21,29 +21,29 @@ const (
 
 // Check represents a health check for a component
 type Check struct {
-	Name        string                 `json:"name"`
-	Status      Status                 `json:"status"`
-	Message     string                 `json:"message,omitempty"`
-	ResponseTime time.Duration         `json:"response_time_ms"`
-	Details     map[string]interface{} `json:"details,omitempty"`
+	Name         string                 `json:"name"`
+	Status       Status                 `json:"status"`
+	Message      string                 `json:"message,omitempty"`
+	ResponseTime time.Duration          `json:"response_time_ms"`
+	Details      map[string]interface{} `json:"details,omitempty"`
 }
 
 // Report represents a complete health report
 type Report struct {
-	Status    Status    `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-	Version   string    `json:"version"`
-	Checks    []Check   `json:"checks"`
+	Status    Status     `json:"status"`
+	Timestamp time.Time  `json:"timestamp"`
+	Version   string     `json:"version"`
+	Checks    []Check    `json:"checks"`
 	System    SystemInfo `json:"system"`
 }
 
 // SystemInfo holds system-level information
 type SystemInfo struct {
-	GoVersion   string `json:"go_version"`
-	Goroutines  int    `json:"goroutines"`
-	MemoryMB    uint64 `json:"memory_mb"`
-	MemoryUsed  uint64 `json:"memory_used_mb"`
-	Uptime      string `json:"uptime"`
+	GoVersion  string `json:"go_version"`
+	Goroutines int    `json:"goroutines"`
+	MemoryMB   uint64 `json:"memory_mb"`
+	MemoryUsed uint64 `json:"memory_used_mb"`
+	Uptime     string `json:"uptime"`
 }
 
 // Checker is a function that performs a health check
@@ -263,5 +263,3 @@ func DatabaseCheck(ping func() error) Checker {
 		return check
 	}
 }
-
-

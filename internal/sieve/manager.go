@@ -15,12 +15,12 @@ type StoredScript struct {
 
 // Manager handles Sieve script storage and execution
 type Manager struct {
-	scripts   map[string]map[string]*StoredScript // userID -> scriptName -> stored script
-	activeScripts map[string]string          // userID -> activeScriptName
-	scriptsMu sync.RWMutex
+	scripts       map[string]map[string]*StoredScript // userID -> scriptName -> stored script
+	activeScripts map[string]string                   // userID -> activeScriptName
+	scriptsMu     sync.RWMutex
 
 	// Vacation cache: prevents spamming the same sender
-	vacationCache  map[string]time.Time
+	vacationCache   map[string]time.Time
 	vacationCacheMu sync.Mutex
 }
 

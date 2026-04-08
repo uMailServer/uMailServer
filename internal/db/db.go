@@ -13,16 +13,16 @@ import (
 
 // Bucket names
 const (
-	BucketAccounts      = "accounts"
-	BucketDomains       = "domains"
-	BucketQueue         = "queue"
-	BucketSpam          = "spam"
-	BucketMetrics       = "metrics"
-	BucketMessageMeta   = "messagemeta"
-	BucketIndex         = "index"
-	BucketAliases       = "aliases"
-	BucketContacts      = "contacts"
-	BucketFilters       = "filters"
+	BucketAccounts    = "accounts"
+	BucketDomains     = "domains"
+	BucketQueue       = "queue"
+	BucketSpam        = "spam"
+	BucketMetrics     = "metrics"
+	BucketMessageMeta = "messagemeta"
+	BucketIndex       = "index"
+	BucketAliases     = "aliases"
+	BucketContacts    = "contacts"
+	BucketFilters     = "filters"
 )
 
 // DB wraps bbolt database
@@ -92,17 +92,18 @@ func (p QueuePriority) String() string {
 		return "normal"
 	}
 }
+
 // QueueEntry holds message queue information
 type QueueEntry struct {
-	ID          string    `json:"id"`
-	From        string    `json:"from"`
-	To          []string  `json:"to"`
-	MessagePath string    `json:"message_path"`
-	CreatedAt   time.Time `json:"created_at"`
-	NextRetry   time.Time `json:"next_retry"`
-	RetryCount  int       `json:"retry_count"`
-	LastError   string    `json:"last_error"`
-	Status      string    `json:"status"` // pending, sending, failed, delivered, bounced
+	ID          string        `json:"id"`
+	From        string        `json:"from"`
+	To          []string      `json:"to"`
+	MessagePath string        `json:"message_path"`
+	CreatedAt   time.Time     `json:"created_at"`
+	NextRetry   time.Time     `json:"next_retry"`
+	RetryCount  int           `json:"retry_count"`
+	LastError   string        `json:"last_error"`
+	Status      string        `json:"status"`   // pending, sending, failed, delivered, bounced
 	Priority    QueuePriority `json:"priority"` // 0=low, 1=normal, 2=high, 3=urgent
 	// DSN fields
 	Notify DSNNotify `json:"notify"` // DSN notification preferences (NEVER, SUCCESS, FAILURE, DELAY)
@@ -436,4 +437,3 @@ func (d *DB) ResolveAlias(domain, localPart string) (string, error) {
 	}
 	return alias.Target, nil
 }
-

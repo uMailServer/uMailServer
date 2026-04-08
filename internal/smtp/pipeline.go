@@ -52,12 +52,12 @@ type MessageContext struct {
 
 // SpamResult holds spam check results
 type SpamResult struct {
-	Score          float64
-	Verdict        string  // inbox, junk, quarantine, reject
-	Reasons        []string
-	BayesianProb   float64 // 0-1 probability from Bayesian classifier
-	RBLListed      bool    // True if listed on any RBL
-	BayesianSpam   bool    // True if Bayesian classified as spam
+	Score        float64
+	Verdict      string // inbox, junk, quarantine, reject
+	Reasons      []string
+	BayesianProb float64 // 0-1 probability from Bayesian classifier
+	RBLListed    bool    // True if listed on any RBL
+	BayesianSpam bool    // True if Bayesian classified as spam
 }
 
 // DKIMResult holds DKIM verification results

@@ -23,10 +23,10 @@ func TestHistogram_Observe(t *testing.T) {
 	hist := NewHistogram(bounds)
 
 	// Observe values
-	hist.Observe(0.05)  // First bucket
-	hist.Observe(0.3)   // Second bucket
-	hist.Observe(0.7)   // Third bucket
-	hist.Observe(2.0)   // Overflow bucket
+	hist.Observe(0.05) // First bucket
+	hist.Observe(0.3)  // Second bucket
+	hist.Observe(0.7)  // Third bucket
+	hist.Observe(2.0)  // Overflow bucket
 
 	snapshot := hist.Snapshot()
 	count := snapshot["count"].(uint64)

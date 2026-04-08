@@ -20,9 +20,9 @@ type RotatingWriter struct {
 	maxBackups int
 	maxAge     time.Duration
 
-	mu     sync.Mutex
-	file   *os.File
-	size   int64
+	mu   sync.Mutex
+	file *os.File
+	size int64
 }
 
 // NewRotatingWriter creates a new RotatingWriter.

@@ -104,8 +104,8 @@ func TestCheckConnection_OK(t *testing.T) {
 
 func TestCheckConnection_TooMany(t *testing.T) {
 	cfg := &Config{
-		IPConnections:    3,
-		CleanupInterval:  time.Hour,
+		IPConnections:   3,
+		CleanupInterval: time.Hour,
 	}
 	rl := New(nil, cfg)
 	ip := "10.0.0.2"
@@ -124,8 +124,8 @@ func TestCheckConnection_TooMany(t *testing.T) {
 
 func TestReleaseConnection(t *testing.T) {
 	cfg := &Config{
-		IPConnections:    2,
-		CleanupInterval:  time.Hour,
+		IPConnections:   2,
+		CleanupInterval: time.Hour,
 	}
 	rl := New(nil, cfg)
 	ip := "10.0.0.3"

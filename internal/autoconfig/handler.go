@@ -216,26 +216,26 @@ func (h *Handler) buildAutoconfig(domain string) *AutoconfigClientConfig {
 		Version: "1.1",
 		Providers: []AutoconfigProvider{
 			{
-				ID:       domain,
-				Domain:   []string{domain},
+				ID:          domain,
+				Domain:      []string{domain},
 				DisplayName: domain,
 				IncomingServers: []AutoconfigServer{
 					{
-						Type:         "imap",
-						Hostname:     hostname,
-						Port:         port,
-						SocketType:   socketType,
-						Username:     "%EMAILADDRESS%",
+						Type:           "imap",
+						Hostname:       hostname,
+						Port:           port,
+						SocketType:     socketType,
+						Username:       "%EMAILADDRESS%",
 						Authentication: h.getAuthMethod(ssl),
 					},
 				},
 				OutgoingServers: []AutoconfigServer{
 					{
-						Type:         "smtp",
-						Hostname:     hostname,
-						Port:         outPort,
-						SocketType:   socketType,
-						Username:     "%EMAILADDRESS%",
+						Type:           "smtp",
+						Hostname:       hostname,
+						Port:           outPort,
+						SocketType:     socketType,
+						Username:       "%EMAILADDRESS%",
 						Authentication: h.getAuthMethod(ssl),
 					},
 				},

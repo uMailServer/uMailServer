@@ -64,11 +64,11 @@ var folderMap = map[string]string{
 
 // reverseFolderMap maps internal mailbox names to webmail folder names
 var reverseFolderMap = map[string]string{
-	"INBOX": "Inbox",
-	"Sent":  "Sent",
+	"INBOX":  "Inbox",
+	"Sent":   "Sent",
 	"Drafts": "Drafts",
-	"Trash": "Trash",
-	"Junk":  "Spam",
+	"Trash":  "Trash",
+	"Junk":   "Spam",
 }
 
 // handleMailList lists emails in a folder

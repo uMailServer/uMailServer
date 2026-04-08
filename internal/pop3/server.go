@@ -72,15 +72,15 @@ type Message struct {
 
 // Session represents a POP3 client session
 type Session struct {
-	id           string
-	conn         net.Conn
-	reader       *bufio.Reader
-	writer       *bufio.Writer
-	server       *Server
-	state        State
-	user         string
-	messages     []*Message
-	isTLS        bool
+	id            string
+	conn          net.Conn
+	reader        *bufio.Reader
+	writer        *bufio.Writer
+	server        *Server
+	state         State
+	user          string
+	messages      []*Message
+	isTLS         bool
 	apopTimestamp string // Timestamp from greeting for APOP auth
 }
 
@@ -330,7 +330,7 @@ func NewSession(conn net.Conn, server *Server) *Session {
 		writer:        bufio.NewWriter(conn),
 		server:        server,
 		apopTimestamp: fmt.Sprintf("%d.%s", timestamp, secret),
-		state:  StateAuthorization,
+		state:         StateAuthorization,
 	}
 }
 

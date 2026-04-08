@@ -20,9 +20,9 @@ type BboltMailstore struct {
 	msgStore *storage.MessageStore
 
 	// MDN tracking
-	mdnSent     map[string]bool // Message-Id -> true if MDN sent
-	mdnSentMu   sync.Mutex
-	mdnHandler  func(from, to, messageID, inReplyTo string, msg []byte) error
+	mdnSent    map[string]bool // Message-Id -> true if MDN sent
+	mdnSentMu  sync.Mutex
+	mdnHandler func(from, to, messageID, inReplyTo string, msg []byte) error
 }
 
 // MDNHandler defines the interface for sending MDN notifications
@@ -341,7 +341,7 @@ func parseMDNAddress(header string) (string, error) {
 type FlagOperation int
 
 const (
-	FlagAdd    FlagOperation = iota // +FLAGS
+	FlagAdd     FlagOperation = iota // +FLAGS
 	FlagRemove                       // -FLAGS
 	FlagReplace                      // FLAGS (replace all)
 )
@@ -824,7 +824,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 			if lineEnd == -1 {
 				lineEnd = len(msgStr)
 			}
-			ccLine := msgStr[ccIdx:ccIdx+lineEnd]
+			ccLine := msgStr[ccIdx : ccIdx+lineEnd]
 			if !strings.Contains(ccLine, strings.ToLower(criteria.Cc)) {
 				return false
 			}

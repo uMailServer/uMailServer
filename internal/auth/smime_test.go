@@ -44,4 +44,3 @@ func TestSMIMEEncryptor(t *testing.T) {
 		t.Error("Expected error when encrypting without certificates")
 	}
 }
-

@@ -118,7 +118,7 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 			subscribe: make(chan imap.MailboxNotification, 100),
 		}
 
-	// Register client (enforce per-user connection limit)
+		// Register client (enforce per-user connection limit)
 		s.clientsMu.Lock()
 		const maxClientsPerUser = 5
 		if len(s.clients[user]) >= maxClientsPerUser {

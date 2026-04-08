@@ -762,7 +762,7 @@ func TestShouldSendAutoReply_OutsideDateRange(t *testing.T) {
 		Subject:   "Vacation",
 		Message:   "I am on vacation",
 		StartDate: time.Now().Add(-48 * time.Hour), // Started 2 days ago
-		EndDate:   time.Now().Add(-24 * time.Hour),  // Ended yesterday
+		EndDate:   time.Now().Add(-24 * time.Hour), // Ended yesterday
 	}
 	manager.SetConfig("user@example.com", config)
 

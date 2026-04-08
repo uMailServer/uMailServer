@@ -40,7 +40,7 @@ func TestOpen_NewFile(t *testing.T) {
 
 	w := &RotatingWriter{
 		filename: logFile,
-		maxSize: 1024 * 1024,
+		maxSize:  1024 * 1024,
 	}
 
 	// open() should create new file with size 0

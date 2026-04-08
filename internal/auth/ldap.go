@@ -14,19 +14,19 @@ import (
 
 // LDAPConfig holds LDAP/AD connection configuration
 type LDAPConfig struct {
-	Enabled        bool            `yaml:"enabled"`
-	URL            string          `yaml:"url"`             // ldap://localhost:389 or ldaps://localhost:636
-	BindDN         string          `yaml:"bind_dn"`         // DN for initial bind (optional)
-	BindPassword   string          `yaml:"bind_password"`   // Password for initial bind (optional)
-	BaseDN         string          `yaml:"base_dn"`         // Base DN for user search
-	UserFilter     string          `yaml:"user_filter"`     // Filter for user search (default: "(uid=%s)")
-	EmailAttribute string          `yaml:"email_attribute"` // Attribute for email (default: "mail")
-	NameAttribute  string          `yaml:"name_attribute"`  // Attribute for display name (default: "cn")
-	GroupAttribute string          `yaml:"group_attribute"` // Attribute for group membership (default: "memberOf")
-	AdminGroups    []string        `yaml:"admin_groups"`    // Groups that grant admin access
-	StartTLS       bool            `yaml:"start_tls"`       // Use StartTLS on port 389
-	SkipVerify     bool            `yaml:"skip_verify"`     // Skip TLS certificate verification (dev only)
-	Timeout        time.Duration   `yaml:"timeout"`         // Connection timeout
+	Enabled        bool          `yaml:"enabled"`
+	URL            string        `yaml:"url"`             // ldap://localhost:389 or ldaps://localhost:636
+	BindDN         string        `yaml:"bind_dn"`         // DN for initial bind (optional)
+	BindPassword   string        `yaml:"bind_password"`   // Password for initial bind (optional)
+	BaseDN         string        `yaml:"base_dn"`         // Base DN for user search
+	UserFilter     string        `yaml:"user_filter"`     // Filter for user search (default: "(uid=%s)")
+	EmailAttribute string        `yaml:"email_attribute"` // Attribute for email (default: "mail")
+	NameAttribute  string        `yaml:"name_attribute"`  // Attribute for display name (default: "cn")
+	GroupAttribute string        `yaml:"group_attribute"` // Attribute for group membership (default: "memberOf")
+	AdminGroups    []string      `yaml:"admin_groups"`    // Groups that grant admin access
+	StartTLS       bool          `yaml:"start_tls"`       // Use StartTLS on port 389
+	SkipVerify     bool          `yaml:"skip_verify"`     // Skip TLS certificate verification (dev only)
+	Timeout        time.Duration `yaml:"timeout"`         // Connection timeout
 }
 
 // LDAPClient handles LDAP authentication

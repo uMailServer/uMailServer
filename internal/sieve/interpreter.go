@@ -49,13 +49,13 @@ type StopAction struct {
 
 // VacationAction sends vacation auto-reply
 type VacationAction struct {
-	Subject     string
-	Body        string
-	Days        int
-	Addresses   []string
-	From        string
-	Mime        bool
-	Handle      string
+	Subject   string
+	Body      string
+	Days      int
+	Addresses []string
+	From      string
+	Mime      bool
+	Handle    string
 }
 
 // SieveContext holds execution context
@@ -86,7 +86,7 @@ func NewInterpreter(script *Script) *Interpreter {
 func (i *Interpreter) Execute(msg *MessageContext) ([]Action, error) {
 	i.ctx = &SieveContext{
 		MessageContext: msg,
-		Variables:     make(map[string]string),
+		Variables:      make(map[string]string),
 	}
 
 	// Set built-in variables

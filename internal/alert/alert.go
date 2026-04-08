@@ -57,11 +57,11 @@ type Config struct {
 	MaxAlerts   int           `yaml:"max_alerts" json:"max_alerts"`     // Max alerts per hour
 
 	// Thresholds
-	DiskThreshold    float64 `yaml:"disk_threshold" json:"disk_threshold"`       // Disk usage % (e.g., 85)
-	MemoryThreshold  float64 `yaml:"memory_threshold" json:"memory_threshold"`   // Memory usage % (e.g., 90)
-	ErrorThreshold   float64 `yaml:"error_threshold" json:"error_threshold"`     // Error rate % (e.g., 5)
-	TLSWarningDays   int     `yaml:"tls_warning_days" json:"tls_warning_days"`   // Days before expiry
-	QueueThreshold   int     `yaml:"queue_threshold" json:"queue_threshold"`     // Queue backlog count
+	DiskThreshold   float64 `yaml:"disk_threshold" json:"disk_threshold"`     // Disk usage % (e.g., 85)
+	MemoryThreshold float64 `yaml:"memory_threshold" json:"memory_threshold"` // Memory usage % (e.g., 90)
+	ErrorThreshold  float64 `yaml:"error_threshold" json:"error_threshold"`   // Error rate % (e.g., 5)
+	TLSWarningDays  int     `yaml:"tls_warning_days" json:"tls_warning_days"` // Days before expiry
+	QueueThreshold  int     `yaml:"queue_threshold" json:"queue_threshold"`   // Queue backlog count
 }
 
 // DefaultConfig returns sensible defaults
@@ -353,7 +353,7 @@ func (m *Manager) CheckTLSCertificate(domain string, daysUntilExpiry int) {
 			SeverityCritical,
 			fmt.Sprintf("TLS certificate for %s has EXPIRED", domain),
 			map[string]interface{}{
-				"domain":           domain,
+				"domain":            domain,
 				"days_until_expiry": daysUntilExpiry,
 			},
 		)
@@ -363,9 +363,9 @@ func (m *Manager) CheckTLSCertificate(domain string, daysUntilExpiry int) {
 			SeverityWarning,
 			fmt.Sprintf("TLS certificate for %s expires in %d days", domain, daysUntilExpiry),
 			map[string]interface{}{
-				"domain":           domain,
+				"domain":            domain,
 				"days_until_expiry": daysUntilExpiry,
-				"warning_days":     m.config.TLSWarningDays,
+				"warning_days":      m.config.TLSWarningDays,
 			},
 		)
 	}
@@ -413,11 +413,11 @@ func (m *Manager) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"enabled":          m.config.Enabled,
-		"hourly_count":     hourlyCount,
-		"max_alerts":       m.config.MaxAlerts,
-		"min_interval":     m.config.MinInterval.String(),
-		"recent_alerts":    len(m.lastAlert),
+		"enabled":       m.config.Enabled,
+		"hourly_count":  hourlyCount,
+		"max_alerts":    m.config.MaxAlerts,
+		"min_interval":  m.config.MinInterval.String(),
+		"recent_alerts": len(m.lastAlert),
 	}
 }
 

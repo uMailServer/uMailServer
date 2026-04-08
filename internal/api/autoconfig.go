@@ -8,28 +8,28 @@ import (
 
 // AutoconfigProvider represents an email provider in autoconfig
 type AutoconfigProvider struct {
-	XMLName xml.Name `xml:"emailProvider"`
-	ID      string   `xml:"id,attr"`
-	Domain  []string `xml:"domain"`
+	XMLName         xml.Name           `xml:"emailProvider"`
+	ID              string             `xml:"id,attr"`
+	Domain          []string           `xml:"domain"`
 	IncomingServers []AutoconfigServer `xml:"incomingServer"`
 	OutgoingServers []AutoconfigServer `xml:"outgoingServer"`
 }
 
 // AutoconfigServer represents a server configuration
 type AutoconfigServer struct {
-	Type        string `xml:"type,attr"`
-	Hostname    string `xml:"hostname"`
-	Port        int    `xml:"port"`
-	SocketType  string `xml:"socketType"`
-	Username    string `xml:"username"`
+	Type           string `xml:"type,attr"`
+	Hostname       string `xml:"hostname"`
+	Port           int    `xml:"port"`
+	SocketType     string `xml:"socketType"`
+	Username       string `xml:"username"`
 	Authentication string `xml:"authentication"`
 }
 
 // AutoconfigClientConfig is the root element
 type AutoconfigClientConfig struct {
-	XMLName     xml.Name      `xml:"clientConfig"`
-	Version     string        `xml:"version,attr"`
-	Providers   []AutoconfigProvider `xml:"emailProvider"`
+	XMLName   xml.Name             `xml:"clientConfig"`
+	Version   string               `xml:"version,attr"`
+	Providers []AutoconfigProvider `xml:"emailProvider"`
 }
 
 // handleAutoconfig handles Mozilla-style autoconfig requests
@@ -90,21 +90,21 @@ func (s *Server) buildAutoconfig(domain string) *AutoconfigClientConfig {
 				Domain: []string{domain},
 				IncomingServers: []AutoconfigServer{
 					{
-						Type:         incomingType,
-						Hostname:     getMailServer(domain),
-						Port:         incomingPort,
-						SocketType:   getSocketType(incomingSSL),
-						Username:     "%EMAILADDRESS%",
+						Type:           incomingType,
+						Hostname:       getMailServer(domain),
+						Port:           incomingPort,
+						SocketType:     getSocketType(incomingSSL),
+						Username:       "%EMAILADDRESS%",
 						Authentication: getAuthMethod(incomingSSL),
 					},
 				},
 				OutgoingServers: []AutoconfigServer{
 					{
-						Type:         outgoingType,
-						Hostname:     getMailServer(domain),
-						Port:         outgoingPort,
-						SocketType:   getSocketType(outgoingSSL),
-						Username:     "%EMAILADDRESS%",
+						Type:           outgoingType,
+						Hostname:       getMailServer(domain),
+						Port:           outgoingPort,
+						SocketType:     getSocketType(outgoingSSL),
+						Username:       "%EMAILADDRESS%",
 						Authentication: getAuthMethod(outgoingSSL),
 					},
 				},

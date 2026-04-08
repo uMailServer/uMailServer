@@ -39,10 +39,10 @@ type TokenData struct {
 
 // Parser parses Sieve scripts into an AST
 type Parser struct {
-	input    string
-	pos      int
-	length   int
-	tokens   []TokenData
+	input  string
+	pos    int
+	length int
+	tokens []TokenData
 }
 
 // AST node types
@@ -55,10 +55,10 @@ type Script struct {
 }
 
 type Command struct {
-	Name     string
-	Tag      string
+	Name      string
+	Tag       string
 	Arguments []Value
-	Block    *Block
+	Block     *Block
 }
 
 type Block struct {
@@ -70,7 +70,7 @@ type Value interface{}
 
 // StringValue is a quoted or literal string
 type StringValue struct {
-	Value   string
+	Value     string
 	IsLiteral bool
 }
 
@@ -94,23 +94,23 @@ type Test interface{}
 
 // TestCommand is a command used as a test (if, elsif)
 type TestCommand struct {
-	Test    Test
-	Block   *Block
+	Test  Test
+	Block *Block
 }
 
 // HeaderTest represents the header test
 type HeaderTest struct {
-	Headers     []string
-	KeyList     []string
-	MatchType   string // :is, :contains, :matches
-	Comparator  string
+	Headers    []string
+	KeyList    []string
+	MatchType  string // :is, :contains, :matches
+	Comparator string
 }
 
 // EnvelopeTest represents the envelope test
 type EnvelopeTest struct {
 	EnvelopePart string // from, to, etc.
-	MatchType   string
-	KeyList     []string
+	MatchType    string
+	KeyList      []string
 }
 
 // SizeTest represents the size test

@@ -145,13 +145,13 @@ func TestResourceMonitor_GetStats(t *testing.T) {
 
 func TestResourceStats_String(t *testing.T) {
 	stats := ResourceStats{
-		MemoryAllocated:   1024 * 1024 * 100, // 100MB
-		MemoryLimitMB:     1000,
-		Goroutines:        50,
-		GoroutineLimit:    100,
-		Connections:       25,
-		ConnectionLimit:   100,
-		MemoryGC:          10,
+		MemoryAllocated: 1024 * 1024 * 100, // 100MB
+		MemoryLimitMB:   1000,
+		Goroutines:      50,
+		GoroutineLimit:  100,
+		Connections:     25,
+		ConnectionLimit: 100,
+		MemoryGC:        10,
 	}
 
 	str := stats.String()

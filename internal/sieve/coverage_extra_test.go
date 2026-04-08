@@ -366,7 +366,7 @@ func TestParser_lookahead(t *testing.T) {
 
 func TestIsWhitespace(t *testing.T) {
 	tests := []struct {
-		ch  byte
+		ch   byte
 		want bool
 	}{
 		{' ', true},

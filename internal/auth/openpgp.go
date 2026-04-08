@@ -48,7 +48,7 @@ func (s *OpenPGPSigner) SignMessage(msg []byte, from, to string) ([]byte, error)
 		"Content-Type: text/plain\r\n\r\n" +
 		string(msg) + "\r\n" +
 		"--" + boundary + "\r\n" +
-		"Content-Type: application/pgp-signature\r\n"+
+		"Content-Type: application/pgp-signature\r\n" +
 		"Content-Transfer-Encoding: 7bit\r\n\r\n" +
 		string(signature) + "\r\n" +
 		"--" + boundary + "--\r\n"

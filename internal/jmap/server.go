@@ -110,21 +110,21 @@ func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"capabilities": map[string]interface{}{
 			"urn:ietf:params:jmap:core": map[string]interface{}{
-				"maxSizeUpload":        50 * 1024 * 1024, // 50MB
-				"maxConcurrentUpload":  4,
-				"maxSizeRequest":       10 * 1024 * 1024, // 10MB
+				"maxSizeUpload":         50 * 1024 * 1024, // 50MB
+				"maxConcurrentUpload":   4,
+				"maxSizeRequest":        10 * 1024 * 1024, // 10MB
 				"maxConcurrentRequests": 4,
-				"maxCallsInRequest":    16,
-				"maxObjectsInGet":      256,
-				"maxObjectsInSet":      128,
-				"collationAlgorithms":  []string{"i;unicode-casemap"},
+				"maxCallsInRequest":     16,
+				"maxObjectsInGet":       256,
+				"maxObjectsInSet":       128,
+				"collationAlgorithms":   []string{"i;unicode-casemap"},
 			},
 			"urn:ietf:params:jmap:mail": map[string]interface{}{
-				"maxMailboxesPerEmail":     100,
-				"maxMailboxDepth":          10,
-				"maxSizeMailboxName":       256,
+				"maxMailboxesPerEmail":       100,
+				"maxMailboxDepth":            10,
+				"maxSizeMailboxName":         256,
 				"maxSizeAttachmentsPerEmail": 100 * 1024 * 1024, // 100MB
-				"emailQuerySortOptions":    []string{"receivedAt", "sentAt", "from", "to", "subject", "size"},
+				"emailQuerySortOptions":      []string{"receivedAt", "sentAt", "from", "to", "subject", "size"},
 			},
 		},
 	}
@@ -151,14 +151,14 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	response := SessionResponse{
 		Capabilities: map[string]interface{}{
 			"urn:ietf:params:jmap:core": CoreCapabilities{
-				MaxSizeUpload:           50 * 1024 * 1024,
-				MaxConcurrentUpload:     4,
-				MaxSizeRequest:          10 * 1024 * 1024,
-				MaxConcurrentRequests:   4,
-				MaxCallsInRequest:       16,
-				MaxObjectsInGet:         256,
-				MaxObjectsInSet:         128,
-				CollationAlgorithms:     []string{"i;unicode-casemap"},
+				MaxSizeUpload:         50 * 1024 * 1024,
+				MaxConcurrentUpload:   4,
+				MaxSizeRequest:        10 * 1024 * 1024,
+				MaxConcurrentRequests: 4,
+				MaxCallsInRequest:     16,
+				MaxObjectsInGet:       256,
+				MaxObjectsInSet:       128,
+				CollationAlgorithms:   []string{"i;unicode-casemap"},
 			},
 			"urn:ietf:params:jmap:mail": MailCapabilities{
 				MaxMailboxesPerEmail:       100,
@@ -170,8 +170,8 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		},
 		Accounts: map[string]Account{
 			user: {
-				Name:          user,
-				IsPrimary:     true,
+				Name:      user,
+				IsPrimary: true,
 				AccountCapabilities: map[string]interface{}{
 					"urn:ietf:params:jmap:mail": struct{}{},
 				},
@@ -180,12 +180,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		PrimaryAccounts: map[string]string{
 			"urn:ietf:params:jmap:mail": user,
 		},
-		Username: user,
-		APIURL:   "/jmap/api",
-		DownloadURL: "/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
-		UploadURL:   "/jmap/upload/{accountId}",
+		Username:       user,
+		APIURL:         "/jmap/api",
+		DownloadURL:    "/jmap/download/{accountId}/{blobId}/{name}?accept={type}",
+		UploadURL:      "/jmap/upload/{accountId}",
 		EventSourceURL: "/jmap/events/{types}?ping={interval}&closeafter={closeafter}",
-		State:       session.ID,
+		State:          session.ID,
 	}
 
 	s.sendJSON(w, http.StatusOK, response)
@@ -227,7 +227,7 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := ResponseObject{
-		SessionState: s.getOrCreateSession(user).ID,
+		SessionState:    s.getOrCreateSession(user).ID,
 		MethodResponses: responses,
 	}
 

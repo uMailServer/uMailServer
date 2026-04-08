@@ -62,4 +62,3 @@ func GenerateCRAMMD5Challenge() (string, string, error) {
 
 	return challengeStr, challengeB64, nil
 }
-

@@ -98,32 +98,32 @@ func TestGetAddressbook(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		username    string
+		name          string
+		username      string
 		addressbookID string
-		wantNil     bool
-		wantErr     bool
+		wantNil       bool
+		wantErr       bool
 	}{
 		{
-			name:        "get existing addressbook",
-			username:    "user1@example.com",
+			name:          "get existing addressbook",
+			username:      "user1@example.com",
 			addressbookID: "test-ab",
-			wantNil:     false,
-			wantErr:     false,
+			wantNil:       false,
+			wantErr:       false,
 		},
 		{
-			name:        "get non-existent addressbook",
-			username:    "user1@example.com",
+			name:          "get non-existent addressbook",
+			username:      "user1@example.com",
 			addressbookID: "nonexistent",
-			wantNil:     true,
-			wantErr:     false,
+			wantNil:       true,
+			wantErr:       false,
 		},
 		{
-			name:        "get from non-existent user",
-			username:    "user2@example.com",
+			name:          "get from non-existent user",
+			username:      "user2@example.com",
 			addressbookID: "test-ab",
-			wantNil:     true,
-			wantErr:     false,
+			wantNil:       true,
+			wantErr:       false,
 		},
 	}
 
@@ -295,36 +295,36 @@ func TestGetContact(t *testing.T) {
 	storage.SaveContact("user1@example.com", "test-ab", contact, vcardData)
 
 	tests := []struct {
-		name         string
-		username     string
+		name          string
+		username      string
 		addressbookID string
-		contactUID   string
-		wantData     bool
-		wantErr      bool
+		contactUID    string
+		wantData      bool
+		wantErr       bool
 	}{
 		{
-			name:         "get existing contact",
-			username:     "user1@example.com",
+			name:          "get existing contact",
+			username:      "user1@example.com",
 			addressbookID: "test-ab",
-			contactUID:   "test-contact",
-			wantData:     true,
-			wantErr:      false,
+			contactUID:    "test-contact",
+			wantData:      true,
+			wantErr:       false,
 		},
 		{
-			name:         "get non-existent contact",
-			username:     "user1@example.com",
+			name:          "get non-existent contact",
+			username:      "user1@example.com",
 			addressbookID: "test-ab",
-			contactUID:   "nonexistent",
-			wantData:     false,
-			wantErr:      false,
+			contactUID:    "nonexistent",
+			wantData:      false,
+			wantErr:       false,
 		},
 		{
-			name:         "get from non-existent addressbook",
-			username:     "user1@example.com",
+			name:          "get from non-existent addressbook",
+			username:      "user1@example.com",
 			addressbookID: "nonexistent",
-			contactUID:   "test-contact",
-			wantData:     false,
-			wantErr:      false,
+			contactUID:    "test-contact",
+			wantData:      false,
+			wantErr:       false,
 		},
 	}
 

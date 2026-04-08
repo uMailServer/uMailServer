@@ -152,12 +152,12 @@ func (s *Server) handleMailboxQuery(user string, call MethodCall) Response {
 	return Response{
 		Name: "Mailbox/query",
 		Args: map[string]interface{}{
-			"accountId":             accountID,
-			"queryState":            fmt.Sprintf("state-%d", time.Now().Unix()),
-			"canCalculateChanges":   false,
-			"position":              0,
-			"total":                 len(ids),
-			"ids":                   ids,
+			"accountId":           accountID,
+			"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
+			"canCalculateChanges": false,
+			"position":            0,
+			"total":               len(ids),
+			"ids":                 ids,
 		},
 		ID: call.ID,
 	}
@@ -193,7 +193,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 		name, _ := createData["name"].(string)
 		if name == "" {
 			notCreated[key] = map[string]interface{}{
-				"type": "invalidArguments",
+				"type":        "invalidArguments",
 				"description": "Mailbox name is required",
 			}
 			continue
@@ -201,7 +201,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 
 		if err := s.db.CreateMailbox(user, name); err != nil {
 			notCreated[key] = map[string]interface{}{
-				"type": "serverFail",
+				"type":        "serverFail",
 				"description": err.Error(),
 			}
 			continue
@@ -231,7 +231,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 		if newName, ok := updateData["name"].(string); ok && newName != "" && newName != oldName {
 			if err := s.db.RenameMailbox(user, oldName, newName); err != nil {
 				notUpdated[key] = map[string]interface{}{
-					"type": "serverFail",
+					"type":        "serverFail",
 					"description": err.Error(),
 				}
 				continue
@@ -247,7 +247,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 			name := getMailboxNameFromID(idStr)
 			if err := s.db.DeleteMailbox(user, name); err != nil {
 				notDestroyed[idStr] = map[string]interface{}{
-					"type": "serverFail",
+					"type":        "serverFail",
 					"description": err.Error(),
 				}
 			} else {
@@ -344,10 +344,10 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 
 	// Get all messages from mailboxes
 	var allMessages []struct {
-		id        string
-		mailbox   string
-		uid       uint32
-		meta      *storage.MessageMetadata
+		id      string
+		mailbox string
+		uid     uint32
+		meta    *storage.MessageMetadata
 	}
 
 	mailboxes, _ := s.db.ListMailboxes(user)

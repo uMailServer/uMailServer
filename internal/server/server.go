@@ -43,21 +43,21 @@ import (
 
 // Server is the main uMailServer instance
 type Server struct {
-	config        *config.Config
-	logger        *slog.Logger
-	database      *db.DB
-	queue         *queue.Manager
-	msgStore      *storage.MessageStore
-	smtpServer    *smtp.Server
-	imapServer    *imap.Server
-	apiServer     *api.Server
-	tlsManager    *tls.Manager
-	webhookMgr    *webhook.Manager
-	searchSvc     *search.Service
-	sieveManager  *sieve.Manager
-	storageDB     *storage.Database
-	mailstore     *imap.BboltMailstore
-	pop3Server    *pop3.Server
+	config            *config.Config
+	logger            *slog.Logger
+	database          *db.DB
+	queue             *queue.Manager
+	msgStore          *storage.MessageStore
+	smtpServer        *smtp.Server
+	imapServer        *imap.Server
+	apiServer         *api.Server
+	tlsManager        *tls.Manager
+	webhookMgr        *webhook.Manager
+	searchSvc         *search.Service
+	sieveManager      *sieve.Manager
+	storageDB         *storage.Database
+	mailstore         *imap.BboltMailstore
+	pop3Server        *pop3.Server
 	mcpHTTPServer     *http.Server
 	healthMonitor     *health.Monitor
 	rateLimiter       *ratelimit.RateLimiter
@@ -117,11 +117,11 @@ func New(cfg *config.Config) (*Server, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
-		config: cfg,
-		logger: logger,
-		ctx:    ctx,
-		cancel: cancel,
-		sieveManager: sieve.NewManager(),
+		config:          cfg,
+		logger:          logger,
+		ctx:             ctx,
+		cancel:          cancel,
+		sieveManager:    sieve.NewManager(),
 		smimeKeystore:   smtp.NewSMIMEKeystore(),
 		openpgpKeystore: smtp.NewOpenPGPKeystore(),
 	}
@@ -654,8 +654,6 @@ func (s *Server) startAPI() {
 	s.logger.Info("API server started", "addr", apiCfg.Addr)
 }
 
-
-
 // Stop gracefully stops all server components
 func (s *Server) Stop() error {
 	s.logger.Info("Stopping uMailServer...")
@@ -997,8 +995,8 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 				To:           toAddr,
 			}
 			if err := s.storageDB.StoreMessageMetadata(email, folder, uid, meta); err != nil {
-					s.logger.Error("Failed to store message metadata", "email", email, "uid", uid, "folder", folder, "error", err)
-				}
+				s.logger.Error("Failed to store message metadata", "email", email, "uid", uid, "folder", folder, "error", err)
+			}
 
 			if s.searchSvc != nil {
 				select {
@@ -1253,7 +1251,6 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		s.logger.Error("Failed to enqueue vacation reply", "error", err)
 	}
 }
-
 
 // parseBasicHeaders extracts subject, from, to, date from raw message data.
 func parseBasicHeaders(data []byte) (subject, from, to, date string) {

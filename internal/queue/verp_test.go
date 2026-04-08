@@ -22,4 +22,3 @@ func TestEncodeVERP(t *testing.T) {
 		}
 	}
 }
-

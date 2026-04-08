@@ -13,9 +13,9 @@ type MockVacationManager struct {
 
 	GetConfigResult    *vacation.Config
 	DeleteConfigCalled bool
-	SetConfigCalled   bool
-	SetConfigArg      *vacation.Config
-	ListActiveResult  []string
+	SetConfigCalled    bool
+	SetConfigArg       *vacation.Config
+	ListActiveResult   []string
 }
 
 func (m *MockVacationManager) GetConfig(userID string) (*vacation.Config, error) {

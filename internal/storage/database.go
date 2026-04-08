@@ -285,19 +285,19 @@ func (db *Database) GetNextUID(user, mailbox string) (uint32, error) {
 
 // MessageMetadata stores message metadata
 type MessageMetadata struct {
-	MessageID     string    `json:"message_id"`
-	UID           uint32    `json:"uid"`
-	Flags         []string  `json:"flags"`
-	InternalDate  time.Time `json:"internal_date"`
-	Size          int64     `json:"size"`
-	Subject       string    `json:"subject"`
-	Date          string    `json:"date"`
-	From          string    `json:"from"`
-	To            string    `json:"to"`
-	InReplyTo     string    `json:"in_reply_to,omitempty"`
-	References    []string  `json:"references,omitempty"`
-	ThreadID      string    `json:"thread_id,omitempty"`
-	IsThreadRoot  bool      `json:"is_thread_root,omitempty"`
+	MessageID    string    `json:"message_id"`
+	UID          uint32    `json:"uid"`
+	Flags        []string  `json:"flags"`
+	InternalDate time.Time `json:"internal_date"`
+	Size         int64     `json:"size"`
+	Subject      string    `json:"subject"`
+	Date         string    `json:"date"`
+	From         string    `json:"from"`
+	To           string    `json:"to"`
+	InReplyTo    string    `json:"in_reply_to,omitempty"`
+	References   []string  `json:"references,omitempty"`
+	ThreadID     string    `json:"thread_id,omitempty"`
+	IsThreadRoot bool      `json:"is_thread_root,omitempty"`
 }
 
 // Thread represents an email conversation thread
@@ -313,16 +313,16 @@ type Thread struct {
 
 // ThreadMessage represents a message within a thread
 type ThreadMessage struct {
-	MessageID    string    `json:"message_id"`
-	UID          uint32    `json:"uid"`
-	Mailbox      string    `json:"mailbox"`
-	From         string    `json:"from"`
-	To           string    `json:"to"`
-	Subject      string    `json:"subject"`
-	Date         time.Time `json:"date"`
-	Flags        []string  `json:"flags"`
-	InReplyTo    string    `json:"in_reply_to,omitempty"`
-	IsRead       bool      `json:"is_read"`
+	MessageID string    `json:"message_id"`
+	UID       uint32    `json:"uid"`
+	Mailbox   string    `json:"mailbox"`
+	From      string    `json:"from"`
+	To        string    `json:"to"`
+	Subject   string    `json:"subject"`
+	Date      time.Time `json:"date"`
+	Flags     []string  `json:"flags"`
+	InReplyTo string    `json:"in_reply_to,omitempty"`
+	IsRead    bool      `json:"is_read"`
 }
 
 // GetMessageUIDs returns all message UIDs in a mailbox
@@ -689,15 +689,15 @@ func (db *Database) GetThreadMessages(user, mailbox, threadID string) ([]*Thread
 			if meta.ThreadID == threadID {
 				tm := &ThreadMessage{
 					MessageID: meta.MessageID,
-					UID:         meta.UID,
-					Mailbox:     mailbox,
-					From:        meta.From,
-					To:          meta.To,
-					Subject:     meta.Subject,
-					Date:        meta.InternalDate,
-					Flags:       meta.Flags,
-					InReplyTo:   meta.InReplyTo,
-					IsRead:      HasFlag(meta.Flags, "\\Seen"),
+					UID:       meta.UID,
+					Mailbox:   mailbox,
+					From:      meta.From,
+					To:        meta.To,
+					Subject:   meta.Subject,
+					Date:      meta.InternalDate,
+					Flags:     meta.Flags,
+					InReplyTo: meta.InReplyTo,
+					IsRead:    HasFlag(meta.Flags, "\\Seen"),
 				}
 				messages = append(messages, tm)
 			}

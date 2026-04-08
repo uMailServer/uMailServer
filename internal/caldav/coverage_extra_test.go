@@ -154,7 +154,6 @@ func TestHandleCalendarPropfind_NotFound_Coverage(t *testing.T) {
 	}
 }
 
-
 // TestStorage_UpdateCalendar_NotFound_Coverage tests updating non-existent calendar
 func TestStorage_UpdateCalendar_NotFound_Coverage(t *testing.T) {
 	storage := NewStorage(t.TempDir())
@@ -170,7 +169,6 @@ func TestStorage_UpdateCalendar_NotFound_Coverage(t *testing.T) {
 		t.Error("expected error when updating non-existent calendar")
 	}
 }
-
 
 // TestStorage_DeleteEvent_NotFound_Coverage tests deleting non-existent event
 func TestStorage_DeleteEvent_NotFound_Coverage(t *testing.T) {

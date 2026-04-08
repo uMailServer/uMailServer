@@ -21,15 +21,15 @@ var (
 	OIDSMimeSignedData    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
 	OIDSMimeEncryptedData = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 6}
 	OIDSMimeCapability    = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 15}
-	OIDRSASHA256         = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
-	OIDRsaEncryption     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	OIDRSASHA256          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
+	OIDRsaEncryption      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 )
 
 // SMIMEConfig holds S/MIME configuration
 type SMIMEConfig struct {
 	// Certificate to use for signing
 	SigningCert *x509.Certificate
-	SigningKey crypto.PrivateKey
+	SigningKey  crypto.PrivateKey
 
 	// Certificates for encryption (recipient certificates)
 	EncryptionCerts []*x509.Certificate
@@ -86,8 +86,8 @@ func (s *SMIMESigner) SignMessage(msg []byte, from, to string) ([]byte, error) {
 		"Content-Type: text/plain\r\n\r\n" +
 		string(msg) + "\r\n" +
 		"--" + boundary + "\r\n" +
-		"Content-Type: application/pkcs7-signature; name=\"smime.p7s\"\r\n"+
-		"Content-Transfer-Encoding: base64\r\n"+
+		"Content-Type: application/pkcs7-signature; name=\"smime.p7s\"\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
 		"Content-Disposition: attachment; filename=\"smime.p7s\"\r\n\r\n" +
 		base64.StdEncoding.EncodeToString(signature) + "\r\n" +
 		"--" + boundary + "--\r\n"

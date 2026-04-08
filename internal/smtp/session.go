@@ -2,10 +2,10 @@ package smtp
 
 import (
 	"bufio"
-	"errors"
 	"bytes"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"

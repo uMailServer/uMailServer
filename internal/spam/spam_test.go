@@ -64,9 +64,9 @@ func TestTokenizer_isValidToken(t *testing.T) {
 		want bool
 	}{
 		{"hello", true},
-		{"ab", false},   // too short
-		{"a", false},    // too short
-		{"123", false},  // all digits
+		{"ab", false},  // too short
+		{"a", false},   // too short
+		{"123", false}, // all digits
 		{"hello123", true},
 		{"123hello", true},
 	}
@@ -163,26 +163,26 @@ func TestTokenProbability(t *testing.T) {
 		min, max  float64 // expected range
 	}{
 		{
-			name:      "equal counts",
-			hamCount:  10, spamCount: 10,
+			name:     "equal counts",
+			hamCount: 10, spamCount: 10,
 			totalHam: 100, totalSpam: 100,
 			min: 0.4, max: 0.6,
 		},
 		{
-			name:      "more spam",
-			hamCount:  5, spamCount: 20,
+			name:     "more spam",
+			hamCount: 5, spamCount: 20,
 			totalHam: 100, totalSpam: 100,
 			min: 0.6, max: 0.9,
 		},
 		{
-			name:      "more ham",
-			hamCount:  20, spamCount: 5,
+			name:     "more ham",
+			hamCount: 20, spamCount: 5,
 			totalHam: 100, totalSpam: 100,
 			min: 0.1, max: 0.4,
 		},
 		{
-			name:      "zero counts (smoothing)",
-			hamCount:  0, spamCount: 0,
+			name:     "zero counts (smoothing)",
+			hamCount: 0, spamCount: 0,
 			totalHam: 100, totalSpam: 100,
 			min: 0.4, max: 0.6,
 		},
@@ -283,7 +283,7 @@ func TestFeatureExtractor_Extract(t *testing.T) {
 	fe := NewFeatureExtractor()
 
 	headers := map[string][]string{
-		"Subject":     {"URGENT: Click here now!"},
+		"Subject":      {"URGENT: Click here now!"},
 		"Content-Type": {"text/html"},
 	}
 	body := []byte("Act now limited time offer click here")
@@ -317,33 +317,33 @@ func TestFeatureExtractor_addSpecialFeatures(t *testing.T) {
 		expectedTokens []string
 	}{
 		{
-			name:   "click here phrase",
-			headers: map[string][]string{},
-			body:    []byte("Please click here to claim"),
+			name:           "click here phrase",
+			headers:        map[string][]string{},
+			body:           []byte("Please click here to claim"),
 			expectedTokens: []string{"suspicious_phrase_click_here"},
 		},
 		{
-			name:   "act now phrase",
-			headers: map[string][]string{},
-			body:    []byte("Act now while supplies last"),
+			name:           "act now phrase",
+			headers:        map[string][]string{},
+			body:           []byte("Act now while supplies last"),
 			expectedTokens: []string{"suspicious_phrase_act_now"},
 		},
 		{
-			name:   "exclamation in subject",
-			headers: map[string][]string{"Subject": {"Hello!!!"}},
-			body:    []byte("Test body"),
+			name:           "exclamation in subject",
+			headers:        map[string][]string{"Subject": {"Hello!!!"}},
+			body:           []byte("Test body"),
 			expectedTokens: []string{"excessive_exclamation"},
 		},
 		{
-			name:   "money symbol in subject",
-			headers: map[string][]string{"Subject": {"Your $1000 prize"}},
-			body:    []byte("Test"),
+			name:           "money symbol in subject",
+			headers:        map[string][]string{"Subject": {"Your $1000 prize"}},
+			body:           []byte("Test"),
 			expectedTokens: []string{"money_symbol_subject"},
 		},
 		{
-			name:   "html email",
-			headers: map[string][]string{"Content-Type": {"text/html; charset=utf-8"}},
-			body:    []byte("Test body"),
+			name:           "html email",
+			headers:        map[string][]string{"Content-Type": {"text/html; charset=utf-8"}},
+			body:           []byte("Test body"),
 			expectedTokens: []string{"html_only_email"},
 		},
 	}

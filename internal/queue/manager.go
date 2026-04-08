@@ -961,4 +961,3 @@ func (r *dkimDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, 
 func (r *dkimDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
 	return net.LookupMX(domain)
 }
-

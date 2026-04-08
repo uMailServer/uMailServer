@@ -20,16 +20,16 @@ const ManageSieveTLSListenAddr = "0.0.0.0:4191"
 
 // ManageSieveServer implements RFC 5804 - Protocol for Managing Sieve Scripts
 type ManageSieveServer struct {
-	ln           net.Listener
-	tlsLn        net.Listener
-	tlsCfg       *tls.Config
-	manager      *Manager
-	done         chan struct{}
-	wg           sync.WaitGroup
-	mu           sync.Mutex
-	running      bool
-	sessionUser  string       // Authenticated user for this session
-	authHandler  func(user, pass string) bool  // Auth validation function
+	ln          net.Listener
+	tlsLn       net.Listener
+	tlsCfg      *tls.Config
+	manager     *Manager
+	done        chan struct{}
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	running     bool
+	sessionUser string                       // Authenticated user for this session
+	authHandler func(user, pass string) bool // Auth validation function
 }
 
 // NewManageSieveServer creates a new ManageSieve server
@@ -124,7 +124,7 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 	session := &manageSieveSession{
 		conn:    conn,
 		reader:  &manageSieveReader{r: conn},
-		user:    "",  // Not authenticated yet
+		user:    "", // Not authenticated yet
 		manager: s.manager,
 	}
 
@@ -159,7 +159,7 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 type manageSieveSession struct {
 	conn    net.Conn
 	reader  *manageSieveReader
-	user    string  // Authenticated username
+	user    string // Authenticated username
 	manager *Manager
 }
 

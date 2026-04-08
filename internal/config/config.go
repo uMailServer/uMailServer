@@ -14,24 +14,24 @@ import (
 
 // Config is the main configuration structure
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	TLS      TLSConfig      `yaml:"tls"`
-	SMTP     SMTPConfig     `yaml:"smtp"`
-	IMAP     IMAPConfig     `yaml:"imap"`
-	POP3     POP3Config     `yaml:"pop3"`
-	HTTP     HTTPConfig     `yaml:"http"`
-	Admin    AdminConfig    `yaml:"admin"`
-	Spam     SpamConfig     `yaml:"spam"`
-	AV       AVConfig       `yaml:"av"`
-	Security SecurityConfig `yaml:"security"`
-	LDAP     LDAPConfig     `yaml:"ldap"`
-	MCP        MCPConfig        `yaml:"mcp"`
+	Server      ServerConfig      `yaml:"server"`
+	TLS         TLSConfig         `yaml:"tls"`
+	SMTP        SMTPConfig        `yaml:"smtp"`
+	IMAP        IMAPConfig        `yaml:"imap"`
+	POP3        POP3Config        `yaml:"pop3"`
+	HTTP        HTTPConfig        `yaml:"http"`
+	Admin       AdminConfig       `yaml:"admin"`
+	Spam        SpamConfig        `yaml:"spam"`
+	AV          AVConfig          `yaml:"av"`
+	Security    SecurityConfig    `yaml:"security"`
+	LDAP        LDAPConfig        `yaml:"ldap"`
+	MCP         MCPConfig         `yaml:"mcp"`
 	ManageSieve ManageSieveConfig `yaml:"managesieve"`
-	Domains    []DomainConfig    `yaml:"domains"`
-	Logging  LoggingConfig  `yaml:"logging"`
-	Metrics  MetricsConfig  `yaml:"metrics"`
-	Database DatabaseConfig `yaml:"database"`
-	Storage  StorageConfig  `yaml:"storage"`
+	Domains     []DomainConfig    `yaml:"domains"`
+	Logging     LoggingConfig     `yaml:"logging"`
+	Metrics     MetricsConfig     `yaml:"metrics"`
+	Database    DatabaseConfig    `yaml:"database"`
+	Storage     StorageConfig     `yaml:"storage"`
 }
 
 // ServerConfig holds general server settings
@@ -78,9 +78,9 @@ type InboundSMTPConfig struct {
 
 // SubmissionSMTPConfig holds authenticated submission settings (STARTTLS)
 type SubmissionSMTPConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	Port        int    `yaml:"port"`
-	Bind        string `yaml:"bind"`
+	Enabled        bool   `yaml:"enabled"`
+	Port           int    `yaml:"port"`
+	Bind           string `yaml:"bind"`
 	RequireAuth    bool   `yaml:"require_auth"`
 	RequireTLS     bool   `yaml:"require_tls"`
 	MaxConnections int    `yaml:"max_connections"`
@@ -171,10 +171,10 @@ type SecurityConfig struct {
 // RateLimitConfig holds rate limiting settings
 type RateLimitConfig struct {
 	// Per-IP limits (inbound connections/messages)
-	IPPerMinute       int `yaml:"ip_per_minute"`        // messages per minute per IP (inbound)
-	IPPerHour         int `yaml:"ip_per_hour"`          // messages per hour per IP
-	IPPerDay          int `yaml:"ip_per_day"`           // messages per day per IP
-	IPConnections     int `yaml:"ip_connections"`      // concurrent connections per IP
+	IPPerMinute   int `yaml:"ip_per_minute"`  // messages per minute per IP (inbound)
+	IPPerHour     int `yaml:"ip_per_hour"`    // messages per hour per IP
+	IPPerDay      int `yaml:"ip_per_day"`     // messages per day per IP
+	IPConnections int `yaml:"ip_connections"` // concurrent connections per IP
 
 	// Per-user limits (authenticated outbound sending)
 	UserPerMinute     int `yaml:"user_per_minute"`     // messages per minute per user
@@ -183,8 +183,8 @@ type RateLimitConfig struct {
 	UserMaxRecipients int `yaml:"user_max_recipients"` // max recipients per message
 
 	// Global limits
-	GlobalPerMinute   int `yaml:"global_per_minute"`  // global messages per minute
-	GlobalPerHour     int `yaml:"global_per_hour"`    // global messages per hour
+	GlobalPerMinute int `yaml:"global_per_minute"` // global messages per minute
+	GlobalPerHour   int `yaml:"global_per_hour"`   // global messages per hour
 
 	// Legacy aliases (for backwards compatibility)
 	SMTPPerMinute         int `yaml:"smtp_per_minute"`
@@ -246,7 +246,7 @@ type LoggingConfig struct {
 
 	// Log rotation settings (only used when Output is a file path)
 	MaxSizeMB  int `yaml:"max_size_mb"`  // Maximum log file size in MB before rotation
-	MaxBackups int `yaml:"max_backups"` // Maximum number of old log files to keep
+	MaxBackups int `yaml:"max_backups"`  // Maximum number of old log files to keep
 	MaxAgeDays int `yaml:"max_age_days"` // Maximum number of days to retain old log files
 }
 

@@ -54,8 +54,8 @@ func DefaultConfig() *Config {
 			MaxConnections: 10000,
 		},
 		POP3: POP3Config{
-			Enabled: false,
-			Port:    995,
+			Enabled:        false,
+			Port:           995,
 			Bind:           "0.0.0.0",
 			MaxConnections: 10000,
 		},
@@ -101,18 +101,18 @@ func DefaultConfig() *Config {
 			JWTSecret:        "change-me-in-production-32-char-secret",
 			RateLimit: RateLimitConfig{
 				// Per-IP limits (inbound)
-				IPPerMinute:       30,
-				IPPerHour:         500,
-				IPPerDay:          5000,
-				IPConnections:     10,
+				IPPerMinute:   30,
+				IPPerHour:     500,
+				IPPerDay:      5000,
+				IPConnections: 10,
 				// Per-user limits (outbound authenticated)
 				UserPerMinute:     60,
 				UserPerHour:       1000,
 				UserPerDay:        5000,
 				UserMaxRecipients: 100,
 				// Global limits
-				GlobalPerMinute:   10000,
-				GlobalPerHour:     100000,
+				GlobalPerMinute: 10000,
+				GlobalPerHour:   100000,
 				// Legacy aliases
 				SMTPPerMinute:         30,
 				SMTPPerHour:           500,

@@ -823,13 +823,13 @@ func TestCoverDeliverLocal_ForwardNoKeep(t *testing.T) {
 	srv.database.CreateDomain(domain)
 
 	account := &db.AccountData{
-		Domain:           "example.com",
-		LocalPart:        "testuser",
-		Email:            "testuser@example.com",
-		PasswordHash:     "$2a$10$test",
-		IsActive:         true,
-		ForwardTo:        "forward@other.com",
-		ForwardKeepCopy:  false, // Don't keep local copy
+		Domain:          "example.com",
+		LocalPart:       "testuser",
+		Email:           "testuser@example.com",
+		PasswordHash:    "$2a$10$test",
+		IsActive:        true,
+		ForwardTo:       "forward@other.com",
+		ForwardKeepCopy: false, // Don't keep local copy
 	}
 	srv.database.CreateAccount(account)
 
@@ -936,11 +936,11 @@ func TestCoverNew_LoggingFileOutput(t *testing.T) {
 			Path: tmpDir + "/test.db",
 		},
 		Logging: config.LoggingConfig{
-			Level:       "info",
-			Output:      logFile,
-			MaxSizeMB:   10,
-			MaxBackups:  3,
-			MaxAgeDays:  7,
+			Level:      "info",
+			Output:     logFile,
+			MaxSizeMB:  10,
+			MaxBackups: 3,
+			MaxAgeDays: 7,
 		},
 		TLS: config.TLSConfig{
 			ACME: config.ACMEConfig{

@@ -12,8 +12,8 @@ func TestValidator_ValidateEmail(t *testing.T) {
 	v := NewValidator()
 
 	tests := []struct {
-		email    string
-		wantErr  bool
+		email   string
+		wantErr bool
 	}{
 		{"user@example.com", false},
 		{"user.name@example.com", false},
@@ -38,8 +38,8 @@ func TestValidator_ExtractDomain(t *testing.T) {
 	v := NewValidator()
 
 	tests := []struct {
-		email   string
-		want    string
+		email string
+		want  string
 	}{
 		{"user@example.com", "example.com"},
 		{"USER@EXAMPLE.COM", "example.com"},
@@ -227,15 +227,15 @@ func TestAutoconfigClientConfig_XML(t *testing.T) {
 		Version: "1.1",
 		Providers: []AutoconfigProvider{
 			{
-				ID:   "example.com",
+				ID:     "example.com",
 				Domain: []string{"example.com"},
 				IncomingServers: []AutoconfigServer{
 					{
-						Type:         "imap",
-						Hostname:     "mail.example.com",
-						Port:         993,
-						SocketType:   "SSL",
-						Username:     "%EMAILADDRESS%",
+						Type:           "imap",
+						Hostname:       "mail.example.com",
+						Port:           993,
+						SocketType:     "SSL",
+						Username:       "%EMAILADDRESS%",
 						Authentication: "password-encrypted",
 					},
 				},

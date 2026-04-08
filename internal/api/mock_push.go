@@ -6,13 +6,13 @@ import (
 
 // MockPushService mock for testing
 type MockPushService struct {
-	SubscribeError       error
-	UnsubscribeError     error
-	SendNotificationError error
+	SubscribeError          error
+	UnsubscribeError        error
+	SendNotificationError   error
 	GetVAPIDPublicKeyResult string
 
-	SubscribeCalls       []string
-	UnsubscribeCalls    []struct{ UserID, SubscriptionID string }
+	SubscribeCalls        []string
+	UnsubscribeCalls      []struct{ UserID, SubscriptionID string }
 	SendNotificationCalls []struct{ UserID string }
 }
 

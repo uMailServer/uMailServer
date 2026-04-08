@@ -1372,7 +1372,7 @@ func TestFindSubscriptionByEndpoint_Exists(t *testing.T) {
 		"auth":     "test-auth-secret",
 	}
 	jsonBody, _ := json.Marshal(subReq)
-	
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscribe", bytes.NewReader(jsonBody))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -1392,7 +1392,7 @@ func TestFindSubscriptionByEndpoint_NotFound(t *testing.T) {
 
 	// Try to find a subscription that doesn't exist
 	result := server.findSubscriptionByEndpoint("test@example.com", "https://nonexistent.example.com/push")
-	
+
 	if result != "" {
 		t.Errorf("Expected empty string for non-existent subscription, got %s", result)
 	}
@@ -2019,51 +2019,15 @@ func TestNewServer_WithCorsOrigins(t *testing.T) {
 
 // --- Additional Filter Tests for Coverage ---
 
-
-
-
-
-
-
-
-
-
-
-
-
 // --- Additional Vacation Tests ---
-
-
-
-
-
 
 // --- Additional Push Handler Tests ---
 
-
-
-
-
 // --- pprof Handler Tests ---
-
-
-
-
-
-
 
 // --- Additional Thread Handler Tests ---
 
-
-
-
-
-
-
 // --- Additional Search Handler Tests ---
-
-
-
 
 // --- Additional Login Handler Tests ---
 
@@ -2196,7 +2160,7 @@ func TestMockFileInfo_Sys(t *testing.T) {
 }
 
 func TestMockFile_Seek(t *testing.T) {
- mf := &mockFile{content: "test content", name: "test.txt", pos: 0}
+	mf := &mockFile{content: "test content", name: "test.txt", pos: 0}
 
 	// Seek from start
 	n, err := mf.Seek(5, 0)
@@ -2458,7 +2422,7 @@ func TestHandleWebmail_JSContentType(t *testing.T) {
 	mockFS := &MockFS{
 		Files: map[string]string{
 			"index.html": "<!doctype html><html>Webmail</html>",
-			"app.js":      "console.log('hello');",
+			"app.js":     "console.log('hello');",
 		},
 	}
 
@@ -2487,7 +2451,7 @@ func TestHandleWebmail_CSSContentType(t *testing.T) {
 	mockFS := &MockFS{
 		Files: map[string]string{
 			"index.html": "<!doctype html><html>Webmail</html>",
-			"style.css":   "body { margin: 0; }",
+			"style.css":  "body { margin: 0; }",
 		},
 	}
 
@@ -2505,4 +2469,3 @@ func TestHandleWebmail_CSSContentType(t *testing.T) {
 		t.Errorf("Expected Content-Type text/css, got %s", ct)
 	}
 }
-

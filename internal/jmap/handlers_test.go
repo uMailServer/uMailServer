@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"time"
 
-
 	"testing"
-
 
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -228,7 +226,6 @@ func TestHandleMailboxSet_Destroy(t *testing.T) {
 		t.Errorf("Response.Name = %s, want Mailbox/set", response.Name)
 	}
 }
-
 
 // Test Email Handlers
 func TestHandleEmailGet(t *testing.T) {
@@ -690,7 +687,6 @@ func TestGetMailboxNameFromID(t *testing.T) {
 	}
 }
 
-
 // Test matchesFilter function
 func TestMatchesFilter_NilFilter(t *testing.T) {
 	meta := &storage.MessageMetadata{
@@ -1108,6 +1104,7 @@ func TestHandleEmailSet_CreateNotSupported(t *testing.T) {
 	}
 
 }
+
 // Test handleEmailImport error cases
 func TestHandleEmailImport_InvalidData(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
@@ -1594,8 +1591,8 @@ func TestParseEmailMetadata(t *testing.T) {
 		expectSubj string
 	}{
 		{
-			name: "Simple email",
-			data: []byte("From: sender@example.com\r\nSubject: Test Subject\r\n\r\nBody"),
+			name:       "Simple email",
+			data:       []byte("From: sender@example.com\r\nSubject: Test Subject\r\n\r\nBody"),
 			messageID:  "msg-1",
 			expectFrom: "sender@example.com",
 			expectSubj: "Test Subject",
@@ -1608,22 +1605,22 @@ func TestParseEmailMetadata(t *testing.T) {
 			expectSubj: "",
 		},
 		{
-			name: "Email with To header",
-			data: []byte("From: from@example.com\r\nTo: to@example.com\r\nSubject: To Test\r\n\r\nBody"),
+			name:       "Email with To header",
+			data:       []byte("From: from@example.com\r\nTo: to@example.com\r\nSubject: To Test\r\n\r\nBody"),
 			messageID:  "msg-to",
 			expectFrom: "from@example.com",
 			expectSubj: "To Test",
 		},
 		{
-			name: "Email with Date header",
-			data: []byte("From: sender@test.com\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nSubject: Dated\r\n\r\nBody"),
+			name:       "Email with Date header",
+			data:       []byte("From: sender@test.com\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\nSubject: Dated\r\n\r\nBody"),
 			messageID:  "msg-date",
 			expectFrom: "sender@test.com",
 			expectSubj: "Dated",
 		},
 		{
-			name: "Email with References header",
-			data: []byte("From: a@b.com\r\nReferences: <ref1@example.com> <ref2@example.com>\r\nSubject: Refs\r\n\r\nBody"),
+			name:       "Email with References header",
+			data:       []byte("From: a@b.com\r\nReferences: <ref1@example.com> <ref2@example.com>\r\nSubject: Refs\r\n\r\nBody"),
 			messageID:  "msg-refs",
 			expectFrom: "a@b.com",
 			expectSubj: "Refs",
@@ -1683,8 +1680,8 @@ func TestStorageToJMAPEmail_Flags(t *testing.T) {
 			expected: map[string]bool{"$draft": true},
 		},
 		{
-			name:    "All flags",
-			flags:   []string{`\Seen`, `\Answered`, `\Flagged`, `\Draft`},
+			name:  "All flags",
+			flags: []string{`\Seen`, `\Answered`, `\Flagged`, `\Draft`},
 			expected: map[string]bool{
 				"$seen":     true,
 				"$answered": true,
@@ -1908,6 +1905,7 @@ func TestHandleThreadGet_WithMessages(t *testing.T) {
 		t.Error("Expected at least one thread")
 	}
 }
+
 // Test handleMailboxGet with properties filter
 func TestHandleMailboxGet_WithProperties(t *testing.T) {
 	server, db, _, cleanup := setupTestServer(t)

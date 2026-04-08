@@ -65,7 +65,7 @@ func (fi *mockFileInfo) Size() int64        { return fi.size }
 func (fi *mockFileInfo) Mode() fs.FileMode  { return 0644 }
 func (fi *mockFileInfo) ModTime() time.Time { return time.Now() }
 func (fi *mockFileInfo) IsDir() bool        { return false }
-func (fi *mockFileInfo) Sys() interface{}  { return nil }
+func (fi *mockFileInfo) Sys() interface{}   { return nil }
 
 func (m *MockFS) Open(name string) (fs.File, error) {
 	if m.OpenError != nil {

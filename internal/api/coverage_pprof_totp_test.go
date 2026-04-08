@@ -491,10 +491,10 @@ func TestAccountToJSON_WithVacation(t *testing.T) {
 
 func TestAccountToJSON_WithoutVacation(t *testing.T) {
 	account := &db.AccountData{
-		Email:     "test@example.com",
-		IsAdmin:   false,
-		IsActive:  true,
-		QuotaUsed: 0,
+		Email:      "test@example.com",
+		IsAdmin:    false,
+		IsActive:   true,
+		QuotaUsed:  0,
 		QuotaLimit: 0,
 		// No vacation settings
 	}

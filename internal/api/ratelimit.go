@@ -11,10 +11,10 @@ import (
 // RateLimitConfigRequest represents the rate limit configuration for API requests
 type RateLimitConfigRequest struct {
 	// Per-IP limits (inbound)
-	IPPerMinute       int `json:"ip_per_minute"`
-	IPPerHour         int `json:"ip_per_hour"`
-	IPPerDay          int `json:"ip_per_day"`
-	IPConnections     int `json:"ip_connections"`
+	IPPerMinute   int `json:"ip_per_minute"`
+	IPPerHour     int `json:"ip_per_hour"`
+	IPPerDay      int `json:"ip_per_day"`
+	IPConnections int `json:"ip_connections"`
 
 	// Per-user limits (outbound authenticated)
 	UserPerMinute     int `json:"user_per_minute"`
@@ -23,8 +23,8 @@ type RateLimitConfigRequest struct {
 	UserMaxRecipients int `json:"user_max_recipients"`
 
 	// Global limits
-	GlobalPerMinute   int `json:"global_per_minute"`
-	GlobalPerHour     int `json:"global_per_hour"`
+	GlobalPerMinute int `json:"global_per_minute"`
+	GlobalPerHour   int `json:"global_per_hour"`
 }
 
 // handleRateLimitConfig handles GET/PUT /api/v1/admin/ratelimits/config
@@ -120,7 +120,7 @@ func (s *Server) handlePutRateLimitConfig(w http.ResponseWriter, r *http.Request
 	)
 
 	s.sendJSON(w, http.StatusOK, map[string]string{
-		"status": "config_updated",
+		"status":  "config_updated",
 		"message": "Configuration updated successfully.",
 	})
 }

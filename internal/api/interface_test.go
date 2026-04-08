@@ -389,10 +389,10 @@ func TestHandleGetVacation_WithMockConfig(t *testing.T) {
 	mockVacationMgr := &MockVacationManager{
 		GetConfigResult: &vacation.Config{
 			Enabled:      true,
-			Subject:     "Mock Vacation",
-			Message:     "I'm on mock vacation",
-			StartDate:   startDate,
-			EndDate:     endDate,
+			Subject:      "Mock Vacation",
+			Message:      "I'm on mock vacation",
+			StartDate:    startDate,
+			EndDate:      endDate,
 			SendInterval: 24 * time.Hour,
 		},
 	}
