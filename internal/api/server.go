@@ -1656,6 +1656,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate query length
+	if len(query) > 500 {
+		s.sendError(w, http.StatusBadRequest, "query too long (max 500 characters)")
+		return
+	}
+
 	folder := r.URL.Query().Get("folder")
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
@@ -1663,6 +1669,9 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	limit := 20
 	if limitStr != "" {
 		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			if l > 100 {
+				l = 100 // Cap at 100 to prevent resource exhaustion
+			}
 			limit = l
 		}
 	}
