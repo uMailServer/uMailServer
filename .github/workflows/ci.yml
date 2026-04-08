@@ -114,11 +114,11 @@ jobs:
 
       - name: Build webmail
         run: |
-          npm ci && npm run build --prefix webmail
+          (cd webmail && npm ci && npm run build)
 
       - name: Build admin panel
         run: |
-          npm ci && npm run build --prefix web/admin
+          (cd web/admin && npm ci && npm run build)
 
       - name: Build binary
         run: |
