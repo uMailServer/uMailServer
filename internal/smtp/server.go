@@ -23,6 +23,7 @@ type Server struct {
 	listeners   []net.Listener
 	connections map[string]*Session
 	connMu      sync.RWMutex
+	listenersMu sync.Mutex // protects listeners slice
 	running     atomic.Bool
 	shutdown    chan struct{}
 	stopOnce    sync.Once
@@ -207,7 +208,9 @@ func (s *Server) ListenAndServeTLS(addr string, tlsConfig *tls.Config) error {
 // Serve accepts connections on the listener
 func (s *Server) Serve(listener net.Listener) error {
 	s.listener = listener
+	s.listenersMu.Lock()
 	s.listeners = append(s.listeners, listener)
+	s.listenersMu.Unlock()
 	s.running.Store(true)
 
 	s.logger.Info("SMTP server listening",
@@ -346,9 +349,11 @@ func (s *Server) Stop() error {
 	})
 
 	// Close all listeners
+	s.listenersMu.Lock()
 	for _, ln := range s.listeners {
 		ln.Close()
 	}
+	s.listenersMu.Unlock()
 
 	// Close all connections
 	s.connMu.Lock()
