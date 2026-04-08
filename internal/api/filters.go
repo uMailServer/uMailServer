@@ -138,13 +138,41 @@ func (s *Server) handleCreateFilter(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "filter name is required")
 		return
 	}
+	if len(req.Name) > 255 {
+		s.sendError(w, http.StatusBadRequest, "filter name exceeds maximum length of 255")
+		return
+	}
 	if len(req.Conditions) == 0 {
 		s.sendError(w, http.StatusBadRequest, "at least one condition is required")
+		return
+	}
+	if len(req.Conditions) > 50 {
+		s.sendError(w, http.StatusBadRequest, "too many conditions (max 50)")
 		return
 	}
 	if len(req.Actions) == 0 {
 		s.sendError(w, http.StatusBadRequest, "at least one action is required")
 		return
+	}
+	if len(req.Actions) > 20 {
+		s.sendError(w, http.StatusBadRequest, "too many actions (max 20)")
+		return
+	}
+
+	// Validate condition values
+	for i, cond := range req.Conditions {
+		if cond.Value == "" {
+			s.sendError(w, http.StatusBadRequest, fmt.Sprintf("condition %d has empty value", i+1))
+			return
+		}
+		if len(cond.Value) > 1000 {
+			s.sendError(w, http.StatusBadRequest, fmt.Sprintf("condition %d value exceeds maximum length", i+1))
+			return
+		}
+		if cond.Field == "header" && cond.HeaderName == "" {
+			s.sendError(w, http.StatusBadRequest, fmt.Sprintf("condition %d requires headerName", i+1))
+			return
+		}
 	}
 
 	// Create filter
