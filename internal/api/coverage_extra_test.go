@@ -18,6 +18,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/queue"
+	"github.com/umailserver/umailserver/internal/ratelimit"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -2467,5 +2468,203 @@ func TestHandleWebmail_CSSContentType(t *testing.T) {
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "text/css" {
 		t.Errorf("Expected Content-Type text/css, got %s", ct)
+	}
+}
+
+// mockRateLimitManager is a mock for testing
+type mockRateLimitManager struct {
+	cfg  *ratelimit.Config
+	ipStats  map[string]any
+	userStats map[string]any
+}
+
+func (m *mockRateLimitManager) GetConfig() *ratelimit.Config {
+	return m.cfg
+}
+
+func (m *mockRateLimitManager) SetConfig(cfg *ratelimit.Config) {
+	m.cfg = cfg
+}
+
+func (m *mockRateLimitManager) GetIPStats(ip string) map[string]any {
+	return m.ipStats
+}
+
+func (m *mockRateLimitManager) GetUserStats(user string) map[string]any {
+	return m.userStats
+}
+
+func TestHandleRateLimitConfig_NilManager(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	// server.rateLimitMgr is nil by default
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/config", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitIPStats_NilManager(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/ip/192.168.1.1", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitIPStats(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitUserStats_NilManager(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/user/testuser", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitUserStats(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitIPStats_MissingIP(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{
+		ipStats: make(map[string]any),
+	}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/ip", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitIPStats(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitUserStats_MissingUser(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{
+		userStats: make(map[string]any),
+	}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/user", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitUserStats(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitConfig_Put_NilManager(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status 503, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitIPStats_WithMockManager(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{
+		ipStats: map[string]any{
+			"requests_today": 10,
+			"blocked":        2,
+		},
+	}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/ip/192.168.1.1", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitIPStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitUserStats_WithMockManager(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{
+		userStats: map[string]any{
+			"emails_today": 5,
+			"blocked":       1,
+		},
+	}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/user/testuser", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitUserStats(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
 	}
 }
