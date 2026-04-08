@@ -155,6 +155,10 @@ func TestValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := DefaultConfig()
+			// Use temp dir for valid config tests that don't explicitly set DataDir
+			if tt.name == "valid config" {
+				cfg.Server.DataDir = t.TempDir()
+			}
 			tt.modify(cfg)
 			err := cfg.Validate()
 			if (err != nil) != tt.wantErr {
@@ -267,12 +271,15 @@ func TestLoadConfigFile(t *testing.T) {
 	configContent := `
 server:
   hostname: mail.example.com
-  data_dir: /var/lib/umailserver
+  data_dir: TMPDIR_PLACEHOLDER
 smtp:
   inbound:
     port: 2525
     enabled: true
 `
+	// Replace placeholder with actual temp dir
+	configContent = strings.Replace(configContent, "TMPDIR_PLACEHOLDER", tmpDir, 1)
+
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
@@ -293,6 +300,11 @@ smtp:
 }
 
 func TestLoadNonExistentConfig(t *testing.T) {
+	// Set temp data dir before loading config to avoid /var/lib/umailserver issues in CI
+	tmpDir := t.TempDir()
+	os.Setenv("UMAILSERVER_SERVER_DATADIR", tmpDir)
+	defer os.Unsetenv("UMAILSERVER_SERVER_DATADIR")
+
 	// Loading a non-existent config should use defaults
 	cfg, err := Load("")
 	if err != nil {
@@ -1175,6 +1187,7 @@ server:
 
 func TestValidateQuarantineGreaterThanOrEqualReject(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.DataDir = t.TempDir()
 	// Set quarantine >= reject to trigger the quarantine >= reject check
 	cfg.Spam.QuarantineThreshold = 9.0
 	cfg.Spam.RejectThreshold = 9.0
@@ -1409,6 +1422,11 @@ func TestAskChoiceNonNumericInput(t *testing.T) {
 }
 
 func TestLoadNonExistentFilePath(t *testing.T) {
+	// Set temp data dir before loading config to avoid /var/lib/umailserver issues in CI
+	tmpDir := t.TempDir()
+	os.Setenv("UMAILSERVER_SERVER_DATADIR", tmpDir)
+	defer os.Unsetenv("UMAILSERVER_SERVER_DATADIR")
+
 	cfg, err := Load("/nonexistent/path/config.yaml")
 	if err != nil {
 		t.Fatalf("Load with non-existent path should not error: %v", err)
@@ -1486,6 +1504,7 @@ func TestSetupWizardRunDataDirError(t *testing.T) {
 
 func TestValidateJWTSecretTooShort(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.DataDir = t.TempDir()
 	cfg.Security.JWTSecret = "short"
 	err := cfg.Validate()
 	if err == nil {
@@ -1498,6 +1517,7 @@ func TestValidateJWTSecretTooShort(t *testing.T) {
 
 func TestValidateTLSMinVersionInvalid(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.DataDir = t.TempDir()
 	cfg.TLS.MinVersion = "1.1"
 	err := cfg.Validate()
 	if err == nil {
@@ -1510,6 +1530,7 @@ func TestValidateTLSMinVersionInvalid(t *testing.T) {
 
 func TestValidateTLSMinVersionValid(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.DataDir = t.TempDir()
 	cfg.TLS.MinVersion = "1.2"
 	err := cfg.Validate()
 	if err != nil {
@@ -1525,6 +1546,7 @@ func TestValidateTLSMinVersionValid(t *testing.T) {
 
 func TestValidatePortConflict(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Server.DataDir = t.TempDir()
 	cfg.SMTP.Inbound.Enabled = true
 	cfg.SMTP.Inbound.Port = 25
 	cfg.IMAP.Enabled = true
@@ -1661,6 +1683,7 @@ func TestValidateSpamThresholdsOutOfRange(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := DefaultConfig()
+			cfg.Server.DataDir = t.TempDir()
 			tt.modify(cfg)
 			err := cfg.Validate()
 			if err == nil {
@@ -1695,6 +1718,7 @@ func TestValidateRateLimitsNegative(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := DefaultConfig()
+			cfg.Server.DataDir = t.TempDir()
 			tt.modify(cfg)
 			err := cfg.Validate()
 			if err == nil {
