@@ -1,11 +1,14 @@
+//go:build windows
+
 package store
 
 import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestListFolders_SkipsFiles covers the branch in ListFolders where
@@ -142,23 +145,23 @@ func TestQuota_WalkErrorNonNotExist(t *testing.T) {
 		// Lock the Archive subfolder exclusively to cause Walk to fail
 		maildir, _ := store.userMaildirPath(domain, user)
 		archiveDir := filepath.Join(maildir, ".Archive")
-		p, err := syscall.UTF16PtrFromString(archiveDir)
+		p, err := windows.UTF16PtrFromString(archiveDir)
 		if err != nil {
 			t.Fatalf("UTF16PtrFromString: %v", err)
 		}
-		h, err := syscall.CreateFile(
+		h, err := windows.CreateFile(
 			p,
-			syscall.GENERIC_READ,
+			windows.GENERIC_READ,
 			0, // no sharing
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_FLAG_BACKUP_SEMANTICS,
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_BACKUP_SEMANTICS,
 			0,
 		)
 		if err != nil {
 			t.Skipf("could not lock archive directory: %v", err)
 		}
-		defer syscall.CloseHandle(h)
+		defer windows.CloseHandle(h)
 
 		used, limit, err := store.Quota(domain, user)
 		if err != nil {
@@ -212,23 +215,23 @@ func TestQuota_SkipsInaccessibleFiles(t *testing.T) {
 
 	if runtime.GOOS == "windows" {
 		// On Windows, lock the new/ directory to make Walk receive an error
-		p, err := syscall.UTF16PtrFromString(newDir)
+		p, err := windows.UTF16PtrFromString(newDir)
 		if err != nil {
 			t.Fatalf("UTF16PtrFromString: %v", err)
 		}
-		h, err := syscall.CreateFile(
+		h, err := windows.CreateFile(
 			p,
-			syscall.GENERIC_READ,
+			windows.GENERIC_READ,
 			0, // no sharing
 			nil,
-			syscall.OPEN_EXISTING,
-			syscall.FILE_FLAG_BACKUP_SEMANTICS,
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_BACKUP_SEMANTICS,
 			0,
 		)
 		if err != nil {
 			t.Skipf("could not lock new/ directory: %v", err)
 		}
-		defer syscall.CloseHandle(h)
+		defer windows.CloseHandle(h)
 
 		used, limit, err := store.Quota(domain, user)
 		t.Logf("Quota: used=%d, limit=%d, err=%v", used, limit, err)
