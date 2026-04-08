@@ -76,6 +76,9 @@ type Server struct {
 	// HTTP router (cached)
 	router http.Handler
 
+	// HTTP server lifecycle guard (protects httpServer field)
+	serverMu sync.Mutex
+
 	// Login rate limiting
 	loginMu       sync.Mutex
 	loginAttempts map[string]*loginAttempt
@@ -398,12 +401,14 @@ func (s *Server) SetRateLimitManager(mgr RateLimitManager) {
 func (s *Server) Start(addr string) error {
 	s.config.Addr = addr
 
+	s.serverMu.Lock()
 	s.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      s,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
+	s.serverMu.Unlock()
 
 	s.logger.Info("Admin API server starting", "addr", addr)
 	return s.httpServer.ListenAndServe()
@@ -411,10 +416,13 @@ func (s *Server) Start(addr string) error {
 
 // Stop gracefully stops the API server
 func (s *Server) Stop() error {
-	if s.httpServer != nil {
+	s.serverMu.Lock()
+	httpServer := s.httpServer
+	s.serverMu.Unlock()
+	if httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return s.httpServer.Shutdown(ctx)
+		return httpServer.Shutdown(ctx)
 	}
 	return nil
 }
