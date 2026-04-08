@@ -438,7 +438,7 @@ func TestDurationParseViaEnv(t *testing.T) {
 }
 
 func TestValidateInboundSMTPDisabled(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.SMTP.Inbound.Enabled = false
 	cfg.SMTP.Inbound.Port = 0 // Should be fine since inbound is disabled
 	err := cfg.Validate()
@@ -448,7 +448,7 @@ func TestValidateInboundSMTPDisabled(t *testing.T) {
 }
 
 func TestValidateSubmissionDisabled(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.SMTP.Submission.Enabled = false
 	cfg.SMTP.Submission.Port = 0
 	err := cfg.Validate()
@@ -458,7 +458,7 @@ func TestValidateSubmissionDisabled(t *testing.T) {
 }
 
 func TestValidateIMAPDisabled(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.IMAP.Enabled = false
 	cfg.IMAP.Port = 0
 	err := cfg.Validate()
