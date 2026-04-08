@@ -341,6 +341,24 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate recipient count
+	if len(req.To) > 100 {
+		http.Error(w, "Too many recipients (max 100)", http.StatusBadRequest)
+		return
+	}
+
+	// Validate subject length
+	if len(req.Subject) > 998 {
+		http.Error(w, "Subject too long (max 998 characters)", http.StatusBadRequest)
+		return
+	}
+
+	// Validate body length (prevent memory issues)
+	if len(req.Body) > 25*1024*1024 {
+		http.Error(w, "Message body too large (max 25MB)", http.StatusBadRequest)
+		return
+	}
+
 	// Build RFC 2822 email
 	now := time.Now()
 	dateStr := now.Format("Mon, 02 Jan 2006 15:04:05 -0700")
