@@ -207,7 +207,7 @@ func TestCreateAccount_ClosedDB(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	database.Close()
 
-	body := map[string]interface{}{"email": "new@test.com", "password": "pass123"}
+	body := map[string]interface{}{"email": "new@test.com", "password": "password123"}
 	jsonBody, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
@@ -517,7 +517,7 @@ func TestFullRouter_AccountCRUD(t *testing.T) {
 	defer database.Close()
 
 	// Create account via router
-	body := map[string]interface{}{"email": "new@test.com", "password": "pass123"}
+	body := map[string]interface{}{"email": "new@test.com", "password": "password123"}
 	jsonBody, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
 	req.Header.Set("Authorization", "Bearer "+token)

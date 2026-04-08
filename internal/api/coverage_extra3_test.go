@@ -258,7 +258,7 @@ func TestCreateAccount_ClosedDB_Cov3(t *testing.T) {
 	// Close DB to force CreateAccount failure
 	database.Close()
 
-	body, _ := json.Marshal(map[string]string{"email": "u@clsd.com", "password": "pass123"})
+	body, _ := json.Marshal(map[string]string{"email": "u@clsd.com", "password": "password123"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 	server.createAccount(rec, req)
