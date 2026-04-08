@@ -919,14 +919,15 @@ func TestMigrationManagerImportMaildir(t *testing.T) {
 	mm := NewMigrationManager(database, nil, nil)
 
 	// Create a test maildir structure
+	// importMessage expects path format: .../domain/user/Maildir/cur/filename
 	maildirPath := t.TempDir() + "/maildir"
-	os.MkdirAll(maildirPath+"/user@example.com/INBOX/cur", 0755)
-	os.MkdirAll(maildirPath+"/user@example.com/INBOX/new", 0755)
-	os.MkdirAll(maildirPath+"/user@example.com/INBOX/tmp", 0755)
+	os.MkdirAll(maildirPath+"/example.com/user/Maildir/cur", 0755)
+	os.MkdirAll(maildirPath+"/example.com/user/Maildir/new", 0755)
+	os.MkdirAll(maildirPath+"/example.com/user/Maildir/tmp", 0755)
 
-	// Create a test message
+	// Create a test message in new/
 	msgContent := []byte("From: test@example.com\nTo: user@example.com\nSubject: Test\n\nTest message")
-	os.WriteFile(maildirPath+"/user@example.com/INBOX/new/1234567890.1", msgContent, 0644)
+	os.WriteFile(maildirPath+"/example.com/user/Maildir/new/1234567890.1", msgContent, 0644)
 
 	// Test importMaildir
 	err = mm.importMaildir(maildirPath)
