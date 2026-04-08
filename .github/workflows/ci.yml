@@ -32,9 +32,9 @@ jobs:
 
       - name: Build web UIs
         run: |
-          cd webmail && npm ci && npm run build
-          cd ../web/admin && npm ci && npm run build
-          cd ../web/account && npm install && npm run build
+          npm ci && npm run build --prefix webmail
+          npm ci && npm run build --prefix web/admin
+          npm install && npm run build --prefix web/account
 
       - name: Run golangci-lint
         if: false  # Temporarily disabled - golangci-lint binary built for Go 1.24, need version compiled for Go 1.25
@@ -75,9 +75,9 @@ jobs:
 
       - name: Build web UIs
         run: |
-          cd webmail && npm ci && npm run build
-          cd ../web/admin && npm ci && npm run build
-          cd ../web/account && npm install && npm run build
+          npm ci && npm run build --prefix webmail
+          npm ci && npm run build --prefix web/admin
+          npm install && npm run build --prefix web/account
 
       - name: Download dependencies
         run: go mod download
@@ -114,11 +114,11 @@ jobs:
 
       - name: Build webmail
         run: |
-          cd webmail && npm ci && npm run build
+          npm ci && npm run build --prefix webmail
 
       - name: Build admin panel
         run: |
-          cd web/admin && npm ci && npm run build
+          npm ci && npm run build --prefix web/admin
 
       - name: Build binary
         run: |
