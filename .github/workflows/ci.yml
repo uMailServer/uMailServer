@@ -175,7 +175,7 @@ jobs:
       - name: Install Playwright
         run: |
           cd e2e
-          npm ci
+          npm install
           npx playwright install chromium firefox webkit
 
       - name: Download binary
