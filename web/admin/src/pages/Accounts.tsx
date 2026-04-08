@@ -11,8 +11,6 @@ import {
   AlertCircle,
   RefreshCw,
   Key,
-  Check,
-  X,
   HardDrive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -48,7 +46,7 @@ export function Accounts() {
   const {
     accounts,
     loading,
-    error,
+    error: _error,
     fetchAccounts,
     createAccount,
     updateAccount,
@@ -107,7 +105,7 @@ export function Accounts() {
     if (!selectedAccount) return;
 
     try {
-      const updates: Partial<Account> = {
+      const updates: Partial<Account> & { password?: string } = {
         is_admin: selectedAccount.is_admin,
         is_active: selectedAccount.is_active,
       };
@@ -142,6 +140,7 @@ export function Accounts() {
           </p>
         </div>
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
           <DialogTrigger asChild>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
@@ -397,6 +396,7 @@ function AccountCard({ account, onEdit, onDelete, formatBytes }: AccountCardProp
             </div>
           </div>
           <DropdownMenu>
+            {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-8 w-8">
                 <MoreHorizontal className="h-4 w-4" />

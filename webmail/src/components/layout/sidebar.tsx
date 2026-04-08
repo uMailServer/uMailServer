@@ -5,7 +5,6 @@ import {
   Send,
   FileText,
   Trash2,
-  Archive,
   Star,
   AlertCircle,
   Settings,
@@ -125,8 +124,7 @@ const NavItemComponent = ({ item, isExpanded }: { item: NavItem; isExpanded: boo
   return content
 }
 
-export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) {
-  const location = useLocation()
+export function Sidebar({ collapsed, onToggle, unreadCount: _unreadCount = 0 }: SidebarProps) {
   const navigate = useNavigate()
   const [hovered, setHovered] = useState(false)
 

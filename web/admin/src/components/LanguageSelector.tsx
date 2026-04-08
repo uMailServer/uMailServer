@@ -1,14 +1,13 @@
-import React from 'react';
-import { Globe } from 'lucide-react';
-import useI18n from '../hooks/useI18n';
+import { Globe } from 'lucide-react'
+import useI18n from '../hooks/useI18n'
 
 const languages = [
   { code: 'en', name: 'English', flag: '🇺🇸' },
   { code: 'tr', name: 'Türkçe', flag: '🇹🇷' },
-];
+]
 
 export default function LanguageSelector() {
-  const { locale, changeLocale } = useI18n();
+  const { locale, changeLocale } = useI18n()
 
   return (
     <div className="relative inline-block">
@@ -25,5 +24,5 @@ export default function LanguageSelector() {
       </select>
       <Globe className="absolute right-2 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
     </div>
-  );
+  )
 }

@@ -192,14 +192,6 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
     setSelectedEmails(new Set())
   }
 
-  const handleMarkUnread = () => {
-    toast.success(`${selectedEmails.size} message${selectedEmails.size !== 1 ? "s" : ""} marked as unread`)
-    setEmails(emails.map((e) =>
-      selectedEmails.has(e.id) ? { ...e, read: false } : e
-    ))
-    setSelectedEmails(new Set())
-  }
-
   const filteredEmails = emails
     .filter((email) => {
       if (activeFilter === "unread") return !email.read

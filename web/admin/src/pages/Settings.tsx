@@ -20,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function SettingsPage() {
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
+  const [error] = useState("");
 
   const handleSave = () => {
     setSaved(true);

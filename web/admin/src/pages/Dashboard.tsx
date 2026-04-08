@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   Mail,
   Users,
@@ -310,7 +310,7 @@ function ResourceBar({ label, value, max = 100, color }: ResourceBarProps) {
   );
 }
 
-function ActivityItem({ type, message, details, timestamp, severity = "info" }: ActivityType) {
+function ActivityItem({ message, details, timestamp, severity = "info" }: ActivityType) {
   const severityConfig = {
     info: { icon: Activity, color: "text-blue-500", bg: "bg-blue-500/10" },
     success: { icon: CheckCircle, color: "text-emerald-500", bg: "bg-emerald-500/10" },

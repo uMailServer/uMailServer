@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
-import { cn } from "@/lib/utils"
 
 export function SettingsPage() {
   const { theme, setTheme, resolvedTheme } = useTheme()

@@ -4,7 +4,6 @@ import {
   Plus,
   Search,
   MoreHorizontal,
-  Edit,
   Trash2,
   Copy,
   Check,
@@ -45,7 +44,7 @@ export function Domains() {
   const {
     domains,
     loading,
-    error,
+    error: _error,
     fetchDomains,
     createDomain,
     updateDomain,
@@ -137,6 +136,7 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
           </p>
         </div>
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
           <DialogTrigger asChild>
             <Button>
               <Plus className="mr-2 h-4 w-4" />
@@ -314,6 +314,7 @@ function DomainCard({ domain, onToggle, onDelete, onCopyDNS, copiedDNS }: Domain
             </div>
           </div>
           <DropdownMenu>
+            {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-8 w-8">
                 <MoreHorizontal className="h-4 w-4" />

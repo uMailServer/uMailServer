@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import type { Account, Domain, QueueEntry } from "@/types";
 
 interface ApiError {
   message: string;
@@ -35,15 +36,15 @@ async function apiRequest<T>(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Unknown error" }));
-    throw { message: error.error || "Request failed", status: response.status };
+    const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
+    throw { message: errorData.error || "Request failed", status: response.status };
   }
 
   if (response.status === 204) {
     return undefined as T;
   }
 
-  return response.json();
+  return response.json() as Promise<T>;
 }
 
 export function useApi<T>() {
@@ -78,14 +79,14 @@ export function useApi<T>() {
 
 // Domain API hooks
 export function useDomains() {
-  const [data, setData] = useState<unknown[] | null>(null);
+  const [data, setData] = useState<Domain[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
 
   const fetchDomains = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await apiRequest<unknown[]>("/domains");
+      const result = await apiRequest<Domain[]>("/domains");
       setData(result);
       return result;
     } catch (err) {
@@ -97,7 +98,7 @@ export function useDomains() {
   }, []);
 
   const createDomain = useCallback(async (name: string, maxAccounts?: number) => {
-    const result = await apiRequest<unknown>("/domains", {
+    const result = await apiRequest<Domain>("/domains", {
       method: "POST",
       body: JSON.stringify({ name, max_accounts: maxAccounts }),
     });
@@ -105,8 +106,8 @@ export function useDomains() {
     return result;
   }, [fetchDomains]);
 
-  const updateDomain = useCallback(async (name: string, updates: Partial<unknown>) => {
-    const result = await apiRequest<unknown>(`/domains/${name}`, {
+  const updateDomain = useCallback(async (name: string, updates: Partial<Domain>) => {
+    const result = await apiRequest<Domain>(`/domains/${name}`, {
       method: "PUT",
       body: JSON.stringify(updates),
     });
@@ -132,7 +133,7 @@ export function useDomains() {
 
 // Account API hooks
 export function useAccounts() {
-  const [data, setData] = useState<unknown[] | null>(null);
+  const [data, setData] = useState<Account[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
 
@@ -140,7 +141,7 @@ export function useAccounts() {
     setLoading(true);
     try {
       const url = domain ? `/accounts?domain=${domain}` : "/accounts";
-      const result = await apiRequest<unknown[]>(url);
+      const result = await apiRequest<Account[]>(url);
       setData(result);
       return result;
     } catch (err) {
@@ -152,7 +153,7 @@ export function useAccounts() {
   }, []);
 
   const createAccount = useCallback(async (email: string, password: string, isAdmin = false) => {
-    const result = await apiRequest<unknown>("/accounts", {
+    const result = await apiRequest<Account>("/accounts", {
       method: "POST",
       body: JSON.stringify({ email, password, is_admin: isAdmin }),
     });
@@ -160,8 +161,8 @@ export function useAccounts() {
     return result;
   }, [fetchAccounts]);
 
-  const updateAccount = useCallback(async (email: string, updates: Partial<unknown>) => {
-    const result = await apiRequest<unknown>(`/accounts/${email}`, {
+  const updateAccount = useCallback(async (email: string, updates: Partial<Account>) => {
+    const result = await apiRequest<Account>(`/accounts/${email}`, {
       method: "PUT",
       body: JSON.stringify(updates),
     });
@@ -216,13 +217,13 @@ export function useStats() {
 
 // Queue API hooks
 export function useQueue() {
-  const [data, setData] = useState<unknown[] | null>(null);
+  const [data, setData] = useState<QueueEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await apiRequest<unknown[]>("/queue");
+      const result = await apiRequest<QueueEntry[]>("/queue");
       setData(result);
       return result;
     } finally {

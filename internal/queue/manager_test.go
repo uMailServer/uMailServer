@@ -2656,3 +2656,53 @@ func TestManagerSetRequireTLS(t *testing.T) {
 		t.Error("expected requireTLS to be false after SetRequireTLS(false)")
 	}
 }
+
+// TestDeleteMessageFileIfUnreferencedNoDeadlockRegression is a regression test for
+// the race condition bug in deleteMessageFileIfUnreferenced. The bug was that
+// deleteMessageFileIfUnreferenced held a write lock but then called countMessageRefs
+// which tried to acquire a read lock - causing a deadlock with sync.RWMutex
+// (RLock is not reentrant with a write lock held by the same goroutine).
+// The fix changed the call to countMessageRefsUnsafe which assumes the caller
+// already holds the lock.
+func TestDeleteMessageFileIfUnreferencedNoDeadlockRegression(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	mgr := NewManager(database, nil, dataDir, nil)
+
+	// Create a message file that is not referenced by any queue entry
+	msgPath := filepath.Join(dataDir, "unreferenced.msg")
+	if err := os.WriteFile(msgPath, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// This call previously deadlocked because deleteMessageFileIfUnreferenced
+	// held a write lock and then called countMessageRefs which tried to acquire
+	// a read lock. The fix uses countMessageRefsUnsafe when the lock is already held.
+	// We run this in a goroutine with a timeout to detect deadlock.
+	done := make(chan struct{})
+	go func() {
+		deleted := mgr.deleteMessageFileIfUnreferenced(msgPath)
+		if !deleted {
+			t.Error("expected file to be deleted")
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Normal completion - no deadlock
+	case <-time.After(2 * time.Second):
+		t.Fatal("deleteMessageFileIfUnreferenced appears to have deadlocked")
+	}
+
+	// File should no longer exist
+	if _, err := os.Stat(msgPath); !os.IsNotExist(err) {
+		t.Error("expected file to be deleted")
+	}
+}

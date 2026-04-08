@@ -31,8 +31,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true)
     setError(null)
     try {
-      const data = await api.post('/auth/login', { email, password })
-      if (data.token) {
+      const data = await api.post<{ token?: string }>('/auth/login', { email, password })
+      if (data?.token) {
         setToken(data.token)
         setUser({ email })
         localStorage.setItem('token', data.token)
@@ -41,8 +41,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return true
       }
       return false
-    } catch (err: any) {
-      setError(err.message || 'Login failed')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Login failed')
       return false
     } finally {
       setLoading(false)

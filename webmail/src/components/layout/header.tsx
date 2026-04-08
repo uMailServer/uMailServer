@@ -22,7 +22,7 @@ interface HeaderProps {
 }
 
 export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
-  const { theme, setTheme, resolvedTheme } = useTheme()
+  const { setTheme, resolvedTheme } = useTheme()
   const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState("")
 

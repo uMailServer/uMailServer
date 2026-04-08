@@ -22,7 +22,7 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCountRef = useRef(0);
-  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
     onMetrics,
@@ -86,7 +86,7 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
         }
       };
 
-      ws.onerror = (error) => {
+      ws.onerror = () => {
         onError?.(new Error("WebSocket error"));
       };
     } catch (err) {

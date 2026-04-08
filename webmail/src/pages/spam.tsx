@@ -2,12 +2,9 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   AlertCircle,
-  Mail,
   Trash2,
   Archive,
-  RefreshCw,
   MoreHorizontal,
-  Star,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -68,7 +65,7 @@ const mockSpamEmails: SpamEmail[] = [
 
 export function SpamPage() {
   const navigate = useNavigate()
-  const [loading, setLoading] = useState(false)
+  const [loading, _setLoading] = useState(false)
   const [emails] = useState<SpamEmail[]>(mockSpamEmails)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 

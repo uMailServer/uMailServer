@@ -18,7 +18,7 @@ import { Toaster } from "@/components/ui/sonner"
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts"
 import { LoginPage } from "@/pages/login"
 
-function ProtectedRoute({ children }) {
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
 
   if (isLoading) {

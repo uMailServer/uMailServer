@@ -1,5 +1,6 @@
 // @ts-check
 const { defineConfig, devices } = require('@playwright/test');
+const path = require('path');
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -21,6 +22,9 @@ module.exports = defineConfig({
 
   /* Reporter to use */
   reporter: 'html',
+
+  /* Global setup - runs before any test */
+  globalSetup: path.join(__dirname, 'global-setup.js'),
 
   /* Shared settings for all the projects below */
   use: {

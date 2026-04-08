@@ -1,9 +1,8 @@
-import { useState } from "react"
+import { useState, type MouseEvent } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   FileText,
   Trash2,
-  Mail,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
@@ -144,7 +143,7 @@ export function DraftsPage() {
                 <Checkbox
                   checked={selectedDrafts.has(draft.id)}
                   onCheckedChange={() => toggleSelect(draft.id)}
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e: MouseEvent) => e.stopPropagation()}
                 />
                 <FileText className="h-4 w-4 text-muted-foreground" />
                 <div className="flex-1 min-w-0">

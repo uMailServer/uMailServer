@@ -1,28 +1,16 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
-  Star,
-  Archive,
-  Trash2,
   MailOpen,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
-  MoreHorizontal,
   Paperclip,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Separator } from "@/components/ui/separator"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 
 interface Email {
   id: string
@@ -63,7 +51,7 @@ const mockSentEmails: Email[] = [
 
 export function SentPage() {
   const navigate = useNavigate()
-  const [emails, setEmails] = useState<Email[]>(mockSentEmails)
+  const [emails, _setEmails] = useState<Email[]>(mockSentEmails)
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
 

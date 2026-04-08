@@ -3,10 +3,13 @@ package smtp
 import (
 	"bufio"
 	"crypto/tls"
+	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestServer(t *testing.T) {
@@ -554,4 +557,61 @@ func TestServerRecordAuthFailure_Disabled(t *testing.T) {
 
 	// Should not panic
 	server.recordAuthFailure("127.0.0.1")
+}
+
+// TestServerAuthFailuresCleanupAtThresholdRegression tests the fix for the auth
+// failures cleanup bug where cleanup only ran at exact multiples of 100
+// (len%100==0) instead of at any count >= 100. This caused stale auth failure
+// entries to accumulate between cleanup cycles when len was between 100-199.
+// The fix changed the condition from len(authFailures)%100==0 to len(authFailures)>=100.
+func TestServerAuthFailuresCleanupAtThresholdRegression(t *testing.T) {
+	config := &Config{
+		Hostname:       "mail.example.com",
+		MaxMessageSize: 1024 * 1024,
+		MaxRecipients:  100,
+		AllowInsecure:  true,
+	}
+	server := NewServer(config, nil)
+
+	// Set auth limits with short lockout duration so old entries can be cleaned
+	shortDuration := 100 * time.Millisecond
+	server.SetAuthLimits(3, shortDuration)
+
+	// Use unsafe.Pointer to access the unexported authFailures map
+	// This is necessary because we need to inject stale entries to test cleanup behavior
+	authFailuresPtr := (*map[string][]time.Time)(unsafe.Pointer(
+		uintptr(unsafe.Pointer(reflect.ValueOf(server).Elem().FieldByName("authFailures").UnsafeAddr()))))
+
+	// Add 100 recent auth failures (all different IPs)
+	for i := 0; i < 100; i++ {
+		server.recordAuthFailure(fmt.Sprintf("192.168.1.%d", i))
+	}
+
+	// At this point, len(*authFailuresPtr) == 100, cleanup has run but removed nothing (all recent)
+	// Wait a bit so new entries will be "older" relative to short lockoutDuration
+	time.Sleep(150 * time.Millisecond)
+
+	// Directly add a stale entry (entry older than lockoutDuration)
+	// This simulates entries that would exist in a real scenario between cleanup cycles
+	staleIP := "10.0.0.1"
+	staleTime := time.Now().Add(-200 * time.Millisecond) // older than shortDuration
+	(*authFailuresPtr)[staleIP] = []time.Time{staleTime}
+
+	// Verify the stale entry exists
+	if times, ok := (*authFailuresPtr)[staleIP]; !ok || len(times) != 1 {
+		t.Fatal("failed to inject stale entry for testing")
+	}
+
+	// Now len(*authFailuresPtr) == 101
+	// With the BUG (len%100==0): cleanup would NOT run at len=101, stale entry stays
+	// With the FIX (len>=100): cleanup RUNS at 101, stale entry is removed
+
+	// Add one more failure to trigger cleanup at len=101
+	server.recordAuthFailure("192.168.2.1")
+
+	// Check if stale entry was cleaned up
+	if times, ok := (*authFailuresPtr)[staleIP]; ok && len(times) > 0 {
+		t.Error("stale auth failure entry should have been cleaned up at len=101, but it remains")
+		t.Log("This indicates the cleanup condition is still using %100==0 instead of >=100")
+	}
 }

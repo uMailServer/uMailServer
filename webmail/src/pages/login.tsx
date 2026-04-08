@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -13,7 +13,7 @@ export function LoginPage() {
     return <Navigate to="/inbox" replace />
   }
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError('')
     setLoading(true)
@@ -23,7 +23,7 @@ export function LoginPage() {
       if (!success) {
         setError('Invalid email or password')
       }
-    } catch (err) {
+    } catch {
       setError('Connection error. Please try again.')
     } finally {
       setLoading(false)

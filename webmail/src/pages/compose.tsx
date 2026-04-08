@@ -7,7 +7,6 @@ import {
   Paperclip,
   X,
   Plus,
-  Trash2,
   Bold,
   Italic,
   Underline,
@@ -29,7 +28,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -84,7 +82,7 @@ export function ComposePage() {
   const [showBcc, setShowBcc] = useState(false)
   const [sending, setSending] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const autoSaveTimerRef = useRef<NodeJS.Timeout>()
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const filteredContacts = mockContacts.filter(
     (c) =>

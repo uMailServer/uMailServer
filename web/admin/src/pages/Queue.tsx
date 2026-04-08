@@ -145,7 +145,7 @@ export function Queue() {
                 {filteredEntries?.length || 0} messages in queue
               </CardDescription>
             </div>
-            <Select value={filter} onValueChange={setFilter}>
+            <Select value={filter} onValueChange={(value) => setFilter(value ?? "all")}>
               <SelectTrigger className="w-40">
                 <Filter className="h-4 w-4 mr-2" />
                 <SelectValue placeholder="Filter by status" />

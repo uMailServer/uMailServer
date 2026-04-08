@@ -11,7 +11,6 @@ import {
   Star,
   Printer,
   Download,
-  Mail,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -23,7 +22,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Badge } from "@/components/ui/badge"
 import { toast } from "sonner"
 
 interface Attachment {
@@ -76,7 +74,7 @@ const mockEmailDetail: EmailDetail = {
 }
 
 export function EmailDetailPage() {
-  const { id } = useParams()
+  const { id: _id } = useParams()
   const navigate = useNavigate()
   const email = mockEmailDetail
   const [isStarred, setIsStarred] = useState(email.starred)

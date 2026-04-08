@@ -2,7 +2,6 @@ import { useState } from "react"
 import { useParams, useNavigate } from "react-router-dom"
 import {
   FolderOpen,
-  Mail,
   Trash2,
   MoreHorizontal,
   Star,
@@ -67,7 +66,7 @@ const mockFolderEmails: FolderEmail[] = [
 export function FolderPage() {
   const { type } = useParams()
   const navigate = useNavigate()
-  const [loading, setLoading] = useState(false)
+  const [loading, _setLoading] = useState(false)
   const [emails] = useState<FolderEmail[]>(mockFolderEmails)
   const [selected, setSelected] = useState<Set<string>>(new Set())
 

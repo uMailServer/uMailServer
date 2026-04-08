@@ -21,8 +21,8 @@ GOFMT=gofmt
 # Default target
 .DEFAULT_GOAL := build
 
-# Build the binary
-build:
+# Build the binary (first builds all frontends)
+build: build-web
 	@echo "Building $(BINARY_NAME)..."
 	$(GOBUILD) $(LDFLAGS) -o $(BINARY_NAME) $(BINARY_PATH)
 	@echo "Build complete: $(BINARY_NAME)"

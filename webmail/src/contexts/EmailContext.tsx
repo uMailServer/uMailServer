@@ -63,7 +63,7 @@ export function EmailProvider({ children }: { children: React.ReactNode }) {
     setLoading(true)
     try {
       const apiFolder = FOLDER_MAP[folder] || folder.toLowerCase()
-      const data = await api.get(`/mail/${apiFolder}`)
+      const data = await api.get<{ emails?: unknown[] }>(`/mail/${apiFolder}`)
 
       if (data && data.emails) {
         const mappedEmails = data.emails.map((email: any) => ({

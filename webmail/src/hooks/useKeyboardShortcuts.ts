@@ -1,15 +1,6 @@
 import { useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 
-interface Shortcut {
-  key: string
-  ctrl?: boolean
-  meta?: boolean
-  shift?: boolean
-  action: () => void
-  description: string
-}
-
 export function useKeyboardShortcuts() {
   const navigate = useNavigate()
 

@@ -1,5 +1,5 @@
-import { Link, useLocation } from "react-router-dom";
-import { Sun, Moon, Monitor, Bell, Activity } from "lucide-react";
+import { useLocation } from "react-router-dom";
+import { Sun, Moon, Monitor } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,12 +8,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 interface HeaderProps {
   isConnected: boolean;
-  notificationCount?: number;
 }
 
 const breadcrumbMap: Record<string, string> = {
@@ -24,8 +22,8 @@ const breadcrumbMap: Record<string, string> = {
   "/settings": "Settings",
 };
 
-export function Header({ isConnected, notificationCount = 0 }: HeaderProps) {
-  const { theme, setTheme, resolvedTheme } = useTheme();
+export function Header({ isConnected }: HeaderProps) {
+  const { setTheme, resolvedTheme } = useTheme();
   const location = useLocation();
 
   const pageTitle = breadcrumbMap[location.pathname] || "Dashboard";
@@ -54,6 +52,7 @@ export function Header({ isConnected, notificationCount = 0 }: HeaderProps) {
 
         {/* Theme Toggle */}
         <DropdownMenu>
+          {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-9 w-9">
               {resolvedTheme === "dark" ? (

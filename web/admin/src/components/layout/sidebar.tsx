@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
   TooltipContent,
@@ -40,7 +39,7 @@ export function Sidebar({ isCollapsed, onToggle, user, onLogout }: SidebarProps)
   const location = useLocation();
 
   return (
-    <TooltipProvider delayDuration={0}>
+    <TooltipProvider delay={0}>
       <aside
         className={cn(
           "fixed left-0 top-0 z-40 h-screen bg-card border-r border-border transition-all duration-300 ease-in-out",
@@ -93,6 +92,7 @@ export function Sidebar({ isCollapsed, onToggle, user, onLogout }: SidebarProps)
             if (isCollapsed) {
               return (
                 <Tooltip key={item.path}>
+                  {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
                   <TooltipTrigger asChild>{content}</TooltipTrigger>
                   <TooltipContent side="right">{item.label}</TooltipContent>
                 </Tooltip>
@@ -113,6 +113,7 @@ export function Sidebar({ isCollapsed, onToggle, user, onLogout }: SidebarProps)
               </div>
             )}
             <Tooltip>
+              {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"

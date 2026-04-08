@@ -2,7 +2,6 @@ import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Trash2,
-  Mail,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
@@ -34,7 +33,7 @@ export function TrashPage() {
   const loadTrash = async () => {
     setLoading(true)
     try {
-      const data = await api.get("/mail/trash")
+      const data = await api.get<{ emails?: unknown[] }>("/mail/trash")
       if (data && data.emails) {
         setEmails(data.emails.map((email: any) => ({
           id: email.id,
