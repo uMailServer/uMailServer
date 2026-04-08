@@ -1090,3 +1090,113 @@ func TestMatchesCriteriaExtended(t *testing.T) {
 		})
 	}
 }
+
+// ---------- parseMDNAddress tests ----------
+
+func TestParseMDNAddress(t *testing.T) {
+	tests := []struct {
+		name    string
+		header  string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "simple email",
+			header:  "admin@example.com",
+			want:    "admin@example.com",
+			wantErr: false,
+		},
+		{
+			name:    "with angle brackets",
+			header:  "<admin@example.com>",
+			want:    "admin@example.com",
+			wantErr: false,
+		},
+		{
+			name:    "with spaces",
+			header:  "  admin@example.com  ",
+			want:    "admin@example.com",
+			wantErr: false,
+		},
+		{
+			name:    "no at sign",
+			header:  "admin.example.com",
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			header:  "",
+			want:    "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseMDNAddress(tt.header)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseMDNAddress() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("parseMDNAddress() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------- parseMessageDate tests ----------
+
+func TestParseMessageDate(t *testing.T) {
+	tests := []struct {
+		name    string
+		dateStr string
+		wantErr bool
+	}{
+		{
+			name:    "RFC2822 with timezone",
+			dateStr: "Mon, 01 Jan 2024 10:00:00 +0000",
+			wantErr: false,
+		},
+		{
+			name:    "RFC2822 without timezone",
+			dateStr: "Mon, 01 Jan 2024 10:00:00",
+			wantErr: false,
+		},
+		{
+			name:    "date only",
+			dateStr: "Mon, 01 Jan 2024",
+			wantErr: false,
+		},
+		{
+			name:    "ISO-like format",
+			dateStr: "01 Jan 2024 10:00:00 +0000",
+			wantErr: false,
+		},
+		{
+			name:    "basic date format",
+			dateStr: "01-Jan-2024",
+			wantErr: false,
+		},
+		{
+			name:    "invalid date",
+			dateStr: "not a date",
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			dateStr: "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseMessageDate(tt.dateStr)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseMessageDate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
