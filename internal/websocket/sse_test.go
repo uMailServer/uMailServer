@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -495,20 +496,39 @@ func TestSSEServerGetConnectedCountWithClients(t *testing.T) {
 // mockResponseRecorder wraps httptest.ResponseRecorder and implements http.Flusher
 type mockResponseRecorder struct {
 	*httptest.ResponseRecorder
-	flushed  bool
-	headerMu sync.Mutex
+	mu      sync.Mutex
+	flushed bool
 }
 
 func (m *mockResponseRecorder) Header() http.Header {
-	m.headerMu.Lock()
-	defer m.headerMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.ResponseRecorder.Header()
 }
 
 func (m *mockResponseRecorder) Flush() {
-	m.headerMu.Lock()
-	defer m.headerMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.flushed = true
+}
+
+// GetBody returns the body buffer with lock protection for thread-safe access
+func (m *mockResponseRecorder) GetBody() *bytes.Buffer {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ResponseRecorder.Body
+}
+
+func (m *mockResponseRecorder) Write(b []byte) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ResponseRecorder.Write(b)
+}
+
+func (m *mockResponseRecorder) WriteHeader(statusCode int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ResponseRecorder.WriteHeader(statusCode)
 }
 
 func contains(s, substr string) bool {

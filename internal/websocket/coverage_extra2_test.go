@@ -103,7 +103,7 @@ func TestSSEHandler_NotificationChannel(t *testing.T) {
 		t.Fatal("handler did not complete in time")
 	}
 
-	body := rec.Body.String()
+	body := rec.GetBody().String()
 	if !contains(body, "event: new_mail") {
 		t.Errorf("expected new_mail event in SSE output, got: %s", body)
 	}
@@ -142,7 +142,7 @@ func TestSSEHandler_HeartbeatTick(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify initial connected event was sent (proves the select loop started)
-	body := rec.Body.String()
+	body := rec.GetBody().String()
 	if !contains(body, "event: connected") {
 		t.Errorf("expected connected event in SSE output, got: %s", body)
 	}
@@ -282,7 +282,7 @@ func TestSSEHandler_FullNotificationFlow(t *testing.T) {
 				t.Fatal("handler did not complete in time")
 			}
 
-			body := rec.Body.String()
+			body := rec.GetBody().String()
 			if !contains(body, "event: "+tt.wantEvent) {
 				t.Errorf("expected event %s in output, got: %s", tt.wantEvent, body)
 			}
