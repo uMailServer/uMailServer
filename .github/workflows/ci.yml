@@ -120,6 +120,10 @@ jobs:
         run: |
           (cd web/admin && npm ci && npm run build)
 
+      - name: Build account portal
+        run: |
+          (cd web/account && npm install && npm run build)
+
       - name: Build binary
         run: |
           CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=dev -X main.BuildDate=$(date -u +%Y-%m-%d)" -o umailserver ./cmd/umailserver
