@@ -1484,3 +1484,494 @@ if size :over 1M {
 		t.Errorf("Expected 1 action in else branch, got %d", len(actions))
 	}
 }
+
+// ========== Dead Code Path Tests ==========
+// These functions are never called through normal parsing because
+// StringTest, SizeTest, BooleanTest are never created by the parser.
+// We test them directly to achieve 100% coverage.
+
+func TestInterpreter_EvaluateStringTest_Is(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{
+			From: "sender@example.com",
+			To:   []string{"recipient@example.com"},
+		},
+		Variables: make(map[string]string),
+	}
+	interp.ctx.Headers = map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	// Test :is match type - exact match
+	test := &StringTest{
+		MatchType: ":is",
+		Target:    "From",
+		Value:     "test@example.com",
+	}
+	result, err := interp.evaluateStringTest(test)
+	if err != nil {
+		t.Fatalf("evaluateStringTest error: %v", err)
+	}
+	if !result {
+		t.Error("Expected true for exact match")
+	}
+}
+
+func TestInterpreter_EvaluateStringTest_Contains(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Headers = map[string][]string{
+		"Subject": {"Hello World Test"},
+	}
+
+	// Test :contains match type
+	test := &StringTest{
+		MatchType: ":contains",
+		Target:    "Subject",
+		Value:     "World",
+	}
+	result, err := interp.evaluateStringTest(test)
+	if err != nil {
+		t.Fatalf("evaluateStringTest error: %v", err)
+	}
+	if !result {
+		t.Error("Expected true for contains match")
+	}
+}
+
+func TestInterpreter_EvaluateStringTest_Matches(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Headers = map[string][]string{
+		"Subject": {"Order Number 12345"},
+	}
+
+	// Test :matches with wildcard
+	test := &StringTest{
+		MatchType: ":matches",
+		Target:    "Subject",
+		Value:     "Order Number *",
+	}
+	result, err := interp.evaluateStringTest(test)
+	if err != nil {
+		t.Fatalf("evaluateStringTest error: %v", err)
+	}
+	if !result {
+		t.Error("Expected true for wildcard match")
+	}
+}
+
+func TestInterpreter_EvaluateStringTest_NoMatch(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Headers = map[string][]string{
+		"From": {"other@example.com"},
+	}
+
+	// Test no match
+	test := &StringTest{
+		MatchType: ":is",
+		Target:    "From",
+		Value:     "test@example.com",
+	}
+	result, err := interp.evaluateStringTest(test)
+	if err != nil {
+		t.Fatalf("evaluateStringTest error: %v", err)
+	}
+	if result {
+		t.Error("Expected false for no match")
+	}
+}
+
+func TestInterpreter_EvaluateStringTest_UnknownMatchType(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Headers = map[string][]string{}
+
+	// Test unknown match type - should return false
+	test := &StringTest{
+		MatchType: ":unknown",
+		Target:    "From",
+		Value:     "test@example.com",
+	}
+	result, err := interp.evaluateStringTest(test)
+	if err != nil {
+		t.Fatalf("evaluateStringTest error: %v", err)
+	}
+	if result {
+		t.Error("Expected false for unknown match type")
+	}
+}
+
+func TestInterpreter_EvaluateSizeTest_Over(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Size = 2000
+
+	// Test :over - size is over 1000
+	test := &SizeTest{
+		Relation: ":over",
+		Size:     1000,
+	}
+	result, err := interp.evaluateSizeTest(test)
+	if err != nil {
+		t.Fatalf("evaluateSizeTest error: %v", err)
+	}
+	if !result {
+		t.Error("Expected true when size is over limit")
+	}
+}
+
+func TestInterpreter_EvaluateSizeTest_Under(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Size = 500
+
+	// Test :under - size is under 1000
+	test := &SizeTest{
+		Relation: ":under",
+		Size:     1000,
+	}
+	result, err := interp.evaluateSizeTest(test)
+	if err != nil {
+		t.Fatalf("evaluateSizeTest error: %v", err)
+	}
+	if !result {
+		t.Error("Expected true when size is under limit")
+	}
+}
+
+func TestInterpreter_EvaluateSizeTest_UnknownRelation(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Size = 500
+
+	// Test unknown relation - should return false
+	test := &SizeTest{
+		Relation: ":unknown",
+		Size:     1000,
+	}
+	result, err := interp.evaluateSizeTest(test)
+	if err != nil {
+		t.Fatalf("evaluateSizeTest error: %v", err)
+	}
+	if result {
+		t.Error("Expected false for unknown relation")
+	}
+}
+
+func TestInterpreter_EvaluateBooleanTest_Empty(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+
+	// Test empty boolean test - returns true
+	test := &BooleanTest{
+		Tests: []Test{},
+	}
+	result, err := interp.evaluateBooleanTest(test)
+	if err != nil {
+		t.Fatalf("evaluateBooleanTest error: %v", err)
+	}
+	if !result {
+		t.Error("Expected true for empty boolean test")
+	}
+}
+
+func TestInterpreter_EvaluateBooleanTest_WithTrueResult(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Headers = map[string][]string{
+		"From": {"test@example.com"},
+	}
+
+	// Create a header test that returns true
+	headerTest := &HeaderTest{
+		Headers:   []string{"From"},
+		KeyList:   []string{"test@example.com"},
+		MatchType: ":is",
+	}
+
+	test := &BooleanTest{
+		Tests: []Test{headerTest},
+	}
+	result, err := interp.evaluateBooleanTest(test)
+	if err != nil {
+		t.Fatalf("evaluateBooleanTest error: %v", err)
+	}
+	if !result {
+		t.Error("Expected true when child test is true")
+	}
+}
+
+func TestInterpreter_EvaluateBooleanTest_AllFalse(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	interp.ctx = &SieveContext{
+		MessageContext: &MessageContext{},
+		Variables:      make(map[string]string),
+	}
+	interp.ctx.Headers = map[string][]string{
+		"From": {"other@example.com"},
+	}
+
+	// Create a header test that returns false
+	headerTest := &HeaderTest{
+		Headers:   []string{"From"},
+		KeyList:   []string{"test@example.com"},
+		MatchType: ":is",
+	}
+
+	test := &BooleanTest{
+		Tests: []Test{headerTest},
+	}
+	result, err := interp.evaluateBooleanTest(test)
+	if err != nil {
+		t.Fatalf("evaluateBooleanTest error: %v", err)
+	}
+	if result {
+		t.Error("Expected false when all child tests are false")
+	}
+}
+
+func TestInterpreter_EvaluateTest_UnknownType(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+
+	// Create a mock test that is not one of the known types
+	test := &mockTest{}
+	result, err := interp.evaluateTest(test)
+	if err != nil {
+		t.Fatalf("evaluateTest error: %v", err)
+	}
+	// Unknown type returns true by default
+	if !result {
+		t.Error("Expected true for unknown test type")
+	}
+}
+
+// mockTest is a test type that is not handled by evaluateTest
+type mockTest struct{}
+
+func (m *mockTest) Test() {}
+
+func TestInterpreter_ParseTest_StringValue(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+
+	// Test parseTest with StringValue - creates StringTest
+	test, err := interp.parseTest(&StringValue{Value: "test@example.com"})
+	if err != nil {
+		t.Fatalf("parseTest error: %v", err)
+	}
+	if test == nil {
+		t.Error("Expected non-nil test")
+	}
+	stringTest, ok := test.(*StringTest)
+	if !ok {
+		t.Fatalf("Expected *StringTest, got %T", test)
+	}
+	if stringTest.Value != "test@example.com" {
+		t.Errorf("Expected 'test@example.com', got %q", stringTest.Value)
+	}
+}
+
+func TestInterpreter_ParseTest_TagValue(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+
+	// Test parseTest with TagValue - returns nil
+	test, err := interp.parseTest(&TagValue{Value: "contains"})
+	if err != nil {
+		t.Fatalf("parseTest error: %v", err)
+	}
+	if test != nil {
+		t.Error("Expected nil for TagValue")
+	}
+}
+
+func TestInterpreter_ParseTest_OtherValue(t *testing.T) {
+	script := `keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+
+	// Test parseTest with unknown type - returns nil
+	test, err := interp.parseTest(&ListValue{})
+	if err != nil {
+		t.Fatalf("parseTest error: %v", err)
+	}
+	if test != nil {
+		t.Error("Expected nil for unknown type")
+	}
+}
+
+// TestDecodeBase64 tests the base64 decode helper
+func TestDecodeBase64(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		wantErr  bool
+	}{
+		{"SGVsbG8=", "Hello", false},
+		{"dGVzdA==", "test", false},
+		{"", "", false},
+		// Invalid base64 returns original string
+		{"not-valid-base64!", "not-valid-base64!", false},
+	}
+
+	for _, tt := range tests {
+		result, err := decodeBase64(tt.input)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("decodeBase64(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			continue
+		}
+		if string(result) != tt.expected {
+			t.Errorf("decodeBase64(%q) = %q, want %q", tt.input, string(result), tt.expected)
+		}
+	}
+}
+
+// TestManageSieveServer_SetAuthHandler tests the auth handler setter
+func TestManageSieveServer_SetAuthHandler(t *testing.T) {
+	m := NewManager()
+	server := NewManageSieveServer(m, nil)
+	if server == nil {
+		t.Fatal("Expected non-nil server")
+	}
+	// SetAuthHandler should be callable
+	server.SetAuthHandler(nil)
+}
+
+// TestManageSieveServer_NewManageSieveServer tests server creation
+func TestManageSieveServer_NewManageSieveServer(t *testing.T) {
+	m := NewManager()
+	server := NewManageSieveServer(m, nil)
+	if server == nil {
+		t.Fatal("Expected non-nil server")
+	}
+	if server.manager != m {
+		t.Error("Expected manager to be set")
+	}
+}

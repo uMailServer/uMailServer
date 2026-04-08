@@ -1465,3 +1465,46 @@ func TestParseMessageHeadersExtra(t *testing.T) {
 		})
 	}
 }
+
+func TestAddressToString(t *testing.T) {
+	tests := []struct {
+		name    string
+		addrs   []*Address
+		want    string
+	}{
+		{
+			name:    "nil slice",
+			addrs:   nil,
+			want:    "",
+		},
+		{
+			name:    "empty slice",
+			addrs:   []*Address{},
+			want:    "",
+		},
+		{
+			name: "single address",
+			addrs: []*Address{
+				{MailboxName: "john", HostName: "example.com"},
+			},
+			want: "john@example.com",
+		},
+		{
+			name: "multiple addresses - only first used",
+			addrs: []*Address{
+				{MailboxName: "first", HostName: "example.com"},
+				{MailboxName: "second", HostName: "other.com"},
+			},
+			want: "first@example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := addressToString(tt.addrs)
+			if got != tt.want {
+				t.Errorf("addressToString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
