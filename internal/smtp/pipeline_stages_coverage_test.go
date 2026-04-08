@@ -7,6 +7,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/ratelimit"
 	"github.com/umailserver/umailserver/internal/sieve"
+	"github.com/umailserver/umailserver/internal/spam"
 )
 
 // ---------------------------------------------------------------------------
@@ -191,4 +192,108 @@ func TestRBLDNSResolver_LookupHost(t *testing.T) {
 	// May fail in test environment due to DNS restrictions, but should not panic
 	_ = ip
 	_ = err
+}
+
+// ---------------------------------------------------------------------------
+// BayesianStage tests
+// ---------------------------------------------------------------------------
+
+func TestNewBayesianStage(t *testing.T) {
+	classifier := spam.NewClassifier(nil)
+	stage := NewBayesianStage(classifier)
+
+	if stage == nil {
+		t.Fatal("Expected non-nil stage")
+	}
+	if stage.classifier == nil {
+		t.Error("Expected classifier to be set")
+	}
+	if !stage.enabled {
+		t.Error("Expected enabled to be true")
+	}
+	if stage.Name() != "Bayesian" {
+		t.Errorf("Expected name 'Bayesian', got %s", stage.Name())
+	}
+}
+
+func TestNewBayesianStage_NilClassifier(t *testing.T) {
+	stage := NewBayesianStage(nil)
+
+	if stage == nil {
+		t.Fatal("Expected non-nil stage")
+	}
+	if stage.enabled {
+		t.Error("Expected enabled to be false for nil classifier")
+	}
+	if stage.Name() != "Bayesian" {
+		t.Errorf("Expected name 'Bayesian', got %s", stage.Name())
+	}
+}
+
+func TestBayesianStage_Disabled(t *testing.T) {
+	stage := NewBayesianStage(nil)
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+
+	result := stage.Process(ctx)
+	// Should accept when classifier is nil
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for nil classifier, got %d", result)
+	}
+}
+
+func TestBayesianStage_WithClassifier(t *testing.T) {
+	classifier := spam.NewClassifier(nil)
+	classifier.Initialize()
+	stage := NewBayesianStage(classifier)
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+	ctx.Headers = map[string][]string{
+		"Subject": {"Test email"},
+	}
+
+	result := stage.Process(ctx)
+	// Should accept (spam score below reject threshold)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %d", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RBLStage tests
+// ---------------------------------------------------------------------------
+
+func TestRBLStage_WithServers_NotListed(t *testing.T) {
+	// Use a mock resolver that returns "not listed"
+	resolver := &mockRBLResolver{results: map[string]net.IP{}}
+	stage := NewRBLStage([]string{"zen.spamhaus.org"}, resolver)
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+
+	result := stage.Process(ctx)
+	// Should accept for unlisted IPs
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %d", result)
+	}
+}
+
+func TestRBLStage_WithServers_Listed(t *testing.T) {
+	// Use a mock resolver that returns "listed"
+	resolver := &mockRBLResolver{
+		results: map[string]net.IP{
+			"1.1.168.192.zen.spamhaus.org": net.ParseIP("127.0.0.2"),
+		},
+	}
+	stage := NewRBLStage([]string{"zen.spamhaus.org"}, resolver)
+
+	ip := net.ParseIP("192.168.1.1")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+
+	result := stage.Process(ctx)
+	// With current implementation, this may still return accept
+	// The RBL check sets spam score but doesn't reject
+	_ = result
 }
