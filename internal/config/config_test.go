@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+// validConfigForTest returns a config with a temp DataDir for testing validation
+func validConfigForTest(t *testing.T) *Config {
+	cfg := DefaultConfig()
+	cfg.Server.DataDir = t.TempDir()
+	return cfg
+}
+
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
@@ -1480,7 +1487,7 @@ func TestLoadFromEnvDurationFieldInvalid(t *testing.T) {
 }
 
 func TestValidateQuarantineLessEqualJunk(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Spam.QuarantineThreshold = 3.0
 	cfg.Spam.JunkThreshold = 3.0
 	err := cfg.Validate()
@@ -1745,7 +1752,7 @@ func TestValidateTimeoutsNegative(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := DefaultConfig()
+			cfg := validConfigForTest(t)
 			tt.modify(cfg)
 			err := cfg.Validate()
 			if err == nil {
@@ -1756,7 +1763,7 @@ func TestValidateTimeoutsNegative(t *testing.T) {
 }
 
 func TestValidateAVEnabledMissingAddr(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.AV.Enabled = true
 	cfg.AV.Addr = ""
 	err := cfg.Validate()
@@ -1769,7 +1776,7 @@ func TestValidateAVEnabledMissingAddr(t *testing.T) {
 }
 
 func TestValidateAVInvalidAction(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.AV.Enabled = true
 	cfg.AV.Addr = "127.0.0.1:3310"
 	cfg.AV.Action = "invalid"
@@ -1783,7 +1790,7 @@ func TestValidateAVInvalidAction(t *testing.T) {
 }
 
 func TestValidateLoggingInvalidLevel(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Logging.Level = "trace"
 	err := cfg.Validate()
 	if err == nil {
@@ -1795,7 +1802,7 @@ func TestValidateLoggingInvalidLevel(t *testing.T) {
 }
 
 func TestValidateLoggingInvalidFormat(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Logging.Format = "xml"
 	err := cfg.Validate()
 	if err == nil {
@@ -1807,7 +1814,7 @@ func TestValidateLoggingInvalidFormat(t *testing.T) {
 }
 
 func TestValidateTLSCertFileMissingKey(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.CertFile = "/path/to/cert.pem"
 	cfg.TLS.KeyFile = ""
 	err := cfg.Validate()
@@ -1820,7 +1827,7 @@ func TestValidateTLSCertFileMissingKey(t *testing.T) {
 }
 
 func TestValidateTLSKeyFileMissingCert(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.CertFile = ""
 	cfg.TLS.KeyFile = "/path/to/key.pem"
 	err := cfg.Validate()
@@ -1833,7 +1840,7 @@ func TestValidateTLSKeyFileMissingCert(t *testing.T) {
 }
 
 func TestValidateTLSCertFileNotReadable(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.CertFile = "/nonexistent/cert.pem"
 	cfg.TLS.KeyFile = "/nonexistent/key.pem"
 	err := cfg.Validate()
@@ -1846,7 +1853,7 @@ func TestValidateTLSCertFileNotReadable(t *testing.T) {
 }
 
 func TestValidateACMEMissingEmail(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.ACME.Enabled = true
 	cfg.TLS.ACME.Email = ""
 	err := cfg.Validate()
@@ -1859,7 +1866,7 @@ func TestValidateACMEMissingEmail(t *testing.T) {
 }
 
 func TestValidateACMEInvalidProvider(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.ACME.Enabled = true
 	cfg.TLS.ACME.Email = "test@example.com"
 	cfg.TLS.ACME.Provider = "invalid"
@@ -1873,7 +1880,7 @@ func TestValidateACMEInvalidProvider(t *testing.T) {
 }
 
 func TestValidateACMEInvalidChallenge(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.ACME.Enabled = true
 	cfg.TLS.ACME.Email = "test@example.com"
 	cfg.TLS.ACME.Provider = "letsencrypt"
@@ -1888,7 +1895,7 @@ func TestValidateACMEInvalidChallenge(t *testing.T) {
 }
 
 func TestValidateDuplicateDomain(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Domains = []DomainConfig{
 		{Name: "example.com"},
 		{Name: "example.com"},
@@ -1903,7 +1910,7 @@ func TestValidateDuplicateDomain(t *testing.T) {
 }
 
 func TestValidateDomainNegativeMaxAccounts(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Domains = []DomainConfig{
 		{Name: "example.com", MaxAccounts: -1},
 	}
@@ -1917,7 +1924,7 @@ func TestValidateDomainNegativeMaxAccounts(t *testing.T) {
 }
 
 func TestValidateMetricsEnabledMissingPath(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Metrics.Enabled = true
 	cfg.Metrics.Path = ""
 	err := cfg.Validate()
@@ -2004,7 +2011,7 @@ func TestCheckDirWritableNonWritable(t *testing.T) {
 }
 
 func TestValidateRejectThresholdLessThanJunk(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Spam.RejectThreshold = 3.0
 	cfg.Spam.JunkThreshold = 5.0
 	err := cfg.Validate()
@@ -2014,7 +2021,7 @@ func TestValidateRejectThresholdLessThanJunk(t *testing.T) {
 }
 
 func TestValidateRejectThresholdEqualJunk(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Spam.RejectThreshold = 5.0
 	cfg.Spam.JunkThreshold = 5.0
 	err := cfg.Validate()
@@ -2024,7 +2031,7 @@ func TestValidateRejectThresholdEqualJunk(t *testing.T) {
 }
 
 func TestValidateRejectThresholdGreaterThanQuarantine(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Spam.RejectThreshold = 5.0
 	cfg.Spam.QuarantineThreshold = 5.0
 	err := cfg.Validate()
@@ -2034,7 +2041,7 @@ func TestValidateRejectThresholdGreaterThanQuarantine(t *testing.T) {
 }
 
 func TestValidateRejectThresholdGreaterThanQuarantineLessThanJunk(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.Spam.RejectThreshold = 3.0
 	cfg.Spam.QuarantineThreshold = 5.0
 	cfg.Spam.JunkThreshold = 7.0
@@ -2045,7 +2052,7 @@ func TestValidateRejectThresholdGreaterThanQuarantineLessThanJunk(t *testing.T) 
 }
 
 func TestValidateIMAPDisabledNoPortCheck(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.IMAP.Enabled = false
 	cfg.IMAP.Port = 0
 	err := cfg.Validate()
@@ -2055,7 +2062,7 @@ func TestValidateIMAPDisabledNoPortCheck(t *testing.T) {
 }
 
 func TestValidatePOP3DisabledNoPortCheck(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.POP3.Enabled = false
 	cfg.POP3.Port = 0
 	err := cfg.Validate()
@@ -2065,7 +2072,7 @@ func TestValidatePOP3DisabledNoPortCheck(t *testing.T) {
 }
 
 func TestValidateSMTPSubmissionDisabledNoPortCheck(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.SMTP.Submission.Enabled = false
 	cfg.SMTP.Submission.Port = 0
 	err := cfg.Validate()
@@ -2075,7 +2082,7 @@ func TestValidateSMTPSubmissionDisabledNoPortCheck(t *testing.T) {
 }
 
 func TestValidateSMTPInboundDisabledNoPortCheck(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.SMTP.Inbound.Enabled = false
 	cfg.SMTP.Inbound.Port = 0
 	err := cfg.Validate()
@@ -2085,7 +2092,7 @@ func TestValidateSMTPInboundDisabledNoPortCheck(t *testing.T) {
 }
 
 func TestValidateAvidActionTag(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.AV.Enabled = true
 	cfg.AV.Addr = "127.0.0.1:3310"
 	cfg.AV.Action = "tag"
@@ -2096,7 +2103,7 @@ func TestValidateAvidActionTag(t *testing.T) {
 }
 
 func TestValidateAvidActionQuarantine(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.AV.Enabled = true
 	cfg.AV.Addr = "127.0.0.1:3310"
 	cfg.AV.Action = "quarantine"
@@ -2107,7 +2114,7 @@ func TestValidateAvidActionQuarantine(t *testing.T) {
 }
 
 func TestValidateAvidActionReject(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.AV.Enabled = true
 	cfg.AV.Addr = "127.0.0.1:3310"
 	cfg.AV.Action = "reject"
@@ -2121,7 +2128,7 @@ func TestValidateLoggingLevelValid(t *testing.T) {
 	tests := []string{"debug", "info", "warn", "error"}
 
 	for _, level := range tests {
-		cfg := DefaultConfig()
+		cfg := validConfigForTest(t)
 		cfg.Logging.Level = level
 		err := cfg.Validate()
 		if err != nil {
@@ -2134,7 +2141,7 @@ func TestValidateLoggingFormatValid(t *testing.T) {
 	tests := []string{"json", "text"}
 
 	for _, format := range tests {
-		cfg := DefaultConfig()
+		cfg := validConfigForTest(t)
 		cfg.Logging.Format = format
 		err := cfg.Validate()
 		if err != nil {
@@ -2144,7 +2151,7 @@ func TestValidateLoggingFormatValid(t *testing.T) {
 }
 
 func TestValidateACMELetsencryptStaging(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.ACME.Enabled = true
 	cfg.TLS.ACME.Email = "test@example.com"
 	cfg.TLS.ACME.Provider = "letsencrypt-staging"
@@ -2156,7 +2163,7 @@ func TestValidateACMELetsencryptStaging(t *testing.T) {
 }
 
 func TestValidateACMEDNSChallenge(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := validConfigForTest(t)
 	cfg.TLS.ACME.Enabled = true
 	cfg.TLS.ACME.Email = "test@example.com"
 	cfg.TLS.ACME.Provider = "letsencrypt"
