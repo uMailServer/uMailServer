@@ -91,8 +91,8 @@ func (s *Server) recordAuthFailure(ip string) {
 	defer s.authFailuresMu.Unlock()
 	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
 
-	// Periodic cleanup when map gets large (every 100 entries)
-	if len(s.authFailures)%100 == 0 {
+	// Periodic cleanup when map reaches threshold
+	if len(s.authFailures) >= 100 {
 		s.cleanupAuthFailuresLocked()
 	}
 }

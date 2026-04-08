@@ -832,8 +832,10 @@ func deleteFile(path string) {
 
 // countMessageRefs counts how many queue entries still reference the given
 // message file path. Used to avoid deleting a shared .msg file while other
-// recipients still need it.
+// recipients still need it. Must be called with mu held for read.
 func (m *Manager) countMessageRefs(messagePath string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	count := 0
 	m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
 		var entry db.QueueEntry
@@ -856,11 +858,30 @@ func (m *Manager) countMessageRefs(messagePath string) int {
 func (m *Manager) deleteMessageFileIfUnreferenced(messagePath string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.countMessageRefs(messagePath) == 0 {
+	// Re-check count under write lock for atomic check-and-delete
+	if m.countMessageRefsUnsafe(messagePath) == 0 {
 		os.Remove(messagePath)
 		return true
 	}
 	return false
+}
+
+// countMessageRefsUnsafe counts references without locking. Caller must hold mu.
+func (m *Manager) countMessageRefsUnsafe(messagePath string) int {
+	count := 0
+	m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var entry db.QueueEntry
+		if err := json.Unmarshal(value, &entry); err != nil {
+			return nil
+		}
+		if entry.MessagePath == messagePath {
+			if entry.Status != "delivered" && entry.Status != "bounced" {
+				count++
+			}
+		}
+		return nil
+	})
+	return count
 }
 
 // signWithDKIM signs an outgoing message with DKIM if the sender's domain has a DKIM key configured.
