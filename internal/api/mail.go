@@ -53,6 +53,13 @@ func (h *MailHandler) SetStorage(msgStore *storage.MessageStore, mailDB *storage
 	h.mailDB = mailDB
 }
 
+// sendError sends a JSON error response
+func (h *MailHandler) sendError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
 // folderMap maps webmail folder names to internal mailbox names
 var folderMap = map[string]string{
 	"inbox":  "INBOX",
@@ -74,14 +81,14 @@ var reverseFolderMap = map[string]string{
 // handleMailList lists emails in a folder
 func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	// Get user from context (set by auth middleware)
 	user := r.Context().Value("user")
 	if user == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	userEmail := user.(string)
@@ -209,13 +216,13 @@ func hasFlag(flags []string, flag string) bool {
 // handleMailGet gets a single email
 func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	user := r.Context().Value("user")
 	if user == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	userEmail := user.(string)
@@ -233,7 +240,7 @@ func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
 
 	email, err := h.getEmailFromStorage(userEmail, internalFolder, emailID)
 	if err != nil || email == nil {
-		http.Error(w, "Email not found", http.StatusNotFound)
+		h.sendError(w, http.StatusNotFound, "Email not found")
 		return
 	}
 
@@ -319,43 +326,43 @@ func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
 // handleMailSend sends an email and stores it in Sent folder
 func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	user := r.Context().Value("user")
 	if user == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	userEmail := user.(string)
 
 	var req SendMailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
+		h.sendError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
 	if len(req.To) == 0 {
-		http.Error(w, "Recipient required", http.StatusBadRequest)
+		h.sendError(w, http.StatusBadRequest, "Recipient required")
 		return
 	}
 
 	// Validate recipient count
 	if len(req.To) > 100 {
-		http.Error(w, "Too many recipients (max 100)", http.StatusBadRequest)
+		h.sendError(w, http.StatusBadRequest, "Too many recipients (max 100)")
 		return
 	}
 
 	// Validate subject length
 	if len(req.Subject) > 998 {
-		http.Error(w, "Subject too long (max 998 characters)", http.StatusBadRequest)
+		h.sendError(w, http.StatusBadRequest, "Subject too long (max 998 characters)")
 		return
 	}
 
 	// Validate body length (prevent memory issues)
 	if len(req.Body) > 25*1024*1024 {
-		http.Error(w, "Message body too large (max 25MB)", http.StatusBadRequest)
+		h.sendError(w, http.StatusBadRequest, "Message body too large (max 25MB)")
 		return
 	}
 
@@ -388,11 +395,11 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		// Store message file - msgID is the hash-based ID returned by StoreMessage
 		storedMsgID, err := h.msgStore.StoreMessage(userEmail, []byte(rawEmail))
 		if err != nil {
-			http.Error(w, "Failed to store message", http.StatusInternalServerError)
+			h.sendError(w, http.StatusInternalServerError, "Failed to store message")
 			return
 		}
 		if storedMsgID == "" {
-			http.Error(w, "Failed to store message: no ID returned", http.StatusInternalServerError)
+			h.sendError(w, http.StatusInternalServerError, "Failed to store message: no ID returned")
 			return
 		}
 		msgID = storedMsgID
@@ -400,7 +407,7 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		// Get next UID for Sent mailbox
 		uid, err := h.mailDB.GetNextUID(userEmail, "Sent")
 		if err != nil {
-			http.Error(w, "Failed to get next UID", http.StatusInternalServerError)
+			h.sendError(w, http.StatusInternalServerError, "Failed to get next UID")
 			return
 		}
 
@@ -434,13 +441,13 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 // handleMailDelete deletes an email (moves to trash)
 func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	userVal := r.Context().Value("user")
 	if userVal == nil {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
 	userEmail := userVal.(string)
@@ -459,7 +466,7 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if messageID == "" {
-		http.Error(w, "Message ID required", http.StatusBadRequest)
+		h.sendError(w, http.StatusBadRequest, "Message ID required")
 		return
 	}
 
