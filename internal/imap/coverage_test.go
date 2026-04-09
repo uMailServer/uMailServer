@@ -1552,3 +1552,57 @@ func TestBboltMailstoreSetMDNHandler(t *testing.T) {
 		t.Error("Expected handler to be called")
 	}
 }
+
+func TestParseDispositionHeader(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{
+			name: "valid header lowercase",
+			msg:  "From: sender@example.com\r\ndisposition-notification-to: <test@example.com>\r\n\r\nBody",
+			want: "<test@example.com>",
+		},
+		{
+			name: "missing header",
+			msg:  "From: sender@example.com\r\n\r\nBody",
+			want: "",
+		},
+		{
+			name: "valid header with extra whitespace",
+			msg:  "From: sender@example.com\r\ndisposition-notification-to:    <test@example.com>   \r\n\r\nBody",
+			want: "<test@example.com>",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseDispositionHeader(tt.msg)
+			if got != tt.want {
+				t.Errorf("parseDispositionHeader() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFlagOperationString(t *testing.T) {
+	tests := []struct {
+		op    FlagOperation
+		want  string
+	}{
+		{FlagAdd, "add"},
+		{FlagRemove, "remove"},
+		{FlagReplace, "replace"},
+		{FlagOperation(99), "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := tt.op.String()
+			if got != tt.want {
+				t.Errorf("FlagOperation(%d).String() = %q, want %q", tt.op, got, tt.want)
+			}
+		})
+	}
+}
