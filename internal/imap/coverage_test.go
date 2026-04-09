@@ -1606,3 +1606,84 @@ func TestFlagOperationString(t *testing.T) {
 		})
 	}
 }
+
+func TestParseSortCriteria(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    []SortCriterion
+		wantErr bool
+	}{
+		{
+			name: "single criterion",
+			args: []string{"DATE"},
+			want: []SortCriterion{{Field: "DATE", Descending: true}},
+		},
+		{
+			name: "with reverse",
+			args: []string{"REVERSE", "SUBJECT"},
+			want: []SortCriterion{{Field: "SUBJECT", Descending: false}},
+		},
+		{
+			name: "multiple criteria",
+			args: []string{"ARRIVAL", "SUBJECT", "SIZE"},
+			want: []SortCriterion{
+				{Field: "ARRIVAL", Descending: true},
+				{Field: "SUBJECT", Descending: true},
+				{Field: "SIZE", Descending: true},
+			},
+		},
+		{
+			name: "case insensitive",
+			args: []string{"date", "reverse", "from"},
+			want: []SortCriterion{
+				{Field: "DATE", Descending: true},
+				{Field: "FROM", Descending: false},
+			},
+		},
+		{
+			name:    "unsupported SCORE",
+			args:    []string{"SCORE"},
+			wantErr: true,
+		},
+		{
+			name:    "unknown criterion",
+			args:    []string{"UNKNOWN"},
+			wantErr: true,
+		},
+		{
+			name:    "empty",
+			args:    []string{},
+			wantErr: true,
+		},
+		{
+			name: "CC criterion",
+			args: []string{"CC"},
+			want: []SortCriterion{{Field: "CC", Descending: true}},
+		},
+		{
+			name: "TO criterion",
+			args: []string{"TO"},
+			want: []SortCriterion{{Field: "TO", Descending: true}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseSortCriteria(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseSortCriteria() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && len(got) != len(tt.want) {
+				t.Errorf("parseSortCriteria() returned %d criteria, want %d", len(got), len(tt.want))
+				return
+			}
+			for i, c := range got {
+				if c.Field != tt.want[i].Field || c.Descending != tt.want[i].Descending {
+					t.Errorf("parseSortCriteria()[%d] = %+v, want %+v", i, c, tt.want[i])
+				}
+			}
+		})
+	}
+}
