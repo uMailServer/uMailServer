@@ -1222,3 +1222,52 @@ func TestSetWriteDeadline_WithTimeout(t *testing.T) {
 	session.setWriteDeadline()
 	// If we get here without panic, the test passes
 }
+
+func TestComputeAPOPDigest(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	srv := NewServer(":0", &coverageMockMailstore{}, logger)
+	session := NewSession(server, srv)
+	session.apopTimestamp = "<test@server>"
+
+	secret := "password123"
+	digest := session.computeAPOPDigest(secret)
+
+	// MD5("<test@server>" + "password123")
+	// = MD5("<test@server>password123")
+	// = 8476628fa3de3f09c9e38f1c812a9c75
+	if digest == "" {
+		t.Error("Expected non-empty digest")
+	}
+	if len(digest) != 32 {
+		t.Errorf("Expected 32 char hex digest, got %d", len(digest))
+	}
+}
+
+func TestSetAPOPSecretHandler(t *testing.T) {
+	srv := NewServer(":0", &coverageMockMailstore{}, nil)
+
+	called := false
+	srv.SetAPOPSecretHandler(func(username string) (string, error) {
+		called = true
+		return "test-secret", nil
+	})
+
+	if srv.onGetAPOPSecret == nil {
+		t.Error("Expected onGetAPOPSecret to be set")
+	}
+
+	secret, err := srv.onGetAPOPSecret("testuser")
+	if err != nil {
+		t.Errorf("onGetAPOPSecret returned error: %v", err)
+	}
+	if secret != "test-secret" {
+		t.Errorf("Expected test-secret, got %s", secret)
+	}
+	if !called {
+		t.Error("Expected handler to be called")
+	}
+}
