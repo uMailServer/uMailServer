@@ -111,6 +111,20 @@ func TestHandleAutodiscover_GetRequest(t *testing.T) {
 	}
 }
 
+func TestHandleAutodiscover_MethodNotAllowed(t *testing.T) {
+	s := &Server{}
+
+	// Test PUT request (should be rejected with method not allowed)
+	req := httptest.NewRequest(http.MethodPut, "/autodiscover/autodiscover.xml", nil)
+	w := httptest.NewRecorder()
+
+	s.handleAutodiscover(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status %d, got %d", http.StatusMethodNotAllowed, w.Code)
+	}
+}
+
 func TestHandleAutoconfig_GetRequest(t *testing.T) {
 	s := &Server{}
 
