@@ -945,7 +945,7 @@ func TestGenerateTOTPUri_Escaping(t *testing.T) {
 	account := "user@example.com"
 	issuer := "Example Service"
 
-	uri := GenerateTOTPUri(secret, account, issuer)
+	uri := GenerateTOTPUri(secret, account, issuer, TOTPAlgorithmSHA1)
 
 	if uri == "" {
 		t.Error("expected non-empty URI")

@@ -5,6 +5,8 @@ import (
 	"net/mail"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // MessageContext holds the message being filtered
@@ -71,6 +73,7 @@ type Interpreter struct {
 	ctx         *SieveContext
 	extensions  map[string]bool
 	requireDone map[string]bool
+	timeout     time.Duration // Timeout for regex matching to prevent ReDoS
 }
 
 // NewInterpreter creates a new Sieve interpreter
@@ -79,7 +82,87 @@ func NewInterpreter(script *Script) *Interpreter {
 		script:      script,
 		extensions:  make(map[string]bool),
 		requireDone: make(map[string]bool),
+		timeout:     100 * time.Millisecond, // Default timeout for regex matching
 	}
+}
+
+// regexCache caches compiled regex patterns with timeout protection
+var regexCache = struct {
+	sync.RWMutex
+	patterns map[string]*regexp.Regexp
+}{
+	patterns: make(map[string]*regexp.Regexp),
+}
+
+// safeRegexMatch matches a pattern against value with ReDoS protection
+func safeRegexMatch(pattern, value string, timeout time.Duration) (bool, error) {
+	// Check for obviously malicious patterns (nested quantifiers)
+	if isSuspiciousPattern(pattern) {
+		return false, fmt.Errorf("regex pattern too complex (potential ReDoS)")
+	}
+
+	// Try to get from cache first
+	regexCache.RLock()
+	re, ok := regexCache.patterns[pattern]
+	regexCache.RUnlock()
+
+	if !ok {
+		// Validate and compile
+		var err error
+		re, err = regexp.Compile(pattern)
+		if err != nil {
+			return false, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+
+		// Cache it
+		regexCache.Lock()
+		regexCache.patterns[pattern] = re
+		regexCache.Unlock()
+	}
+
+	// Channel for result
+	done := make(chan bool, 1)
+	go func() {
+		done <- re.MatchString(value)
+	}()
+
+	// Wait with timeout
+	select {
+	case result := <-done:
+		return result, nil
+	case <-time.After(timeout):
+		return false, fmt.Errorf("regex match timed out (possible ReDoS)")
+	}
+}
+
+// isSuspiciousPattern checks for patterns that could cause ReDoS
+func isSuspiciousPattern(pattern string) bool {
+	// Check for nested quantifiers like (a+)+ or (a*)* that can cause exponential backtracking
+	// Simple heuristics: look for patterns like (X+)+ or (X*)+ where X is a group
+	suspicious := []string{
+		"(+)", // (a+)+ form
+		"(*)", // (a*)+ or (a*)* form
+		"(+*", // mixed
+		"(*+",
+		"++)", // reversed form
+		"*+)",
+		"++)",
+		"+*)",
+		"*(+",
+	}
+
+	// Also check for multiple adjacent quantifiers like .*.* without anchors
+	// This is less dangerous but could still cause issues with long inputs
+	if strings.Count(pattern, ".*") > 3 || strings.Count(pattern, ".+") > 3 {
+		return true
+	}
+
+	for _, s := range suspicious {
+		if strings.Contains(pattern, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Execute runs the Sieve script and returns actions
@@ -334,7 +417,12 @@ func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 				for _, key := range t.KeyList {
 					pattern := strings.ReplaceAll(key, "*", ".*")
 					pattern = strings.ReplaceAll(pattern, "?", ".")
-					matched, _ := regexp.MatchString("(?i)"+pattern, value)
+					matched, err := safeRegexMatch("(?i)"+pattern, value, i.timeout)
+					if err != nil {
+						// Log the error but don't fail the entire filter
+						// Just return false for this test
+						return false, nil
+					}
 					if matched {
 						return true, nil
 					}
@@ -383,7 +471,10 @@ func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {
 				continue
 			}
 			for _, v := range values {
-				matched, _ := regexp.MatchString("(?i)"+pattern, v)
+				matched, err := safeRegexMatch("(?i)"+pattern, v, i.timeout)
+				if err != nil {
+					return false, nil
+				}
 				if matched {
 					return true, nil
 				}

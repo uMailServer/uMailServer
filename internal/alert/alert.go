@@ -15,6 +15,34 @@ import (
 	"time"
 )
 
+// SecureString is a string that masks its value when serialized to JSON
+// to prevent accidental credential exposure in logs or API responses.
+type SecureString string
+
+// MarshalJSON returns a masked representation of the string
+func (s SecureString) MarshalJSON() ([]byte, error) {
+	if s == "" {
+		return []byte(`""`), nil
+	}
+	return []byte(`"[REDACTED]"`), nil
+}
+
+// UnmarshalJSON allows direct unmarshaling (the actual value is stored)
+func (s *SecureString) UnmarshalJSON(data []byte) error {
+	if string(data) == `"[REDACTED]"` {
+		*s = ""
+		return nil
+	}
+	// Remove quotes and set the value
+	*s = SecureString(strings.Trim(string(data), `"`))
+	return nil
+}
+
+// String returns the actual string value (use with caution in logging)
+func (s SecureString) String() string {
+	return string(s)
+}
+
 // Severity represents the severity level of an alert
 type Severity string
 
@@ -44,13 +72,13 @@ type Config struct {
 	WebhookTemplate string            `yaml:"webhook_template,omitempty" json:"webhook_template,omitempty"`
 
 	// Email settings
-	SMTPServer   string   `yaml:"smtp_server,omitempty" json:"smtp_server,omitempty"`
-	SMTPPort     int      `yaml:"smtp_port,omitempty" json:"smtp_port,omitempty"`
-	SMTPUsername string   `yaml:"smtp_username,omitempty" json:"smtp_username,omitempty"`
-	SMTPPassword string   `yaml:"smtp_password,omitempty" json:"smtp_password,omitempty"`
-	FromAddress  string   `yaml:"from_address,omitempty" json:"from_address,omitempty"`
-	ToAddresses  []string `yaml:"to_addresses,omitempty" json:"to_addresses,omitempty"`
-	UseTLS       bool     `yaml:"use_tls,omitempty" json:"use_tls,omitempty"`
+	SMTPServer   string        `yaml:"smtp_server,omitempty" json:"smtp_server,omitempty"`
+	SMTPPort     int           `yaml:"smtp_port,omitempty" json:"smtp_port,omitempty"`
+	SMTPUsername string        `yaml:"smtp_username,omitempty" json:"smtp_username,omitempty"`
+	SMTPPassword SecureString  `yaml:"smtp_password,omitempty" json:"smtp_password,omitempty"`
+	FromAddress  string        `yaml:"from_address,omitempty" json:"from_address,omitempty"`
+	ToAddresses  []string      `yaml:"to_addresses,omitempty" json:"to_addresses,omitempty"`
+	UseTLS       bool          `yaml:"use_tls,omitempty" json:"use_tls,omitempty"`
 
 	// Rate limiting
 	MinInterval time.Duration `yaml:"min_interval" json:"min_interval"` // Min time between same alerts
@@ -273,7 +301,7 @@ func (m *Manager) sendEmail(alert Alert) error {
 
 	var auth smtp.Auth
 	if m.config.SMTPUsername != "" {
-		auth = smtp.PlainAuth("", m.config.SMTPUsername, m.config.SMTPPassword, m.config.SMTPServer)
+		auth = smtp.PlainAuth("", m.config.SMTPUsername, string(m.config.SMTPPassword), m.config.SMTPServer)
 	}
 
 	err := smtp.SendMail(addr, auth, m.config.FromAddress, m.config.ToAddresses, []byte(body.String()))

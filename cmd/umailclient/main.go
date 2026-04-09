@@ -64,11 +64,16 @@ Commands:
   dsn           Test DSN (Delivery Status Notification)
   mdn           Test MDN (Message Disposition Notification)
 
+Security Options:
+  --insecure    Skip TLS certificate verification (use only for testing with self-signed certs)
+
 Examples:
   umailclient send --host localhost --port 25 --from user@example.com --to dest@example.com --subject "Test"
+  umailclient send --host localhost --port 465 --tls --insecure --from user@example.com --to dest@example.com
   umailclient bench --host localhost --port 25 --count 100 --concurrency 10
   umailclient stress --host localhost --port 25 --count 1000 --concurrency 50 --user user --pass secret
   umailclient auth --host localhost --port 25 --user user --pass secret
+  umailclient inbox --host localhost --port 993 --tls
   umailclient autoconfig --domain example.com
   umailclient autodiscover --email user@example.com`)
 }
@@ -86,15 +91,16 @@ func formatAddr(host string, port int) string {
 }
 
 type SMTPClient struct {
-	Host     string
-	Port     int
-	Username string
-	Password string
-	UseTLS   bool
+	Host            string
+	Port            int
+	Username        string
+	Password        string
+	UseTLS          bool
+	InsecureSkipVerify bool // Only for testing with self-signed certs
 }
 
-func NewSMTPClient(host string, port int, user, pass string, tls bool) *SMTPClient {
-	return &SMTPClient{Host: host, Port: port, Username: user, Password: pass, UseTLS: tls}
+func NewSMTPClient(host string, port int, user, pass string, tls, insecure bool) *SMTPClient {
+	return &SMTPClient{Host: host, Port: port, Username: user, Password: pass, UseTLS: tls, InsecureSkipVerify: insecure}
 }
 
 func (c *SMTPClient) Send(from, to, subject, body string) error {
@@ -103,7 +109,11 @@ func (c *SMTPClient) Send(from, to, subject, body string) error {
 	var conn net.Conn
 	var err error
 	if c.UseTLS {
-		conn, err = tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, ServerName: c.Host})
+		tlsConfig := &tls.Config{ServerName: c.Host}
+		if c.InsecureSkipVerify {
+			tlsConfig.InsecureSkipVerify = true
+		}
+		conn, err = tls.Dial("tcp", addr, tlsConfig)
 	} else {
 		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	}
@@ -169,6 +179,7 @@ func runSend() {
 	user := cmd.String("user", "", "Username")
 	pass := cmd.String("pass", "", "Password")
 	tls := cmd.Bool("tls", false, "Use TLS")
+	insecure := cmd.Bool("insecure", false, "Skip TLS certificate verification (use for testing with self-signed certs only)")
 
 	cmd.Parse(os.Args[2:])
 	if *from == "" || *to == "" {
@@ -176,7 +187,7 @@ func runSend() {
 		os.Exit(1)
 	}
 
-	client := NewSMTPClient(*host, *port, *user, *pass, *tls)
+	client := NewSMTPClient(*host, *port, *user, *pass, *tls, *insecure)
 	if err := client.Send(*from, *to, *subject, *body); err != nil {
 		fmt.Printf("Send failed: %v\n", err)
 		os.Exit(1)
@@ -219,7 +230,7 @@ func runBench() {
 			defer wg.Add(-1)
 			defer func() { <-sem }()
 
-			c := NewSMTPClient(*host, *port, *user, *pass, false)
+			c := NewSMTPClient(*host, *port, *user, *pass, false, false)
 			t0 := time.Now()
 			err := c.Send(fmt.Sprintf("bench%d@localhost", idx), "test@localhost",
 				fmt.Sprintf("Benchmark #%d", idx), "Test body")
@@ -299,7 +310,7 @@ func runStress() {
 			defer wg.Add(-1)
 			defer func() { <-sem }()
 
-			c := NewSMTPClient(*host, *port, *user, *pass, false)
+			c := NewSMTPClient(*host, *port, *user, *pass, false, false)
 			err := c.Send(fmt.Sprintf("stress%d@localhost", idx), "test@localhost",
 				fmt.Sprintf("Stress #%d", idx), "Stress test message")
 			if err != nil {
@@ -351,6 +362,7 @@ func runInbox() {
 	host := cmd.String("host", "localhost", "IMAP host")
 	port := cmd.Int("port", 993, "IMAP port")
 	useTLS := cmd.Bool("tls", true, "Use TLS")
+	insecure := cmd.Bool("insecure", false, "Skip TLS certificate verification (use for testing with self-signed certs only)")
 
 	cmd.Parse(os.Args[2:])
 
@@ -360,7 +372,11 @@ func runInbox() {
 	var conn net.Conn
 	var err error
 	if *useTLS {
-		conn, err = tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, ServerName: *host})
+		tlsConfig := &tls.Config{ServerName: *host}
+		if *insecure {
+			tlsConfig.InsecureSkipVerify = true
+		}
+		conn, err = tls.Dial("tcp", addr, tlsConfig)
 	} else {
 		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	}
@@ -544,7 +560,7 @@ func runMDN() {
 			"This message requests a read receipt.\r\n"+
 			"Please confirm receipt.\r\n", *to, *subject, time.Now().Format(time.RFC1123Z))
 
-	client := NewSMTPClient(*host, *port, "", "", false)
+	client := NewSMTPClient(*host, *port, "", "", false, false)
 	if err := client.Send("admin@localhost", *to, *subject, body); err != nil {
 		fmt.Printf("Send failed: %v\n", err)
 		os.Exit(1)

@@ -8,9 +8,11 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"math"
 	"net/url"
 	"strings"
@@ -26,6 +28,14 @@ const (
 	TOTPSecretLength = 20
 )
 
+// TOTPAlgorithm represents the hash algorithm used for TOTP
+type TOTPAlgorithm int
+
+const (
+	TOTPAlgorithmSHA1 TOTPAlgorithm = iota
+	TOTPAlgorithmSHA256
+)
+
 // GenerateTOTPSecret generates a new random TOTP secret (base32-encoded)
 func GenerateTOTPSecret() (string, error) {
 	secret := make([]byte, TOTPSecretLength)
@@ -36,11 +46,17 @@ func GenerateTOTPSecret() (string, error) {
 }
 
 // GenerateTOTPUri generates the otpauth:// URI for QR code provisioning
-func GenerateTOTPUri(secret, account, issuer string) string {
+// Note: RFC 6238 specifies SHA1 as the default algorithm.
+// SHA256 is a non-standard extension supported by some authenticators.
+func GenerateTOTPUri(secret, account, issuer string, algo TOTPAlgorithm) string {
 	v := url.Values{}
 	v.Set("secret", secret)
 	v.Set("issuer", issuer)
-	v.Set("algorithm", "SHA1")
+	if algo == TOTPAlgorithmSHA256 {
+		v.Set("algorithm", "SHA256")
+	} else {
+		v.Set("algorithm", "SHA1")
+	}
 	v.Set("digits", fmt.Sprintf("%d", TOTPDefaultDigits))
 	v.Set("period", fmt.Sprintf("%d", TOTPDefaultPeriod))
 	return fmt.Sprintf("otpauth://totp/%s:%s?%s", issuer, url.PathEscape(account), v.Encode())
@@ -48,12 +64,14 @@ func GenerateTOTPUri(secret, account, issuer string) string {
 
 // ValidateTOTP validates a TOTP code against a secret at the current time.
 // It checks the current time step and one step before/after for clock drift.
+// Uses SHA1 by default (RFC 6238 compliant).
 func ValidateTOTP(secret, code string) bool {
-	return ValidateTOTPAt(secret, code, time.Now())
+	return ValidateTOTPAt(secret, code, time.Now(), TOTPAlgorithmSHA1)
 }
 
 // ValidateTOTPAt validates a TOTP code against a secret at a specific time.
-func ValidateTOTPAt(secret, code string, now time.Time) bool {
+// The algorithm parameter specifies which hash to use (SHA1 or SHA256).
+func ValidateTOTPAt(secret, code string, now time.Time, algo TOTPAlgorithm) bool {
 	if len(code) != TOTPDefaultDigits {
 		return false
 	}
@@ -68,7 +86,7 @@ func ValidateTOTPAt(secret, code string, now time.Time) bool {
 	// Check current, -1, and +1 time steps for clock drift tolerance
 	for _, offset := range []int64{-1, 0, 1} {
 		ts := uint64(int64(timeStep) + offset)
-		expected := computeTOTP(key, ts, TOTPDefaultDigits)
+		expected := computeTOTP(key, ts, TOTPDefaultDigits, algo)
 		if expected == code {
 			return true
 		}
@@ -94,14 +112,22 @@ func decodeTOTPSecret(secret string) ([]byte, error) {
 	return base32.StdEncoding.DecodeString(secretUpper)
 }
 
-// computeTOTP computes a TOTP code for the given key and time step.
-func computeTOTP(key []byte, timeStep uint64, digits int) string {
+// computeTOTP computes a TOTP code for the given key, time step, and algorithm.
+func computeTOTP(key []byte, timeStep uint64, digits int, algo TOTPAlgorithm) string {
 	// Encode time step as big-endian 8-byte array
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, timeStep)
 
-	// HMAC-SHA1
-	mac := hmac.New(sha1.New, key)
+	// Create hasher based on algorithm
+	var h func() hash.Hash
+	if algo == TOTPAlgorithmSHA256 {
+		h = sha256.New
+	} else {
+		h = sha1.New
+	}
+
+	// HMAC with selected algorithm
+	mac := hmac.New(h, key)
 	mac.Write(buf)
 	hash := mac.Sum(nil)
 

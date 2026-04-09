@@ -98,7 +98,7 @@ func DefaultConfig() *Config {
 		Security: SecurityConfig{
 			MaxLoginAttempts: 5,
 			LockoutDuration:  Duration(15 * time.Minute),
-			JWTSecret:        "change-me-in-production-32-char-secret",
+			JWTSecret:        "", // Generate secure random at runtime if empty
 			RateLimit: RateLimitConfig{
 				// Per-IP limits (inbound)
 				IPPerMinute:   30,

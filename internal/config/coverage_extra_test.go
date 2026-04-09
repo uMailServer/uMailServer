@@ -848,6 +848,7 @@ func TestValidate_SpamThresholds(t *testing.T) {
 }
 
 // TestValidate_MissingJWTSecret tests validation with missing JWT secret
+// Empty JWT secret is now VALID - it will be generated at runtime by api.NewServer
 func TestValidate_MissingJWTSecret(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -857,7 +858,7 @@ func TestValidate_MissingJWTSecret(t *testing.T) {
 			DataDir:  tmpDir,
 		},
 		Security: SecurityConfig{
-			JWTSecret: "", // Empty
+			JWTSecret: "", // Empty - will be generated at runtime
 		},
 		Spam: SpamConfig{
 			Enabled:             true,
@@ -868,8 +869,8 @@ func TestValidate_MissingJWTSecret(t *testing.T) {
 	}
 
 	err := cfg.Validate()
-	if err == nil {
-		t.Error("expected error for missing JWT secret")
+	if err != nil {
+		t.Errorf("empty JWT secret should be valid (generated at runtime): %v", err)
 	}
 }
 

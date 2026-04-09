@@ -28,7 +28,7 @@ func TestGenerateTOTPSecret(t *testing.T) {
 }
 
 func TestGenerateTOTPUri(t *testing.T) {
-	uri := GenerateTOTPUri("JBSWY3DPEHPK3PXP", "user@example.com", "uMailServer")
+	uri := GenerateTOTPUri("JBSWY3DPEHPK3PXP", "user@example.com", "uMailServer", TOTPAlgorithmSHA1)
 	if uri == "" {
 		t.Fatal("GenerateTOTPUri() returned empty URI")
 	}
@@ -59,9 +59,9 @@ func TestComputeTOTP_RFC6238Vectors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		code := computeTOTP(key, tt.timeStep, 6)
+		code := computeTOTP(key, tt.timeStep, 6, TOTPAlgorithmSHA1)
 		if code != tt.expected {
-			t.Errorf("computeTOTP(key, %d, 6) = %q, want %q", tt.timeStep, code, tt.expected)
+			t.Errorf("computeTOTP(key, %d, 6, TOTPAlgorithmSHA1) = %q, want %q", tt.timeStep, code, tt.expected)
 		}
 	}
 }
@@ -72,13 +72,13 @@ func TestValidateTOTPAt_KnownVector(t *testing.T) {
 
 	// time=59 => timeStep=1 => code=287082
 	now := time.Unix(59, 0)
-	if !ValidateTOTPAt(secret, "287082", now) {
+	if !ValidateTOTPAt(secret, "287082", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt() should accept RFC 6238 test vector for t=59")
 	}
 
 	// time=1234567890 => timeStep=41152263 => code=005924
 	now2 := time.Unix(1234567890, 0)
-	if !ValidateTOTPAt(secret, "005924", now2) {
+	if !ValidateTOTPAt(secret, "005924", now2, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt() should accept RFC 6238 test vector for t=1234567890")
 	}
 }
@@ -86,7 +86,7 @@ func TestValidateTOTPAt_KnownVector(t *testing.T) {
 func TestValidateTOTP_WrongCode(t *testing.T) {
 	secret, _ := GenerateTOTPSecret()
 	// Very unlikely to match "999999" at current time
-	if ValidateTOTPAt(secret, "999999", time.Now()) {
+	if ValidateTOTPAt(secret, "999999", time.Now(), TOTPAlgorithmSHA1) {
 		t.Log("Warning: code 999999 matched (unlikely but possible)")
 	}
 }
@@ -123,25 +123,25 @@ func TestValidateTOTP_DriftTolerance(t *testing.T) {
 
 	// Exact time: t=45 => timeStep=1
 	exactTime := time.Unix(45, 0)
-	if !ValidateTOTPAt(secret, code, exactTime) {
+	if !ValidateTOTPAt(secret, code, exactTime, TOTPAlgorithmSHA1) {
 		t.Error("Should accept code at exact time")
 	}
 
 	// One step forward: t=75 => timeStep=2, should still accept due to drift
 	oneStepLater := time.Unix(75, 0)
-	if !ValidateTOTPAt(secret, code, oneStepLater) {
+	if !ValidateTOTPAt(secret, code, oneStepLater, TOTPAlgorithmSHA1) {
 		t.Error("Should accept code with +1 step drift tolerance")
 	}
 
 	// One step back: t=15 => timeStep=0, should still accept due to drift
 	oneStepBefore := time.Unix(15, 0)
-	if !ValidateTOTPAt(secret, code, oneStepBefore) {
+	if !ValidateTOTPAt(secret, code, oneStepBefore, TOTPAlgorithmSHA1) {
 		t.Error("Should accept code with -1 step drift tolerance")
 	}
 
 	// Two steps forward: t=105 => timeStep=3, should NOT accept
 	twoStepsLater := time.Unix(105, 0)
-	if ValidateTOTPAt(secret, code, twoStepsLater) {
+	if ValidateTOTPAt(secret, code, twoStepsLater, TOTPAlgorithmSHA1) {
 		t.Error("Should NOT accept code with +2 step drift")
 	}
 }
@@ -287,7 +287,7 @@ func TestValidateTOTPAt_ValidCode(t *testing.T) {
 	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)
 	now := time.Unix(59, 0)
 
-	if !ValidateTOTPAt(secret, "287082", now) {
+	if !ValidateTOTPAt(secret, "287082", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt should accept valid RFC 6238 code at t=59")
 	}
 }
@@ -297,7 +297,7 @@ func TestValidateTOTPAt_InvalidCode(t *testing.T) {
 	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(key)
 	now := time.Unix(59, 0)
 
-	if ValidateTOTPAt(secret, "000000", now) {
+	if ValidateTOTPAt(secret, "000000", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt should reject wrong code at t=59")
 	}
 }
@@ -309,14 +309,14 @@ func TestValidateTOTPAt_WrongSecret(t *testing.T) {
 
 	now := time.Unix(59, 0)
 	// Code for secret1 at t=59 is "287082"
-	if ValidateTOTPAt(secret2, "287082", now) {
+	if ValidateTOTPAt(secret2, "287082", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt should reject code generated from a different secret")
 	}
 }
 
 func TestValidateTOTPAt_InvalidSecret(t *testing.T) {
 	now := time.Unix(59, 0)
-	if ValidateTOTPAt("!!!invalid!!!", "123456", now) {
+	if ValidateTOTPAt("!!!invalid!!!", "123456", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt should reject invalid base32 secret")
 	}
 }
@@ -325,13 +325,13 @@ func TestValidateTOTPAt_InvalidCodeLength(t *testing.T) {
 	secret, _ := GenerateTOTPSecret()
 	now := time.Now()
 
-	if ValidateTOTPAt(secret, "12345", now) {
+	if ValidateTOTPAt(secret, "12345", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt should reject 5-digit code")
 	}
-	if ValidateTOTPAt(secret, "1234567", now) {
+	if ValidateTOTPAt(secret, "1234567", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt should reject 7-digit code")
 	}
-	if ValidateTOTPAt(secret, "", now) {
+	if ValidateTOTPAt(secret, "", now, TOTPAlgorithmSHA1) {
 		t.Error("ValidateTOTPAt should reject empty code")
 	}
 }
@@ -350,7 +350,7 @@ func TestComputeTOTP_KnownVectors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		code6 := computeTOTP(key, tt.timeStep, 6)
+		code6 := computeTOTP(key, tt.timeStep, 6, TOTPAlgorithmSHA1)
 		if len(code6) != 6 {
 			t.Errorf("computeTOTP(_, %d, 6) produced %d-digit code, want 6", tt.timeStep, len(code6))
 		}
@@ -361,7 +361,7 @@ func TestComputeTOTP_DigitVariation(t *testing.T) {
 	key := []byte("12345678901234567890")
 
 	// Test with 8 digits
-	code8 := computeTOTP(key, 1, 8)
+	code8 := computeTOTP(key, 1, 8, TOTPAlgorithmSHA1)
 	if len(code8) != 8 {
 		t.Errorf("computeTOTP(_, 1, 8) produced %d-digit code, want 8", len(code8))
 	}
@@ -384,7 +384,7 @@ func TestValidateTOTP_WrongSecret(t *testing.T) {
 }
 
 func TestGenerateTOTPUri_Fields(t *testing.T) {
-	uri := GenerateTOTPUri("MYSECRET", "alice@example.com", "TestIssuer")
+	uri := GenerateTOTPUri("MYSECRET", "alice@example.com", "TestIssuer", TOTPAlgorithmSHA1)
 
 	// Check all required fields
 	if !stringsContains(uri, "otpauth://totp/TestIssuer:alice@example.com") {
@@ -409,7 +409,7 @@ func TestGenerateTOTPUri_Fields(t *testing.T) {
 
 func TestGenerateTOTPUri_SpecialCharacters(t *testing.T) {
 	// Account with special characters - url.PathEscape handles certain characters
-	uri := GenerateTOTPUri("SECRET", "user test@example.com", "MyApp")
+	uri := GenerateTOTPUri("SECRET", "user test@example.com", "MyApp", TOTPAlgorithmSHA1)
 	if !stringsContains(uri, "user%20test@example.com") {
 		t.Errorf("URI did not escape space character: %s", uri)
 	}
@@ -426,7 +426,7 @@ func TestValidateTOTPAt_TwoStepsDrift_Rejected(t *testing.T) {
 	// Use t=-30 => timeStep that wraps: uint64(-30)/30 is large, but int64(-30)/30 = -1
 	// Instead use a time far enough: t=135 => timeStep=4, which is 3 steps from step 1
 	twoStepsLater := time.Unix(135, 0) // timeStep = 4, 3 steps from step 1
-	if ValidateTOTPAt(secret, code, twoStepsLater) {
+	if ValidateTOTPAt(secret, code, twoStepsLater, TOTPAlgorithmSHA1) {
 		t.Error("Should NOT accept code when timeStep differs by 3 steps")
 	}
 }

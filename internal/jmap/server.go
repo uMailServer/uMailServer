@@ -2,6 +2,7 @@
 package jmap
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -487,8 +488,15 @@ func generateBlobID(data []byte) string {
 	return "blob-" + hex.EncodeToString(hash[:16])
 }
 
-// generateSessionID generates a unique session ID
+// generateSessionID generates a unique session ID using crypto/rand
 func generateSessionID() string {
 	counter := atomic.AddUint64(&idCounter, 1)
-	return fmt.Sprintf("session-%d-%d", time.Now().UnixNano(), counter)
+
+	// Generate 16 random bytes for uniqueness
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp+counter if crypto/rand fails (should not happen)
+		return fmt.Sprintf("session-%d-%d", time.Now().UnixNano(), counter)
+	}
+	return fmt.Sprintf("session-%s-%d", hex.EncodeToString(b), counter)
 }

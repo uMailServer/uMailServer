@@ -438,8 +438,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("server.data_dir is not writable: %w", err)
 	}
 
-	// Validate JWT secret length
-	if len(c.Security.JWTSecret) < 32 {
+	// Validate JWT secret length (empty is allowed - will be generated at runtime)
+	if c.Security.JWTSecret != "" && len(c.Security.JWTSecret) < 32 {
 		return fmt.Errorf("security.jwt_secret must be at least 32 characters")
 	}
 

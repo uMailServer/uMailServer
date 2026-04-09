@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -95,11 +96,44 @@ func (c *LDAPClient) TestConnection() error {
 	return nil
 }
 
+// validateLDAPHost checks that the LDAP server hostname is not localhost
+// or a private/internal IP address to prevent SSRF attacks
+func validateLDAPHost(hostname string) error {
+	// Block localhost variants
+	lowerHost := strings.ToLower(hostname)
+	if lowerHost == "localhost" || lowerHost == "localhost.localdomain" {
+		return fmt.Errorf("ldap: localhost is not allowed for security reasons")
+	}
+
+	// Try to parse as IP address
+	ip := net.ParseIP(hostname)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("ldap: private/loopback IP addresses are not allowed for security reasons")
+		}
+		return nil
+	}
+
+	// Block numeric IPv6 addresses that resolve to private/localhost
+	if strings.Contains(hostname, ":") {
+		return fmt.Errorf("ldap: IPv6 addresses are not allowed for security reasons")
+	}
+
+	return nil
+}
+
 // connect establishes a connection to the LDAP server
 func (c *LDAPClient) connect() (*ldap.Conn, error) {
 	u, err := url.Parse(c.config.URL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid ldap url: %w", err)
+	}
+
+	hostname := u.Hostname()
+
+	// SSRF protection: validate hostname is not localhost or private IP
+	if err := validateLDAPHost(hostname); err != nil {
+		return nil, err
 	}
 
 	host := u.Host

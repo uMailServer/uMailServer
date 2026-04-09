@@ -3,6 +3,9 @@ package cli
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,7 +17,18 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/scrypt"
+
 	"github.com/umailserver/umailserver/internal/config"
+)
+
+// Backup encryption constants
+const (
+	backupMagic    = "UMAILBACKUP"
+	backupVersion  = 1
+	saltSize       = 32
+	nonceSize      = 12
+	keySize        = 32 // AES-256
 )
 
 // fileHash tracks a file's hash for integrity verification
@@ -26,8 +40,9 @@ type fileHash struct {
 
 // BackupManager handles backup and restore operations
 type BackupManager struct {
-	config *config.Config
-	hashes []fileHash
+	config   *config.Config
+	hashes   []fileHash
+	password string
 }
 
 // NewBackupManager creates a new backup manager
@@ -37,60 +52,188 @@ func NewBackupManager(cfg *config.Config) *BackupManager {
 	}
 }
 
+// SetPassword sets the encryption password for backups
+func (bm *BackupManager) SetPassword(password string) {
+	bm.password = password
+}
+
 // Backup creates a full backup of the server
 func (bm *BackupManager) Backup(backupPath string) error {
 	// Reset hashes for this backup
 	bm.hashes = []fileHash{}
 
 	timestamp := time.Now().Format("20060102_150405")
-	backupFile := filepath.Join(backupPath, fmt.Sprintf("umailserver_backup_%s.tar.gz", timestamp))
+	extension := ".tar.gz"
+	if bm.password != "" {
+		extension = ".tar.gz.enc"
+	}
+	backupFile := filepath.Join(backupPath, fmt.Sprintf("umailserver_backup_%s%s", timestamp, extension))
 
 	// Create backup directory
 	if err := os.MkdirAll(backupPath, 0755); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
-	// Create tar.gz file
-	file, err := os.Create(backupFile)
-	if err != nil {
-		return fmt.Errorf("failed to create backup file: %w", err)
+	// Create tar.gz in memory first
+	fmt.Printf("Creating backup archive...\n")
+	var tarData []byte
+	{
+		// We'll write to a bytes.Buffer, then compress, then encrypt
+		tarBuffer := new(strings.Builder)
+		gw := gzip.NewWriter(tarBuffer)
+		tw := tar.NewWriter(gw)
+
+		// Backup config
+		fmt.Println("  Adding configuration...")
+		if err := bm.backupConfig(tw); err != nil {
+			return fmt.Errorf("failed to backup config: %w", err)
+		}
+
+		// Backup database
+		fmt.Println("  Adding database...")
+		if err := bm.backupDatabase(tw); err != nil {
+			return fmt.Errorf("failed to backup database: %w", err)
+		}
+
+		// Backup maildir
+		fmt.Println("  Adding maildir...")
+		if err := bm.backupMaildir(tw); err != nil {
+			return fmt.Errorf("failed to backup maildir: %w", err)
+		}
+
+		// Create backup manifest
+		fmt.Println("  Adding manifest...")
+		if err := bm.createManifest(tw, timestamp); err != nil {
+			return fmt.Errorf("failed to create manifest: %w", err)
+		}
+
+		if err := tw.Close(); err != nil {
+			return fmt.Errorf("failed to close tar writer: %w", err)
+		}
+		if err := gw.Close(); err != nil {
+			return fmt.Errorf("failed to close gzip writer: %w", err)
+		}
+
+		tarData = []byte(tarBuffer.String())
 	}
-	defer file.Close()
 
-	gw := gzip.NewWriter(file)
-	defer gw.Close()
+	// Write to file (optionally encrypted)
+	if bm.password != "" {
+		fmt.Printf("Encrypting backup with AES-256-GCM...\n")
+		encrypted, err := bm.encryptBackup(tarData)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt backup: %w", err)
+		}
+		if err := os.WriteFile(backupFile, encrypted, 0600); err != nil {
+			return fmt.Errorf("failed to write encrypted backup: %w", err)
+		}
+	} else {
+		// Warn about unencrypted backup
+		fmt.Printf("WARNING: Backup is NOT ENCRYPTED. Sensitive data may be exposed.\n")
+		fmt.Printf("         Use SetPassword() to enable AES-256-GCM encryption.\n")
 
-	tw := tar.NewWriter(gw)
-	defer tw.Close()
-
-	fmt.Printf("Creating backup: %s\n", backupFile)
-
-	// Backup config
-	fmt.Println("Backing up configuration...")
-	if err := bm.backupConfig(tw); err != nil {
-		return fmt.Errorf("failed to backup config: %w", err)
-	}
-
-	// Backup database
-	fmt.Println("Backing up database...")
-	if err := bm.backupDatabase(tw); err != nil {
-		return fmt.Errorf("failed to backup database: %w", err)
-	}
-
-	// Backup maildir
-	fmt.Println("Backing up maildir...")
-	if err := bm.backupMaildir(tw); err != nil {
-		return fmt.Errorf("failed to backup maildir: %w", err)
-	}
-
-	// Create backup manifest
-	fmt.Println("Creating backup manifest...")
-	if err := bm.createManifest(tw, timestamp); err != nil {
-		return fmt.Errorf("failed to create manifest: %w", err)
+		if err := os.WriteFile(backupFile, tarData, 0644); err != nil {
+			return fmt.Errorf("failed to write backup: %w", err)
+		}
 	}
 
 	fmt.Printf("Backup completed successfully: %s\n", backupFile)
 	return nil
+}
+
+// encryptBackup encrypts tar.gz data using AES-256-GCM with scrypt key derivation
+func (bm *BackupManager) encryptBackup(data []byte) ([]byte, error) {
+	// Generate salt and nonce
+	salt := make([]byte, saltSize)
+	if _, err := rand.Read(salt); err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	nonce := make([]byte, nonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Derive key from password using scrypt
+	key, err := scrypt.Key([]byte(bm.password), salt, 1<<18, 8, 1, keySize) // N=2^18, r=8, p=1
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive key: %w", err)
+	}
+
+	// Create AES-GCM cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Encrypt the data
+	ciphertext := gcm.Seal(nil, nonce, data, nil)
+
+	// Format: magic(12) + version(1) + salt(32) + nonce(12) + ciphertext
+	result := make([]byte, 0, len(backupMagic)+1+saltSize+nonceSize+len(ciphertext))
+	result = append(result, []byte(backupMagic)...)
+	result = append(result, backupVersion)
+	result = append(result, salt...)
+	result = append(result, nonce...)
+	result = append(result, ciphertext...)
+
+	return result, nil
+}
+
+// decryptBackup decrypts AES-256-GCM encrypted backup data
+func (bm *BackupManager) decryptBackup(data []byte) ([]byte, error) {
+	if len(data) < len(backupMagic)+1+saltSize+nonceSize {
+		return nil, fmt.Errorf("invalid backup file: too short")
+	}
+
+	// Parse header
+	magic := string(data[:len(backupMagic)])
+	if magic != backupMagic {
+		// Not an encrypted backup, try as plain tar.gz
+		return data, nil
+	}
+
+	version := int(data[len(backupMagic)])
+	if version != backupVersion {
+		return nil, fmt.Errorf("unsupported backup version: %d", version)
+	}
+
+	offset := len(backupMagic) + 1
+	salt := data[offset : offset+saltSize]
+	offset += saltSize
+	nonce := data[offset : offset+nonceSize]
+	offset += nonceSize
+	ciphertext := data[offset:]
+
+	// Derive key from password
+	key, err := scrypt.Key([]byte(bm.password), salt, 1<<18, 8, 1, keySize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive key: %w", err)
+	}
+
+	// Create AES-GCM cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Decrypt
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt: wrong password?")
+	}
+
+	return plaintext, nil
 }
 
 // addFileWithHash copies a file to tar and records its hash
@@ -269,13 +412,28 @@ func (bm *BackupManager) createManifest(tw *tar.Writer, timestamp string) error 
 func (bm *BackupManager) Restore(backupFile string) error {
 	fmt.Printf("Restoring from backup: %s\n", backupFile)
 
-	file, err := os.Open(backupFile)
+	fileData, err := os.ReadFile(backupFile)
 	if err != nil {
 		return fmt.Errorf("failed to open backup file: %w", err)
 	}
-	defer file.Close()
 
-	gr, err := gzip.NewReader(file)
+	// Try to decrypt if password is set
+	var tarData []byte
+	if bm.password != "" {
+		tarData, err = bm.decryptBackup(fileData)
+		if err != nil {
+			return fmt.Errorf("failed to decrypt backup: %w", err)
+		}
+		fmt.Println("Backup decrypted successfully.")
+	} else {
+		// Check if file is encrypted
+		if len(fileData) > len(backupMagic) && string(fileData[:len(backupMagic)]) == backupMagic {
+			return fmt.Errorf("backup is encrypted but no password provided; use SetPassword() first")
+		}
+		tarData = fileData
+	}
+
+	gr, err := gzip.NewReader(strings.NewReader(string(tarData)))
 	if err != nil {
 		return fmt.Errorf("failed to read gzip: %w", err)
 	}
@@ -336,9 +494,8 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		fmt.Printf("Backup contains %d files with integrity hashes\n", len(expectedHashes))
 	}
 
-	// Reset file to beginning
-	file.Seek(0, 0)
-	gr, err = gzip.NewReader(file)
+	// Re-create reader from tarData for extraction
+	gr, err = gzip.NewReader(strings.NewReader(string(tarData)))
 	if err != nil {
 		return fmt.Errorf("failed to decompress backup: %w", err)
 	}

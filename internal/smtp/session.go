@@ -222,6 +222,12 @@ func (s *Session) handleEHLO(arg string) error {
 			authMechs = append(authMechs, "CRAM-MD5")
 		}
 		capabilities = append(capabilities, strings.Join(authMechs, " "))
+		// Warn if AUTH is advertised over non-TLS connection
+		if !s.isTLS && s.server.config.AllowInsecure {
+			s.server.logger.Warn("SMTP AUTH advertised over unencrypted connection - credentials may be exposed",
+				"remote_addr", s.conn.RemoteAddr().String(),
+				"allow_insecure", s.server.config.AllowInsecure)
+		}
 	}
 
 	return s.WriteMultiLineResponse(250, capabilities)
@@ -755,12 +761,16 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	// Decode credentials
 	decoded, err := base64.StdEncoding.DecodeString(credentials)
 	if err != nil {
+		// Record failure to prevent user enumeration via malformed auth
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
 	// PLAIN format: \0username\0password
 	credParts := strings.Split(string(decoded), "\x00")
 	if len(credParts) != 3 {
+		// Record failure to prevent user enumeration via malformed auth
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
@@ -803,6 +813,8 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 
 	usernameBytes, err := base64.StdEncoding.DecodeString(usernameEnc)
 	if err != nil {
+		// Record failure to prevent user enumeration via malformed auth
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 	username := string(usernameBytes)
@@ -821,6 +833,8 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 
 	passwordBytes, err := base64.StdEncoding.DecodeString(passwordEnc)
 	if err != nil {
+		// Record failure to prevent user enumeration via malformed auth
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 	password := string(passwordBytes)

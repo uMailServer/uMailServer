@@ -410,8 +410,8 @@
             const folderList = state.folders.map(folder => {
                 const isActive = folder === state.currentFolder;
                 const count = folder === 'Inbox' ? state.emails.filter(e => !e.read).length : 0;
-                return `<li class="${isActive ? 'active' : ''}" data-folder="${folder}">
-                    ${folder} ${count > 0 ? `<span class="badge">${count}</span>` : ''}
+                return `<li class="${isActive ? 'active' : ''}" data-folder="${escapeHTML(folder)}">
+                    ${escapeHTML(folder)} ${count > 0 ? `<span class="badge">${count}</span>` : ''}
                 </li>`;
             }).join('');
 
@@ -425,10 +425,10 @@
             } else {
                 emailContent = state.emails.map(e => `
                     <div class="email-item ${e.read ? '' : 'unread'}" data-id="${e.id}">
-                        <div class="email-sender">${e.from}</div>
+                        <div class="email-sender">${escapeHTML(e.from)}</div>
                         <div class="email-info">
-                            <div class="email-subject">${e.subject}</div>
-                            <div class="email-preview">${e.preview}</div>
+                            <div class="email-subject">${escapeHTML(e.subject)}</div>
+                            <div class="email-preview">${escapeHTML(e.preview)}</div>
                         </div>
                         <div class="email-date">${formatDate(e.date)}</div>
                     </div>
@@ -439,7 +439,7 @@
                 <header class="header">
                     <h1>uMailServer</h1>
                     <div class="header-right">
-                        <span class="user-email">${state.user?.email || 'User'}</span>
+                        <span class="user-email">${escapeHTML(state.user?.email || 'User')}</span>
                         <button class="btn btn-secondary" id="settings-btn">Settings</button>
                         <button class="btn btn-danger" id="logout-btn">Logout</button>
                     </div>
@@ -460,9 +460,9 @@
         function EmailReader(email) {
             return `<div class="email-reader">
                 <div class="email-header">
-                    <h2 class="email-subject-line">${email.subject}</h2>
+                    <h2 class="email-subject-line">${escapeHTML(email.subject)}</h2>
                     <div class="email-meta">
-                        <span class="email-from">From: ${email.from}</span>
+                        <span class="email-from">From: ${escapeHTML(email.from)}</span>
                         <span class="email-date">${formatDate(email.date)}</span>
                     </div>
                 </div>
@@ -472,7 +472,7 @@
                     <button class="btn btn-danger" id="delete-btn">Delete</button>
                 </div>
                 <div class="email-body">
-                    <p>${email.preview}</p>
+                    <p>${escapeHTML(email.preview)}</p>
                 </div>
             </div>`;
         }
@@ -489,6 +489,17 @@
             } else {
                 return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
             }
+        }
+
+        // Escape HTML special characters to prevent XSS
+        function escapeHTML(str) {
+            if (str == null) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         function attachEvents() {

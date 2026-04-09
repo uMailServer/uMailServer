@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -115,7 +117,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	}
 	if config.JWTSecret == "" {
 		logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
-		config.JWTSecret = fmt.Sprintf("%d", time.Now().UnixNano())
+		config.JWTSecret = generateSecureJWTSecret()
 	}
 	if config.TokenExpiry == 0 {
 		config.TokenExpiry = 24 * time.Hour
@@ -932,7 +934,7 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 		return
 	}
 
-	uri := auth.GenerateTOTPUri(secret, email, "uMailServer")
+	uri := auth.GenerateTOTPUri(secret, email, "uMailServer", auth.TOTPAlgorithmSHA1)
 
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"secret": secret,
@@ -1715,4 +1717,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		"limit":   limit,
 		"offset":  offset,
 	})
+}
+
+// generateSecureJWTSecret generates a cryptographically secure 32-byte hex token for JWT signing
+func generateSecureJWTSecret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }

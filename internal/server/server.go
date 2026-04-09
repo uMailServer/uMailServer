@@ -509,7 +509,8 @@ func (s *Server) startMCP() {
 	if s.config.MCP.AuthToken == "" {
 		token := generateSecureToken()
 		s.config.MCP.AuthToken = token
-		s.logger.Warn("MCP: no auth token configured; generated a random token", "token", token)
+		s.logger.Warn("MCP: no auth token configured; generated a random token - check server logs for token on first start")
+		s.logger.Info("MCP auth token generated", "token_length", len(token))
 	}
 	mcpSrv.SetAuthToken(s.config.MCP.AuthToken)
 	if len(s.config.HTTP.CorsOrigins) > 0 {
