@@ -2742,3 +2742,64 @@ func TestExists(t *testing.T) {
 		t.Error("Expected false for nil fs")
 	}
 }
+
+func TestHasFlag(t *testing.T) {
+	tests := []struct {
+		flags []string
+		flag  string
+		want  bool
+	}{
+		{[]string{"Seen", "Answered"}, "Seen", true},
+		{[]string{"seen", "answered"}, "seen", true},
+		{[]string{"Seen", "Answered"}, "Draft", false},
+		{[]string{}, "Seen", false},
+		{nil, "Seen", false},
+	}
+
+	for _, tt := range tests {
+		got := hasFlag(tt.flags, tt.flag)
+		if got != tt.want {
+			t.Errorf("hasFlag(%v, %q) = %v, want %v", tt.flags, tt.flag, got, tt.want)
+		}
+	}
+}
+
+func TestExtractBody(t *testing.T) {
+	h := &MailHandler{}
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "with CRLF separator",
+			raw:  "From: sender@example.com\r\nTo: receiver@example.com\r\n\r\nBody content here",
+			want: "Body content here",
+		},
+		{
+			name: "with LF separator",
+			raw:  "From: sender@example.com\nTo: receiver@example.com\n\nBody content here",
+			want: "Body content here",
+		},
+		{
+			name: "no separator",
+			raw:  "Just body text",
+			want: "Just body text",
+		},
+		{
+			name: "empty body",
+			raw:  "From: sender@example.com\r\n\r\n",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := h.extractBody(tt.raw)
+			if got != tt.want {
+				t.Errorf("extractBody() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
