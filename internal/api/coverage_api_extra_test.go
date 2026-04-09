@@ -2044,3 +2044,86 @@ func TestRateLimitMiddleware_WithForwarded(t *testing.T) {
 		t.Logf("Rate limited request returned %d", rec.Code)
 	}
 }
+
+// --- handleCreateFilter Validation Edge Cases for Coverage ---
+
+// TestHandleCreateFilter_NameTooLong tests filter creation with name exceeding 255 chars
+func TestHandleCreateFilter_NameTooLong(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	longName := ""
+	for i := 0; i < 300; i++ {
+		longName += "a"
+	}
+
+	filterReq := map[string]interface{}{
+		"name":       longName,
+		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
+		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+	}
+	jsonBody, _ := json.Marshal(filterReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400, got %d", rec.Code)
+	}
+}
+
+// TestHandleCreateFilter_TooManyConditions tests filter creation with more than 50 conditions
+func TestHandleCreateFilter_TooManyConditions(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	conditions := make([]map[string]string, 55)
+	for i := 0; i < 55; i++ {
+		conditions[i] = map[string]string{"field": "from", "operator": "contains", "value": fmt.Sprintf("test%d", i)}
+	}
+
+	filterReq := map[string]interface{}{
+		"name":       "Test Filter",
+		"conditions": conditions,
+		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+	}
+	jsonBody, _ := json.Marshal(filterReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400, got %d", rec.Code)
+	}
+}
+
+// TestHandleCreateFilter_TooManyActions tests filter creation with more than 20 actions
+func TestHandleCreateFilter_TooManyActions(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	actions := make([]map[string]string, 25)
+	for i := 0; i < 25; i++ {
+		actions[i] = map[string]string{"action": "move", "target": fmt.Sprintf("Folder%d", i)}
+	}
+
+	filterReq := map[string]interface{}{
+		"name":       "Test Filter",
+		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
+		"actions":    actions,
+	}
+	jsonBody, _ := json.Marshal(filterReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400, got %d", rec.Code)
+	}
+}
