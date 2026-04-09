@@ -125,6 +125,21 @@ func TestHandleAutodiscover_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestHandleAutodiscover_EmptyEmail(t *testing.T) {
+	s := &Server{}
+
+	// Test GET request without email param and non-email host (should return error)
+	req := httptest.NewRequest(http.MethodGet, "/autodiscover/autodiscover.xml", nil)
+	req.Host = "example.com" // No email in host
+	w := httptest.NewRecorder()
+
+	s.handleAutodiscover(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+}
+
 func TestHandleAutoconfig_GetRequest(t *testing.T) {
 	s := &Server{}
 
