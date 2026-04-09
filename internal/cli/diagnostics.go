@@ -494,3 +494,370 @@ func tlsVersionName(version uint16) string {
 		return fmt.Sprintf("Unknown (0x%x)", version)
 	}
 }
+
+// DeliverabilityResult holds the result of a deliverability check
+type DeliverabilityResult struct {
+	Domain       string               `json:"domain"`
+	DNSResults   []DNSCheckResult     `json:"dns_results"`
+	RBLResults   []RBLCheckResult     `json:"rbl_results"`
+	TLSResult    *TLSCheckResult      `json:"tls_result"`
+	SMTPResult   *SMTPCheckResult     `json:"smtp_result"`
+	OverallScore string               `json:"overall_score"` // pass, warning, fail
+	Issues       []string             `json:"issues"`
+	Message      string               `json:"message"`
+}
+
+// RBLCheckResult holds RBL check result for a server
+type RBLCheckResult struct {
+	Server   string `json:"server"`
+	Listed   bool   `json:"listed"`
+	Code     string `json:"code"`
+	Score    string `json:"score"`
+	Message  string `json:"message"`
+}
+
+// SMTPCheckResult holds SMTP connectivity check result
+type SMTPCheckResult struct {
+	Reachable    bool   `json:"reachable"`
+	STARTTLS     bool   `json:"starttls"`
+	AuthSupported bool  `json:"auth_supported"`
+	MaxMessageSize int64 `json:"max_message_size"`
+	Message      string `json:"message"`
+}
+
+// CheckDeliverability runs a comprehensive deliverability audit for a domain
+func (d *Diagnostics) CheckDeliverability(domain string) (*DeliverabilityResult, error) {
+	fmt.Printf("Running comprehensive deliverability check for: %s\n\n", domain)
+
+	result := &DeliverabilityResult{
+		Domain: domain,
+		Issues: []string{},
+	}
+
+	// 1. DNS checks (SPF, DKIM, DMARC, MX, PTR)
+	fmt.Println("[1/4] Checking DNS records...")
+	dnsResults, err := d.CheckDNS(domain)
+	if err != nil {
+		result.Issues = append(result.Issues, fmt.Sprintf("DNS check failed: %v", err))
+	} else {
+		result.DNSResults = dnsResults
+		for _, r := range dnsResults {
+			if r.Status == "fail" {
+				result.Issues = append(result.Issues, fmt.Sprintf("DNS [%s]: %s", r.RecordType, r.Message))
+			}
+		}
+	}
+
+	// 2. RBL checks for server's IP
+	fmt.Println("[2/4] Checking RBL listings...")
+	rblResults, rblIssues := d.checkRBL()
+	result.RBLResults = rblResults
+	result.Issues = append(result.Issues, rblIssues...)
+
+	// 3. TLS check
+	fmt.Println("[3/4] Checking TLS configuration...")
+	hostname := ""
+	if d.config != nil {
+		hostname = d.config.Server.Hostname
+	}
+	if hostname == "" {
+		hostname = domain
+	}
+	tlsResult, err := d.CheckTLS(hostname)
+	if err != nil {
+		result.Issues = append(result.Issues, fmt.Sprintf("TLS check failed: %v", err))
+	} else {
+		result.TLSResult = tlsResult
+		if !tlsResult.Valid {
+			result.Issues = append(result.Issues, fmt.Sprintf("TLS: %s", tlsResult.Message))
+		}
+	}
+
+	// 4. SMTP connectivity check
+	fmt.Println("[4/4] Checking SMTP connectivity...")
+	smtpResult, smtpIssues := d.checkSMTPConnectivity(hostname)
+	result.SMTPResult = smtpResult
+	result.Issues = append(result.Issues, smtpIssues...)
+
+	// Compute overall score
+	if len(result.Issues) == 0 {
+		result.OverallScore = "pass"
+		result.Message = "All deliverability checks passed"
+	} else {
+		failCount := 0
+		for _, issue := range result.Issues {
+			if strings.Contains(issue, "[fail]") || strings.HasPrefix(issue, "DNS [SPF]") || strings.HasPrefix(issue, "DNS [MX]") {
+				failCount++
+			}
+		}
+		if failCount > 0 {
+			result.OverallScore = "fail"
+			result.Message = fmt.Sprintf("Deliverability issues detected (%d critical)", failCount)
+		} else {
+			result.OverallScore = "warning"
+			result.Message = "Minor issues detected that may affect reputation"
+		}
+	}
+
+	return result, nil
+}
+
+// defaultRBLServers returns the default RBL servers to check
+func defaultRBLServers() []string {
+	return []string{
+		"bl.spamcop.net",
+		"b.barracudacentral.org",
+		"dnsbl.sorbs.net",
+	}
+}
+
+// checkRBL checks if the server's IP is listed on RBLs
+func (d *Diagnostics) checkRBL() ([]RBLCheckResult, []string) {
+	results := []RBLCheckResult{}
+	issues := []string{}
+
+	hostname := ""
+	if d.config != nil {
+		hostname = d.config.Server.Hostname
+	}
+
+	if hostname == "" {
+		return results, issues
+	}
+
+	// Get the server's IP addresses
+	ips, err := net.LookupIP(hostname)
+	if err != nil || len(ips) == 0 {
+		issues = append(issues, fmt.Sprintf("RBL: Could not resolve hostname %s: %v", hostname, err))
+		return results, issues
+	}
+
+	// Use the first IPv4 address
+	var serverIP net.IP
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			serverIP = ip
+			break
+		}
+	}
+	if serverIP == nil {
+		issues = append(issues, fmt.Sprintf("RBL: No IPv4 address found for %s", hostname))
+		return results, issues
+	}
+
+	fmt.Printf("      Checking IP: %s\n", serverIP.String())
+
+	// Check each RBL
+	servers := defaultRBLServers()
+	for _, server := range servers {
+		result := RBLCheckResult{Server: server}
+		listed, code := d.checkRBLServer(serverIP.String(), server)
+		result.Listed = listed
+		result.Code = code
+		if listed {
+			result.Message = fmt.Sprintf("Listed on %s (code: %s)", server, code)
+			result.Score = "spam"
+			issues = append(issues, fmt.Sprintf("RBL [%s]: %s", server, code))
+		} else {
+			result.Message = "Not listed"
+			result.Score = "clean"
+		}
+		results = append(results, result)
+	}
+
+	return results, issues
+}
+
+// checkRBLServer checks if an IP is listed on a specific RBL server
+func (d *Diagnostics) checkRBLServer(ip, rblServer string) (bool, string) {
+	reversed := reverseIP(ip)
+	if reversed == "" {
+		return false, ""
+	}
+	lookupHost := fmt.Sprintf("%s.%s", reversed, rblServer)
+
+	ips, err := net.LookupIP(lookupHost)
+	if err != nil {
+		return false, ""
+	}
+	if len(ips) == 0 {
+		return false, ""
+	}
+
+	ipStr := ips[0].String()
+	// RBL result codes - first octet indicates listing type
+	if len(ipStr) >= 8 {
+		code := fmt.Sprintf("code-%s", ipStr)
+		return true, code
+	}
+	return true, "listed"
+}
+
+// reverseIP reverses an IPv4 address for RBL lookups
+func reverseIP(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ""
+	}
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return ""
+	}
+	return fmt.Sprintf("%s.%s.%s.%s", parts[3], parts[2], parts[1], parts[0])
+}
+
+// checkSMTPConnectivity checks if SMTP is reachable and supports STARTTLS
+func (d *Diagnostics) checkSMTPConnectivity(hostname string) (*SMTPCheckResult, []string) {
+	result := &SMTPCheckResult{}
+	issues := []string{}
+
+	// Try connecting to port 25 (MX)
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:25", hostname), 10*time.Second)
+	if err != nil {
+		result.Message = fmt.Sprintf("SMTP port 25 not reachable: %v", err)
+		issues = append(issues, fmt.Sprintf("SMTP: Port 25 unreachable - remote servers may not be able to deliver mail"))
+		return result, issues
+	}
+	defer conn.Close()
+	result.Reachable = true
+
+	// Try reading the SMTP greeting
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 1024)
+	n, err := conn.Read(buf)
+	if err != nil || n == 0 {
+		result.Message = "Could not read SMTP greeting"
+		issues = append(issues, "SMTP: Could not read server greeting")
+		return result, issues
+	}
+	greeting := strings.TrimSpace(string(buf[:n]))
+	result.Message = fmt.Sprintf("SMTP reachable, greeting: %s", greeting)
+
+	// Try STARTTLS on port 587
+	tlsConfig := &tls.Config{ServerName: hostname}
+	starttlsConn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", fmt.Sprintf("%s:587", hostname), tlsConfig)
+	if err != nil {
+		result.STARTTLS = false
+	} else {
+		defer starttlsConn.Close()
+		result.STARTTLS = true
+	}
+
+	return result, issues
+}
+
+// PrintDeliverabilityResults prints comprehensive deliverability results
+func PrintDeliverabilityResults(r *DeliverabilityResult) {
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║                Deliverability Check Results                  ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	// Overall status
+	color := "\033[32m" // green
+	symbol := "✓"
+	if r.OverallScore == "fail" {
+		color = "\033[31m" // red
+		symbol = "✗"
+	} else if r.OverallScore == "warning" {
+		color = "\033[33m" // yellow
+		symbol = "⚠"
+	}
+	reset := "\033[0m"
+	fmt.Printf("%s%s Overall: %s — %s%s\n\n", color, symbol, strings.ToUpper(r.OverallScore), r.Message, reset)
+
+	// DNS results
+	fmt.Println("── DNS Records ─────────────────────────────────────────────")
+	fmt.Println()
+	if len(r.DNSResults) == 0 {
+		fmt.Println("  (DNS check not run)")
+	} else {
+		for _, res := range r.DNSResults {
+			sym := "✓"
+			scolor := "\033[32m"
+			if res.Status == "fail" {
+				sym = "✗"
+				scolor = "\033[31m"
+			} else if res.Status == "warning" {
+				sym = "⚠"
+				scolor = "\033[33m"
+			}
+			fmt.Printf("  %s%s%s [%s] %s\n", scolor, sym, reset, res.RecordType, res.Message)
+		}
+	}
+	fmt.Println()
+
+	// RBL results
+	fmt.Println("── RBL Listings ────────────────────────────────────────────")
+	fmt.Println()
+	if len(r.RBLResults) == 0 {
+		fmt.Println("  (RBL check not run)")
+	} else {
+		for _, res := range r.RBLResults {
+			sym := "✓"
+			scolor := "\033[32m"
+			if res.Listed {
+				sym = "✗"
+				scolor = "\033[31m"
+			}
+			fmt.Printf("  %s%s%s %s: %s\n", scolor, sym, reset, res.Server, res.Message)
+		}
+	}
+	fmt.Println()
+
+	// TLS result
+	fmt.Println("── TLS Configuration ───────────────────────────────────────")
+	fmt.Println()
+	if r.TLSResult != nil {
+		sym := "✓"
+		scolor := "\033[32m"
+		if !r.TLSResult.Valid {
+			sym = "✗"
+			scolor = "\033[31m"
+		}
+		fmt.Printf("  %s%s%s %s\n", scolor, sym, reset, r.TLSResult.Message)
+	} else {
+		fmt.Println("  (TLS check not run)")
+	}
+	fmt.Println()
+
+	// SMTP connectivity
+	fmt.Println("── SMTP Connectivity ───────────────────────────────────────")
+	fmt.Println()
+	if r.SMTPResult != nil {
+		sym := "✓"
+		scolor := "\033[32m"
+		if !r.SMTPResult.Reachable {
+			sym = "✗"
+			scolor = "\033[31m"
+		}
+		fmt.Printf("  %s%s%s %s\n", scolor, sym, reset, r.SMTPResult.Message)
+		if r.SMTPResult.STARTTLS {
+			fmt.Printf("  %s✓%s STARTTLS on port 587 available\n", "\033[32m", reset)
+		}
+	} else {
+		fmt.Println("  (SMTP check not run)")
+	}
+	fmt.Println()
+
+	// Issues
+	if len(r.Issues) > 0 {
+		fmt.Println("── Issues Found ─────────────────────────────────────────────")
+		fmt.Println()
+		for _, issue := range r.Issues {
+			fmt.Printf("  ⚠ %s\n", issue)
+		}
+		fmt.Println()
+	}
+
+	fmt.Println("──────────────────────────────────────────────────────────────")
+	if r.OverallScore == "pass" {
+		fmt.Println("✓ Domain is properly configured for email deliverability")
+	} else if r.OverallScore == "warning" {
+		fmt.Println("⚠ Domain has some configuration issues - see above for details")
+	} else {
+		fmt.Println("✗ Domain has critical deliverability issues that must be fixed")
+	}
+	fmt.Println()
+}

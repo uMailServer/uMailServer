@@ -67,6 +67,9 @@ type Server struct {
 	smimeKeystore   *smtp.SMIMEKeystore
 	openpgpKeystore *smtp.OpenPGPKeystore
 
+	// LDAP authentication client (optional, nil if LDAP disabled)
+	ldapClient *auth.LDAPClient
+
 	// Submission SMTP servers (ports 587/465)
 	submissionServer    *smtp.Server
 	submissionTLSServer *smtp.Server
@@ -169,6 +172,34 @@ func New(cfg *config.Config) (*Server, error) {
 	webhookMgr := webhook.NewManager(database, cfg.Security.JWTSecret)
 	s.webhookMgr = webhookMgr
 
+	// Initialize LDAP client if enabled
+	if cfg.LDAP.Enabled {
+		ldapCfg := auth.LDAPConfig{
+			Enabled:        cfg.LDAP.Enabled,
+			URL:            cfg.LDAP.URL,
+			BindDN:         cfg.LDAP.BindDN,
+			BindPassword:   cfg.LDAP.BindPassword,
+			BaseDN:         cfg.LDAP.BaseDN,
+			UserFilter:     cfg.LDAP.UserFilter,
+			EmailAttribute: cfg.LDAP.EmailAttribute,
+			NameAttribute:  cfg.LDAP.NameAttribute,
+			GroupAttribute: cfg.LDAP.GroupAttribute,
+			AdminGroups:    cfg.LDAP.AdminGroups,
+			StartTLS:       cfg.LDAP.StartTLS,
+			SkipVerify:     cfg.LDAP.SkipVerify,
+			Timeout:        cfg.LDAP.Timeout,
+		}
+		ldapClient, err := auth.NewLDAPClient(ldapCfg)
+		if err != nil {
+			tlsManager.Close()
+			msgStore.Close()
+			database.Close()
+			return nil, fmt.Errorf("failed to create LDAP client: %w", err)
+		}
+		s.ldapClient = ldapClient
+		logger.Info("LDAP authentication enabled", "url", cfg.LDAP.URL)
+	}
+
 	// Initialize storage database for search
 	storageDBPath := s.config.Server.DataDir + "/mail/mail.db"
 	storageDB, err := storage.OpenDatabase(storageDBPath)
@@ -258,6 +289,9 @@ func (s *Server) Start() error {
 			go s.runIndexWorker()
 		}
 	}
+
+	// Start vacation reply cleanup goroutine (time-based, runs hourly)
+	s.startVacationCleanup()
 
 	if err := s.startIMAP(s.mailstore); err != nil {
 		return err
@@ -772,21 +806,34 @@ func (s *Server) Wait() error {
 
 // authenticate validates user credentials
 func (s *Server) authenticate(username, password string) (bool, error) {
-	// Parse username to get domain and local part
+	// Try LDAP authentication first if enabled
+	if s.ldapClient != nil {
+		ldapUser, err := s.ldapClient.Authenticate(username, password)
+		if err == nil {
+			s.logger.Debug("LDAP authentication successful",
+				"username", username,
+				"email", ldapUser.Email,
+				"is_admin", ldapUser.IsAdmin,
+			)
+			return true, nil
+		}
+		// If LDAP returns "user not found", fall back to local DB
+		// Other errors (connection failure, etc.) also fall back to local DB
+		s.logger.Debug("LDAP auth failed, falling back to local DB", "username", username, "error", err)
+	}
+
+	// Fall back to local database authentication
 	user, domain := parseEmail(username)
 
-	// Get account from database
 	account, err := s.database.GetAccount(domain, user)
 	if err != nil {
 		return false, err
 	}
 
-	// Check password using bcrypt
 	if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(password)); err != nil {
 		return false, nil
 	}
 
-	// Check if account is active
 	if !account.IsActive {
 		return false, fmt.Errorf("account is not active")
 	}
@@ -1278,11 +1325,33 @@ func generateSecureToken() string {
 // cleanupVacationReplies removes entries older than 48 hours from vacationReplies map
 func (s *Server) cleanupVacationReplies() {
 	cutoff := time.Now().Add(-48 * time.Hour)
+	s.vacationRepliesMu.Lock()
 	for key, lastSent := range s.vacationReplies {
 		if lastSent.Before(cutoff) {
 			delete(s.vacationReplies, key)
 		}
 	}
+	s.vacationRepliesMu.Unlock()
+}
+
+// startVacationCleanup runs a hourly goroutine that removes vacation reply entries
+// older than 48 hours, preventing unbounded map growth independent of the
+// threshold-based cleanup in trackVacationReply.
+func (s *Server) startVacationCleanup() {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+				s.cleanupVacationReplies()
+			}
+		}
+	}()
 }
 
 // rateLimitAdapter adapts *ratelimit.RateLimiter to satisfy the api.RateLimitManager interface.

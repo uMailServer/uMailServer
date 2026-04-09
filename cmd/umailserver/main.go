@@ -933,9 +933,15 @@ func cmdCheck(args []string) {
 			fmt.Println("Usage: umailserver check deliverability <domain>")
 			os.Exit(1)
 		}
-		fmt.Printf("Checking deliverability for: %s\n", args[1])
-		// TODO: Implement deliverability check
-		fmt.Println("Deliverability check not yet implemented")
+		result, err := diagnostics.CheckDeliverability(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Deliverability check failed: %v\n", err)
+			os.Exit(1)
+		}
+		cli.PrintDeliverabilityResults(result)
+		if result.OverallScore == "fail" {
+			os.Exit(1)
+		}
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown check type: %s\n", checkType)
