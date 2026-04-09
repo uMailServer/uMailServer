@@ -729,6 +729,35 @@ func TestHandleMAIL_EmptyFromWithParams(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Server: SetDeliveryHandlerWithSieve
+// ---------------------------------------------------------------------------
+
+func TestSetDeliveryHandlerWithSieve(t *testing.T) {
+	s := &Server{}
+
+	var called bool
+	handler := func(from string, to []string, data []byte, sieveActions []string) error {
+		called = true
+		return nil
+	}
+
+	s.SetDeliveryHandlerWithSieve(handler)
+
+	if s.onDeliverWithSieve == nil {
+		t.Fatal("Expected onDeliverWithSieve to be set")
+	}
+
+	// Call the handler directly
+	err := s.onDeliverWithSieve("from@test.com", []string{"to@test.com"}, []byte("test"), nil)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("Expected handler to be called")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // safeSlice helper to avoid slice bounds panics
 // ---------------------------------------------------------------------------
 

@@ -685,6 +685,56 @@ func TestAuthSPFStage_Process_Extra(t *testing.T) {
 			t.Errorf("Expected SPF result 'pass', got %q", ctx.SPFResult.Result)
 		}
 	})
+
+	t.Run("SPF fail adds 2.5 spam score", func(t *testing.T) {
+		// SPF record: ip4:1.2.3.4 matches only 1.2.3.4, sender uses different IP with -all (fail)
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"example.com": {"v=spf1 ip4:1.2.3.4 -all"},
+			},
+		}
+		checker := auth.NewSPFChecker(resolver)
+		stage := NewAuthSPFStage(checker, nil)
+
+		// Use different IP that doesn't match the SPF record
+		ctx := NewMessageContext(net.ParseIP("5.6.7.8"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.SPFResult.Result != "fail" {
+			t.Errorf("Expected SPF result 'fail', got %q", ctx.SPFResult.Result)
+		}
+		if ctx.SpamScore != 2.5 {
+			t.Errorf("Expected spam score 2.5 for SPF fail, got %f", ctx.SpamScore)
+		}
+	})
+
+	t.Run("SPF softfail adds 1.5 spam score", func(t *testing.T) {
+		// SPF record with ~all (softfail) for non-matching IP
+		resolver := &mockAuthDNSResolver{
+			txtRecords: map[string][]string{
+				"example.com": {"v=spf1 ip4:1.2.3.4 ~all"},
+			},
+		}
+		checker := auth.NewSPFChecker(resolver)
+		stage := NewAuthSPFStage(checker, nil)
+
+		// Use different IP that doesn't match the SPF record
+		ctx := NewMessageContext(net.ParseIP("5.6.7.8"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
+		result := stage.Process(ctx)
+
+		if result != ResultAccept {
+			t.Errorf("Expected ResultAccept, got %v", result)
+		}
+		if ctx.SPFResult.Result != "softfail" {
+			t.Errorf("Expected SPF result 'softfail', got %q", ctx.SPFResult.Result)
+		}
+		if ctx.SpamScore != 1.5 {
+			t.Errorf("Expected spam score 1.5 for SPF softfail, got %f", ctx.SpamScore)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
