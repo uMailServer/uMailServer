@@ -1359,3 +1359,52 @@ func TestRenameFolder_NonExistentSource(t *testing.T) {
 		t.Error("Expected error when renaming non-existent folder")
 	}
 }
+
+func TestValidateFilename(t *testing.T) {
+	tests := []struct {
+		name    string
+		filename string
+		wantErr bool
+	}{
+		{"valid", "1234567890.M001P001.host:2,S", false},
+		{"empty", "", true},
+		{"double dot", "..", true},
+		{"forward slash", "test/file.txt", true},
+		{"backslash", "test\\file.txt", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateFilename(tt.filename)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateFilename(%q) error = %v, wantErr %v", tt.filename, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidatePathParts(t *testing.T) {
+	tests := []struct {
+		name   string
+		domain string
+		user   string
+		wantErr bool
+	}{
+		{"valid", "example.com", "testuser", false},
+		{"empty domain", "", "testuser", true},
+		{"empty user", "example.com", "", true},
+		{"double dot domain", "..", "testuser", true},
+		{"double dot user", "example.com", "..", true},
+		{"slash in domain", "example.com", "test/user", true},
+		{"backslash in domain", "example\\com", "testuser", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePathParts(tt.domain, tt.user)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validatePathParts(%q, %q) error = %v, wantErr %v", tt.domain, tt.user, err, tt.wantErr)
+			}
+		})
+	}
+}
