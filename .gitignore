@@ -79,3 +79,10 @@ temp/
 
 # OS
 Thumbs.db
+
+# Security reports (generated)
+security-report/
+
+# IDE project files
+.project/
+.claude/
