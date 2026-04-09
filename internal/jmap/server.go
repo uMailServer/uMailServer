@@ -36,6 +36,7 @@ type Server struct {
 type Config struct {
 	JWTSecret   string
 	TokenExpiry time.Duration
+	CorsOrigins []string // Allowed CORS origins; if empty, allows all
 }
 
 // Session represents a JMAP session
@@ -72,7 +73,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// CORS headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	corsOrigin := "*"
+	if len(s.config.CorsOrigins) > 0 {
+		origin := r.Header.Get("Origin")
+		for _, allowed := range s.config.CorsOrigins {
+			if allowed == "*" || allowed == origin {
+				corsOrigin = allowed
+				break
+			}
+		}
+	}
+	w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 

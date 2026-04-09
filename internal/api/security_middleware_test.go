@@ -309,9 +309,22 @@ func TestGetClientIP_XForwardedFor(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2, 10.0.0.3")
 	req.RemoteAddr = "192.168.1.1:12345"
 
-	ip := getClientIP(req)
+	// Without trusted proxies, X-Forwarded-For is ignored (privacy protection)
+	ip := getClientIP(req, nil)
+	if ip != "192.168.1.1" {
+		t.Errorf("Expected IP 192.168.1.1 (no trusted proxies), got %s", ip)
+	}
+}
+
+func TestGetClientIP_XForwardedFor_TrustedProxy(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2, 10.0.0.3")
+	req.RemoteAddr = "192.168.1.1:12345"
+
+	// With trusted proxy, X-Forwarded-For is respected
+	ip := getClientIP(req, []string{"192.168.1.1"})
 	if ip != "10.0.0.1" {
-		t.Errorf("Expected IP 10.0.0.1, got %s", ip)
+		t.Errorf("Expected IP 10.0.0.1 (from trusted proxy), got %s", ip)
 	}
 }
 
@@ -320,9 +333,22 @@ func TestGetClientIP_XRealIP(t *testing.T) {
 	req.Header.Set("X-Real-Ip", "10.0.0.5")
 	req.RemoteAddr = "192.168.1.1:12345"
 
-	ip := getClientIP(req)
+	// Without trusted proxies, X-Real-Ip is ignored
+	ip := getClientIP(req, nil)
+	if ip != "192.168.1.1" {
+		t.Errorf("Expected IP 192.168.1.1 (no trusted proxies), got %s", ip)
+	}
+}
+
+func TestGetClientIP_XRealIP_TrustedProxy(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-Real-Ip", "10.0.0.5")
+	req.RemoteAddr = "192.168.1.1:12345"
+
+	// With trusted proxy, X-Real-Ip is respected
+	ip := getClientIP(req, []string{"192.168.1.1"})
 	if ip != "10.0.0.5" {
-		t.Errorf("Expected IP 10.0.0.5, got %s", ip)
+		t.Errorf("Expected IP 10.0.0.5 (from trusted proxy), got %s", ip)
 	}
 }
 
@@ -330,7 +356,7 @@ func TestGetClientIP_RemoteAddr(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.RemoteAddr = "192.168.1.1:12345"
 
-	ip := getClientIP(req)
+	ip := getClientIP(req, nil)
 	if ip != "192.168.1.1" {
 		t.Errorf("Expected IP 192.168.1.1, got %s", ip)
 	}
@@ -340,9 +366,21 @@ func TestGetClientIP_RemoteAddrNoPort(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.RemoteAddr = "192.168.1.1"
 
-	ip := getClientIP(req)
+	ip := getClientIP(req, nil)
 	if ip != "192.168.1.1" {
 		t.Errorf("Expected IP 192.168.1.1, got %s", ip)
+	}
+}
+
+func TestGetClientIP_UntrustedProxy(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("X-Forwarded-For", "10.0.0.1")
+	req.RemoteAddr = "10.0.0.99:12345" // Untrusted proxy
+
+	// Without trusted proxies, X-Forwarded-For is ignored even from untrusted proxy
+	ip := getClientIP(req, []string{"192.168.1.1"})
+	if ip != "10.0.0.99" {
+		t.Errorf("Expected IP 10.0.0.99 (untrusted proxy), got %s", ip)
 	}
 }
 

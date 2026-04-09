@@ -104,6 +104,7 @@ func TestManager_Send_RateLimiting(t *testing.T) {
 	cfg.MaxAlerts = 10
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Send first alert - should succeed
 	err := mgr.Send("test_alert", SeverityWarning, "first alert", nil)
@@ -144,6 +145,7 @@ func TestManager_Send_MaxAlertsPerHour(t *testing.T) {
 	cfg.MaxAlerts = 2
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Send max alerts
 	for i := 0; i < 2; i++ {
@@ -160,6 +162,7 @@ func TestManager_Send_MaxAlertsPerHour(t *testing.T) {
 	cfg2.WebhookURL = server.URL
 	cfg2.MaxAlerts = 2
 	mgr2 := NewManager(cfg2, nil)
+	mgr2.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Reset internal state manually for this test
 	mgr2.hourlyCount = 2
@@ -195,6 +198,7 @@ func TestManager_sendWebhook(t *testing.T) {
 	}
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	alert := Alert{
 		ID:        "test-123",
@@ -227,6 +231,7 @@ func TestManager_sendWebhook_Error(t *testing.T) {
 	cfg.WebhookURL = server.URL
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	alert := Alert{
 		Name:      "test_alert",
@@ -282,6 +287,7 @@ func TestManager_CheckDiskSpace(t *testing.T) {
 	cfg.MinInterval = 0 // Disable rate limiting for this test
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Check below threshold - no alert
 	mgr.CheckDiskSpace(50.0, "/data")
@@ -309,6 +315,7 @@ func TestManager_CheckDiskSpace(t *testing.T) {
 	cfg2.DiskThreshold = 85.0
 	cfg2.MinInterval = 0
 	mgr2 := NewManager(cfg2, nil)
+	mgr2.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Check above threshold - critical alert
 	mgr2.CheckDiskSpace(90.0, "/data")
@@ -341,6 +348,7 @@ func TestManager_CheckMemory(t *testing.T) {
 	cfg.MinInterval = 0
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Check below threshold - no alert
 	mgr.CheckMemory(50.0, 512, 1024)
@@ -376,6 +384,7 @@ func TestManager_CheckErrorRate(t *testing.T) {
 	cfg.MinInterval = 0
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Check below threshold - no alert
 	mgr.CheckErrorRate(2.0, "5m")
@@ -411,6 +420,7 @@ func TestManager_CheckTLSCertificate(t *testing.T) {
 	cfg.MinInterval = 0
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Check with plenty of time - no alert
 	mgr.CheckTLSCertificate("example.com", 30)
@@ -434,6 +444,7 @@ func TestManager_CheckTLSCertificate(t *testing.T) {
 	cfg2.WebhookURL = server.URL
 	cfg2.MinInterval = 0
 	mgr2 := NewManager(cfg2, nil)
+	mgr2.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Check expired - critical alert
 	mgr2.CheckTLSCertificate("example.com", -1)
@@ -466,6 +477,7 @@ func TestManager_CheckQueueBacklog(t *testing.T) {
 	cfg.MinInterval = 0
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Check below threshold - no alert
 	mgr.CheckQueueBacklog(500)
@@ -500,6 +512,7 @@ func TestManager_Info_Warn_Critical(t *testing.T) {
 	cfg.MinInterval = 0
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Test Info
 	err := mgr.Info("info_test", "info message", nil)
@@ -544,6 +557,7 @@ func TestManager_GetStats(t *testing.T) {
 	cfg.WebhookURL = server.URL
 	cfg.MinInterval = 0
 	mgr = NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 	mgr.Send("test", SeverityInfo, "test", nil)
 
 	stats := mgr.GetStats()
@@ -610,6 +624,7 @@ func TestManager_ConcurrentAccess(t *testing.T) {
 	cfg.MinInterval = 0
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	// Concurrent sends
 	done := make(chan bool, 10)
@@ -675,6 +690,7 @@ func TestSend_WebhookServerError(t *testing.T) {
 	cfg.Enabled = true
 	cfg.WebhookURL = server.URL
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	err := mgr.Send("webhook_error", SeverityInfo, "test alert", nil)
 	// Should return error because webhook returned 500
@@ -688,6 +704,7 @@ func TestSend_WebhookNetworkError(t *testing.T) {
 	cfg.Enabled = true
 	cfg.WebhookURL = "http://localhost:99999/webhook" // Non-existent server
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	err := mgr.Send("webhook_net_error", SeverityInfo, "test alert", nil)
 	// Should return error because connection failed
@@ -765,6 +782,7 @@ func TestSendWebhook_ClientError(t *testing.T) {
 	cfg.WebhookURL = server.URL
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	alert := Alert{
 		Name:      "test_alert",
@@ -789,6 +807,7 @@ func TestSendWebhook_TooManyRequests(t *testing.T) {
 	cfg.WebhookURL = server.URL
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	alert := Alert{
 		Name:      "test_alert",
@@ -869,6 +888,7 @@ func TestSend_WithDetails(t *testing.T) {
 	cfg.MinInterval = 0
 
 	mgr := NewManager(cfg, nil)
+	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	details := map[string]interface{}{
 		"key1": "value1",

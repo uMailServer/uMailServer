@@ -63,7 +63,13 @@ http:
   port: 443
   http_port: 80               # Redirects to HTTPS
   bind: "0.0.0.0"
-  cors_origins: []            # Allowed CORS origins
+  cors_origins: []            # Allowed CORS origins (empty = allow all, "*" = same as empty)
+                              # SECURITY: When empty, browsers will allow cross-origin requests from any site
+                              # because JWT tokens are not sent automatically (bearer token protection).
+                              # For production, set specific origins: ["https://mail.example.com"]
+  trusted_proxies: []         # IPs that are trusted for X-Forwarded-For header
+                              # SECURITY: Only trust IPs of your reverse proxy (e.g., nginx, cloudflare)
+                              # If empty, X-Forwarded-For is ignored (safer default)
 
 # Admin Panel Configuration
 admin:

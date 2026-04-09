@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -119,6 +121,9 @@ type Manager struct {
 
 	// HTTP client for webhooks
 	httpClient *http.Client
+
+	// Security: allowPrivateIP permits localhost/private IPs (for testing only)
+	allowPrivateIP bool
 }
 
 // Logger interface for alert manager
@@ -147,12 +152,20 @@ func NewManager(config Config, logger Logger) *Manager {
 	}
 
 	return &Manager{
-		config:     config,
-		logger:     logger,
-		lastAlert:  make(map[string]time.Time),
-		hourStart:  time.Now(),
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		config:         config,
+		logger:         logger,
+		lastAlert:      make(map[string]time.Time),
+		hourStart:      time.Now(),
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		allowPrivateIP: false, // Default: block private IPs for security
 	}
+}
+
+// SetAllowPrivateIP allows private IP addresses for webhooks (use with caution, mainly for testing)
+func (m *Manager) SetAllowPrivateIP(allow bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.allowPrivateIP = allow
 }
 
 // IsEnabled returns true if alerting is enabled
@@ -241,6 +254,11 @@ func (m *Manager) recordAlert(name string) {
 
 // sendWebhook sends alert via HTTP webhook
 func (m *Manager) sendWebhook(alert Alert) error {
+	// Validate webhook URL to prevent SSRF attacks
+	if !m.isValidWebhookURL(m.config.WebhookURL) {
+		return fmt.Errorf("webhook URL is not allowed: %s", m.config.WebhookURL)
+	}
+
 	payload, err := json.Marshal(alert)
 	if err != nil {
 		return fmt.Errorf("failed to marshal alert: %w", err)
@@ -275,6 +293,48 @@ func (m *Manager) sendWebhook(alert Alert) error {
 	}
 
 	return nil
+}
+
+// isValidWebhookURL checks if the URL is safe (not localhost or private IP) to prevent SSRF attacks
+func (m *Manager) isValidWebhookURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+
+	// Only allow http and https schemes
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+
+	// Get the hostname
+	hostname := u.Hostname()
+	if hostname == "" {
+		return false
+	}
+
+	// If private IPs are allowed (testing mode), skip checks
+	m.mu.RLock()
+	allowPrivate := m.allowPrivateIP
+	m.mu.RUnlock()
+	if allowPrivate {
+		return true
+	}
+
+	// Block localhost variants
+	if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" {
+		return false
+	}
+
+	// Block private IP ranges
+	ip := net.ParseIP(hostname)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return false
+		}
+	}
+
+	return true
 }
 
 // sendEmail sends alert via SMTP

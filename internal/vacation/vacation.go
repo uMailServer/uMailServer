@@ -2,6 +2,7 @@
 package vacation
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -274,23 +275,35 @@ func (m *Manager) saveConfig(email string, config *Config) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// sanitizeFilename sanitizes an email address for use as filename
+// sanitizeFilename sanitizes an email address for use as filename using base64
 func sanitizeFilename(email string) string {
-	// Replace characters that might be problematic in filenames
-	result := strings.ReplaceAll(email, "@", "_at_")
-	result = strings.ReplaceAll(result, ".", "_")
-	result = strings.ReplaceAll(result, "/", "_")
-	result = strings.ReplaceAll(result, "\\", "_")
-	return result
+	// Use URL-safe base64 encoding for unambiguous filename encoding
+	encoded := base64.URLEncoding.EncodeToString([]byte(email))
+	// Remove padding for cleaner filenames
+	return strings.TrimRight(encoded, "=")
 }
 
 // unsanitizeFilename reverses filename sanitization to get the original email
 func unsanitizeFilename(filename string) string {
-	// Replace _at_ with @ first
-	result := strings.ReplaceAll(filename, "_at_", "@")
-	// Replace remaining _ with . (this is a best effort)
-	result = strings.ReplaceAll(result, "_", ".")
-	return result
+	// If filename contains _at_ (old format marker), use legacy unsanitize
+	// This handles existing files created before the base64 migration
+	if strings.Contains(filename, "_at_") {
+		result := strings.ReplaceAll(filename, "_at_", "@")
+		result = strings.ReplaceAll(result, "_", ".")
+		return result
+	}
+
+	// Otherwise, try base64 decoding
+	padding := 4 - len(filename)%4
+	if padding < 4 {
+		filename += strings.Repeat("=", padding)
+	}
+	decoded, err := base64.URLEncoding.DecodeString(filename)
+	if err != nil || len(decoded) == 0 {
+		// Invalid base64, return as-is
+		return filename
+	}
+	return string(decoded)
 }
 
 // DeleteConfig deletes vacation config for a user

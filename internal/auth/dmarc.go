@@ -2,9 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -342,8 +342,13 @@ func shouldApplyPolicy(percentage int) bool {
 	if percentage <= 0 {
 		return false
 	}
-	// Random sampling
-	return rand.Intn(100) < percentage
+	// Random sampling using crypto/rand for unpredictability
+	var randByte [1]byte
+	if _, err := rand.Read(randByte[:]); err != nil {
+		// If crypto/rand fails, default to applying policy (fail open for availability)
+		return true
+	}
+	return int(randByte[0])%100 < percentage
 }
 
 // parseURIList parses a comma-separated list of URIs

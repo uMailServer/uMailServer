@@ -10,12 +10,33 @@ import (
 	"github.com/umailserver/umailserver/internal/storage"
 )
 
+// validateAccountId checks if the provided accountId matches the authenticated user.
+// If accountId is provided and doesn't match, returns an error Response.
+func validateAccountId(accountId, user, methodName, callID string) (bool, Response) {
+	if accountId != "" && accountId != user {
+		return false, Response{
+			Name: methodName,
+			Args: map[string]interface{}{
+				"type":        "accountNotFound",
+				"description": "Account not found or access denied",
+			},
+			ID: callID,
+		}
+	}
+	return true, Response{}
+}
+
 // handleMailboxGet handles Mailbox/get method
 func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 	args := call.Args
 
 	accountID, _ := args["accountId"].(string)
 	ids, _ := args["ids"].([]interface{})
+
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Mailbox/get", call.ID); !valid {
+		return resp
+	}
 
 	// Get mailboxes from storage
 	mailboxNames, err := s.db.ListMailboxes(user)
@@ -127,6 +148,11 @@ func (s *Server) handleMailboxQuery(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Mailbox/query", call.ID); !valid {
+		return resp
+	}
+
 	// Get mailboxes from storage
 	mailboxNames, err := s.db.ListMailboxes(user)
 	if err != nil {
@@ -167,6 +193,11 @@ func (s *Server) handleMailboxQuery(user string, call MethodCall) Response {
 func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
+
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Mailbox/set", call.ID); !valid {
+		return resp
+	}
 
 	// Parse create, update, destroy
 	create, _ := args["create"].(map[string]interface{})
@@ -279,6 +310,11 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 	accountID, _ := args["accountId"].(string)
 	ids, _ := args["ids"].([]interface{})
 
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Email/get", call.ID); !valid {
+		return resp
+	}
+
 	var emails []Email
 	var notFound []string
 
@@ -329,6 +365,12 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
+
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Email/query", call.ID); !valid {
+		return resp
+	}
+
 	filter, _ := args["filter"]
 	sort, _ := args["sort"].([]interface{})
 	position, _ := args["position"].(float64)
@@ -560,6 +602,11 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Email/set", call.ID); !valid {
+		return resp
+	}
+
 	// Parse create, update, destroy
 	create, _ := args["create"].(map[string]interface{})
 	update, _ := args["update"].(map[string]interface{})
@@ -746,6 +793,11 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Email/import", call.ID); !valid {
+		return resp
+	}
+
 	emails, _ := args["emails"].(map[string]interface{})
 
 	created := make(map[string]Email)
@@ -925,6 +977,12 @@ func parseEmailMetadata(data []byte, messageID string) *storage.MessageMetadata 
 func (s *Server) handleThreadGet(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
+
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Thread/get", call.ID); !valid {
+		return resp
+	}
+
 	ids, _ := args["ids"].([]interface{})
 
 	// Get threads from storage
@@ -966,6 +1024,12 @@ func (s *Server) handleThreadGet(user string, call MethodCall) Response {
 func (s *Server) handleSearchSnippetGet(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
+
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "SearchSnippet/get", call.ID); !valid {
+		return resp
+	}
+
 	emailIDs, _ := args["emailIds"].([]interface{})
 	search, _ := args["search"].(map[string]interface{})
 
@@ -1046,6 +1110,12 @@ func (s *Server) generateSearchSnippet(emailData, searchText string) SearchSnipp
 func (s *Server) handleIdentityGet(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
+
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Identity/get", call.ID); !valid {
+		return resp
+	}
+
 	ids, _ := args["ids"].([]interface{})
 
 	// Get user info from database
@@ -1097,6 +1167,11 @@ func (s *Server) handleIdentityGet(user string, call MethodCall) Response {
 func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
+
+	// Validate accountId matches authenticated user
+	if valid, resp := validateAccountId(accountID, user, "Identity/set", call.ID); !valid {
+		return resp
+	}
 
 	// Parse create, update, destroy
 	create, _ := args["create"].(map[string]interface{})

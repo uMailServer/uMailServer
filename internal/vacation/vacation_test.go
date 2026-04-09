@@ -510,10 +510,10 @@ func TestSanitizeFilename(t *testing.T) {
 		input    string
 		expected string
 	}{
-		{"user@example.com", "user_at_example_com"},
-		{"first.last@example.com", "first_last_at_example_com"},
-		{"user/test@example.com", "user_test_at_example_com"},
-		{"user\\test@example.com", "user_test_at_example_com"},
+		{"user@example.com", "dXNlckBleGFtcGxlLmNvbQ"},
+		{"first.last@example.com", "Zmlyc3QubGFzdEBleGFtcGxlLmNvbQ"},
+		{"user/test@example.com", "dXNlci90ZXN0QGV4YW1wbGUuY29t"},
+		{"user\\test@example.com", "dXNlclx0ZXN0QGV4YW1wbGUuY29t"},
 	}
 
 	for _, tt := range tests {
@@ -586,9 +586,14 @@ func TestUnsanitizeFilename(t *testing.T) {
 		input    string
 		expected string
 	}{
+		// Legacy format (with _at_ marker) - should use old unsanitize
 		{"user_at_example_com", "user@example.com"},
 		{"first_last_at_example_com", "first.last@example.com"},
 		{"user_test_at_example_com", "user.test@example.com"},
+		// New base64 format - should decode correctly
+		{"dXNlckBleGFtcGxlLmNvbQ", "user@example.com"},
+		{"Zmlyc3QubGFzdEBleGFtcGxlLmNvbQ", "first.last@example.com"},
+		{"dXNlci90ZXN0QGV4YW1wbGUuY29t", "user/test@example.com"},
 	}
 
 	for _, tt := range tests {

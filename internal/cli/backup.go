@@ -511,7 +511,36 @@ func (bm *BackupManager) Restore(backupFile string) error {
 			return fmt.Errorf("failed to read tar: %w", err)
 		}
 
-		targetPath := filepath.Join(bm.config.Server.DataDir, "..", "restore_temp", header.Name)
+		// Validate filename to prevent path traversal attacks
+		// Reject any path that could escape the restore_temp directory
+		// Also normalize path separators for cross-platform compatibility
+		sanitizedName := strings.ReplaceAll(header.Name, "/", string(filepath.Separator))
+		if strings.Contains(sanitizedName, "..") || strings.HasPrefix(sanitizedName, string(filepath.Separator)) {
+			return fmt.Errorf("invalid filename in tar: %s - path traversal detected", header.Name)
+		}
+
+		baseRestoreDir := filepath.Join(bm.config.Server.DataDir, "..", "restore_temp")
+		targetPath := filepath.Join(baseRestoreDir, sanitizedName)
+
+		// If the base directory exists and target path exists, verify it's within restore_temp
+		// This catches symlink-based path traversal attacks where a file is a symlink pointing outside
+		if _, err := os.Stat(baseRestoreDir); err == nil {
+			if _, err := os.Lstat(targetPath); err == nil {
+				// File/dir exists - verify it's not a symlink pointing outside restore_temp
+				realTargetPath, err := filepath.EvalSymlinks(targetPath)
+				if err != nil {
+					return fmt.Errorf("failed to resolve path: %w", err)
+				}
+				realBaseDir, err := filepath.EvalSymlinks(baseRestoreDir)
+				if err != nil {
+					return fmt.Errorf("failed to resolve base directory: %w", err)
+				}
+
+				if !strings.HasPrefix(realTargetPath, realBaseDir) {
+					return fmt.Errorf("invalid filename: %s - would extract outside target directory", header.Name)
+				}
+			}
+		}
 
 		// Create parent directory
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {

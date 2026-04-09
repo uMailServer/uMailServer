@@ -68,14 +68,20 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 				return
 			}
 
-			// For extra security, verify Origin/Referer if present (defense-in-depth)
-			origin := r.Header.Get("Origin")
-			referer := r.Header.Get("Referer")
-			if origin != "" || referer != "" {
-				// If both are present, they should be consistent
-				if origin != "" && referer != "" && !strings.HasPrefix(referer, origin) {
-					// Could be a CSRF attempt - but allow if Referer is just missing (some privacy tools strip it)
-					// This is defense-in-depth, not a blocking check
+			// For extra security, verify Origin/Referer for state-changing requests
+			// Only check for POST/PUT/PATCH/DELETE (not GET/HEAD/OPTIONS)
+			if !isSafeMethod(r.Method) {
+				origin := r.Header.Get("Origin")
+				referer := r.Header.Get("Referer")
+				if origin != "" || referer != "" {
+					// If both are present, they should be consistent
+					if origin != "" && referer != "" && !strings.HasPrefix(referer, origin) {
+						s.logger.Warn("CSRF: Origin/Referer mismatch", "origin", origin, "referer", referer, "path", r.URL.Path)
+						http.Error(w, "Forbidden - CSRF check failed", http.StatusForbidden)
+						return
+					}
+					// If origin is present but referer is missing (privacy tool stripped it), allow
+					// If referer is present but origin is missing, allow (some setups don't send Origin)
 				}
 			}
 		}
@@ -113,7 +119,7 @@ func (s *Server) ipWhitelistMiddleware(allowedIPs []string) func(http.Handler) h
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			clientIP := getClientIP(r)
+			clientIP := getClientIP(r, s.config.TrustedProxies)
 			if !allowed[clientIP] {
 				s.sendError(w, http.StatusForbidden, "Access denied")
 				return
@@ -124,26 +130,45 @@ func (s *Server) ipWhitelistMiddleware(allowedIPs []string) func(http.Handler) h
 }
 
 // getClientIP extracts the client IP from the request
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (for proxies)
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		// Take the first IP in the chain
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+// If trustedProxies is set, only trust X-Forwarded-For from those IPs
+func getClientIP(r *http.Request, trustedProxies []string) string {
+	remoteIP := getRemoteAddrIP(r)
+
+	// If trusted proxies are configured, only trust X-Forwarded-For if the request is from a trusted proxy
+	if len(trustedProxies) > 0 {
+		isFromTrustedProxy := false
+		for _, trusted := range trustedProxies {
+			if remoteIP == trusted {
+				isFromTrustedProxy = true
+				break
+			}
+		}
+
+		if isFromTrustedProxy {
+			// Only respect X-Forwarded-For from trusted proxies
+			xff := r.Header.Get("X-Forwarded-For")
+			if xff != "" {
+				ips := strings.Split(xff, ",")
+				if len(ips) > 0 {
+					return strings.TrimSpace(ips[0])
+				}
+			}
+
+			// Also check X-Real-Ip from trusted proxy
+			xri := r.Header.Get("X-Real-Ip")
+			if xri != "" {
+				return xri
+			}
 		}
 	}
 
-	// Check X-Real-Ip header
-	xri := r.Header.Get("X-Real-Ip")
-	if xri != "" {
-		return xri
-	}
+	// No trusted proxies configured or request not from trusted proxy - use RemoteAddr
+	return remoteIP
+}
 
-	// Fall back to RemoteAddr
+// getRemoteAddrIP extracts the IP from RemoteAddr without port
+func getRemoteAddrIP(r *http.Request) string {
 	ip := r.RemoteAddr
-	// Strip port if present
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {
 		ip = ip[:idx]
 	}

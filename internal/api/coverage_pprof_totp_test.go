@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -192,7 +193,9 @@ func TestHandleTOTPSetup_Success(t *testing.T) {
 	server, database := helperSetupTOTPAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest("POST", "/api/totp/setup", nil)
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	server.handleTOTPSetup(rec, req, "user@test.com")
@@ -262,8 +265,10 @@ func TestHandleTOTPVerify_MissingCode(t *testing.T) {
 	server, database := helperSetupTOTPAccount(t)
 	defer database.Close()
 
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
 	body, _ := json.Marshal(map[string]string{})
-	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -279,13 +284,15 @@ func TestHandleTOTPVerify_InvalidCode(t *testing.T) {
 	defer database.Close()
 
 	// First setup TOTP
-	req := httptest.NewRequest("POST", "/api/totp/setup", nil)
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleTOTPSetup(rec, req, "user@test.com")
 
 	// Try to verify with invalid code
 	body, _ := json.Marshal(map[string]string{"code": "000000"})
-	req = httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body))
+	req = httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 
@@ -301,8 +308,10 @@ func TestHandleTOTPVerify_NotSetUp(t *testing.T) {
 	defer database.Close()
 
 	// Try to verify without setting up first
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
 	body, _ := json.Marshal(map[string]string{"code": "123456"})
-	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -353,8 +362,10 @@ func TestHandleTOTPDisable_Success(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.handleTOTPSetup(rec, req, "user@test.com")
 
-	// Now disable it
-	req = httptest.NewRequest("POST", "/api/totp/disable", nil)
+	// Now disable it - user can disable their own TOTP
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
 	rec = httptest.NewRecorder()
 	server.handleTOTPDisable(rec, req, "user@test.com")
 
@@ -398,6 +409,77 @@ func TestHandleTOTPDisable_UserNotFound(t *testing.T) {
 	// Returns 404 for user not found
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected status 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleTOTPDisable_ForbiddenForDifferentUser(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	defer database.Close()
+
+	// Setup TOTP for user@test.com
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil)
+	rec := httptest.NewRecorder()
+	server.handleTOTPSetup(rec, req, "user@test.com")
+
+	// Try to disable as different user (not self, not admin) - should be forbidden
+	ctx := context.WithValue(context.Background(), "user", "other@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
+	rec = httptest.NewRecorder()
+	server.handleTOTPDisable(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleTOTPDisable_AdminCanDisableNonAdmin(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	defer database.Close()
+
+	// Setup TOTP for user@test.com (non-admin)
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil)
+	rec := httptest.NewRecorder()
+	server.handleTOTPSetup(rec, req, "user@test.com")
+
+	// Admin disables non-admin user's TOTP - should succeed
+	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
+	rec = httptest.NewRecorder()
+	server.handleTOTPDisable(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleTOTPDisable_AdminCannotDisableAdmin(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	defer database.Close()
+
+	// Setup TOTP for admin@test.com (admin account)
+	database.CreateAccount(&db.AccountData{
+		LocalPart:    "admin",
+		Domain:       "test.com",
+		PasswordHash: "hash",
+		IsAdmin:      true,
+		TOTPEnabled:  false,
+		TOTPSecret:   "",
+	})
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil)
+	rec := httptest.NewRecorder()
+	server.handleTOTPSetup(rec, req, "admin@test.com")
+
+	// Another admin tries to disable admin's TOTP - should be forbidden
+	ctx := context.WithValue(context.Background(), "user", "otheradmin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
+	rec = httptest.NewRecorder()
+	server.handleTOTPDisable(rec, req, "admin@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

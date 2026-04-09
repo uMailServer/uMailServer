@@ -100,14 +100,19 @@ type Server struct {
 	pushUnsubscribeError error
 	pushSendError        error
 	queueMgrStatsError   error
+
+	// Token blacklist for revoked tokens (supports logout before expiry)
+	tokenBlacklist   map[string]time.Time
+	tokenBlacklistMu sync.RWMutex
 }
 
 // Config holds API server configuration
 type Config struct {
-	Addr        string
-	JWTSecret   string
-	TokenExpiry time.Duration
-	CorsOrigins []string
+	Addr           string
+	JWTSecret      string
+	TokenExpiry    time.Duration
+	CorsOrigins    []string
+	TrustedProxies []string // IPs that are allowed to set X-Forwarded-For
 }
 
 // NewServer creates a new admin API server
@@ -154,6 +159,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		sseServer: sseServer,
 		webmailFS: newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
 		adminFS:   newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+		tokenBlacklist: make(map[string]time.Time),
 	}
 }
 
@@ -221,6 +227,7 @@ func NewServerWithInterfaces(
 		pushSvc:     pushSvc,
 		webmailFS:   webmailFS,
 		adminFS:     adminFS,
+		tokenBlacklist: make(map[string]time.Time),
 	}
 }
 
@@ -230,6 +237,39 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.initRouter()
 	}
 	s.router.ServeHTTP(w, r)
+}
+
+// RevokeToken adds a token to the blacklist (for logout)
+func (s *Server) RevokeToken(tokenHash string) {
+	s.tokenBlacklistMu.Lock()
+	defer s.tokenBlacklistMu.Unlock()
+	// Blacklist expires when the token would have expired (1 hour from now for typical tokens)
+	s.tokenBlacklist[tokenHash] = time.Now().Add(time.Hour)
+}
+
+// IsTokenRevoked checks if a token is in the blacklist
+func (s *Server) IsTokenRevoked(tokenHash string) bool {
+	s.tokenBlacklistMu.RLock()
+	defer s.tokenBlacklistMu.RUnlock()
+	if expiry, ok := s.tokenBlacklist[tokenHash]; ok {
+		if time.Now().After(expiry) {
+			return false // Expired, remove from blacklist
+		}
+		return true
+	}
+	return false
+}
+
+// CleanupExpiredTokens removes expired entries from the blacklist
+func (s *Server) CleanupExpiredTokens() {
+	s.tokenBlacklistMu.Lock()
+	defer s.tokenBlacklistMu.Unlock()
+	now := time.Now()
+	for token, expiry := range s.tokenBlacklist {
+		if now.After(expiry) {
+			delete(s.tokenBlacklist, token)
+		}
+	}
 }
 
 // initRouter sets up the HTTP routes (called once on first request)
@@ -270,6 +310,7 @@ func (s *Server) initRouter() {
 	// Authentication
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("/api/v1/auth/refresh", s.handleRefresh)
+	mux.Handle("/api/v1/auth/logout", s.authMiddleware(http.HandlerFunc(s.handleLogout)))
 
 	// Protected routes
 	api := http.NewServeMux()
@@ -496,6 +537,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Check if token is revoked (logout)
+		tokenHash := fmt.Sprintf("%x", md5.Sum([]byte(tokenStr)))
+		if s.IsTokenRevoked(tokenHash) {
+			s.sendError(w, http.StatusUnauthorized, "token has been revoked")
+			return
+		}
+
 		// Get claims
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
@@ -587,7 +635,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.db.ListDomains(); err != nil {
 			status = http.StatusServiceUnavailable
 			result["status"] = "unhealthy"
-			result["database"] = err.Error()
+			result["database"] = "unavailable"
 		} else {
 			result["database"] = "ok"
 		}
@@ -599,11 +647,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		if s.queueMgrStatsError != nil {
 			status = http.StatusServiceUnavailable
 			result["status"] = "unhealthy"
-			result["queue"] = s.queueMgrStatsError.Error()
+			result["queue"] = "unavailable"
 		} else if _, err := s.queueMgr.GetStats(); err != nil {
 			status = http.StatusServiceUnavailable
 			result["status"] = "unhealthy"
-			result["queue"] = err.Error()
+			result["queue"] = "unavailable"
 		} else {
 			result["queue"] = "ok"
 		}
@@ -805,6 +853,32 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	InitDemoEmails(account.Email)
 }
 
+// handleLogout revokes the current token (adds it to blacklist)
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// Get token from Authorization header
+	authHeader := r.Header.Get("Authorization")
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		s.sendError(w, http.StatusUnauthorized, "invalid authorization header")
+		return
+	}
+
+	tokenStr := parts[1]
+
+	// Revoke the token by adding it to blacklist
+	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte(tokenStr)))
+	s.RevokeToken(tokenHash)
+
+	s.sendJSON(w, http.StatusOK, map[string]string{
+		"message": "logged out successfully",
+	})
+}
+
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -913,8 +987,24 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 		return
 	}
 
+	// Authorization: user can setup their own TOTP; admin can setup for non-admin users
+	authUser := r.Context().Value("user")
+	authIsAdmin := r.Context().Value("isAdmin")
+	isAdmin, _ := authIsAdmin.(bool)
+	authenticatedUser, _ := authUser.(string)
+
 	user, domain := parseEmail(email)
 	account, err := s.db.GetAccount(domain, user)
+	if err != nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	// Allow if: user is setting up their own TOTP, OR admin is setting up for non-admin users
+	if authenticatedUser != email && (!isAdmin || account.IsAdmin) {
+		s.sendError(w, http.StatusForbidden, "forbidden: cannot setup TOTP for this user")
+		return
+	}
 	if err != nil {
 		s.sendError(w, http.StatusNotFound, "account not found")
 		return
@@ -948,10 +1038,22 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 		return
 	}
 
+	// Authorization: user can verify their own TOTP; admin can verify for non-admin users
+	authUser := r.Context().Value("user")
+	authIsAdmin := r.Context().Value("isAdmin")
+	isAdmin, _ := authIsAdmin.(bool)
+	authenticatedUser, _ := authUser.(string)
+
 	user, domain := parseEmail(email)
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
 		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	// Allow if: user is verifying their own TOTP, OR admin is verifying for non-admin users
+	if authenticatedUser != email && (!isAdmin || account.IsAdmin) {
+		s.sendError(w, http.StatusForbidden, "forbidden: cannot verify TOTP for this user")
 		return
 	}
 
@@ -992,10 +1094,22 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 		return
 	}
 
+	// Authorization: user can disable their own TOTP; admin can disable non-admin users
+	authUser := r.Context().Value("user")
+	authIsAdmin := r.Context().Value("isAdmin")
+	isAdmin, _ := authIsAdmin.(bool)
+	authenticatedUser, _ := authUser.(string)
+
 	user, domain := parseEmail(email)
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
 		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	// Allow if: user is disabling their own TOTP, OR admin is disabling a non-admin user's TOTP
+	if authenticatedUser != email && (!isAdmin || account.IsAdmin) {
+		s.sendError(w, http.StatusForbidden, "forbidden: cannot disable TOTP for this user")
 		return
 	}
 
@@ -1392,6 +1506,12 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
+	// Authorization check: prevent privilege escalation
+	// Only enforce when context is properly set (i.e., through HTTP middleware)
+	authUser := r.Context().Value("user")
+	authIsAdmin := r.Context().Value("isAdmin")
+
+	// Parse request body first to check IsAdmin modification
 	var req struct {
 		Password         string `json:"password"`
 		IsAdmin          bool   `json:"is_admin"`
@@ -1405,6 +1525,24 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	// Only enforce authorization when context is properly set (authenticated request)
+	if authUser != nil && authIsAdmin != nil {
+		isAdmin, _ := authIsAdmin.(bool)
+		authenticatedUser, _ := authUser.(string)
+
+		// Prevent self-modification of IsAdmin flag
+		if authenticatedUser == email && req.IsAdmin != account.IsAdmin {
+			s.sendError(w, http.StatusForbidden, "cannot modify your own admin status")
+			return
+		}
+
+		// Prevent non-admin from setting IsAdmin to true
+		if !isAdmin && req.IsAdmin {
+			s.sendError(w, http.StatusForbidden, "only admins can grant admin privileges")
+			return
+		}
 	}
 
 	if req.Password != "" {

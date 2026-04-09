@@ -115,11 +115,12 @@ type POP3Config struct {
 
 // HTTPConfig holds HTTP server settings
 type HTTPConfig struct {
-	Enabled     bool     `yaml:"enabled"`
-	Port        int      `yaml:"port"`
-	HTTPPort    int      `yaml:"http_port"`
-	Bind        string   `yaml:"bind"`
-	CorsOrigins []string `yaml:"cors_origins"`
+	Enabled        bool     `yaml:"enabled"`
+	Port           int      `yaml:"port"`
+	HTTPPort       int      `yaml:"http_port"`
+	Bind           string   `yaml:"bind"`
+	CorsOrigins    []string `yaml:"cors_origins"`
+	TrustedProxies []string `yaml:"trusted_proxies"` // IPs that are allowed to set X-Forwarded-For
 }
 
 // AdminConfig holds admin panel settings
@@ -441,6 +442,21 @@ func (c *Config) Validate() error {
 	// Validate JWT secret length (empty is allowed - will be generated at runtime)
 	if c.Security.JWTSecret != "" && len(c.Security.JWTSecret) < 32 {
 		return fmt.Errorf("security.jwt_secret must be at least 32 characters")
+	}
+
+	// Reject known placeholder JWT secrets - these are obvious and must be changed
+	knownPlaceholders := []string{
+		"change-me-to-a-32-character-secret-minimum",
+		"change-me-to-a-32+character-secret-key",
+		"change-me-in-production-32-char-secret",
+		"dev-secret-key-change-in-production-32ch",
+		"demo-secret-key-for-local-testing-32ch",
+		"CHANGE-THIS-TO-A-32+CHARACTER-SECRET-KEY",
+	}
+	for _, placeholder := range knownPlaceholders {
+		if c.Security.JWTSecret == placeholder {
+			return fmt.Errorf("security.jwt_secret contains a known placeholder value - generate a unique secret")
+		}
 	}
 
 	// Validate TLS MinVersion
