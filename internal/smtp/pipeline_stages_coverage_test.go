@@ -294,9 +294,45 @@ func TestRBLStage_WithServers_Listed(t *testing.T) {
 	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
 
 	result := stage.Process(ctx)
-	// With current implementation, this may still return accept
-	// The RBL check sets spam score but doesn't reject
-	_ = result
+	// Should accept (RBL check adds spam score but doesn't reject)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %d", result)
+	}
+	if ctx.SpamScore < 2.0 {
+		t.Errorf("Expected SpamScore >= 2.0 for listed IP, got %f", ctx.SpamScore)
+	}
+}
+
+func TestRBLStage_DifferentResultCodes(t *testing.T) {
+	testCases := []struct {
+		resultIP   string
+		minScore   float64
+	}{
+		{"127.0.0.2", 3.0}, // confirmed spam source
+		{"127.0.0.3", 3.0}, // confirmed spam source (alt)
+		{"127.0.0.4", 2.0}, // spam domain
+		{"127.0.0.5", 2.5}, // phishing domain
+		{"127.0.0.6", 3.0}, // malware domain
+		{"127.0.0.7", 3.0}, // botnet server
+		{"127.0.0.99", 1.5}, // generic positive or unknown
+	}
+
+	for _, tc := range testCases {
+		resolver := &mockRBLResolver{
+			results: map[string]net.IP{
+				"1.1.168.192.zen.spamhaus.org": net.ParseIP(tc.resultIP),
+			},
+		}
+		stage := NewRBLStage([]string{"zen.spamhaus.org"}, resolver)
+
+		ip := net.ParseIP("192.168.1.1")
+		ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+
+		stage.Process(ctx)
+		if ctx.SpamScore < tc.minScore {
+			t.Errorf("For result %s: expected SpamScore >= %f, got %f", tc.resultIP, tc.minScore, ctx.SpamScore)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

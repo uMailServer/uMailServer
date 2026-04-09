@@ -207,6 +207,7 @@ func TestReverseIP(t *testing.T) {
 		// IPv4
 		{"192.168.1.1", "1.1.168.192"},
 		{"10.0.0.1", "1.0.0.10"},
+		// Invalid/edge cases
 		{"invalid", ""},
 		{"", ""},
 	}
