@@ -222,6 +222,28 @@ func TestHandler_HandleAutodiscover_POST(t *testing.T) {
 	}
 }
 
+func TestExtractEmailFromHost(t *testing.T) {
+	handler := NewHandler(nil)
+
+	tests := []struct {
+		host string
+		want string
+	}{
+		{"user@example.com", "user@example.com"},
+		{"user@EXAMPLE.COM", "user@example.com"}, // lowercase conversion
+		{"user@example.com:8080", "user@example.com"}, // with port
+		{"example.com", ""},                       // no email
+		{"192.168.1.1", ""},                       // IP
+	}
+
+	for _, tt := range tests {
+		got := handler.extractEmailFromHost(tt.host)
+		if got != tt.want {
+			t.Errorf("extractEmailFromHost(%q) = %q, want %q", tt.host, got, tt.want)
+		}
+	}
+}
+
 func TestAutoconfigClientConfig_XML(t *testing.T) {
 	config := &AutoconfigClientConfig{
 		Version: "1.1",

@@ -1508,3 +1508,47 @@ func TestAddressToString(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Mailstore tests
+// ---------------------------------------------------------------------------
+
+func TestNewBboltMailstoreWithInterfaces(t *testing.T) {
+	store := NewBboltMailstoreWithInterfaces(nil, nil)
+	if store == nil {
+		t.Fatal("Expected non-nil mailstore")
+	}
+	if store.db != nil {
+		t.Error("Expected nil db")
+	}
+	if store.msgStore != nil {
+		t.Error("Expected nil msgStore")
+	}
+	if store.mdnSent == nil {
+		t.Error("Expected non-nil mdnSent map")
+	}
+}
+
+func TestBboltMailstoreSetMDNHandler(t *testing.T) {
+	store := NewBboltMailstoreWithInterfaces(nil, nil)
+
+	called := false
+	handler := func(from, to, messageID, inReplyTo string, msg []byte) error {
+		called = true
+		return nil
+	}
+
+	store.SetMDNHandler(handler)
+	if store.mdnHandler == nil {
+		t.Error("Expected non-nil mdnHandler")
+	}
+
+	// Call the handler to verify it works
+	err := store.mdnHandler("from@test.com", "to@test.com", "msg123", "", nil)
+	if err != nil {
+		t.Errorf("mdnHandler returned error: %v", err)
+	}
+	if !called {
+		t.Error("Expected handler to be called")
+	}
+}
