@@ -3123,3 +3123,125 @@ func TestMailHandler_MarkAsRead_NilStorage(t *testing.T) {
 	// Should not panic with nil storage
 	h.markAsRead("user@example.com", "INBOX", "123")
 }
+
+func TestMailHandler_HandleMailSend_Unauthorized(t *testing.T) {
+	h := &MailHandler{}
+
+	body := `{"to": ["test@example.com"], "subject": "Test", "body": "Hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/send", strings.NewReader(body))
+	// No user in context
+	w := httptest.NewRecorder()
+
+	h.handleMailSend(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status 401, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailSend_MissingRecipient(t *testing.T) {
+	h := &MailHandler{}
+
+	body := `{"subject": "Test", "body": "Hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/send", strings.NewReader(body))
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailSend(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailSend_TooManyRecipients(t *testing.T) {
+	h := &MailHandler{}
+
+	recipients := make([]string, 101)
+	for i := range recipients {
+		recipients[i] = fmt.Sprintf("user%d@example.com", i)
+	}
+	body := fmt.Sprintf(`{"to": %q, "subject": "Test", "body": "Hello"}`, recipients)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/send", strings.NewReader(body))
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailSend(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailSend_SubjectTooLong(t *testing.T) {
+	h := &MailHandler{}
+
+	body := fmt.Sprintf(`{"to": ["test@example.com"], "subject": "%s", "body": "Hello"}`, strings.Repeat("a", 999))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/send", strings.NewReader(body))
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailSend(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailSend_InvalidJSON(t *testing.T) {
+	h := &MailHandler{}
+
+	body := `invalid json`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/send", strings.NewReader(body))
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailSend(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailDelete_Unauthorized(t *testing.T) {
+	h := &MailHandler{}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mail/message/123", nil)
+	// No user in context
+	w := httptest.NewRecorder()
+
+	h.handleMailDelete(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status 401, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailDelete_MissingMessageID(t *testing.T) {
+	h := &MailHandler{}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mail/message", nil)
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailDelete(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailGet_NilStorage(t *testing.T) {
+	h := &MailHandler{}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/message/123", nil)
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailGet(w, req)
+
+	// With nil storage, returns 404 not found
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", w.Code)
+	}
+}
