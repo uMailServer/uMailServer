@@ -2004,3 +2004,153 @@ func TestInterpreter_Set_InsufficientArgs(t *testing.T) {
 		t.Errorf("Expected 1 action (keep), got %d", len(actions))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Parser Comment Tests
+// ---------------------------------------------------------------------------
+
+func TestParser_SingleLineComment(t *testing.T) {
+	script := `# This is a comment
+keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(s.Commands) != 1 {
+		t.Errorf("Expected 1 command, got %d", len(s.Commands))
+	}
+	if s.Commands[0].Name != "keep" {
+		t.Errorf("Expected 'keep', got %q", s.Commands[0].Name)
+	}
+}
+
+func TestParser_MultiLineComment(t *testing.T) {
+	script := `/* This is a
+multi-line comment */
+keep;`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(s.Commands) != 1 {
+		t.Errorf("Expected 1 command, got %d", len(s.Commands))
+	}
+	if s.Commands[0].Name != "keep" {
+		t.Errorf("Expected 'keep', got %q", s.Commands[0].Name)
+	}
+}
+
+func TestParser_CommentInBlock(t *testing.T) {
+	script := `
+if header :contains "subject" "test" {
+    # comment inside block
+    keep;
+}`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(s.Commands) != 1 {
+		t.Errorf("Expected 1 command, got %d", len(s.Commands))
+	}
+}
+
+func TestParser_MultipleComments(t *testing.T) {
+	script := `# comment 1
+# comment 2
+keep; # inline comment`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(s.Commands) != 1 {
+		t.Errorf("Expected 1 command, got %d", len(s.Commands))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Parser String Escape Tests
+// ---------------------------------------------------------------------------
+
+func TestParser_StringWithEscapes(t *testing.T) {
+	script := `vacation "Hello\nWorld\tTest";`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(s.Commands) != 1 {
+		t.Fatalf("Expected 1 command, got %d", len(s.Commands))
+	}
+	cmd := s.Commands[0]
+	if cmd.Name != "vacation" {
+		t.Errorf("Expected 'vacation', got %q", cmd.Name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Parser String List Tests
+// ---------------------------------------------------------------------------
+
+func TestParser_StringList(t *testing.T) {
+	script := `redirect ["a@b.com", "c@d.com"];`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(s.Commands) != 1 {
+		t.Fatalf("Expected 1 command, got %d", len(s.Commands))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Interpreter executeIf with elsif Tests
+// ---------------------------------------------------------------------------
+
+func TestInterpreter_ElsifBranchExecuted(t *testing.T) {
+	script := `
+if header :contains "subject" "notmatch" {
+    discard;
+} elsif header :contains "from" "test@example.com" {
+    keep;
+}
+`
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{
+			"subject": {"Hello"},
+			"from":    {"test@example.com"},
+		},
+		Body: []byte("Test"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Should have keep action from elsif branch
+	found := false
+	for _, a := range actions {
+		if _, ok := a.(KeepAction); ok {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected keep action from elsif branch")
+	}
+}
