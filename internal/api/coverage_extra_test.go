@@ -2803,3 +2803,177 @@ func TestExtractBody(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Rate limit config validation tests
+// ---------------------------------------------------------------------------
+
+func TestHandlePutRateLimitConfig_InvalidJSON(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{cfg: &ratelimit.Config{}}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", strings.NewReader("invalid json"))
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandlePutRateLimitConfig_NegativeIPPerMinute(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{cfg: &ratelimit.Config{}}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	body := `{"ip_per_minute": -1}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandlePutRateLimitConfig_NegativeIPPerHour(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{cfg: &ratelimit.Config{}}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	body := `{"ip_per_hour": -5}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandlePutRateLimitConfig_NegativeUserPerDay(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{cfg: &ratelimit.Config{}}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	body := `{"user_per_day": -10}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandlePutRateLimitConfig_Success(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{cfg: &ratelimit.Config{CleanupInterval: 600}}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	body := `{"ip_per_minute": 60, "ip_per_hour": 500, "user_per_day": 1000}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+	if mockRL.cfg.IPPerMinute != 60 {
+		t.Errorf("Expected ip_per_minute 60, got %d", mockRL.cfg.IPPerMinute)
+	}
+	if mockRL.cfg.CleanupInterval != 600 {
+		t.Errorf("Expected CleanupInterval to be preserved as 600, got %v", mockRL.cfg.CleanupInterval)
+	}
+}
+
+func TestHandleGetRateLimitConfig_WithMockManager(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{
+		cfg: &ratelimit.Config{
+			IPPerMinute:       60,
+			IPPerHour:         500,
+			IPPerDay:          5000,
+			IPConnections:     10,
+			UserPerMinute:     30,
+			UserPerHour:       200,
+			UserPerDay:        1000,
+			UserMaxRecipients: 100,
+			GlobalPerMinute:   1000,
+			GlobalPerHour:     10000,
+			CleanupInterval:   600,
+		},
+	}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/ratelimits/config", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+}
+
+func TestHandleRateLimitConfig_MethodNotAllowed(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+
+	// Test DELETE method (should be rejected)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/ratelimits/config", nil)
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}

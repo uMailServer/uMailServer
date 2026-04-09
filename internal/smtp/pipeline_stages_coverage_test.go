@@ -355,3 +355,54 @@ func TestAuthARCStage_Process_WithNilLogger(t *testing.T) {
 		t.Errorf("Expected ResultAccept, got %d", result)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// extractUserFromRecipient direct unit tests
+// ---------------------------------------------------------------------------
+
+func TestExtractUserFromRecipient_BangPath(t *testing.T) {
+	tests := []struct {
+		recipient string
+		expected  string
+	}{
+		{"user!domain", "user"},
+		{"postmaster!mailhub", "postmaster"},
+		{"", ""},
+		{"no-at-nada", "no-at-nada"},
+	}
+
+	for _, tt := range tests {
+		result := extractUserFromRecipient(tt.recipient)
+		if result != tt.expected {
+			t.Errorf("extractUserFromRecipient(%q) = %q, want %q", tt.recipient, result, tt.expected)
+		}
+	}
+}
+
+func TestSieveStage_Process_BangPathRecipient(t *testing.T) {
+	manager := sieve.NewManager()
+	stage := NewSieveStage(manager)
+
+	ip := net.ParseIP("192.168.1.1")
+
+	// Add a sieve script for the bang path user
+	script := `
+		require "fileinto";
+		if true {
+			fileinto "INBOX";
+			stop;
+		}
+	`
+	manager.StoreScript("testuser", "testscript", script)
+	manager.SetActiveScript("testuser", "testscript", script)
+
+	// Test with bang path recipient
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"testuser!bangpath@example.com"}, []byte("test"))
+	ctx.Authenticated = true
+	ctx.Username = "testuser"
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for bang path recipient, got %d", result)
+	}
+}
