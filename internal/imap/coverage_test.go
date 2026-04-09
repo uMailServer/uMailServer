@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"strings"
@@ -1685,5 +1686,133 @@ func TestParseSortCriteria(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSortMessagesByCriteria(t *testing.T) {
+	now := time.Now()
+	messages := []*storage.MessageMetadata{
+		{UID: 1, Subject: "Alpha", Size: 100, Date: now.Format(time.RFC1123Z), InternalDate: now},
+		{UID: 2, Subject: "Beta", Size: 200, Date: now.Add(-time.Hour).Format(time.RFC1123Z), InternalDate: now.Add(-time.Hour)},
+		{UID: 3, Subject: "Alpha", Size: 150, Date: now.Add(-2*time.Hour).Format(time.RFC1123Z), InternalDate: now.Add(-2*time.Hour)},
+	}
+	seqNums := []uint32{1, 2, 3}
+
+	// Test SORT BY SUBJECT
+	criteria := []SortCriterion{{Field: "SUBJECT", Descending: true}}
+	result := sortMessagesByCriteria(messages, criteria, seqNums)
+	if len(result) != 3 {
+		t.Errorf("Expected 3 results, got %d", len(result))
+	}
+
+	// Test SORT BY SIZE
+	criteria = []SortCriterion{{Field: "SIZE", Descending: false}}
+	result = sortMessagesByCriteria(messages, criteria, seqNums)
+	if len(result) != 3 {
+		t.Errorf("Expected 3 results, got %d", len(result))
+	}
+
+	// Test empty messages
+	result = sortMessagesByCriteria([]*storage.MessageMetadata{}, []SortCriterion{{Field: "SUBJECT", Descending: true}}, seqNums)
+	if result != nil {
+		t.Errorf("Expected nil for empty messages, got %v", result)
+	}
+}
+
+func TestThreadMessagesByReferences(t *testing.T) {
+	now := time.Now()
+	messages := []*storage.MessageMetadata{
+		{UID: 1, MessageID: "<msg1@test.com>", Subject: "Root", InternalDate: now},
+		{UID: 2, MessageID: "<msg2@test.com>", InReplyTo: "<msg1@test.com>", Subject: "Reply1", InternalDate: now},
+		{UID: 3, MessageID: "<msg3@test.com>", InReplyTo: "<msg1@test.com>", Subject: "Reply2", InternalDate: now},
+		{UID: 4, MessageID: "<msg4@test.com>", Subject: "Orphan", InternalDate: now},
+	}
+	seqNums := []uint32{1, 2, 3, 4}
+
+	result := threadMessagesByReferences(messages, seqNums)
+	if result == nil {
+		t.Fatal("Expected non-nil result")
+	}
+
+	// msg1 should have msg2 and msg3 as children
+	if len(result[1]) != 2 {
+		t.Errorf("Expected 2 children for msg1, got %d", len(result[1]))
+	}
+}
+
+func TestThreadMessagesByOrderedSubject(t *testing.T) {
+	now := time.Now()
+	messages := []*storage.MessageMetadata{
+		{UID: 1, Subject: "Alpha", InternalDate: now},
+		{UID: 2, Subject: "Beta", InternalDate: now.Add(-time.Hour)},
+		{UID: 3, Subject: "Alpha", InternalDate: now.Add(-2 * time.Hour)},
+	}
+	seqNums := []uint32{1, 2, 3}
+
+	result := threadMessagesByOrderedSubject(messages, seqNums)
+	if result == nil {
+		t.Fatal("Expected non-nil result")
+	}
+}
+
+func TestFlattenThread(t *testing.T) {
+	children := map[uint32][]uint32{
+		1: {2, 3},
+		2: {4, 5},
+	}
+	visited := make(map[uint32]bool)
+
+	result := flattenThread(1, children, visited)
+	if len(result) != 5 {
+		t.Errorf("Expected 5 messages in thread, got %d", len(result))
+	}
+}
+
+func TestServerTimeouts(t *testing.T) {
+	config := &Config{Logger: slog.Default()}
+	srv := NewServer(config, &mockMailstore{})
+
+	// Test SetReadTimeout
+	srv.SetReadTimeout(30 * time.Second)
+	if srv.readTimeout != 30*time.Second {
+		t.Errorf("Expected readTimeout 30s, got %v", srv.readTimeout)
+	}
+
+	// Test SetWriteTimeout
+	srv.SetWriteTimeout(45 * time.Second)
+	if srv.writeTimeout != 45*time.Second {
+		t.Errorf("Expected writeTimeout 45s, got %v", srv.writeTimeout)
+	}
+
+	// Test SetIdleTimeout
+	srv.SetIdleTimeout(5 * time.Minute)
+	if srv.idleTimeout != 5*time.Minute {
+		t.Errorf("Expected idleTimeout 5m, got %v", srv.idleTimeout)
+	}
+
+	// Test SetMaxConnections
+	srv.SetMaxConnections(100)
+	if srv.maxConnections != 100 {
+		t.Errorf("Expected maxConnections 100, got %d", srv.maxConnections)
+	}
+}
+
+func TestServerSetOnExpunge(t *testing.T) {
+	config := &Config{Logger: slog.Default()}
+	srv := NewServer(config, &mockMailstore{})
+
+	called := false
+	srv.SetOnExpunge(func(user, mailbox string, uid uint32) {
+		called = true
+	})
+
+	if srv.onExpunge == nil {
+		t.Error("Expected onExpunge to be set")
+	}
+
+	// Call the callback to verify it works
+	srv.onExpunge("testuser", "INBOX", 123)
+	if !called {
+		t.Error("Expected onExpunge callback to be called")
 	}
 }
