@@ -131,6 +131,109 @@ func TestAuthDKIMStage_VerifyError_NilLogger(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AuthARCStage.Process with valid chain and DMARC fail override (lines 257-270)
+// ---------------------------------------------------------------------------
+
+func TestAuthARCStage_Process_ValidChainWithDMARCFail(t *testing.T) {
+	resolver := &mockAuthDNSResolver{}
+	validator := auth.NewARCValidator(resolver)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	stage := NewAuthARCStage(validator, logger)
+
+	// Set up a valid-looking ARC chain with CV=pass
+	headers := map[string][]string{
+		"ARC-Authentication-Results": {"i=1; auth=pass"},
+		"ARC-Message-Signature":      {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
+		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
+	}
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
+	ctx.Headers = headers
+	ctx.DMARCResult.Result = "fail"
+	ctx.SpamScore = 3.0
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+	if ctx.SpamScore < 2.0 {
+		t.Errorf("Expected SpamScore reduced from 3.0, got %f", ctx.SpamScore)
+	}
+}
+
+func TestAuthARCStage_Process_ValidChainNoDMARCOverride(t *testing.T) {
+	resolver := &mockAuthDNSResolver{}
+	validator := auth.NewARCValidator(resolver)
+	stage := NewAuthARCStage(validator, nil)
+
+	headers := map[string][]string{
+		"ARC-Authentication-Results": {"i=1; auth=pass"},
+		"ARC-Message-Signature":      {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
+		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
+	}
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
+	ctx.Headers = headers
+	ctx.DMARCResult.Result = "pass"
+	ctx.SpamScore = 0.0
+
+	originalScore := ctx.SpamScore
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+	if ctx.SpamScore != originalScore {
+		t.Errorf("Expected SpamScore unchanged, got %f", ctx.SpamScore)
+	}
+}
+
+func TestAuthARCStage_Process_InvalidChain(t *testing.T) {
+	resolver := &mockAuthDNSResolver{}
+	validator := auth.NewARCValidator(resolver)
+	stage := NewAuthARCStage(validator, nil)
+
+	headers := map[string][]string{
+		"ARC-Authentication-Results": {"i=1; auth=fail"},
+		"ARC-Message-Signature":      {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
+		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=fail; b=seal1"},
+	}
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
+	ctx.Headers = headers
+	ctx.SpamScore = 0.0
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+	if ctx.SpamScore != 0.0 {
+		t.Errorf("Expected SpamScore 0.0 for invalid chain, got %f", ctx.SpamScore)
+	}
+}
+
+func TestAuthARCStage_Process_WithLogger(t *testing.T) {
+	resolver := &mockAuthDNSResolver{}
+	validator := auth.NewARCValidator(resolver)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	stage := NewAuthARCStage(validator, logger)
+
+	headers := map[string][]string{
+		"ARC-Authentication-Results": {"i=1; auth=pass"},
+		"ARC-Message-Signature":     {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
+		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
+	}
+
+	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
+	ctx.Headers = headers
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept, got %v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // 4. handleAuthPLAIN two-step flow (session.go:686-726)
 //    Send "AUTH PLAIN" without inline creds, respond to 334 challenge with
 //    valid base64 creds, assert 235 response.
