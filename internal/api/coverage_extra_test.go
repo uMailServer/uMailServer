@@ -2977,3 +2977,149 @@ func TestHandleRateLimitConfig_MethodNotAllowed(t *testing.T) {
 		t.Errorf("Expected status 405, got %d", w.Code)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// MailHandler tests
+// ---------------------------------------------------------------------------
+
+func TestMailHandler_SendError(t *testing.T) {
+	h := &MailHandler{}
+
+	tests := []struct {
+		status  int
+		message string
+	}{
+		{400, "Bad request"},
+		{401, "Unauthorized"},
+		{404, "Not found"},
+		{500, "Internal server error"},
+	}
+
+	for _, tt := range tests {
+		w := httptest.NewRecorder()
+		h.sendError(w, tt.status, tt.message)
+
+		if w.Code != tt.status {
+			t.Errorf("status %d: expected %d, got %d", tt.status, tt.status, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("status %d: expected application/json, got %s", tt.status, ct)
+		}
+	}
+}
+
+func TestMailHandler_HandleMailList_NilStorage(t *testing.T) {
+	h := &MailHandler{}
+	// nil storage - should return empty list
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/inbox", nil)
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailList(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailList_PostMethod(t *testing.T) {
+	h := &MailHandler{}
+
+	body := `{"folder": "inbox"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/inbox", strings.NewReader(body))
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailList(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailList_Unauthorized(t *testing.T) {
+	h := &MailHandler{}
+
+	// No user in context
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/inbox", nil)
+	w := httptest.NewRecorder()
+
+	h.handleMailList(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status 401, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailGet_MethodNotAllowed(t *testing.T) {
+	h := &MailHandler{}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/message/123", nil)
+	w := httptest.NewRecorder()
+
+	h.handleMailGet(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailDelete_MethodNotAllowed(t *testing.T) {
+	h := &MailHandler{}
+
+	// GET method should be rejected
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/message/123", nil)
+	w := httptest.NewRecorder()
+
+	h.handleMailDelete(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_HandleMailSend_MethodNotAllowed(t *testing.T) {
+	h := &MailHandler{}
+
+	// GET method should be rejected
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/send", nil)
+	w := httptest.NewRecorder()
+
+	h.handleMailSend(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestMailHandler_GetEmailsFromStorage_NilStorage(t *testing.T) {
+	h := &MailHandler{}
+
+	emails, err := h.getEmailsFromStorage("user@example.com", "INBOX")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if len(emails) != 0 {
+		t.Errorf("Expected 0 emails for nil storage, got %d", len(emails))
+	}
+}
+
+func TestMailHandler_GetEmailFromStorage_NilStorage(t *testing.T) {
+	h := &MailHandler{}
+
+	email, err := h.getEmailFromStorage("user@example.com", "INBOX", "123")
+	if err == nil {
+		t.Error("Expected error for nil storage")
+	}
+	if email != nil {
+		t.Error("Expected nil email for nil storage")
+	}
+}
+
+func TestMailHandler_MarkAsRead_NilStorage(t *testing.T) {
+	h := &MailHandler{}
+
+	// Should not panic with nil storage
+	h.markAsRead("user@example.com", "INBOX", "123")
+}
