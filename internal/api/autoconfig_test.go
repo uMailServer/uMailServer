@@ -170,6 +170,21 @@ func TestHandleAutoconfig_PostRequest(t *testing.T) {
 	}
 }
 
+func TestHandleAutoconfig_EmptyDomain(t *testing.T) {
+	s := &Server{}
+
+	// Test GET request with host that has no dot (returns empty domain)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/autoconfig/mail/config-v1.1.xml", nil)
+	req.Host = "localhost" // No dot, so domain will be empty
+	w := httptest.NewRecorder()
+
+	s.handleAutoconfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+}
+
 func TestBuildAutodiscoverResponse(t *testing.T) {
 	s := &Server{}
 
