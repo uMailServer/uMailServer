@@ -236,3 +236,58 @@ func TestGenerateMDN_DifferentDispositions(t *testing.T) {
 func testDate() time.Time {
 	return time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 }
+
+func TestParseDispositionHeader(t *testing.T) {
+	tests := []struct {
+		name    string
+		msg     string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "valid header",
+			msg: `From: sender@example.com
+To: recipient@example.com
+Subject: Test
+Disposition-Notification-To: <notifications@example.com>
+
+Body`,
+			want:    "<notifications@example.com>",
+			wantErr: false,
+		},
+		{
+			name: "missing header",
+			msg: `From: sender@example.com
+To: recipient@example.com
+Subject: Test
+
+Body`,
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name: "empty header value",
+			msg: `From: sender@example.com
+To: recipient@example.com
+Subject: Test
+Disposition-Notification-To:
+
+Body`,
+			want:    "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseDispositionHeader([]byte(tt.msg))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseDispositionHeader() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("ParseDispositionHeader() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
