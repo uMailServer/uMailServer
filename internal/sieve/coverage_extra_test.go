@@ -1975,3 +1975,32 @@ func TestManageSieveServer_NewManageSieveServer(t *testing.T) {
 		t.Error("Expected manager to be set")
 	}
 }
+
+// TestInterpreter_Set_InsufficientArgs tests executeSet with fewer than 2 arguments
+func TestInterpreter_Set_InsufficientArgs(t *testing.T) {
+	script := `set "myvariable";` // Missing value argument
+
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// set with insufficient args returns nil actions (keep default)
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 action (keep), got %d", len(actions))
+	}
+}
