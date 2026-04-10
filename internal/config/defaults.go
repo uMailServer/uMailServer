@@ -99,6 +99,12 @@ func DefaultConfig() *Config {
 			MaxLoginAttempts: 5,
 			LockoutDuration:  Duration(15 * time.Minute),
 			JWTSecret:        "", // Generate secure random at runtime if empty
+			AuditLog: AuditLogConfig{
+				Path:       "./data/logs/audit.log",
+				MaxSizeMB:  10,
+				MaxBackups: 5,
+				MaxAgeDays: 30,
+			},
 			RateLimit: RateLimitConfig{
 				// Per-IP limits (inbound)
 				IPPerMinute:   30,

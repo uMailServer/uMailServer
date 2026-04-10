@@ -20,6 +20,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver"
+	"github.com/umailserver/umailserver/internal/audit"
 	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/mcp"
@@ -75,6 +76,9 @@ type Server struct {
 	// Mail handler for user email operations
 	mailHandler *MailHandler
 
+	// Audit logger for security events
+	auditLogger *audit.Logger
+
 	// HTTP router (cached)
 	router http.Handler
 
@@ -113,6 +117,15 @@ type Config struct {
 	TokenExpiry    time.Duration
 	CorsOrigins    []string
 	TrustedProxies []string // IPs that are allowed to set X-Forwarded-For
+	AuditLog       AuditLogConfig
+}
+
+// AuditLogConfig holds audit logging configuration
+type AuditLogConfig struct {
+	Path        string // Path to audit log file, empty = disabled
+	MaxSizeMB   int    // Max file size before rotation
+	MaxBackups  int    // Number of backup files to keep
+	MaxAgeDays  int    // Max age of backup files in days
 }
 
 // NewServer creates a new admin API server
@@ -151,14 +164,26 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		return u, a, nil
 	})
 
+	// Initialize audit logger
+	auditLogger, err := audit.NewLogger(
+		config.AuditLog.Path,
+		config.AuditLog.MaxSizeMB,
+		config.AuditLog.MaxBackups,
+		config.AuditLog.MaxAgeDays,
+	)
+	if err != nil {
+		logger.Warn("failed to initialize audit logger", "error", err)
+	}
+
 	return &Server{
-		db:        database,
-		logger:    logger,
-		config:    config,
-		mcpServer: mcp.NewServer(database),
-		sseServer: sseServer,
-		webmailFS: newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
-		adminFS:   newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+		db:          database,
+		logger:      logger,
+		config:      config,
+		mcpServer:   mcp.NewServer(database),
+		sseServer:   sseServer,
+		webmailFS:   newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
+		adminFS:     newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+		auditLogger: auditLogger,
 		tokenBlacklist: make(map[string]time.Time),
 	}
 }
@@ -807,6 +832,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
 		s.recordLoginFailure(ip)
+		s.auditLogger.LogLoginFailure(req.Email, ip, "account_not_found")
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -814,6 +840,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Check password using bcrypt
 	if err := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(req.Password)); err != nil {
 		s.recordLoginFailure(ip)
+		s.auditLogger.LogLoginFailure(req.Email, ip, "invalid_password")
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -821,10 +848,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Check TOTP if enabled
 	if account.TOTPEnabled {
 		if req.TOTPCode == "" {
+			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_required")
 			s.sendError(w, http.StatusUnauthorized, "TOTP code required")
 			return
 		}
 		if !auth.ValidateTOTP(account.TOTPSecret, req.TOTPCode) {
+			s.auditLogger.LogLoginFailure(req.Email, ip, "invalid_totp")
 			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 			return
 		}
@@ -851,6 +880,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Initialize demo emails for the user on first login
 	InitDemoEmails(account.Email)
+
+	// Audit successful login
+	s.auditLogger.LogLoginSuccess(account.Email, ip)
 }
 
 // handleLogout revokes the current token (adds it to blacklist)
@@ -873,6 +905,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Revoke the token by adding it to blacklist
 	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte(tokenStr)))
 	s.RevokeToken(tokenHash)
+
+	// Audit logout
+	user := r.Context().Value("user")
+	if user != nil {
+		s.auditLogger.LogLogout(user.(string), audit.ExtractIP(r))
+	}
 
 	s.sendJSON(w, http.StatusOK, map[string]string{
 		"message": "logged out successfully",
@@ -1026,6 +1064,9 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 
 	uri := auth.GenerateTOTPUri(secret, email, "uMailServer", auth.TOTPAlgorithmSHA1)
 
+	// Audit TOTP setup initiated
+	s.auditLogger.LogTOTPEnable(authenticatedUser, email, audit.ExtractIP(r))
+
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"secret": secret,
 		"uri":    uri,
@@ -1083,6 +1124,9 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 		return
 	}
 
+	// Audit TOTP verification complete (2FA now enabled)
+	s.auditLogger.LogTOTPEnable(authenticatedUser, email, audit.ExtractIP(r))
+
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled": true,
 	})
@@ -1120,6 +1164,9 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 		s.sendError(w, http.StatusInternalServerError, "failed to disable TOTP")
 		return
 	}
+
+	// Audit TOTP disable
+	s.auditLogger.LogTOTPDisable(authenticatedUser, email, audit.ExtractIP(r))
 
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled": false,
@@ -1482,6 +1529,13 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Audit account creation
+	actor := "system"
+	if authUser := r.Context().Value("user"); authUser != nil {
+		actor = authUser.(string)
+	}
+	s.auditLogger.LogAccountCreate(actor, req.Email, audit.ExtractIP(r))
+
 	s.sendJSON(w, http.StatusCreated, accountToJSON(account))
 }
 
@@ -1578,6 +1632,13 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 		s.sendError(w, http.StatusInternalServerError, "failed to delete account")
 		return
 	}
+
+	// Audit account deletion
+	actor := "system"
+	if authUser := r.Context().Value("user"); authUser != nil {
+		actor = authUser.(string)
+	}
+	s.auditLogger.LogAccountDelete(actor, email, audit.ExtractIP(r))
 
 	w.WriteHeader(http.StatusNoContent)
 }

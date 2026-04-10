@@ -660,6 +660,12 @@ func (s *Server) startAPI() {
 		Addr:        fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
 		JWTSecret:   s.config.Security.JWTSecret,
 		CorsOrigins: s.config.HTTP.CorsOrigins,
+		AuditLog: api.AuditLogConfig{
+			Path:       s.config.Security.AuditLog.Path,
+			MaxSizeMB:  s.config.Security.AuditLog.MaxSizeMB,
+			MaxBackups: s.config.Security.AuditLog.MaxBackups,
+			MaxAgeDays: s.config.Security.AuditLog.MaxAgeDays,
+		},
 	}
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
 	s.apiServer.SetSearchService(s.searchSvc)

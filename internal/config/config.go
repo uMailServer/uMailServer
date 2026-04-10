@@ -167,6 +167,15 @@ type SecurityConfig struct {
 	LockoutDuration  Duration        `yaml:"lockout_duration"`
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`
 	JWTSecret        string          `yaml:"jwt_secret"`
+	AuditLog         AuditLogConfig  `yaml:"audit_log"`
+}
+
+// AuditLogConfig holds audit logging settings
+type AuditLogConfig struct {
+	Path        string   `yaml:"path"`        // Path to audit log file, empty = disabled
+	MaxSizeMB   int      `yaml:"max_size_mb"` // Max file size before rotation (default 10MB)
+	MaxBackups  int      `yaml:"max_backups"` // Number of backup files to keep (default 5)
+	MaxAgeDays  int      `yaml:"max_age_days"` // Max age of backup files in days (default 30)
 }
 
 // RateLimitConfig holds rate limiting settings
