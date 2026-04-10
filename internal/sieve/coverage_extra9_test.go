@@ -314,3 +314,36 @@ func TestInterpreter_ExecuteSet_Modifier(t *testing.T) {
 		t.Fatalf("Execute error: %v", err)
 	}
 }
+
+// --- executeFileinto with empty folder ---
+
+func TestInterpreter_ExecuteFileinto_EmptyFolder(t *testing.T) {
+	script := `
+	require "fileinto";
+	fileinto "";
+	`
+
+	p := NewParser(script)
+	s, err := p.Parse()
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+
+	interp := NewInterpreter(s)
+	msg := &MessageContext{
+		From:    "sender@example.com",
+		To:      []string{"recipient@example.com"},
+		Headers: map[string][]string{},
+		Body:    []byte("Hello"),
+	}
+
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+
+	// Empty folder should return no explicit action (implicit keep)
+	if len(actions) != 1 {
+		t.Errorf("Expected 1 implicit keep action, got %d", len(actions))
+	}
+}
