@@ -111,3 +111,58 @@ func TestPrintDeliverabilityResults_WithIssues(t *testing.T) {
 	// Should not panic
 	PrintDeliverabilityResults(result)
 }
+
+func TestPrintDeliverabilityResults_Warning(t *testing.T) {
+	result := &DeliverabilityResult{
+		Domain:       "example.com",
+		OverallScore:  "warning",
+		Message:      "Some issues found",
+		Issues:       []string{"DNS: SPF softfail"},
+		DNSResults: []DNSCheckResult{
+			{RecordType: "A", Status: "warning", Message: "No A record"},
+		},
+		RBLResults: []RBLCheckResult{
+			{Server: "spam.dnsbl.example.com", Listed: false, Message: "Not listed"},
+		},
+		TLSResult: &TLSCheckResult{
+			Valid:   true,
+			Message: "TLS configured correctly",
+		},
+		SMTPResult: &SMTPCheckResult{
+			Reachable: true,
+			Message:   "SMTP is reachable",
+		},
+	}
+
+	// Should not panic
+	PrintDeliverabilityResults(result)
+}
+
+func TestPrintDeliverabilityResults_WithRBLListings(t *testing.T) {
+	result := &DeliverabilityResult{
+		Domain:       "example.com",
+		OverallScore:  "fail",
+		Message:      "IP listed on RBL",
+		RBLResults: []RBLCheckResult{
+			{Server: "spam.dnsbl.example.com", Listed: true, Code: "127.0.0.2", Message: "Listed", Score: "spam"},
+		},
+	}
+
+	// Should not panic
+	PrintDeliverabilityResults(result)
+}
+
+func TestPrintDeliverabilityResults_NilTLSAndSMTP(t *testing.T) {
+	result := &DeliverabilityResult{
+		Domain:       "example.com",
+		OverallScore:  "pass",
+		Message:      "Basic checks passed",
+		DNSResults: []DNSCheckResult{
+			{RecordType: "A", Status: "pass", Message: "A record found"},
+		},
+		// TLSResult and SMTPResult are nil
+	}
+
+	// Should not panic
+	PrintDeliverabilityResults(result)
+}

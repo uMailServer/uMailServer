@@ -77,3 +77,30 @@ Body`
 		t.Errorf("Expected 'INBOX' (no angle brackets fallback), got %q", result)
 	}
 }
+
+// --- processMBOXMessage tests ---
+
+func TestProcessMBOXMessage_UnknownTarget(t *testing.T) {
+	mm := NewMigrationManager(nil, nil, nil)
+
+	// Message with MBOX "From " separator but no "From:" header
+	// and empty folder -> targetUser = "unknown" -> should error
+	msg := []byte("From sender@example.com Mon Jan 01 00:00:00 2024\nSubject: Test\n\nBody")
+
+	err := mm.processMBOXMessage(msg, "")
+	if err == nil {
+		t.Error("Expected error when target user is unknown")
+	}
+}
+
+func TestProcessMBOXMessage_NoMsgStore(t *testing.T) {
+	mm := NewMigrationManager(nil, nil, nil)
+
+	// Valid message but no msgStore - should print message but not error
+	msg := []byte("From sender@example.com Mon Jan 01 00:00:00 2024\nFrom: <user@example.com>\nSubject: Test\n\nBody")
+
+	err := mm.processMBOXMessage(msg, "INBOX")
+	if err != nil {
+		t.Errorf("Unexpected error with nil msgStore: %v", err)
+	}
+}
