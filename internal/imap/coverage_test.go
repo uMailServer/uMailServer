@@ -166,7 +166,7 @@ func TestCoverageHandleSelectedAllCommands(t *testing.T) {
 			}()
 
 			// Drain all responses from the client side.
-			_ = drainConn(client, 200*time.Millisecond)
+			drainConn(client, 200*time.Millisecond)
 
 			err := <-cmdDone
 			if err != nil {
@@ -721,8 +721,8 @@ func TestCoverageHandleCreate_Error(t *testing.T) {
 		done <- session.handleCommand("A001 CREATE TestFolder")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleCreate_NilMailstore(t *testing.T) {
@@ -734,8 +734,8 @@ func TestCoverageHandleCreate_NilMailstore(t *testing.T) {
 		done <- session.handleCommand("A001 CREATE TestFolder")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleDelete error paths ----------
@@ -753,7 +753,7 @@ func TestCoverageHandleDelete_INBOX(t *testing.T) {
 	if !strings.Contains(resp, "NO") {
 		t.Errorf("Expected NO for DELETE INBOX, got: %s", resp)
 	}
-	_ = <-done
+	<-done
 }
 
 func TestCoverageHandleDelete_Error(t *testing.T) {
@@ -768,8 +768,8 @@ func TestCoverageHandleDelete_Error(t *testing.T) {
 		done <- session.handleCommand("A001 DELETE SomeFolder")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleDelete_Selected(t *testing.T) {
@@ -781,8 +781,8 @@ func TestCoverageHandleDelete_Selected(t *testing.T) {
 		done <- session.handleCommand("A001 DELETE INBOX")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleRename error paths ----------
@@ -799,8 +799,8 @@ func TestCoverageHandleRename_Error(t *testing.T) {
 		done <- session.handleCommand("A001 RENAME OldName NewName")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleRename_MissingArgs(t *testing.T) {
@@ -816,7 +816,7 @@ func TestCoverageHandleRename_MissingArgs(t *testing.T) {
 	if !strings.Contains(resp, "BAD") {
 		t.Logf("RENAME with one arg: %s", resp)
 	}
-	_ = <-done
+	<-done
 }
 
 // ---------- handleList error paths ----------
@@ -833,8 +833,8 @@ func TestCoverageHandleList_Error(t *testing.T) {
 		done <- session.handleCommand("A001 LIST \"\" *")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleSelect/Examine error ----------
@@ -851,8 +851,8 @@ func TestCoverageHandleSelect_Error(t *testing.T) {
 		done <- session.handleCommand("A001 SELECT INBOX")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleExamine_Error(t *testing.T) {
@@ -867,8 +867,8 @@ func TestCoverageHandleExamine_Error(t *testing.T) {
 		done <- session.handleCommand("A001 EXAMINE INBOX")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleAppend error ----------
@@ -891,8 +891,8 @@ func TestCoverageHandleAppend_Error(t *testing.T) {
 		client.Write([]byte("0123456789\r\n"))
 	}
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleAppend_MissingArgs(t *testing.T) {
@@ -904,8 +904,8 @@ func TestCoverageHandleAppend_MissingArgs(t *testing.T) {
 		done <- session.handleCommand("A001 APPEND")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleCopy/Move no selected ----------
@@ -919,8 +919,8 @@ func TestCoverageHandleCopy_NoSelected(t *testing.T) {
 		done <- session.handleCommand("A001 COPY 1 Sent")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleMove_NoSelected(t *testing.T) {
@@ -932,8 +932,8 @@ func TestCoverageHandleMove_NoSelected(t *testing.T) {
 		done <- session.handleCommand("A001 MOVE 1 Trash")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleCopy/Move errors ----------
@@ -950,8 +950,8 @@ func TestCoverageHandleCopy_Error(t *testing.T) {
 		done <- session.handleCommand("A001 COPY 1 Sent")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleMove_Error(t *testing.T) {
@@ -966,8 +966,8 @@ func TestCoverageHandleMove_Error(t *testing.T) {
 		done <- session.handleCommand("A001 MOVE 1 Trash")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleSearch error ----------
@@ -984,8 +984,8 @@ func TestCoverageHandleSearch_Error(t *testing.T) {
 		done <- session.handleCommand("A001 SEARCH ALL")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleFetch error ----------
@@ -1002,8 +1002,8 @@ func TestCoverageHandleFetch_Error(t *testing.T) {
 		done <- session.handleCommand("A001 FETCH 1:* FLAGS")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleStore error ----------
@@ -1020,8 +1020,8 @@ func TestCoverageHandleStore_Error(t *testing.T) {
 		done <- session.handleCommand("A001 STORE 1 +FLAGS (\\Seen)")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleExpunge error ----------
@@ -1038,8 +1038,8 @@ func TestCoverageHandleExpunge_Error(t *testing.T) {
 		done <- session.handleCommand("A001 EXPUNGE")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleClose/Check coverage ----------
@@ -1053,8 +1053,8 @@ func TestCoverageHandleClose(t *testing.T) {
 		done <- session.handleCommand("A001 CLOSE")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 func TestCoverageHandleCheck(t *testing.T) {
@@ -1066,8 +1066,8 @@ func TestCoverageHandleCheck(t *testing.T) {
 		done <- session.handleCommand("A001 CHECK")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- handleLSUB error ----------
@@ -1084,8 +1084,8 @@ func TestCoverageHandleLSUB_Error(t *testing.T) {
 		done <- session.handleCommand("A001 LSUB \"\" *")
 	}()
 
-	_ = drainConn(client, 200*time.Millisecond)
-	_ = <-done
+	drainConn(client, 200*time.Millisecond)
+	<-done
 }
 
 // ---------- matchPattern coverage ----------
@@ -1469,19 +1469,19 @@ func TestParseMessageHeadersExtra(t *testing.T) {
 
 func TestAddressToString(t *testing.T) {
 	tests := []struct {
-		name    string
-		addrs   []*Address
-		want    string
+		name  string
+		addrs []*Address
+		want  string
 	}{
 		{
-			name:    "nil slice",
-			addrs:   nil,
-			want:    "",
+			name:  "nil slice",
+			addrs: nil,
+			want:  "",
 		},
 		{
-			name:    "empty slice",
-			addrs:   []*Address{},
-			want:    "",
+			name:  "empty slice",
+			addrs: []*Address{},
+			want:  "",
 		},
 		{
 			name: "single address",
@@ -1589,8 +1589,8 @@ func TestParseDispositionHeader(t *testing.T) {
 
 func TestFlagOperationString(t *testing.T) {
 	tests := []struct {
-		op    FlagOperation
-		want  string
+		op   FlagOperation
+		want string
 	}{
 		{FlagAdd, "add"},
 		{FlagRemove, "remove"},
@@ -1694,7 +1694,7 @@ func TestSortMessagesByCriteria(t *testing.T) {
 	messages := []*storage.MessageMetadata{
 		{UID: 1, Subject: "Alpha", Size: 100, Date: now.Format(time.RFC1123Z), InternalDate: now},
 		{UID: 2, Subject: "Beta", Size: 200, Date: now.Add(-time.Hour).Format(time.RFC1123Z), InternalDate: now.Add(-time.Hour)},
-		{UID: 3, Subject: "Alpha", Size: 150, Date: now.Add(-2*time.Hour).Format(time.RFC1123Z), InternalDate: now.Add(-2*time.Hour)},
+		{UID: 3, Subject: "Alpha", Size: 150, Date: now.Add(-2 * time.Hour).Format(time.RFC1123Z), InternalDate: now.Add(-2 * time.Hour)},
 	}
 	seqNums := []uint32{1, 2, 3}
 

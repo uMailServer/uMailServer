@@ -611,7 +611,7 @@ func TestIndexMessageWithNilMsgStore(t *testing.T) {
 	}
 
 	// Should still find via subject field
-	results, err := svc.Search(MessageSearchOptions{
+	_, err = svc.Search(MessageSearchOptions{
 		User:  user,
 		Query: "subject:body",
 		Limit: 10,
@@ -621,7 +621,7 @@ func TestIndexMessageWithNilMsgStore(t *testing.T) {
 	}
 	// "body" won't match "No Body Test" as a field query uses lowercase comparison
 	// Search for "no" (stop word won't work) - search for "test"
-	results, err = svc.Search(MessageSearchOptions{
+	results, err := svc.Search(MessageSearchOptions{
 		User:  user,
 		Query: "test",
 		Limit: 10,

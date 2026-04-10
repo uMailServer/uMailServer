@@ -171,7 +171,7 @@ func TestProvider_StartSpan_Disabled(t *testing.T) {
 	provider := NewProvider(Config{Enabled: false})
 	ctx := context.Background()
 
-	ctx, span := provider.StartSpan(ctx, "test")
+	_, span := provider.StartSpan(ctx, "test")
 	if span != nil {
 		t.Error("should return nil span when disabled")
 	}
@@ -181,7 +181,7 @@ func TestProvider_StartSpan_Enabled(t *testing.T) {
 	provider := NewProvider(Config{Enabled: true, ServiceName: "test"})
 	ctx := context.Background()
 
-	ctx, span := provider.StartSpan(ctx, "test")
+	_, span := provider.StartSpan(ctx, "test")
 	if span == nil {
 		t.Fatal("should return span when enabled")
 	}

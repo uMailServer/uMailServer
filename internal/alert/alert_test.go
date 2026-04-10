@@ -547,8 +547,6 @@ func TestManager_GetStats(t *testing.T) {
 	cfg.Enabled = true
 	cfg.MaxAlerts = 50
 
-	mgr := NewManager(cfg, nil)
-
 	// Send an alert to populate stats
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -556,7 +554,7 @@ func TestManager_GetStats(t *testing.T) {
 	defer server.Close()
 	cfg.WebhookURL = server.URL
 	cfg.MinInterval = 0
-	mgr = NewManager(cfg, nil)
+	mgr := NewManager(cfg, nil)
 	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
 	mgr.Send("test", SeverityInfo, "test", nil)
 

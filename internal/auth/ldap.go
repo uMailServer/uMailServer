@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -33,8 +32,6 @@ type LDAPConfig struct {
 // LDAPClient handles LDAP authentication
 type LDAPClient struct {
 	config LDAPConfig
-	mu     sync.RWMutex
-	conn   *ldap.Conn
 }
 
 // LDAPUser represents an authenticated LDAP user

@@ -402,7 +402,7 @@ func TestCoverAuthCRAMMD5_ConnectionClosedDuringChallenge(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	clientConn.Close()
-	_ = <-done
+	<-done
 }
 
 func TestCoverSTARTTLS_WriteResponseError(t *testing.T) {
@@ -440,7 +440,7 @@ func TestCoverAuthLOGIN_PasswordReadError(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	clientConn.Close()
-	_ = <-done
+	<-done
 }
 
 func TestCoverValidateEmail_InternationalEdgeCases(t *testing.T) {
@@ -803,7 +803,7 @@ func TestCoverAuthLOGIN_UsernameReadError(t *testing.T) {
 	// Read the username prompt, then close
 	time.Sleep(50 * time.Millisecond)
 	clientConn.Close()
-	_ = <-done
+	<-done
 }
 
 func TestCoverAuthLOGIN_InvalidBase64Username(t *testing.T) {
@@ -1082,7 +1082,7 @@ func TestCoverAuthPLAIN_ConnectionClosed(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	clientConn.Close()
-	_ = <-done
+	<-done
 }
 
 func TestCoverAUTH_AlreadyAuthenticated(t *testing.T) {

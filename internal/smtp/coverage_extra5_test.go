@@ -144,7 +144,7 @@ func TestAuthARCStage_Process_ValidChainWithDMARCFail(t *testing.T) {
 	headers := map[string][]string{
 		"ARC-Authentication-Results": {"i=1; auth=pass"},
 		"ARC-Message-Signature":      {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
-		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
+		"ARC-Seal":                   {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
 	}
 
 	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
@@ -169,7 +169,7 @@ func TestAuthARCStage_Process_ValidChainNoDMARCOverride(t *testing.T) {
 	headers := map[string][]string{
 		"ARC-Authentication-Results": {"i=1; auth=pass"},
 		"ARC-Message-Signature":      {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
-		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
+		"ARC-Seal":                   {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
 	}
 
 	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
@@ -195,7 +195,7 @@ func TestAuthARCStage_Process_InvalidChain(t *testing.T) {
 	headers := map[string][]string{
 		"ARC-Authentication-Results": {"i=1; auth=fail"},
 		"ARC-Message-Signature":      {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
-		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=fail; b=seal1"},
+		"ARC-Seal":                   {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=fail; b=seal1"},
 	}
 
 	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
@@ -220,8 +220,8 @@ func TestAuthARCStage_Process_WithLogger(t *testing.T) {
 
 	headers := map[string][]string{
 		"ARC-Authentication-Results": {"i=1; auth=pass"},
-		"ARC-Message-Signature":     {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
-		"ARC-Seal":                  {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
+		"ARC-Message-Signature":      {"i=1; a=rsa-sha256; d=example.com; s=selector; b=sig1; h=from:to"},
+		"ARC-Seal":                   {"i=1; a=rsa-sha256; d=example.com; s=selector; cv=pass; b=seal1"},
 	}
 
 	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
@@ -890,7 +890,7 @@ func TestHandleAuthCRAMMD5_ConnectionClosedDuringResponse(t *testing.T) {
 	// Read the 334 challenge then close
 	time.Sleep(50 * time.Millisecond)
 	clientConn.Close()
-	_ = <-done
+	<-done
 }
 
 // ---------------------------------------------------------------------------

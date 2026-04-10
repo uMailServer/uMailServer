@@ -1017,25 +1017,6 @@ func generateTestCertWithExpiry(t *testing.T, domain string, expiry time.Duratio
 	return certPEM
 }
 
-// Helper function to generate test key - returns key matching the cert helpers (same random key)
-// Note: This is a placeholder key that won't match the cert, used for testing error cases
-func generateTestKey(t *testing.T) []byte {
-	t.Helper()
-
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("failed to generate private key: %v", err)
-	}
-
-	privBytes, err := x509.MarshalECPrivateKey(priv)
-	if err != nil {
-		t.Fatalf("failed to marshal private key: %v", err)
-	}
-
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes})
-	return keyPEM
-}
-
 // TestGenerateSelfSignedEmptyDomains tests GenerateSelfSigned with no domains (default)
 func TestGenerateSelfSignedEmptyDomains(t *testing.T) {
 	config := Config{

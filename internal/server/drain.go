@@ -103,11 +103,6 @@ func (cd *ConnectionDrainer) Wait() {
 	}
 }
 
-// DrainingListener wraps a net.Listener with connection tracking
-type DrainingListener struct {
-	drainer *ConnectionDrainer
-}
-
 // ServerComponent interface for components that can be drained
 type ServerComponent interface {
 	Stop() error
@@ -119,7 +114,6 @@ type GracefulShutdown struct {
 	components []ServerComponent
 	drainers   []*ConnectionDrainer
 	timeout    time.Duration
-	logger     interface{}
 }
 
 // NewGracefulShutdown creates a new graceful shutdown coordinator
@@ -132,7 +126,7 @@ func NewGracefulShutdown(timeout time.Duration) *GracefulShutdown {
 }
 
 // AddComponent adds a server component to be shut down
-func (gs *GracefulShutdown) AddComponent(name string, component ServerComponent) {
+func (gs *GracefulShutdown) AddComponent(_ string, component ServerComponent) {
 	gs.components = append(gs.components, component)
 }
 

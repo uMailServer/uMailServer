@@ -591,17 +591,26 @@ func TestValidateWithDNSSEC(t *testing.T) {
 	if result != DANENone {
 		t.Errorf("Expected DANENone without DNSSEC, got %s", result.String())
 	}
+	if err != nil {
+		t.Errorf("Unexpected error with DNSSEC unknown: %v", err)
+	}
 
 	// Test with DNSSEC insecure - should return DANENone
 	result, err = validator.ValidateWithDNSSEC("example.com", 25, state, DNSSECInsecure)
 	if result != DANENone {
 		t.Errorf("Expected DANENone with insecure DNSSEC, got %s", result.String())
 	}
+	if err != nil {
+		t.Errorf("Unexpected error with DNSSEC insecure: %v", err)
+	}
 
 	// Test with DNSSEC bogus - should return DANENone
 	result, err = validator.ValidateWithDNSSEC("example.com", 25, state, DNSSECBogus)
 	if result != DANENone {
 		t.Errorf("Expected DANENone with bogus DNSSEC, got %s", result.String())
+	}
+	if err != nil {
+		t.Errorf("Unexpected error with DNSSEC bogus: %v", err)
 	}
 }
 

@@ -1353,20 +1353,3 @@ func (s *Server) startVacationCleanup() {
 		}
 	}()
 }
-
-// rateLimitAdapter adapts *ratelimit.RateLimiter to satisfy the api.RateLimitManager interface.
-type rateLimitAdapter struct {
-	rl *ratelimit.RateLimiter
-}
-
-func (a *rateLimitAdapter) GetConfig() *ratelimit.Config {
-	return a.rl.GetConfig()
-}
-
-func (a *rateLimitAdapter) GetIPStats(ip string) map[string]any {
-	return a.rl.GetIPStats(ip)
-}
-
-func (a *rateLimitAdapter) GetUserStats(user string) map[string]any {
-	return a.rl.GetUserStats(user)
-}

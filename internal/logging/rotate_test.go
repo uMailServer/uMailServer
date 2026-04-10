@@ -562,7 +562,7 @@ func TestRotate_OpenError(t *testing.T) {
 
 	// Write enough to trigger rotation
 	largeData := make([]byte, 1024*1024+1)
-	_, err = w2.Write(largeData)
+	_, _ = w2.Write(largeData)
 
 	// Cleanup
 	os.Chmod(tempDir, 0755)

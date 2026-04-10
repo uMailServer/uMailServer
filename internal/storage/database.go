@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -19,7 +18,6 @@ import (
 type Database struct {
 	path string
 	bolt *bbolt.DB
-	mu   sync.Mutex
 }
 
 // OpenDatabase opens the bbolt database

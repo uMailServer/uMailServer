@@ -2,26 +2,10 @@ package imap
 
 import (
 	"fmt"
-	"net"
 	"strings"
 	"testing"
 	"time"
 )
-
-// setupSessionWithPipeRaw creates a net.Pipe pair and a session on the
-// server side. It returns (clientConn, session). The caller is
-// responsible for closing clientConn.
-func setupSessionWithPipeRaw(t *testing.T, state State, user string, selected *Mailbox) (net.Conn, *Session) {
-	t.Helper()
-	client, srv := net.Pipe()
-	server := NewServer(&Config{Addr: ":0"}, &mockMailstore{})
-	session := NewSession(srv, server)
-	session.state = state
-	session.user = user
-	session.selected = selected
-	session.tlsActive = true
-	return client, session
-}
 
 // selected states.
 // =======================================================================

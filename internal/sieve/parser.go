@@ -42,7 +42,6 @@ type Parser struct {
 	input  string
 	pos    int
 	length int
-	tokens []TokenData
 }
 
 // AST node types

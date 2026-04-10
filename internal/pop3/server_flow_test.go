@@ -351,14 +351,14 @@ func TestAuthorizationErrors(t *testing.T) {
 	}
 
 	// PASS without args
-	resp = sendCmd(t, conn, reader, "USER testuser")
+	_ = sendCmd(t, conn, reader, "USER testuser")
 	resp = sendCmd(t, conn, reader, "PASS")
 	if !strings.HasPrefix(resp, "-ERR") {
 		t.Errorf("PASS without args: expected -ERR, got %s", resp)
 	}
 
 	// Wrong password
-	resp = sendCmd(t, conn, reader, "USER testuser")
+	_ = sendCmd(t, conn, reader, "USER testuser")
 	resp = sendCmd(t, conn, reader, "PASS wrong")
 	if !strings.HasPrefix(resp, "-ERR") {
 		t.Errorf("PASS wrong: expected -ERR, got %s", resp)

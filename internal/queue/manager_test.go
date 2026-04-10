@@ -254,8 +254,7 @@ func TestManagerGetPendingEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPendingEntries failed: %v", err)
 	}
-	// entries can be nil or empty slice depending on implementation
-	if entries != nil && len(entries) > 0 {
+	if len(entries) > 0 {
 		t.Logf("Got %d pending entries", len(entries))
 	}
 }
@@ -1374,19 +1373,6 @@ func TestHandleDeliveryFailureWithMetrics(t *testing.T) {
 		t.Error("expected entry to be updated with retry count")
 	}
 }
-
-// mockMetricsCollector is a mock implementation for testing
-type mockMetricsCollector struct {
-	deliveryFailedCalled bool
-}
-
-func (m *mockMetricsCollector) DeliveryFailed() {
-	m.deliveryFailedCalled = true
-}
-
-func (m *mockMetricsCollector) DeliverySucceeded() {}
-func (m *mockMetricsCollector) MessageReceived()   {}
-func (m *mockMetricsCollector) MessageRejected()   {}
 
 // TestGenerateBounceWithMissingFile tests generateBounce when message file is missing
 func TestGenerateBounceWithMissingFile(t *testing.T) {

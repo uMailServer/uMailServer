@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"math/big"
 	"net/http"
 	"strings"
@@ -1153,11 +1152,6 @@ func generateTestCertForCov4(t *testing.T) *x509.Certificate {
 // Verify that mockTransport from coverage_extra3_test.go is available.
 // We ensure it compiles by referencing it in a no-op test.
 // =======================================================================
-
-// mockTransportIOTest verifies the mock transport from coverage_extra3_test.go works.
-func mockTransportIOTest() {
-	_ = io.NopCloser(strings.NewReader(""))
-}
 
 // _ = crypto.SHA256 ensures the crypto import is used.
 var _ = crypto.SHA256

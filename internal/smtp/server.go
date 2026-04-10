@@ -18,7 +18,6 @@ import (
 // Server represents an SMTP server
 type Server struct {
 	config      *Config
-	tlsConfig   *tls.Config
 	listener    net.Listener
 	listeners   []net.Listener
 	connections map[string]*Session

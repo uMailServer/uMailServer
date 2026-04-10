@@ -28,7 +28,6 @@ type ManageSieveServer struct {
 	wg          sync.WaitGroup
 	mu          sync.Mutex
 	running     bool
-	sessionUser string                       // Authenticated user for this session
 	authHandler func(user, pass string) bool // Auth validation function
 }
 
@@ -164,8 +163,7 @@ type manageSieveSession struct {
 }
 
 type manageSieveReader struct {
-	r   io.Reader
-	buf []byte
+	r io.Reader
 }
 
 func (r *manageSieveReader) ReadLine() (string, error) {

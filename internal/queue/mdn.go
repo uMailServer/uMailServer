@@ -55,8 +55,7 @@ func ParseMDNAddress(header string) (*MDNAddress, error) {
 		if strings.Contains(header, "<") {
 			parts := strings.Split(header, "<")
 			if len(parts) == 2 {
-				addr, err = mail.ParseAddress("<" + parts[1])
-				if err != nil {
+				if _, err := mail.ParseAddress("<" + parts[1]); err != nil {
 					return &MDNAddress{Original: header}, nil
 				}
 			}

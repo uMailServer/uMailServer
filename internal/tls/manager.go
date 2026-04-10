@@ -177,11 +177,7 @@ func (m *Manager) GetTLSConfig() *tls.Config {
 }
 
 // GenerateSelfSigned generates a self-signed certificate for testing
-func (m *Manager) GenerateSelfSigned(domains []string) (string, string, error) {
-	if len(domains) == 0 {
-		domains = []string{"localhost", "127.0.0.1", "::1"}
-	}
-
+func (m *Manager) GenerateSelfSigned(_ []string) (string, string, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate private key: %w", err)

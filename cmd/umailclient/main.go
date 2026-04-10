@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"net"
@@ -91,11 +90,11 @@ func formatAddr(host string, port int) string {
 }
 
 type SMTPClient struct {
-	Host            string
-	Port            int
-	Username        string
-	Password        string
-	UseTLS          bool
+	Host               string
+	Port               int
+	Username           string
+	Password           string
+	UseTLS             bool
 	InsecureSkipVerify bool // Only for testing with self-signed certs
 }
 
@@ -568,9 +567,4 @@ func runMDN() {
 
 	fmt.Println("Email with MDN request sent successfully!")
 	fmt.Println("MDN (Disposition-Notification-To) header included.")
-}
-
-// Helper for base64 encoding
-func b64(s string) string {
-	return base64.StdEncoding.EncodeToString([]byte(s))
 }
