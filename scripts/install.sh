@@ -1,6 +1,6 @@
 #!/bin/bash
 # uMailServer Installation Script
-# Usage: curl -fsSL https://get.umailserver.com | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/uMailServer/uMailServer/main/install.sh | sudo bash
 
 set -e
 
@@ -96,9 +96,9 @@ download_binary() {
 
     local download_url
     if [[ "$VERSION" == "latest" ]]; then
-        download_url="https://github.com/umailserver/umailserver/releases/latest/download/umailserver-${OS}-${ARCH}"
+        download_url="https://github.com/uMailServer/uMailServer/releases/latest/download/umailserver-${OS}-${ARCH}"
     else
-        download_url="https://github.com/umailserver/umailserver/releases/download/${VERSION}/umailserver-${OS}-${ARCH}"
+        download_url="https://github.com/uMailServer/uMailServer/releases/download/${VERSION}/umailserver-${OS}-${ARCH}"
     fi
 
     log_info "Downloading from: $download_url"

@@ -65,12 +65,11 @@
 #### Linux/macOS
 ```bash
 # Download and run installer
-curl -fsSL https://get.umailserver.com/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/uMailServer/uMailServer/main/install.sh | sudo bash
 
-# Or manually
-wget https://github.com/umailserver/umailserver/releases/latest/download/umailserver-linux-amd64.tar.gz
-tar -xzf umailserver-linux-amd64.tar.gz
-sudo ./install.sh
+# Or download binary directly from release
+wget https://github.com/uMailServer/uMailServer/releases/download/v0.1.0/umailserver-v0.1.0-linux-amd64.tar.gz
+tar -xzf umailserver-v0.1.0-linux-amd64.tar.gz
 
 # Quick start (creates config and first account)
 sudo umailserver quickstart admin@example.com
@@ -82,19 +81,18 @@ sudo umailserver serve
 #### Windows
 ```powershell
 # Run PowerShell as Administrator
-irm https://get.umailserver.com/install.ps1 | iex
+irm https://raw.githubusercontent.com/uMailServer/uMailServer/main/install.ps1 | iex
 
-# Or download and run manually
-# Download umailserver.exe from releases
-.\install.ps1 -Hostname mail.example.com -AdminEmail admin@example.com -Domain example.com
+# Or download binary directly from release
+# https://github.com/uMailServer/uMailServer/releases/download/v0.1.0/umailserver-windows-amd64.exe
 ```
 
 #### Docker
 ```bash
-# Run with Docker Compose
-docker compose up -d
+# Pull latest image
+docker pull ghcr.io/umailserver/umailserver:latest
 
-# Or run directly
+# Run
 docker run -d \
   --name umailserver \
   -p 25:25 -p 587:587 -p 465:465 \

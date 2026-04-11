@@ -113,7 +113,7 @@
 - [x] Add JWT rotation endpoints to spec
 - [x] Add health/ready endpoints to spec
 - [x] Regenerate from code (swag annotations added to key handlers)
-- [ ] More handler annotations needed for full coverage
+- [x] Annotate mail handlers (handleMailList, handleMailSend, handleMailDelete)
 ```
 
 ## Progress Tracker
