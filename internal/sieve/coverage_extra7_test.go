@@ -428,8 +428,8 @@ func TestInterpreter_HeaderTest_Contains_CaseSensitive(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"This is a TEST email"},
 		},
@@ -460,8 +460,8 @@ func TestInterpreter_HeaderTest_Is_ExactMatch(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"from": {"sender@example.com"},
 		},

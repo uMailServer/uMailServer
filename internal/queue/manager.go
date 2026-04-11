@@ -48,8 +48,8 @@ type Manager struct {
 	requireTLS   bool
 
 	// MX connection pool settings
-	mxPoolSize     int           // max connections per MX host (default 10)
-	mxIdleTimeout  time.Duration // idle connection timeout (default 5 min)
+	mxPoolSize    int           // max connections per MX host (default 10)
+	mxIdleTimeout time.Duration // idle connection timeout (default 5 min)
 
 	// MX connection pools keyed by MX host
 	mxPools map[string]*mxPool
@@ -67,10 +67,10 @@ type Manager struct {
 
 // mxPool represents a connection pool for a single MX host
 type mxPool struct {
-	mu       sync.Mutex
-	conns    []*mxConn // available connections
-	addr     string    // MX host:port
-	maxSize  int
+	mu          sync.Mutex
+	conns       []*mxConn // available connections
+	addr        string    // MX host:port
+	maxSize     int
 	idleTimeout time.Duration
 }
 

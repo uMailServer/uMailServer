@@ -1718,11 +1718,11 @@ func TestDKIMSignerEd25519_Sign(t *testing.T) {
 	signer := NewDKIMSignerEd25519(resolver, privateKey, "example.com", "ed25519-selector")
 
 	headers := map[string][]string{
-		"From":         {"sender@example.com"},
-		"To":           {"recipient@example.com"},
-		"Subject":      {"Test subject"},
-		"Date":         {"Mon, 01 Jan 2024 12:00:00 +0000"},
-		"Message-ID":   {"<abc123@example.com>"},
+		"From":       {"sender@example.com"},
+		"To":         {"recipient@example.com"},
+		"Subject":    {"Test subject"},
+		"Date":       {"Mon, 01 Jan 2024 12:00:00 +0000"},
+		"Message-ID": {"<abc123@example.com>"},
 	}
 	body := []byte("Test body content")
 

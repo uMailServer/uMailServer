@@ -189,8 +189,8 @@ func TestSMIMEUserKeys_Fields(t *testing.T) {
 func TestSMIMEStage_Process_NonSMIMEContent(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"text/plain"},
 		},
@@ -206,8 +206,8 @@ func TestSMIMEStage_Process_NonSMIMEContent(t *testing.T) {
 func TestSMIMEStage_Process_PKCS7Signature(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"application/pkcs7-signature"},
 		},
@@ -224,8 +224,8 @@ func TestSMIMEStage_Process_PKCS7Signature(t *testing.T) {
 func TestSMIMEStage_Process_PKCS7Mime(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"application/pkcs7-mime"},
 		},
@@ -242,8 +242,8 @@ func TestSMIMEStage_Process_PKCS7Mime(t *testing.T) {
 func TestSMIMEStage_Process_XPKCS7Signature(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"application/x-pkcs7-signature"},
 		},
@@ -259,8 +259,8 @@ func TestSMIMEStage_Process_XPKCS7Signature(t *testing.T) {
 func TestSMIMEStage_Process_XPKCS7Mime(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"application/x-pkcs7-mime"},
 		},
@@ -285,8 +285,8 @@ func TestSMIMEStage_VerifySMIME_WithKeys(t *testing.T) {
 
 	stage := NewSMIMEStage(ks)
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"application/pkcs7-signature"},
 		},
@@ -312,8 +312,8 @@ func TestSMIMEStage_DecryptSMIME_WithEncryptionCertOnly(t *testing.T) {
 
 	stage := NewSMIMEStage(ks)
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"application/pkcs7-mime"},
 		},
@@ -384,8 +384,8 @@ func TestSMIMEStage_EncryptMessage_NoKeys(t *testing.T) {
 func TestSMIMEStage_VerifySMIME_EmptySender(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "", // Empty sender
-		To:      []string{"recipient@example.com"},
+		From: "", // Empty sender
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"application/pkcs7-signature"},
 		},
@@ -404,8 +404,8 @@ func TestSMIMEStage_VerifySMIME_EmptySender(t *testing.T) {
 func TestSMIMEStage_DecryptSMIME_NoRecipients(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{}, // No recipients
+		From: "sender@example.com",
+		To:   []string{}, // No recipients
 		Headers: map[string][]string{
 			"Content-Type": {"application/pkcs7-mime"},
 		},
@@ -488,8 +488,8 @@ func TestSMIMEStage_Process_NilHeaders(t *testing.T) {
 func TestSMIMEStage_Process_MultipleContentTypes(t *testing.T) {
 	stage := NewSMIMEStage(NewSMIMEKeystore())
 	ctx := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Content-Type": {"text/plain; boundary=----"},
 		},

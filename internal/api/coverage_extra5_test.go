@@ -16,4 +16,3 @@ func TestSetRateLimitManager(t *testing.T) {
 		t.Error("Rate limit manager not set correctly")
 	}
 }
-

@@ -664,9 +664,9 @@ func (s *Server) setupHealthChecks() {
 // startAPI creates and starts the HTTP API server (webmail + admin).
 func (s *Server) startAPI() {
 	apiCfg := api.Config{
-		Addr:          fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
-		JWTSecret:     s.config.Security.JWTSecret,
-		CorsOrigins:   s.config.HTTP.CorsOrigins,
+		Addr:           fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
+		JWTSecret:      s.config.Security.JWTSecret,
+		CorsOrigins:    s.config.HTTP.CorsOrigins,
 		PasswordHasher: "bcrypt", // or "argon2id" (OWASP recommended)
 		AuditLog: api.AuditLogConfig{
 			Path:       s.config.Security.AuditLog.Path,

@@ -24,11 +24,11 @@ import (
 
 // Backup encryption constants
 const (
-	backupMagic    = "UMAILBACKUP"
-	backupVersion  = 1
-	saltSize       = 32
-	nonceSize      = 12
-	keySize        = 32 // AES-256
+	backupMagic   = "UMAILBACKUP"
+	backupVersion = 1
+	saltSize      = 32
+	nonceSize     = 12
+	keySize       = 32 // AES-256
 )
 
 // fileHash tracks a file's hash for integrity verification

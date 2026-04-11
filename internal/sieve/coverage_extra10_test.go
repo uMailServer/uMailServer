@@ -9,7 +9,7 @@ import (
 func TestLookahead_LeftBrace(t *testing.T) {
 	script := `{ keep; }`
 	p := NewParser(script)
-tok := p.lookahead()
+	tok := p.lookahead()
 	if tok != TokLeftBrace {
 		t.Errorf("Expected TokLeftBrace, got %v", tok)
 	}
@@ -18,7 +18,7 @@ tok := p.lookahead()
 func TestLookahead_RightBrace(t *testing.T) {
 	script := `} keep;`
 	p := NewParser(script)
-tok := p.lookahead()
+	tok := p.lookahead()
 	if tok != TokRightBrace {
 		t.Errorf("Expected TokRightBrace, got %v", tok)
 	}
@@ -27,7 +27,7 @@ tok := p.lookahead()
 func TestLookahead_Semicolon(t *testing.T) {
 	script := `; keep;`
 	p := NewParser(script)
-tok := p.lookahead()
+	tok := p.lookahead()
 	if tok != TokSemicolon {
 		t.Errorf("Expected TokSemicolon, got %v", tok)
 	}
@@ -36,7 +36,7 @@ tok := p.lookahead()
 func TestLookahead_Tag(t *testing.T) {
 	script := `:create "folder";`
 	p := NewParser(script)
-tok := p.lookahead()
+	tok := p.lookahead()
 	if tok != TokTag {
 		t.Errorf("Expected TokTag, got %v", tok)
 	}
@@ -45,7 +45,7 @@ tok := p.lookahead()
 func TestLookahead_Identifier(t *testing.T) {
 	script := `keep;`
 	p := NewParser(script)
-tok := p.lookahead()
+	tok := p.lookahead()
 	if tok != TokIdentifier {
 		t.Errorf("Expected TokIdentifier, got %v", tok)
 	}
@@ -54,7 +54,7 @@ tok := p.lookahead()
 func TestLookahead_EOF(t *testing.T) {
 	script := ``
 	p := NewParser(script)
-tok := p.lookahead()
+	tok := p.lookahead()
 	if tok != TokEOF {
 		t.Errorf("Expected TokEOF, got %v", tok)
 	}

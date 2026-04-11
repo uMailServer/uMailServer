@@ -58,8 +58,8 @@ func TestInterpreter_ElsifConditionSkipped(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"match"},
 		},

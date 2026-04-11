@@ -13,9 +13,9 @@ import (
 
 // AdminConfig holds configuration for the admin server
 type AdminConfig struct {
-	Addr              string // e.g., "127.0.0.1:8443"
-	JWTSecret         string                  // Legacy single secret
-	JWTSecretVersions map[string]string       // kid -> secret, for key rotation
+	Addr              string            // e.g., "127.0.0.1:8443"
+	JWTSecret         string            // Legacy single secret
+	JWTSecretVersions map[string]string // kid -> secret, for key rotation
 	AuditLog          AuditLogConfig
 }
 
@@ -23,8 +23,8 @@ type AdminConfig struct {
 // It serves on a separate port bound to localhost only.
 // It embeds the main Server to reuse its handlers.
 type AdminServer struct {
-	*Server // Embed main server to reuse handlers
-	config   AdminConfig
+	*Server    // Embed main server to reuse handlers
+	config     AdminConfig
 	httpServer *http.Server
 }
 
@@ -239,4 +239,3 @@ func getContentType(path string) string {
 		return "application/octet-stream"
 	}
 }
-

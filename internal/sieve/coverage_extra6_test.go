@@ -616,8 +616,8 @@ func TestInterpreter_MultipleHeaders(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"Received": {"from mail.example.com", "by mx.example.com"},
 		},
@@ -895,8 +895,8 @@ func TestInterpreter_HeaderTest_Regex(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"test123 email"},
 		},
@@ -987,8 +987,8 @@ func TestInterpreter_HeaderTest_MultipleMatches(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"X-Spam-Score": {"5.5", "3.2"},
 		},
@@ -1082,8 +1082,8 @@ func TestInterpreter_SetBuiltInVariables(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"From":    {"Sender Name <sender@example.com>"},
 			"To":      {"Recipient Name <recipient@example.com>"},

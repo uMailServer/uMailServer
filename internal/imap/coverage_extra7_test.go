@@ -25,7 +25,7 @@ func (m *messagesMockMailstore) FetchMessages(user, mailbox string, seqSet strin
 			Envelope: &Envelope{
 				Subject:   "Zebra Subject",
 				Date:      "15 Jan 2024 10:00:00 +0000",
-				MessageID:  "<msg1@example.com>",
+				MessageID: "<msg1@example.com>",
 				InReplyTo: "",
 				From:      []*Address{{MailboxName: "sender", HostName: "example.com"}},
 				Sender:    []*Address{{MailboxName: "sender", HostName: "example.com"}},
@@ -40,7 +40,7 @@ func (m *messagesMockMailstore) FetchMessages(user, mailbox string, seqSet strin
 			Envelope: &Envelope{
 				Subject:   "Apple Subject",
 				Date:      "14 Jan 2024 10:00:00 +0000",
-				MessageID:  "<msg2@example.com>",
+				MessageID: "<msg2@example.com>",
 				InReplyTo: "<msg1@example.com>",
 				From:      []*Address{{MailboxName: "other", HostName: "other.com"}},
 				Sender:    []*Address{{MailboxName: "other", HostName: "other.com"}},
@@ -55,7 +55,7 @@ func (m *messagesMockMailstore) FetchMessages(user, mailbox string, seqSet strin
 			Envelope: &Envelope{
 				Subject:   "Banana Subject",
 				Date:      "13 Jan 2024 10:00:00 +0000",
-				MessageID:  "<msg3@example.com>",
+				MessageID: "<msg3@example.com>",
 				InReplyTo: "",
 				From:      []*Address{{MailboxName: "third", HostName: "third.com"}},
 				Sender:    []*Address{{MailboxName: "third", HostName: "third.com"}},

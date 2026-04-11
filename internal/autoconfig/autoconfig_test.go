@@ -230,10 +230,10 @@ func TestExtractEmailFromHost(t *testing.T) {
 		want string
 	}{
 		{"user@example.com", "user@example.com"},
-		{"user@EXAMPLE.COM", "user@example.com"}, // lowercase conversion
+		{"user@EXAMPLE.COM", "user@example.com"},      // lowercase conversion
 		{"user@example.com:8080", "user@example.com"}, // with port
-		{"example.com", ""},                       // no email
-		{"192.168.1.1", ""},                       // IP
+		{"example.com", ""},                           // no email
+		{"192.168.1.1", ""},                           // IP
 	}
 
 	for _, tt := range tests {

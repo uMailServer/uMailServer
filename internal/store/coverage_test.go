@@ -1362,9 +1362,9 @@ func TestRenameFolder_NonExistentSource(t *testing.T) {
 
 func TestValidateFilename(t *testing.T) {
 	tests := []struct {
-		name    string
+		name     string
 		filename string
-		wantErr bool
+		wantErr  bool
 	}{
 		{"valid", "1234567890.M001P001.host:2,S", false},
 		{"empty", "", true},
@@ -1385,9 +1385,9 @@ func TestValidateFilename(t *testing.T) {
 
 func TestValidatePathParts(t *testing.T) {
 	tests := []struct {
-		name   string
-		domain string
-		user   string
+		name    string
+		domain  string
+		user    string
 		wantErr bool
 	}{
 		{"valid", "example.com", "testuser", false},

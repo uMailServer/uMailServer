@@ -497,32 +497,32 @@ func tlsVersionName(version uint16) string {
 
 // DeliverabilityResult holds the result of a deliverability check
 type DeliverabilityResult struct {
-	Domain       string               `json:"domain"`
-	DNSResults   []DNSCheckResult     `json:"dns_results"`
-	RBLResults   []RBLCheckResult     `json:"rbl_results"`
-	TLSResult    *TLSCheckResult      `json:"tls_result"`
-	SMTPResult   *SMTPCheckResult     `json:"smtp_result"`
-	OverallScore string               `json:"overall_score"` // pass, warning, fail
-	Issues       []string             `json:"issues"`
-	Message      string               `json:"message"`
+	Domain       string           `json:"domain"`
+	DNSResults   []DNSCheckResult `json:"dns_results"`
+	RBLResults   []RBLCheckResult `json:"rbl_results"`
+	TLSResult    *TLSCheckResult  `json:"tls_result"`
+	SMTPResult   *SMTPCheckResult `json:"smtp_result"`
+	OverallScore string           `json:"overall_score"` // pass, warning, fail
+	Issues       []string         `json:"issues"`
+	Message      string           `json:"message"`
 }
 
 // RBLCheckResult holds RBL check result for a server
 type RBLCheckResult struct {
-	Server   string `json:"server"`
-	Listed   bool   `json:"listed"`
-	Code     string `json:"code"`
-	Score    string `json:"score"`
-	Message  string `json:"message"`
+	Server  string `json:"server"`
+	Listed  bool   `json:"listed"`
+	Code    string `json:"code"`
+	Score   string `json:"score"`
+	Message string `json:"message"`
 }
 
 // SMTPCheckResult holds SMTP connectivity check result
 type SMTPCheckResult struct {
-	Reachable    bool   `json:"reachable"`
-	STARTTLS     bool   `json:"starttls"`
-	AuthSupported bool  `json:"auth_supported"`
-	MaxMessageSize int64 `json:"max_message_size"`
-	Message      string `json:"message"`
+	Reachable      bool   `json:"reachable"`
+	STARTTLS       bool   `json:"starttls"`
+	AuthSupported  bool   `json:"auth_supported"`
+	MaxMessageSize int64  `json:"max_message_size"`
+	Message        string `json:"message"`
 }
 
 // CheckDeliverability runs a comprehensive deliverability audit for a domain

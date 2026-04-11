@@ -122,21 +122,21 @@ type Server struct {
 // Config holds API server configuration
 type Config struct {
 	Addr              string
-	JWTSecret         string                  // Legacy single secret (used if JWTSecretVersions not set)
-	JWTSecretVersions map[string]string       // kid -> secret, for key rotation
+	JWTSecret         string            // Legacy single secret (used if JWTSecretVersions not set)
+	JWTSecretVersions map[string]string // kid -> secret, for key rotation
 	TokenExpiry       time.Duration
 	CorsOrigins       []string
 	TrustedProxies    []string // IPs that are allowed to set X-Forwarded-For
 	AuditLog          AuditLogConfig
-	PasswordHasher    string                 // "bcrypt" (default) or "argon2id"
+	PasswordHasher    string // "bcrypt" (default) or "argon2id"
 }
 
 // AuditLogConfig holds audit logging configuration
 type AuditLogConfig struct {
-	Path        string // Path to audit log file, empty = disabled
-	MaxSizeMB   int    // Max file size before rotation
-	MaxBackups  int    // Number of backup files to keep
-	MaxAgeDays  int    // Max age of backup files in days
+	Path       string // Path to audit log file, empty = disabled
+	MaxSizeMB  int    // Max file size before rotation
+	MaxBackups int    // Number of backup files to keep
+	MaxAgeDays int    // Max age of backup files in days
 }
 
 // NewServer creates a new admin API server
@@ -220,17 +220,17 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	}
 
 	return &Server{
-		db:          database,
-		logger:      logger,
-		config:      config,
-		mcpServer:   mcp.NewServer(database),
-		sseServer:   sseServer,
-		webmailFS:   newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
-		adminFS:     newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
-		auditLogger: auditLogger,
+		db:             database,
+		logger:         logger,
+		config:         config,
+		mcpServer:      mcp.NewServer(database),
+		sseServer:      sseServer,
+		webmailFS:      newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
+		adminFS:        newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+		auditLogger:    auditLogger,
 		tokenBlacklist: make(map[string]time.Time),
-		jwtSecrets: jwtSecrets,
-		currentKid:  currentKid,
+		jwtSecrets:     jwtSecrets,
+		currentKid:     currentKid,
 	}
 }
 
@@ -315,19 +315,19 @@ func NewServerWithInterfaces(
 	}
 
 	return &Server{
-		db:          database,
-		logger:      logger,
-		config:      config,
-		mcpServer:   mcp.NewServer(database),
-		sseServer:   sseServer,
-		vacationMgr: vacationMgr,
-		filterMgr:   filterMgr,
-		pushSvc:     pushSvc,
-		webmailFS:   webmailFS,
-		adminFS:     adminFS,
+		db:             database,
+		logger:         logger,
+		config:         config,
+		mcpServer:      mcp.NewServer(database),
+		sseServer:      sseServer,
+		vacationMgr:    vacationMgr,
+		filterMgr:      filterMgr,
+		pushSvc:        pushSvc,
+		webmailFS:      webmailFS,
+		adminFS:        adminFS,
 		tokenBlacklist: make(map[string]time.Time),
-		jwtSecrets: jwtSecrets,
-		currentKid:  currentKid,
+		jwtSecrets:     jwtSecrets,
+		currentKid:     currentKid,
 	}
 }
 
@@ -2081,8 +2081,8 @@ func (s *Server) listAliases(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Alias    string `json:"alias"`    // alias@domain
-		Target   string `json:"target"`  // user@domain
+		Alias    string `json:"alias"`  // alias@domain
+		Target   string `json:"target"` // user@domain
 		IsActive bool   `json:"is_active"`
 	}
 

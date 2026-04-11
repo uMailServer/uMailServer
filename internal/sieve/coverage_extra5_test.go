@@ -241,8 +241,8 @@ func TestInterpreter_HeaderTest_WithMatches(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"this is a test email"},
 		},

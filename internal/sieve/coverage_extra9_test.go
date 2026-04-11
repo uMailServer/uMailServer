@@ -29,8 +29,8 @@ func TestInterpreter_Elsif_SkippedWhenPreviousFalse(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"Hello"}, // doesn't match "nomatch"
 			"from":    {"test@example.com"},
@@ -75,8 +75,8 @@ func TestInterpreter_Elsif_SecondElsifEvaluated(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"Hello"},
 			"from":    {"test@example.com"},
@@ -118,8 +118,8 @@ func TestInterpreter_ExecuteFileinto_NoCreateFlag(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"Test"},
 		},
@@ -148,8 +148,8 @@ func TestInterpreter_ExecuteFileinto_CreateFalse(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"Test"},
 		},
@@ -178,8 +178,8 @@ func TestInterpreter_ExecuteIf_EmptyBlock(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"match"},
 		},
@@ -217,8 +217,8 @@ func TestInterpreter_EvaluateHeaderTest_CountMatch(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"from": {"test@example.com"},
 		},
@@ -248,8 +248,8 @@ func TestInterpreter_EvaluateHeaderTest_IndexMatch(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"from": {"test@example.com"},
 		},
@@ -480,8 +480,8 @@ func TestInterpreter_Elsif_ExecutesWhenPreviousTrue(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "test@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "test@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"match"},
 			"from":    {"test@example.com"},
@@ -519,8 +519,8 @@ func TestInterpreter_ExecuteIf_FalseConditionNilBlock(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"Hello"}, // doesn't match "nomatch"
 		},
@@ -672,8 +672,8 @@ func TestInterpreter_EvaluateHeaderTest_MatchesWildcard(t *testing.T) {
 
 	interp := NewInterpreter(s)
 	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
+		From: "sender@example.com",
+		To:   []string{"recipient@example.com"},
 		Headers: map[string][]string{
 			"subject": {"Hello World"},
 		},
@@ -940,4 +940,3 @@ func TestSafeRegexMatch_NoMatchResult(t *testing.T) {
 		t.Error("Expected no match")
 	}
 }
-

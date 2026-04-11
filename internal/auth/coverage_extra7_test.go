@@ -48,8 +48,8 @@ func TestSMIMESigner_SignMessage(t *testing.T) {
 	}
 
 	config := &SMIMEConfig{
-		SigningCert:      cert,
-		SigningKey:        privateKey,
+		SigningCert:     cert,
+		SigningKey:      privateKey,
 		EncryptionCerts: []*x509.Certificate{cert},
 	}
 
@@ -80,7 +80,7 @@ func TestSMIMEEncrypt_EncryptMessage(t *testing.T) {
 
 	config := &SMIMEConfig{
 		EncryptionCerts: []*x509.Certificate{cert},
-		SigningKey:       nil,
+		SigningKey:      nil,
 	}
 
 	encryptor := NewSMIMEEncryptor(config)
@@ -98,7 +98,7 @@ func TestSMIMEEncrypt_EncryptMessage(t *testing.T) {
 func TestSMIMEEncrypt_NoEncryptionCerts(t *testing.T) {
 	config := &SMIMEConfig{
 		EncryptionCerts: []*x509.Certificate{},
-		SigningKey:       nil,
+		SigningKey:      nil,
 	}
 
 	encryptor := NewSMIMEEncryptor(config)

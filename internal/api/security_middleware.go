@@ -34,7 +34,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 			"frame-ancestors 'none'",
 			"base-uri 'self'",
 			"form-action 'self'",
-			"object-src 'none'", // Disallow plugins like Flash
+			"object-src 'none'",         // Disallow plugins like Flash
 			"upgrade-insecure-requests", // Upgrade HTTP to HTTPS
 		}
 		w.Header().Set("Content-Security-Policy", strings.Join(csp, "; "))

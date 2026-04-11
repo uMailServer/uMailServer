@@ -14,14 +14,18 @@ type mockConn struct {
 	writeBuf *bytes.Buffer
 }
 
-func (m *mockConn) Read(b []byte) (n int, err error)   { return m.readBuf.Read(b) }
+func (m *mockConn) Read(b []byte) (n int, err error)  { return m.readBuf.Read(b) }
 func (m *mockConn) Write(b []byte) (n int, err error) { return m.writeBuf.Write(b) }
 func (m *mockConn) Close() error                      { return nil }
-func (m *mockConn) LocalAddr() net.Addr              { return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4190} }
-func (m *mockConn) RemoteAddr() net.Addr             { return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321} }
-func (m *mockConn) SetDeadline(t time.Time) error     { return nil }
-func (m *mockConn) SetReadDeadline(t time.Time) error   { return nil }
-func (m *mockConn) SetWriteDeadline(t time.Time) error  { return nil }
+func (m *mockConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4190}
+}
+func (m *mockConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321}
+}
+func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 
 // mockReader implements io.Reader for testing ReadLine
 type mockReader struct {

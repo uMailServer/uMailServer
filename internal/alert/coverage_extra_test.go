@@ -103,7 +103,7 @@ func TestConfig_DefaultValues(t *testing.T) {
 
 func TestConfig_JSONMarshal(t *testing.T) {
 	cfg := &Config{
-		Enabled:  true,
+		Enabled:      true,
 		SMTPPassword: "secret",
 	}
 

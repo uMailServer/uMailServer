@@ -212,7 +212,7 @@ func TestResult_RetryAfter(t *testing.T) {
 func TestCheckIP_HourlyLimit(t *testing.T) {
 	cfg := &Config{
 		IPPerMinute:     1000, // High so minute doesn't trigger first
-		IPPerHour:      3,
+		IPPerHour:       3,
 		CleanupInterval: time.Hour,
 	}
 	rl := New(nil, cfg)
@@ -236,8 +236,8 @@ func TestCheckIP_HourlyLimit(t *testing.T) {
 func TestCheckIP_DailyLimit(t *testing.T) {
 	cfg := &Config{
 		IPPerMinute:     1000,
-		IPPerHour:      1000,
-		IPPerDay:       2,
+		IPPerHour:       1000,
+		IPPerDay:        2,
 		CleanupInterval: time.Hour,
 	}
 	rl := New(nil, cfg)
@@ -311,7 +311,7 @@ func TestCheckIP_MinuteLimitBeforeHourly(t *testing.T) {
 	// When minute limit is lower, it should be checked first
 	cfg := &Config{
 		IPPerMinute:     2,
-		IPPerHour:      100,
+		IPPerHour:       100,
 		CleanupInterval: time.Hour,
 	}
 	rl := New(nil, cfg)

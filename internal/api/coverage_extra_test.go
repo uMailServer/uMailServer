@@ -2473,8 +2473,8 @@ func TestHandleWebmail_CSSContentType(t *testing.T) {
 
 // mockRateLimitManager is a mock for testing
 type mockRateLimitManager struct {
-	cfg  *ratelimit.Config
-	ipStats  map[string]any
+	cfg       *ratelimit.Config
+	ipStats   map[string]any
 	userStats map[string]any
 }
 
@@ -2653,7 +2653,7 @@ func TestHandleRateLimitUserStats_WithMockManager(t *testing.T) {
 	mockRL := &mockRateLimitManager{
 		userStats: map[string]any{
 			"emails_today": 5,
-			"blocked":       1,
+			"blocked":      1,
 		},
 	}
 	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)

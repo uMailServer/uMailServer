@@ -36,10 +36,10 @@ type Config struct {
 
 // ServerConfig holds general server settings
 type ServerConfig struct {
-	Hostname         string `yaml:"hostname"` // FQDN: mail.example.com
-	DataDir          string `yaml:"data_dir"` // /var/lib/umailserver
-	GracefulTimeout   int    `yaml:"graceful_timeout"`   // Seconds to wait for connections to drain (default 30)
-	ForceCloseAfter  int    `yaml:"force_close_after"`  // Seconds after which to force close connections (default 60)
+	Hostname        string `yaml:"hostname"`          // FQDN: mail.example.com
+	DataDir         string `yaml:"data_dir"`          // /var/lib/umailserver
+	GracefulTimeout int    `yaml:"graceful_timeout"`  // Seconds to wait for connections to drain (default 30)
+	ForceCloseAfter int    `yaml:"force_close_after"` // Seconds after which to force close connections (default 60)
 }
 
 // TLSConfig holds TLS and certificate settings
@@ -174,10 +174,10 @@ type SecurityConfig struct {
 
 // AuditLogConfig holds audit logging settings
 type AuditLogConfig struct {
-	Path        string   `yaml:"path"`        // Path to audit log file, empty = disabled
-	MaxSizeMB   int      `yaml:"max_size_mb"` // Max file size before rotation (default 10MB)
-	MaxBackups  int      `yaml:"max_backups"` // Number of backup files to keep (default 5)
-	MaxAgeDays  int      `yaml:"max_age_days"` // Max age of backup files in days (default 30)
+	Path       string `yaml:"path"`         // Path to audit log file, empty = disabled
+	MaxSizeMB  int    `yaml:"max_size_mb"`  // Max file size before rotation (default 10MB)
+	MaxBackups int    `yaml:"max_backups"`  // Number of backup files to keep (default 5)
+	MaxAgeDays int    `yaml:"max_age_days"` // Max age of backup files in days (default 30)
 }
 
 // RateLimitConfig holds rate limiting settings

@@ -91,7 +91,7 @@ func TestNewSieveStage(t *testing.T) {
 }
 
 // Note: SieveStage.Process does not handle nil manager gracefully,
- // so we skip testing with nil manager
+// so we skip testing with nil manager
 
 func TestSieveStage_EmptyRecipient(t *testing.T) {
 	manager := sieve.NewManager()
@@ -305,15 +305,15 @@ func TestRBLStage_WithServers_Listed(t *testing.T) {
 
 func TestRBLStage_DifferentResultCodes(t *testing.T) {
 	testCases := []struct {
-		resultIP   string
-		minScore   float64
+		resultIP string
+		minScore float64
 	}{
-		{"127.0.0.2", 3.0}, // confirmed spam source
-		{"127.0.0.3", 3.0}, // confirmed spam source (alt)
-		{"127.0.0.4", 2.0}, // spam domain
-		{"127.0.0.5", 2.5}, // phishing domain
-		{"127.0.0.6", 3.0}, // malware domain
-		{"127.0.0.7", 3.0}, // botnet server
+		{"127.0.0.2", 3.0},  // confirmed spam source
+		{"127.0.0.3", 3.0},  // confirmed spam source (alt)
+		{"127.0.0.4", 2.0},  // spam domain
+		{"127.0.0.5", 2.5},  // phishing domain
+		{"127.0.0.6", 3.0},  // malware domain
+		{"127.0.0.7", 3.0},  // botnet server
 		{"127.0.0.99", 1.5}, // generic positive or unknown
 	}
 

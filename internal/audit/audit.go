@@ -17,26 +17,26 @@ import (
 type EventType string
 
 const (
-	LoginSuccess      EventType = "login_success"
-	LoginFailure      EventType = "login_failure"
-	Logout            EventType = "logout"
-	AccountCreate     EventType = "account_create"
-	AccountUpdate     EventType = "account_update"
-	AccountDelete     EventType = "account_delete"
-	TOTPEnable        EventType = "totp_enable"
-	TOTPDisable       EventType = "totp_disable"
-	PasswordChange    EventType = "password_change"
+	LoginSuccess   EventType = "login_success"
+	LoginFailure   EventType = "login_failure"
+	Logout         EventType = "logout"
+	AccountCreate  EventType = "account_create"
+	AccountUpdate  EventType = "account_update"
+	AccountDelete  EventType = "account_delete"
+	TOTPEnable     EventType = "totp_enable"
+	TOTPDisable    EventType = "totp_disable"
+	PasswordChange EventType = "password_change"
 )
 
 // Event represents a single audit log entry
 type Event struct {
-	Timestamp   string            `json:"timestamp"`
-	Type       EventType          `json:"type"`
-	User       string            `json:"user,omitempty"`
-	IP         string            `json:"ip,omitempty"`
-	Success    bool              `json:"success"`
-	Details    map[string]string `json:"details,omitempty"`
-	Service    string            `json:"service"` // "api", "smtp", "imap", "pop3"
+	Timestamp string            `json:"timestamp"`
+	Type      EventType         `json:"type"`
+	User      string            `json:"user,omitempty"`
+	IP        string            `json:"ip,omitempty"`
+	Success   bool              `json:"success"`
+	Details   map[string]string `json:"details,omitempty"`
+	Service   string            `json:"service"` // "api", "smtp", "imap", "pop3"
 }
 
 // Logger handles structured audit logging with rotation

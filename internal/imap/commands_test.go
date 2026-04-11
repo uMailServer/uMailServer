@@ -2995,7 +2995,7 @@ func TestParseSearchCriteria_DateAndSize(t *testing.T) {
 			name: "LARGER with size",
 			args: []string{"LARGER", "1000"},
 			expected: SearchCriteria{
-				All:   true,
+				All:    true,
 				Larger: 1000,
 			},
 		},
@@ -3003,7 +3003,7 @@ func TestParseSearchCriteria_DateAndSize(t *testing.T) {
 			name: "SMALLER with size",
 			args: []string{"SMALLER", "500"},
 			expected: SearchCriteria{
-				All:    true,
+				All:     true,
 				Smaller: 500,
 			},
 		},
