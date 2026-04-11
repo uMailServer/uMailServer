@@ -86,3 +86,4 @@ security-report/
 # IDE project files
 .project/
 .claude/
+api/docs.go

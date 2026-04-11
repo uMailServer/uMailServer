@@ -79,6 +79,17 @@ var reverseFolderMap = map[string]string{
 }
 
 // handleMailList lists emails in a folder
+// handleMailList returns emails in a mailbox folder
+//
+//	@Summary List emails in folder
+//	@Description Returns a list of emails from the specified mailbox folder
+//	@Tags Mail
+//	@Produce json
+//	@Security BearerAuth
+//	@Param folder query string false "Folder name (default INBOX)"
+//	@Success 200 {array} Mail "List of emails"
+//	@Failure 401 {object} map[string]interface{} "Unauthorized"
+//	@Router /api/v1/mail [get]
 func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -324,6 +335,17 @@ func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
 }
 
 // handleMailSend sends an email and stores it in Sent folder
+//
+//	@Summary Send email
+//	@Description Sends an email and stores it in the Sent folder
+//	@Tags Mail
+//	@Accept json
+//	@Produce json
+//	@Security BearerAuth
+//	@Param email body map[string]interface{} true "Email data"
+//	@Success 200 {object} map[string]interface{} "Email sent"
+//	@Failure 401 {object} map[string]interface{} "Unauthorized"
+//	@Router /api/v1/mail/send [post]
 func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
@@ -439,6 +461,16 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleMailDelete deletes an email (moves to trash)
+//
+//	@Summary Delete email
+//	@Description Moves an email to the Trash folder
+//	@Tags Mail
+//	@Produce json
+//	@Security BearerAuth
+//	@Param id query string true "Message ID"
+//	@Success 200 {object} map[string]string "Email deleted"
+//	@Failure 401 {object} map[string]interface{} "Unauthorized"
+//	@Router /api/v1/mail/delete [delete]
 func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
 		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")

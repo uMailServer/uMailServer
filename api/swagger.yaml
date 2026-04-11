@@ -1,6 +1,97 @@
+definitions:
+  api.Mail:
+    properties:
+      body:
+        type: string
+      date:
+        type: string
+      folder:
+        type: string
+      from:
+        type: string
+      fromName:
+        type: string
+      hasAttachments:
+        type: boolean
+      id:
+        type: string
+      preview:
+        type: string
+      read:
+        type: boolean
+      size:
+        type: integer
+      starred:
+        type: boolean
+      subject:
+        type: string
+      to:
+        items:
+          type: string
+        type: array
+    type: object
 info:
   contact: {}
 paths:
+  /api/v1/accounts:
+    get:
+      consumes:
+      - application/json
+      description: |-
+        Returns a list of all accounts for a domain
+        Creates a new email account
+      produces:
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: List of accounts
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "201":
+          description: Account created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      summary: Create account
+      tags:
+      - Accounts
+      - Accounts
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Returns a list of all accounts for a domain
+        Creates a new email account
+      produces:
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: List of accounts
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "201":
+          description: Account created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      summary: Create account
+      tags:
+      - Accounts
+      - Accounts
   /api/v1/domains:
     get:
       consumes:
@@ -107,6 +198,113 @@ paths:
             additionalProperties: true
             type: object
       summary: User login
+      tags:
+      - Auth
+  /api/v1/mail:
+    get:
+      description: Returns a list of emails from the specified mailbox folder
+      parameters:
+      - description: Folder name (default INBOX)
+        in: query
+        name: folder
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: List of emails
+          schema:
+            items:
+              $ref: '#/definitions/api.Mail'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: List emails in folder
+      tags:
+      - Mail
+  /api/v1/mail/delete:
+    delete:
+      description: Moves an email to the Trash folder
+      parameters:
+      - description: Message ID
+        in: query
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Email deleted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Delete email
+      tags:
+      - Mail
+  /api/v1/mail/send:
+    post:
+      consumes:
+      - application/json
+      description: Sends an email and stores it in the Sent folder
+      parameters:
+      - description: Email data
+        in: body
+        name: email
+        required: true
+        schema:
+          additionalProperties: true
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Email sent
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Send email
+      tags:
+      - Mail
+  /api/v1/refresh:
+    post:
+      description: Returns a new JWT token with extended expiry
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Token refreshed
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Refresh token
       tags:
       - Auth
   /health:

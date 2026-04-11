@@ -1122,6 +1122,16 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRefresh refreshes the JWT token
+//
+//	@Summary Refresh token
+//	@Description Returns a new JWT token with extended expiry
+//	@Tags Auth
+//	@Produce json
+//	@Security BearerAuth
+//	@Success 200 {object} map[string]interface{} "Token refreshed"
+//	@Failure 401 {object} map[string]interface{} "Unauthorized"
+//	@Router /api/v1/refresh [post]
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1207,6 +1217,23 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleAccounts lists and creates accounts
+//
+//	@Summary List accounts
+//	@Description Returns a list of all accounts for a domain
+//	@Tags Accounts
+//	@Produce json
+//	@Security BearerAuth
+//	@Success 200 {array} map[string]interface{} "List of accounts"
+//	@Router /api/v1/accounts [get]
+//	@Summary Create account
+//	@Description Creates a new email account
+//	@Tags Accounts
+//	@Accept json
+//	@Produce json
+//	@Security BearerAuth
+//	@Success 201 {object} map[string]interface{} "Account created"
+//	@Router /api/v1/accounts [post]
 func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) {
 	suffix := strings.TrimPrefix(r.URL.Path, "/api/v1/accounts/")
 
