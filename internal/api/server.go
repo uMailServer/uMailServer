@@ -766,6 +766,15 @@ func (s *Server) recordLoginFailure(ip string) {
 
 // Handlers
 
+// handleHealth returns server health status
+//
+//	@Summary Get server health
+//	@Description Returns the current health status of the server including database, queue, and storage checks
+//	@Tags Health
+//	@Produce json
+//	@Success 200 {object} map[string]interface{} "Server is healthy"
+//	@Success 503 {object} map[string]interface{} "Server is unhealthy"
+//	@Router /health [get]
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	result := map[string]interface{}{
@@ -819,6 +828,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleReady is the Kubernetes readiness probe endpoint
 // Returns 200 if the server is ready to accept traffic, 503 if draining
+//
+//	@Summary Get server readiness for zero-downtime deployment
+//	@Description Returns whether the server is ready to accept traffic. Used for kubernetes readiness probes.
+//	@Tags Health
+//	@Produce json
+//	@Success 200 {object} map[string]interface{} "Server is ready"
+//	@Success 503 {object} map[string]interface{} "Server is not ready"
+//	@Router /health/ready [get]
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	// If draining, report not ready
 	if s.draining.Load() {
@@ -959,6 +976,21 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, path, stat.ModTime(), file.(io.ReadSeeker))
 }
 
+// handleLogin authenticates a user and returns a JWT token
+//
+//	@Summary User login
+//	@Description Authenticates a user with email and password, returns JWT token
+//	@Tags Auth
+//	@Accept json
+//	@Produce json
+//	@Param email body string true "User email"
+//	@Param password body string true "User password"
+//	@Param totp_code body string false "TOTP code if MFA is enabled"
+//	@Success 200 {object} map[string]interface{} "Login successful"
+//	@Failure 400 {object} map[string]interface{} "Invalid request"
+//	@Failure 401 {object} map[string]interface{} "Invalid credentials"
+//	@Failure 429 {object} map[string]interface{} "Too many login attempts"
+//	@Router /api/v1/login [post]
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1121,6 +1153,23 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleDomains lists and creates domains
+//
+//	@Summary List domains
+//	@Description Returns a list of all domains
+//	@Tags Domains
+//	@Produce json
+//	@Security BearerAuth
+//	@Success 200 {array} map[string]interface{} "List of domains"
+//	@Router /api/v1/domains [get]
+//	@Summary Create domain
+//	@Description Creates a new domain
+//	@Tags Domains
+//	@Accept json
+//	@Produce json
+//	@Security BearerAuth
+//	@Success 201 {object} map[string]interface{} "Domain created"
+//	@Router /api/v1/domains [post]
 func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

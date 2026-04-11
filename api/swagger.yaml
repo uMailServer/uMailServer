@@ -1,0 +1,152 @@
+info:
+  contact: {}
+paths:
+  /api/v1/domains:
+    get:
+      consumes:
+      - application/json
+      description: |-
+        Returns a list of all domains
+        Creates a new domain
+      produces:
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: List of domains
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "201":
+          description: Domain created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      summary: Create domain
+      tags:
+      - Domains
+      - Domains
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Returns a list of all domains
+        Creates a new domain
+      produces:
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: List of domains
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "201":
+          description: Domain created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      summary: Create domain
+      tags:
+      - Domains
+      - Domains
+  /api/v1/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates a user with email and password, returns JWT token
+      parameters:
+      - description: User email
+        in: body
+        name: email
+        required: true
+        schema:
+          type: string
+      - description: User password
+        in: body
+        name: password
+        required: true
+        schema:
+          type: string
+      - description: TOTP code if MFA is enabled
+        in: body
+        name: totp_code
+        schema:
+          type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Login successful
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Invalid credentials
+          schema:
+            additionalProperties: true
+            type: object
+        "429":
+          description: Too many login attempts
+          schema:
+            additionalProperties: true
+            type: object
+      summary: User login
+      tags:
+      - Auth
+  /health:
+    get:
+      description: Returns the current health status of the server including database,
+        queue, and storage checks
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Server is healthy
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Server is unhealthy
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get server health
+      tags:
+      - Health
+  /health/ready:
+    get:
+      description: Returns whether the server is ready to accept traffic. Used for
+        kubernetes readiness probes.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Server is ready
+          schema:
+            additionalProperties: true
+            type: object
+        "503":
+          description: Server is not ready
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Get server readiness for zero-downtime deployment
+      tags:
+      - Health
+swagger: "2.0"
