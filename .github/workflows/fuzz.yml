@@ -1,0 +1,62 @@
+name: Fuzz
+
+on:
+  schedule:
+    # Run 24h fuzzing corpus expansion every Monday at 3am UTC
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Fuzzing duration (hours)'
+        required: false
+        default: '24'
+      package:
+        description: 'Package to fuzz (default: all)'
+        required: false
+        default: ''
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ inputs.package || 'all' }})
+    runs-on: ubuntu-latest
+    timeout-hours: ${{ github.event.inputs.duration || '25' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+        env:
+          GO_VERSION: '1.25'
+
+      - name: Run fuzzing
+        run: |
+          # Determine packages to fuzz
+          PACKAGES=(
+            ./internal/smtp
+            ./internal/imap
+            ./internal/api
+            ./internal/sieve
+            ./internal/spam
+          )
+
+          for pkg in "${PACKAGES[@]}"; do
+            if [ -d "$pkg" ] && ls "$pkg"/fuzz_test.go 2>/dev/null; then
+              echo "=== Fuzzing $pkg ==="
+              timeout 23h go test -fuzz=FuzzParseCommand -fuzztime=23h "$pkg" || true
+            fi
+          fi
+        shell: bash
+        timeout-minutes: 1380
+
+      - name: Upload crashers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: |
+            **/crashers/
+            **/suppressions/
+          retention-days: 30

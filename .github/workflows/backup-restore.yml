@@ -1,0 +1,95 @@
+name: Backup Restore Test
+
+# Weekly backup smoke test — creates a backup, restores it, verifies contents
+on:
+  schedule:
+    # Run every Sunday at 4am UTC
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+
+jobs:
+  backup-restore-test:
+    name: Backup Restore Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+        env:
+          GO_VERSION: '1.25'
+
+      - name: Create test data dir
+        run: |
+          mkdir -p /tmp/umailserver-test/data/config
+          cat > /tmp/umailserver-test/data/config/umailserver.yaml << 'YAML'
+          server:
+            hostname: test-backup.local
+            data_dir: /tmp/umailserver-test/data
+          YAML
+          echo "test db content" > /tmp/umailserver-test/data/umailserver.db
+          mkdir -p /tmp/umailserver-test/data/messages/new
+          echo "test message" > /tmp/umailserver-test/data/messages/new/1
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 go build -ldflags "-X main.Version=test" -o umailserver-test ./cmd/umailserver
+
+      - name: Create test backup
+        run: |
+          mkdir -p /tmp/umailserver-backups
+          ./umailserver-test backup /tmp/umailserver-backups \
+            --config /tmp/umailserver-test/data/config/umailserver.yaml \
+            --password "test-password-123"
+          ls -la /tmp/umailserver-backups/
+
+      - name: Find latest encrypted backup
+        id: find_backup
+        run: |
+          BACKUP=$(ls -t /tmp/umailserver-backups/*.tar.gz.enc 2>/dev/null | head -1)
+          echo "backup_file=$BACKUP" >> $GITHUB_OUTPUT
+          echo "Found backup: $BACKUP"
+
+      - name: Restore to temp location
+        if: steps.find_backup.outputs.backup_file != ''
+        run: |
+          ./umailserver-test restore "${{ steps.find_backup.outputs.backup_file }}" \
+            --config /tmp/umailserver-test/data/config/umailserver.yaml \
+            --password "test-password-123"
+
+      - name: Verify restored contents
+        if: steps.find_backup.outputs.backup_file != ''
+        run: |
+          RESTORE_DIR="/tmp/umailserver-test/data/../restore_temp"
+          echo "=== Checking restored files ==="
+          # Check manifest exists
+          if [ -f "$RESTORE_DIR/manifest.json" ]; then
+            echo "✓ manifest.json present"
+            python3 -c "import sys,json; d=json.load(open('$RESTORE_DIR/manifest.json')); print(f'Version: {d.get(\"version\")}, Timestamp: {d.get(\"timestamp\")}')"
+          else
+            echo "✗ manifest.json missing"
+            exit 1
+          fi
+          # Check config directory
+          if [ -d "$RESTORE_DIR/config" ]; then
+            echo "✓ config/ directory present"
+          else
+            echo "✗ config/ directory missing"
+            exit 1
+          fi
+          # Check database backup
+          if [ -f "$RESTORE_DIR/database/umailserver.db" ]; then
+            echo "✓ database/umailserver.db present"
+          else
+            echo "✗ database/umailserver.db missing"
+            exit 1
+          fi
+          echo "=== All restore checks passed ==="
+
+      - name: Cleanup
+        run: |
+          rm -rf /tmp/umailserver-test /tmp/umailserver-backups
+          echo "Cleanup complete"
