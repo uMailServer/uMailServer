@@ -175,21 +175,36 @@ func cmdServe(args []string) {
 }
 
 func cmdQuickstart(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: umailserver quickstart <email>")
+	// Define defaults to match install.sh
+	defaultDataDir := "/var/lib/umailserver"
+	defaultConfigDir := "/etc/umailserver"
+	defaultConfigPath := defaultConfigDir + "/umailserver.yaml"
+
+	// Command-line flags
+	var dataDir string
+	var configPath string
+
+	fs := flag.NewFlagSet("quickstart", flag.ExitOnError)
+	fs.StringVar(&dataDir, "data-dir", defaultDataDir, "Data directory")
+	fs.StringVar(&configPath, "config", defaultConfigPath, "Config file path")
+	fs.Parse(args)
+
+	// Get email from remaining args
+	remaining := fs.Args()
+	if len(remaining) < 1 {
+		fmt.Println("Usage: umailserver quickstart <email> [flags]")
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
-	email := args[0]
+	email := remaining[0]
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
 		fmt.Fprintf(os.Stderr, "Invalid email format: %s\n", email)
 		os.Exit(1)
 	}
 	domain := parts[1]
-
-	dataDir := "./data"
-	configPath := "./umailserver.yaml"
 
 	// Check if config already exists
 	if _, err := os.Stat(configPath); err == nil {
@@ -259,6 +274,7 @@ http:
   http_port: 80
 
 admin:
+  enabled: true
   port: 8443
   bind: 127.0.0.1
 
@@ -303,6 +319,16 @@ domains:
 		os.Exit(1)
 	}
 	defer database.Close()
+
+	// Run pending migrations
+	fmt.Println("Running database migrations...")
+	registry := migrations.NewRegistry()
+	migrations.InitMigrations(registry)
+	migrator := migrations.NewMigrator(database.BoltDB(), registry)
+	if err := migrator.Migrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to run migrations: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Create domain
 	if err := database.CreateDomain(&db.DomainData{
@@ -362,7 +388,8 @@ domains:
 
 	fmt.Println("=== Next Steps ===")
 	fmt.Println("1. Update DNS records above with your actual server IP")
-	fmt.Println("2. Start the server: umailserver serve -config umailserver.yaml")
+	fmt.Println("2. Start the server: sudo systemctl start umailserver")
+	fmt.Println("   Or run directly: umailserver serve")
 	fmt.Println("3. Access webmail at: https://mail.yourdomain.com")
 	fmt.Println("4. Access admin panel at: https://127.0.0.1:8443")
 }

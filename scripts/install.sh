@@ -173,6 +173,7 @@ imap:
   port: 993
 
 admin:
+  enabled: true
   port: 8443
   bind: 127.0.0.1
 EOF
