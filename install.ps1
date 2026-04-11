@@ -17,6 +17,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Default paths
+$DefaultDataDir = "C:\ProgramData\umailserver"
+$DefaultInstallDir = "$env:ProgramFiles\umailserver"
+$DefaultConfigDir = "$env:PROGRAMDATA\umailserver"  # Same as data dir on Windows
+
 # Colors
 function Write-Info($message) { Write-Host "[INFO] $message" -ForegroundColor Green }
 function Write-Warn($message) { Write-Host "[WARN] $message" -ForegroundColor Yellow }
@@ -314,6 +319,10 @@ function Invoke-Setup {
 
     Write-Host ""
     Write-Info "Setup complete!"
+    Write-Host ""
+    Write-Host "Configuration:" -ForegroundColor Cyan
+    Write-Host "  Config: $configPath"
+    Write-Host "  Data: $DataDir"
 }
 
 # Main installation
