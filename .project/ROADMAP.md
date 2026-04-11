@@ -1,140 +1,295 @@
 # Project Roadmap
 
-> Based on comprehensive codebase analysis performed on 2026-04-10
+> Based on comprehensive codebase analysis performed on 2026-04-11
 > This roadmap prioritizes work needed to bring the project to production quality.
 
 ---
 
 ## Current State Assessment
 
-uMailServer is a **production-grade single-binary email server** with comprehensive SMTP/IMAP/POP3 implementation, full RFC compliance, spam filtering (SPF/DKIM/DMARC/ARC/RBL/Bayesian/greylisting), ClamAV antivirus integration, S/MIME + OpenPGP encryption, Sieve mail filtering, TOTP 2FA, TLS via ACME, CalDAV/CardDAV/JMAP support, MCP AI integration, and embedded React frontends.
+uMailServer is a **production-grade single-binary email server** for v0.1.0. Core protocols (SMTP/IMAP/POP3) are well-implemented with proper RFC compliance. Security features (SPF/DKIM/DMARC validation, JWT auth, rate limiting, brute-force protection) are solid. Build and tests pass cleanly.
 
-**Key Strengths:**
-- Complete RFC compliance for core email protocols
-- Comprehensive test suite (104 test files, all 35 packages passing)
-- Well-structured codebase with clean package boundaries
-- Excellent documentation (20+ markdown docs)
-- Active security hardening (17 vulnerabilities fixed recently)
-- Multi-platform builds (Linux, macOS, Windows; amd64 + arm64)
-- Docker and Helm chart support
-- Only 1 real TODO in entire codebase
+**Key Blockers for Production Readiness:**
+1. **`signRSA` nil hash bug** — dkim.go:623 passes `nil` to `rsa.SignPKCS1v15`, producing garbage signatures silently
+2. **Spam Bayesian filter is a stub** — `spam/bayes.go` always returns 0.0 score
+3. **AV scanning is a stub** — `av/scanner.go` always returns Clean regardless of actual content
+4. **ARC sealing not implemented** — server can validate ARC but cannot seal/relay with ARC
 
-**Key Blockers:**
-1. **vacationReplies cleanup is threshold-based** — `server.go:1214` only runs cleanup when map exceeds 100 entries; high diversity email can grow map significantly between cleanups
-2. **LDAP auth dead code** — `internal/auth/ldap.go` (360 LOC) fully implemented but never wired into auth flow
-3. **`check deliverability` not implemented** — CLI command exists but `Diagnostics.CheckDeliverability()` method does not exist
+**Key Tech Debt:**
+1. `api/server.go` at 2536 lines — needs per-resource handler拆解
+2. `server/server.go` at 1399 lines — needs subsystem拆解
+3. Queue thundering herd problem — unbounded concurrent processing on each 30s tick
+4. 14 stub packages not wired (webhook, alert, push, vacation, caldav, carddav, jmap, mcp, etc.)
 
 ---
 
-## Phase 1: Critical Fixes (Week 1-2)
-### Must-fix items blocking basic functionality
+## Phase 1: Critical Bug Fixes (Week 1)
 
-- [x] **Fix vacationReplies time-based cleanup** — `internal/server/server.go:1214`. Added `startVacationCleanup()` goroutine (hourly sweep for entries >48h old) in addition to the existing 100-entry threshold. ✅ **Done.**
-- [x] **Wire LDAP auth into main auth flow or remove** — `internal/auth/ldap.go` integrated into `authenticate()` in `server.go`. LDAP is tried first; falls back to local DB on failure. ✅ **Done.**
-- [x] **Implement `check deliverability` command** — `cmd/umailserver/main.go:937`. `CheckDeliverability()` added to `diagnostics.go` with DNS, RBL, TLS, and SMTP connectivity checks. ✅ **Done.**
-- [x] **Update IMPLEMENTATION.md antivirus section** — Already correct (YARA v2 is planned for v2.0, ClamAV is current implementation). No change needed. ✅ **Done.**
+### 1.1 `signRSA` nil hash fix (1 line)
 
----
+**File:** `internal/auth/dkim.go:623`
 
-## Phase 2: Core Completion (Week 3-6)
-### Complete missing core features from specification
+```go
+// BEFORE (bug):
+signature, err := rsa.SignPKCS1v15(nil, privateKey, crypto.SHA256, hash[:])
 
-- [ ] **Argon2id password support** — Add as alternative to bcrypt (configurable). **Effort:** 1 day.
+// AFTER (fix):
+signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hash[:])
+```
 
----
+**Verification:** Add integration test that signs a message and verifies the signature against the public key.
 
-## Phase 3: Hardening (Week 5-6)
-### Security, error handling, edge cases
+### 1.2 `isTemporaryError` reliability fix
 
-- [ ] **Fuzz testing for SMTP/IMAP parsers** — Add fuzz tests for SMTP command parser, IMAP command parser, MIME parser. **Effort:** 3-5 days.
-- [ ] **Security audit for HTML email sanitization** — Verify DOMPurify configuration is strict enough. Test XSS vectors in webmail. **Effort:** 1-2 days.
-- [ ] **Input validation gaps** — Audit HTTP handlers for missing input validation. Add bounds checking on all size limits. **Effort:** 2 days.
-- [ ] **Error response format consistency** — Ensure all API endpoints return consistent error format (`{error: string, code: string}`). **Effort:** 1 day.
-- [ ] **JWT secret rotation mechanism** — Currently no key rotation for JWT. Document limitation or implement rotation. **Effort:** 1 day.
+**File:** `internal/auth/spf.go:501-509`
 
----
+Replace string-matching with proper `net.Error` type assertion:
 
-## Phase 4: Testing (Week 7-8)
-### Comprehensive test coverage
-
-- [ ] **Unit tests for packages with 0% coverage** — Identify any packages without `_test.go` files. Add tests. **Effort:** 2-3 days.
-- [ ] **Integration tests for API endpoints** — Add integration tests for all REST API endpoints (domains, accounts, mail, queue, filters). **Effort:** 2-3 days.
-- [ ] **Frontend component tests** — Set up Vitest for webmail/admin. Add tests for critical components (mail list, compose, sidebar). **Effort:** 3-5 days.
-- [ ] **E2E test fix and enablement** — Fix flakiness in `e2e/` tests. Enable in CI. Playwright tests for critical flows. **Effort:** 3-4 days.
-- [ ] **Backup/restore automated testing** — Add integration tests for `internal/cli/backup.go`. **Effort:** 1-2 days.
-- [ ] **Benchmark suite** — Document performance characteristics. Add benchmark tests for hot paths (delivery, fetch, search). **Effort:** 1 day.
+```go
+func isTemporaryError(err error) bool {
+    var netErr net.Error
+    if errors.As(err, &netErr) {
+        return netErr.Temporary()
+    }
+    return false
+}
+```
 
 ---
 
-## Phase 5: Performance & Optimization (Week 9-10)
-### Performance tuning and optimization
+## Phase 2: Core Feature Completion (Week 2-4)
 
-- [ ] **Profile under load** — Run `make bench` and identify hot spots. Profile with `pprof` under concurrent load. **Effort:** 2 days.
-- [ ] **bbolt write amplification** — Analyze bbolt write patterns. Consider batch operations where applicable. **Effort:** 1-2 days.
-- [ ] **Maildir delivery optimization** — Profile `internal/store/maildir.go` delivery path. Consider write caching or batch fsync. **Effort:** 2-3 days.
-- [ ] **Search indexing parallelism** — Currently 10 workers. Tune based on CPU cores and queue depth. **Effort:** 1 day.
-- [ ] **Frontend bundle size** — Analyze Vite bundle. Add lazy loading for routes. Tree-shake unused components. **Effort:** 2-3 days.
-- [ ] **Memory profiling** — Profile under 10K account load. Identify memory leaks. **Effort:** 2 days.
-- [ ] **Connection pooling for outbound SMTP** — Add connection reuse for MX delivery. **Effort:** 2-3 days.
+### 2.1 Implement Bayesian Spam Filter (3-5 days)
 
----
+**File:** `internal/spam/bayes.go`
 
-## Phase 6: Documentation & DX (Week 11-12)
-### Documentation and developer experience
+The `Tokenize()` function exists but `Score()` always returns `defaultScore`. Need to:
+1. Implement token frequency database (bbolt-backed)
+2. Train on ham/spam (webmail actions: mark as spam/not spam)
+3. Score messages using Naive Bayes formula
+4. Wire into SMTP pipeline after heuristic stage
 
-- [ ] **API documentation (OpenAPI spec)** — Generate OpenAPI 3.0 spec from REST API handlers. **Effort:** 2-3 days.
-- [ ] **Updated README with accurate setup instructions** — Verify all quickstart steps work. **Effort:** 1 day.
-- [ ] **Architecture decision records (ADRs)** — Document key decisions (why bbolt, why Maildir++, why embedded UI). **Effort:** 1 day.
-- [ ] **Contributing guide** — `docs/CONTRIBUTING.md` already exists, verify accuracy. **Effort:** 1 hour.
-- [ ] **MCP integration guide** — Document MCP tools and usage. **Effort:** 1 day.
+**API changes:** Need webmail endpoints to submit ham/spam feedback for training.
 
----
+### 2.2 Implement ClamAV Integration (3-5 days)
 
-## Phase 7: Release Preparation (Week 13-14)
-### Final production preparation
+**File:** `internal/av/scanner.go`
 
-- [ ] **CI/CD pipeline completion** — All tests (including E2E) running in CI. **Effort:** 1 day.
-- [ ] **Docker production image optimization** — Verify multi-stage build is minimal. **Effort:** 1 day.
-- [ ] **Release automation (.goreleaser)** — Configure and test `.goreleaser.yml`. **Effort:** 2 hours.
-- [ ] **Monitoring and observability** — Verify Prometheus metrics are comprehensive. **Effort:** 1 day.
-- [ ] **v1.0.0 release** — Tag and create GitHub release with release notes. **Effort:** 2 hours.
+Replace stub with actual integration:
+1. Connect to ClamAV daemon via TCP socket or Unix socket
+2. Stream message to `INSTREAM` command
+3. Parse response for virus name or "OK"
+4. Add `ClamAVSocket` config option
 
----
+**Config change:** `spam.av.enabled: true` + `spam.av.socket: /var/run/clamav/clamd.sock`
 
-## Beyond v1.0: Future Enhancements
-### Features and improvements for future versions
+### 2.3 Implement ARC Sealing (2-3 days)
 
-- [ ] **Multi-node clustering** — Shared storage backend (S3-compatible for mail blobs), Raft consensus for config
-- [ ] **LDAP/Active Directory integration** — Full LDAP auth wired into main auth flow
-- [ ] **JMAP calendar/contacts** — Expand JMAP support beyond email
-- [ ] **YARA v2 antivirus** — Lightweight YARA rules-based scanning
-- [ ] **DMARC aggregate report parsing** — Dashboard showing auth pass/fail rates per sending source
-- [ ] **White-label support** — For hosting providers
-- [ ] **Webhook events expansion** — new mail, bounce, spam, delivery notifications
+**File:** `internal/auth/arc.go`
 
----
+`Seal()` method needs to:
+1. Add `AS` header with authentication results from each hop
+2. Sign the chain with the server's own key
+3. Add `AF` header chain
 
-## Effort Summary
+Wire into SMTP submission pipeline for outbound relay.
 
-| Phase | Estimated Hours | Priority | Dependencies |
-|---|---|---|---|
-| Phase 1 | 16h | CRITICAL | None |
-| Phase 2 | 24h | HIGH | Phase 1 |
-| Phase 3 | 40h | HIGH | Phase 1 |
-| Phase 4 | 64h | HIGH | Phase 1 |
-| Phase 5 | 56h | MEDIUM | Phase 4 |
-| Phase 6 | 32h | MEDIUM | Phase 5 |
-| Phase 7 | 16h | MEDIUM | Phase 6 |
-| **Total** | **248h (~6 weeks)** | | |
+### 2.4 Implement DMARC Reporting (2-3 days)
+
+**Files:** `internal/auth/dmarc.go`, `internal/api/` (new handler)
+
+1. Aggregate RUA reports (DMARC feedback)
+2. Generate RFC 5961-compliant XML reports
+3. Send via SMTP to RUA addresses in `_dmarc.example.com` TXT record
+4. Per-message failure details stored for forensic reports (RUF)
+
+### 2.5 Implement Sieve Vacation (2-3 days)
+
+**Files:** `internal/sieve/`, `internal/vacation/`
+
+1. Implement `vacation` action in Sieve executor
+2. Track auto-replied messages to avoid duplicates
+3. Wire `vacation` package into sieve execution context
 
 ---
 
-## Risk Assessment
+## Phase 3: Architecture Refactoring (Week 4-6)
 
-| Risk | Probability | Impact | Mitigation |
-|---|---|---|---|
-| E2E tests remain flaky | High | Low (manual testing possible) | Allocate more time for debugging Playwright |
-| LDAP integration complexity | Medium | Medium (misleading dead code) | Remove if not planned for v1.0 |
-| Memory leak in vacationReplies | Medium | High (production stability) | Fix in Phase 1 |
-| Security vulnerabilities in dependencies | Low | High | Dependency audit already done (17 fixed) |
-| Frontend embedding build order | Low | High (broken binary) | `make build` already正确的chains `build-web` |
+### 3.1 Split `api/server.go` (1-2 weeks)
+
+Current 2536 lines. Proposed split:
+
+```
+internal/api/
+  server.go          # HTTP server setup, middleware, routes
+  handler/           # Per-resource handlers
+    domains.go       # Domain CRUD
+    accounts.go      # Account CRUD
+    aliases.go      # Alias CRUD
+    queue.go        # Queue management
+    auth.go         # Login, TOTP setup
+    config.go       # Server config
+  middleware/
+    auth.go         # JWT validation
+    ratelimit.go    # HTTP-level rate limiting
+    cors.go         # CORS
+    logging.go      # Request logging
+  websocket.go      # WebSocket upgrades
+  sse.go           # SSE endpoint
+  push.go          # Push notification hub
+```
+
+### 3.2 Split `server/server.go` (1 week)
+
+Current 1399 lines. Proposed split:
+
+```
+internal/server/
+  server.go          # Server struct, Start/Stop
+  init/
+    db.go           # DB initialization
+    mailstore.go    # Mailstore initialization
+    tls.go          # TLS manager init
+    queue.go        # Queue init
+    smtp.go         # SMTP servers
+    imap.go         # IMAP server
+    pop3.go         # POP3 server
+    http.go         # HTTP API
+    mcp.go          # MCP server
+```
+
+### 3.3 Fix Queue Thundering Herd (1-2 days)
+
+**File:** `internal/queue/manager.go:311-357`
+
+Replace 30s tick + unbounded concurrency with a proper worker pool:
+1. Maintain N delivery workers (configurable, default 10)
+2. Feed entries from a channel
+3. Each worker handles one delivery at a time
+4. Workers pick up retries from priority queue
+
+---
+
+## Phase 4: Stub Package Wiring (Week 5-8)
+
+### 4.1 Wire Webhook System
+
+1. Add event emission calls in:
+   - `queue/manager.go` — message delivered/failed/bounced
+   - `smtp/session.go` — message received, filtered
+   - `api/` handlers — admin actions (domain add, account create, etc.)
+2. `POST {webhook.url}` with JSON event body
+3. Retry with exponential backoff
+4. Dead letter queue for failed webhooks
+
+### 4.2 Wire Push Notifications
+
+1. Wire into `websocket/` for real-time webmail updates
+2. Subscribe to new mail events in `storage/messagestore.go`
+3. WebPush to subscriber endpoints stored per-account
+
+### 4.3 Wire Alert Manager
+
+1. Call `alert.Send()` on:
+   - Queue bounce threshold exceeded
+   - TLS cert expiring < 7 days
+   - Disk space < 10%
+   - Repeated delivery failures to same MX
+
+### 4.4 Implement CalDAV HTTP Handlers
+
+1. `CALDAV` HTTP endpoints at `/dav/calendars/`
+2. `REPORT` method for calendar-query
+3. `MKCALENDAR`, `MKCALENDAR` methods
+4. iCal feed generation
+
+### 4.5 Implement CardDAV HTTP Handlers
+
+1. `CARDDAV` HTTP endpoints at `/dav/contacts/`
+2. Address book queries
+3. vCard CRUD
+
+### 4.6 Implement JMAP Method Handlers
+
+1. `JMAPCoreInvocation` parsing
+2. `getMailboxes`, `getEmails`, `setEmails` methods
+3. `Email/changes` for sync
+
+---
+
+## Phase 5: Hardening (Week 7-10)
+
+### 5.1 Fuzz Testing SMTP/IMAP Parsers
+
+1. Add `//go:build fuzz` tags for:
+   - SMTP command parser
+   - IMAP command parser
+   - MIME parser (from `mail.ReadMessage`)
+   - DKIM signature parser
+   - SPF record parser
+2. Run in CI fuzzing workflow
+
+### 5.2 Security Audit for XSS in Webmail
+
+1. Review `isomorphic-dompurify` DOMPurify config in webmail
+2. Test XSS vectors in email rendering
+3. Verify CSP headers in API responses
+
+### 5.3 Circuit Breaker in MX Delivery
+
+Wire `internal/circuitbreaker/` into `queue/manager.go`:
+1. Per-MX-host circuit breakers
+2. Open on consecutive failures
+3. Half-open after timeout, allow one probe
+4. Close on success
+
+### 5.4 Account Portal `make build-web` Integration
+
+Add `web/account/` build to `build-web` target in Makefile.
+
+---
+
+## Phase 6: Missing Spec Features (Week 10+)
+
+### 6.1 S/MIME Encryption
+
+1. Parse S/MIME signed/encrypted messages (PKCS#7)
+2. Store/decrypt for IMAP display
+3. Sign outgoing messages with user's key
+
+### 6.2 OpenPGP Support
+
+1. Parse PGP-armored messages
+2. Decrypt with private key
+3. Encrypt/sign outgoing with recipient's public key
+
+### 6.3 LDAP Full Integration
+
+1. Test `internal/auth/ldap.go` with real LDAP server
+2. Group-based ACLs
+3. LDAP address book for autocomplete
+
+---
+
+## Priority Summary
+
+| Priority | Task | Effort | Impact |
+|----------|------|--------|--------|
+| P0 | Fix `signRSA` nil hash bug | 1 line | Correctness |
+| P0 | Fix `isTemporaryError` | 10 lines | Correctness |
+| P1 | Implement Bayesian filter | 3-5 days | Core feature |
+| P1 | Implement ClamAV integration | 3-5 days | Core feature |
+| P1 | Implement ARC sealing | 2-3 days | RFC compliance |
+| P1 | Fix queue thundering herd | 1-2 days | Production stability |
+| P2 | Implement DMARC reporting | 2-3 days | Spec compliance |
+| P2 | Wire webhook system | 3-5 days | Integration |
+| P2 | Implement Sieve vacation | 2-3 days | Feature parity |
+| P3 | Split api/server.go | 1-2 weeks | Code quality |
+| P3 | Split server/server.go | 1 week | Code quality |
+| P3 | Wire push/alert systems | 3-5 days | UX |
+| P4 | CalDAV/CardDAV handlers | 1-2 weeks | Feature parity |
+| P4 | JMAP method handlers | 1-2 weeks | Feature parity |
+| P5 | S/MIME encryption | 2-3 weeks | Spec compliance |
+| P5 | OpenPGP support | 2-3 weeks | Spec compliance |
+
+**Estimated total for production quality (P0-P3):** 6-8 weeks

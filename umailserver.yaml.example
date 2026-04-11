@@ -128,3 +128,22 @@ mcp:
   bind: "127.0.0.1"
   port: 3000
   auth_token: ""              # Set to enable authentication
+
+# CalDAV Server (Calendar synchronization)
+caldav:
+  enabled: false              # Set to true to enable CalDAV
+  bind: "127.0.0.1"
+  port: 8081                 # CalDAV HTTP server port
+
+# CardDAV Server (Contacts synchronization)
+carddav:
+  enabled: false             # Set to true to enable CardDAV
+  bind: "127.0.0.1"
+  port: 8082                 # CardDAV HTTP server port
+
+# JMAP Server (Modern email API)
+jmap:
+  enabled: false             # Set to true to enable JMAP
+  bind: "127.0.0.1"
+  port: 8083                 # JMAP HTTP server port
+  cors_origins: []           # Allowed CORS origins (empty = allow all)

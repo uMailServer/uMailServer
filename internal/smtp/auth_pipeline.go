@@ -119,12 +119,18 @@ func (s *AuthDKIMStage) Process(ctx *MessageContext) PipelineResult {
 // AuthDMARCStage uses the real auth.DMARCEvaluator for DMARC evaluation
 type AuthDMARCStage struct {
 	evaluator *auth.DMARCEvaluator
+	reporter  *auth.DMARCReporter
 	logger    *slog.Logger
 }
 
 // NewAuthDMARCStage creates a new DMARC stage using the real evaluator
 func NewAuthDMARCStage(evaluator *auth.DMARCEvaluator, logger *slog.Logger) *AuthDMARCStage {
 	return &AuthDMARCStage{evaluator: evaluator, logger: logger}
+}
+
+// SetReporter sets the DMARC reporter for aggregate reporting
+func (s *AuthDMARCStage) SetReporter(reporter *auth.DMARCReporter) {
+	s.reporter = reporter
 }
 
 func (s *AuthDMARCStage) Name() string { return "DMARC" }
@@ -183,6 +189,12 @@ func (s *AuthDMARCStage) Process(ctx *MessageContext) PipelineResult {
 				"explanation", evaluation.Explanation,
 			)
 		}
+	}
+
+	// Record result for DMARC aggregate reporting
+	if s.reporter != nil && evaluation.Result != auth.DMARCNone {
+		s.reporter.RecordResult(fromDomain, evaluation, ctx.RemoteIP.String(),
+			spfResult.String(), dkimResult.String())
 	}
 
 	return ResultAccept

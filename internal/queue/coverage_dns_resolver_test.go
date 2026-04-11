@@ -193,22 +193,16 @@ func TestRealMTASTSDNSResolverMethods(t *testing.T) {
 	resolver := &realMTASTSDNSResolver{}
 	ctx := context.Background()
 
-	// LookupIP is never called by validators - it returns nil, nil immediately
-	ips, err := resolver.LookupIP(ctx, "example.com")
-	if err != nil {
-		t.Errorf("LookupIP returned error: %v", err)
-	}
-	if ips != nil {
-		t.Errorf("LookupIP expected nil, got %v", ips)
+	// LookupIP is never called by validators - it returns an error to prevent misuse
+	_, err := resolver.LookupIP(ctx, "example.com")
+	if err == nil {
+		t.Errorf("LookupIP expected error, got nil")
 	}
 
-	// LookupMX is never called by validators - it returns nil, nil immediately
-	mxRecords, err := resolver.LookupMX(ctx, "example.com")
-	if err != nil {
-		t.Errorf("LookupMX returned error: %v", err)
-	}
-	if mxRecords != nil {
-		t.Errorf("LookupMX expected nil, got %v", mxRecords)
+	// LookupMX is never called by validators - it returns an error to prevent misuse
+	_, err = resolver.LookupMX(ctx, "example.com")
+	if err == nil {
+		t.Errorf("LookupMX expected error, got nil")
 	}
 
 	// LookupTXT is actually used by validators

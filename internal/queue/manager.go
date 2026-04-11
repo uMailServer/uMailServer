@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -23,10 +24,16 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/auth"
+	"github.com/umailserver/umailserver/internal/circuitbreaker"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/store"
 )
+
+// WebhookTrigger is the interface for triggering webhook events
+type WebhookTrigger interface {
+	Trigger(eventType string, data interface{})
+}
 
 // Manager manages the outbound message queue.
 //
@@ -46,6 +53,11 @@ type Manager struct {
 	maxRetries   int
 	maxQueueSize int
 	requireTLS   bool
+	webhook      WebhookTrigger // optional webhook trigger for delivery events
+
+	// Worker pool settings
+	workerCount  int                 // number of delivery workers (default 10)
+	deliveryChan chan *db.QueueEntry // direct delivery channel
 
 	// MX connection pool settings
 	mxPoolSize    int           // max connections per MX host (default 10)
@@ -59,6 +71,9 @@ type Manager struct {
 
 	// DANE validator for TLS certificate validation
 	daneValidator *auth.DANEValidator
+
+	// Circuit breaker for MX delivery to prevent cascading failures
+	mxBreaker *circuitbreaker.CircuitBreaker
 
 	// dialSMTP, if set, is used instead of net.DialTimeout for testing.
 	// It returns a net.Conn and is used by deliverToMX.
@@ -127,15 +142,17 @@ func (r *realMTASTSDNSResolver) LookupTXT(ctx context.Context, name string) ([]s
 }
 
 func (r *realMTASTSDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
-	// MTA-STS and DANE validators do not use LookupIP
-	// This stub exists only to satisfy the auth.DNSResolver interface
-	return nil, nil
+	// MTA-STS and DANE validators do not use LookupIP.
+	// This exists only to satisfy the auth.DNSResolver interface.
+	// Returning an error prevents silent failure if callers mistakeny invoke this.
+	return nil, errors.New("LookupIP is not implemented: MTA-STS/DANE validators do not use this method")
 }
 
 func (r *realMTASTSDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
-	// MTA-STS and DANE validators do not use LookupMX
-	// This stub exists only to satisfy the auth.DNSResolver interface
-	return nil, nil
+	// MTA-STS and DANE validators do not use LookupMX.
+	// This exists only to satisfy the auth.DNSResolver interface.
+	// Returning an error prevents silent failure if callers mistakeny invoke this.
+	return nil, errors.New("LookupMX is not implemented: MTA-STS/DANE validators do not use this method")
 }
 
 // NewManager creates a new queue manager
@@ -153,11 +170,13 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		logger:          logger,
 		maxRetries:      len(retryDelays),
 		maxQueueSize:    10000,
+		workerCount:     10,
 		mxPoolSize:      10,
 		mxIdleTimeout:   5 * time.Minute,
 		mxPools:         make(map[string]*mxPool),
 		mtastsValidator: auth.NewMTASTSValidator(&realMTASTSDNSResolver{}),
 		daneValidator:   auth.NewDANEValidator(&realMTASTSDNSResolver{}),
+		mxBreaker:       circuitbreaker.New(circuitbreaker.DefaultConfig()),
 	}
 }
 
@@ -168,8 +187,14 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 	m.running.Store(true)
 
-	// Start queue processor
-	go m.processQueue(ctx)
+	// Create delivery channel and start worker pool
+	m.deliveryChan = make(chan *db.QueueEntry, m.workerCount*2)
+	for i := 0; i < m.workerCount; i++ {
+		go m.deliveryWorker(ctx, i)
+	}
+
+	// Start periodic queue sweeper for retry entries
+	go m.queueSweeper(ctx)
 }
 
 // Stop stops the queue manager
@@ -178,7 +203,13 @@ func (m *Manager) Stop() {
 		return
 	}
 	m.running.Store(false)
-	m.stopOnce.Do(func() { close(m.shutdown) })
+	m.stopOnce.Do(func() {
+		close(m.shutdown)
+		// Close delivery channel to signal workers to stop
+		if m.deliveryChan != nil {
+			close(m.deliveryChan)
+		}
+	})
 }
 
 // SetMTASTSDNSResolver sets the DNS resolver for MTA-STS validation (for testing)
@@ -189,6 +220,11 @@ func (m *Manager) SetMTASTSDNSResolver(resolver MTASTSDNSResolver) {
 // SetDANEDNSResolver sets the DNS resolver for DANE validation (for testing)
 func (m *Manager) SetDANEDNSResolver(resolver MTASTSDNSResolver) {
 	m.daneValidator = auth.NewDANEValidator(resolver)
+}
+
+// SetWebhookTrigger sets the webhook trigger for delivery events
+func (m *Manager) SetWebhookTrigger(w WebhookTrigger) {
+	m.webhook = w
 }
 
 // Enqueue adds a message to the outbound queue
@@ -248,6 +284,14 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 			deleteFile(messagePath)
 			return "", fmt.Errorf("failed to enqueue: %w", err)
 		}
+
+		// Send to delivery channel for immediate processing (non-blocking)
+		// If channel is full, the periodic sweeper will pick it up
+		select {
+		case m.deliveryChan <- entry:
+		default:
+			// Channel full, sweeper will handle it
+		}
 	}
 
 	// Track metric
@@ -280,7 +324,18 @@ func (m *Manager) RetryEntry(id string) error {
 	entry.RetryCount = 0
 	entry.LastError = ""
 
-	return m.db.UpdateQueueEntry(entry)
+	if err := m.db.UpdateQueueEntry(entry); err != nil {
+		return err
+	}
+
+	// Send to delivery channel for immediate retry
+	select {
+	case m.deliveryChan <- entry:
+	default:
+		// Channel full, sweeper will handle it
+	}
+
+	return nil
 }
 
 // DropEntry removes an entry from the queue
@@ -307,8 +362,9 @@ func (m *Manager) FlushQueue() error {
 	return nil
 }
 
-// processQueue processes the queue
-func (m *Manager) processQueue(ctx context.Context) {
+// queueSweeper periodically picks up entries that need retry
+// and sends them to the delivery channel for processing.
+func (m *Manager) queueSweeper(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -319,41 +375,58 @@ func (m *Manager) processQueue(ctx context.Context) {
 		case <-m.shutdown:
 			return
 		case <-ticker.C:
-			m.processPendingEntries()
+			m.sweepPendingEntries()
 		}
 	}
 }
 
-// processPendingEntries processes pending queue entries with bounded concurrency
-func (m *Manager) processPendingEntries() {
+// sweepPendingEntries picks up entries ready for delivery and sends them to workers
+func (m *Manager) sweepPendingEntries() {
 	entries, err := m.db.GetPendingQueue(time.Now())
 	if err != nil {
 		return
 	}
 
-	// Limit concurrent deliveries
-	sem := make(chan struct{}, 20)
-	var wg sync.WaitGroup
-
 	for _, entry := range entries {
 		select {
 		case <-m.shutdown:
-			wg.Wait()
 			return
+		case m.deliveryChan <- entry:
+			// Sent to worker
 		default:
+			// Channel full, entry will be picked up on next sweep
+			return
 		}
-
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(e *db.QueueEntry) {
-			defer func() {
-				<-sem
-				wg.Done()
-			}()
-			m.deliver(e)
-		}(entry)
 	}
-	wg.Wait()
+}
+
+// deliveryWorker is a persistent worker that processes entries from the delivery channel
+func (m *Manager) deliveryWorker(ctx context.Context, id int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.shutdown:
+			return
+		case entry, ok := <-m.deliveryChan:
+			if !ok {
+				return
+			}
+			m.deliver(entry)
+		}
+	}
+}
+
+// processQueue is a backward-compatible method for testing.
+// It starts the queue sweeper in the background and returns.
+func (m *Manager) processQueue(ctx context.Context) {
+	go m.queueSweeper(ctx)
+}
+
+// processPendingEntries is a backward-compatible method for testing.
+// It performs a one-time sweep of pending entries.
+func (m *Manager) processPendingEntries() {
+	m.sweepPendingEntries()
 }
 
 // deliver attempts to deliver a message
@@ -361,6 +434,7 @@ func (m *Manager) deliver(entry *db.QueueEntry) {
 	defer func() {
 		if r := recover(); r != nil {
 			m.logger.Error("panic in delivery", "error", r, "to", entry.To)
+			m.handleDeliveryFailure(entry, fmt.Sprintf("panic during delivery: %v", r))
 		}
 	}()
 
@@ -446,8 +520,8 @@ func (m *Manager) acquireMXConn(mx string) (*smtp.Client, bool, error) {
 			pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
 			continue
 		}
-		// Check if connection is still alive by doing a no-op
-		if err := conn.client.Noop(); err == nil {
+		// Check if connection is still alive by doing RSET
+		if err := conn.client.Reset(); err == nil {
 			// Valid connection found
 			pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
 			return conn.client, true, nil
@@ -514,6 +588,18 @@ func (m *Manager) releaseMXConn(mx string, client *smtp.Client, valid bool) {
 
 // deliverToMX delivers a message to a specific MX server
 func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error {
+	// Use circuit breaker to prevent cascading failures from bad MX hosts
+	if m.mxBreaker != nil {
+		err := m.mxBreaker.Execute(func() error {
+			return m.doDeliverToMX(from, to, message, mx)
+		})
+		return err
+	}
+	return m.doDeliverToMX(from, to, message, mx)
+}
+
+// doDeliverToMX performs the actual MX delivery
+func (m *Manager) doDeliverToMX(from, to string, message []byte, mx string) error {
 	// Check MTA-STS policy for recipient domain
 	domain := extractDomain(to)
 	if m.mtastsValidator != nil && domain != "" {
@@ -660,6 +746,16 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 	if m.metrics != nil {
 		m.metrics.DeliverySuccess()
 	}
+
+	// Trigger webhook for successful delivery
+	if m.webhook != nil {
+		m.webhook.Trigger("delivery.success", map[string]interface{}{
+			"message_id": entry.ID,
+			"from":       entry.From,
+			"to":         entry.To,
+			"domain":     extractDomain(entry.To[0]),
+		})
+	}
 }
 
 // sendSuccessDSN sends a DSN success notification
@@ -727,6 +823,19 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 	// Track metric
 	if m.metrics != nil {
 		m.metrics.DeliveryFailed()
+	}
+
+	// Trigger webhook for failed delivery
+	if m.webhook != nil {
+		m.webhook.Trigger("delivery.failed", map[string]interface{}{
+			"message_id":  entry.ID,
+			"from":        entry.From,
+			"to":          entry.To,
+			"domain":      extractDomain(entry.To[0]),
+			"error":       errorMsg,
+			"retry_count": entry.RetryCount,
+			"max_retries": m.maxRetries,
+		})
 	}
 }
 

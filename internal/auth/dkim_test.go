@@ -1808,3 +1808,35 @@ func TestGetEd25519PublicKeyForDNS(t *testing.T) {
 		t.Errorf("Expected public key size %d, got %d", ed25519.PublicKeySize, len(decoded))
 	}
 }
+
+// TestSignRSADirect tests the signRSA function directly to ensure rand.Reader is used.
+// This is a regression test for the bug where signRSA was called without rand.Reader.
+func TestSignRSADirect(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	data := []byte("test data to sign via signRSA")
+
+	// Call signRSA directly - this tests that rand.Reader is properly used
+	signature, err := signRSA(privateKey, data)
+	if err != nil {
+		t.Fatalf("signRSA failed: %v", err)
+	}
+	if signature == "" {
+		t.Fatal("signRSA returned empty signature")
+	}
+
+	// Verify the signature works correctly
+	err = verifyRSASignature(&privateKey.PublicKey, data, signature)
+	if err != nil {
+		t.Errorf("signature verification failed: %v", err)
+	}
+
+	// Verify with wrong data fails
+	err = verifyRSASignature(&privateKey.PublicKey, []byte("wrong data"), signature)
+	if err == nil {
+		t.Error("verification should fail with wrong data")
+	}
+}

@@ -137,6 +137,22 @@ func DefaultConfig() *Config {
 			Port:    4190,
 			Bind:    "0.0.0.0",
 		},
+		CalDAV: CalDAVConfig{
+			Enabled: false,
+			Port:    8081,
+			Bind:    "127.0.0.1",
+		},
+		CardDAV: CardDAVConfig{
+			Enabled: false,
+			Port:    8082,
+			Bind:    "127.0.0.1",
+		},
+		JMAP: JMAPConfig{
+			Enabled:     false,
+			Port:        8083,
+			Bind:        "127.0.0.1",
+			CorsOrigins: []string{},
+		},
 		Domains: []DomainConfig{},
 		Logging: LoggingConfig{
 			Level:      "info",
@@ -158,6 +174,13 @@ func DefaultConfig() *Config {
 		Storage: StorageConfig{
 			Sync:          true,
 			SharedFolders: false,
+		},
+		DMARC: DMARCConfig{
+			Enabled:     false,
+			OrgName:     "uMailServer",
+			FromEmail:   "dmarc-reports@example.com",
+			ReportEmail: "",
+			Interval:    "24h",
 		},
 	}
 }

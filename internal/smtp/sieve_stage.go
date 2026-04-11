@@ -7,9 +7,14 @@ import (
 	"github.com/umailserver/umailserver/internal/sieve"
 )
 
+// VacationHandler is called when a Sieve vacation action is encountered
+// Args: sender (original message from), recipient (vacation reply from), vacation action details
+type VacationHandler func(sender, recipient string, vacation sieve.VacationAction)
+
 // SieveStage implements Sieve mail filtering in the SMTP pipeline
 type SieveStage struct {
-	manager *sieve.Manager
+	manager         *sieve.Manager
+	vacationHandler VacationHandler
 }
 
 // NewSieveStage creates a new Sieve filtering stage
@@ -17,6 +22,11 @@ func NewSieveStage(manager *sieve.Manager) *SieveStage {
 	return &SieveStage{
 		manager: manager,
 	}
+}
+
+// SetVacationHandler sets the callback for Sieve vacation actions
+func (s *SieveStage) SetVacationHandler(h VacationHandler) {
+	s.vacationHandler = h
 }
 
 func (s *SieveStage) Name() string { return "Sieve" }
@@ -88,8 +98,12 @@ func (s *SieveStage) Process(ctx *MessageContext) PipelineResult {
 				}
 				ctx.SpamResult.Reasons = append(ctx.SpamResult.Reasons, fmt.Sprintf("redirect:%s", a.Address))
 			case sieve.VacationAction:
-				// Queue vacation reply - handled asynchronously
-				// Note: vacation is typically processed after delivery
+				// Call vacation handler if set (for async vacation reply)
+				if s.vacationHandler != nil && s.manager.ShouldSendVacation(from, a.Days) {
+					s.manager.RecordVacationSent(from)
+					// Call handler asynchronously to not block the pipeline
+					go s.vacationHandler(from, recipient, a)
+				}
 			case sieve.StopAction:
 				// Stop processing
 				return ResultAccept

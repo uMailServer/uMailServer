@@ -32,6 +32,10 @@ type Config struct {
 	Metrics     MetricsConfig     `yaml:"metrics"`
 	Database    DatabaseConfig    `yaml:"database"`
 	Storage     StorageConfig     `yaml:"storage"`
+	CalDAV      CalDAVConfig      `yaml:"caldav"`
+	CardDAV     CardDAVConfig     `yaml:"carddav"`
+	JMAP        JMAPConfig        `yaml:"jmap"`
+	DMARC       DMARCConfig       `yaml:"dmarc"`
 }
 
 // ServerConfig holds general server settings
@@ -279,6 +283,37 @@ type DatabaseConfig struct {
 type StorageConfig struct {
 	Sync          bool `yaml:"sync"`
 	SharedFolders bool `yaml:"shared_folders"`
+}
+
+// CalDAVConfig holds CalDAV server settings
+type CalDAVConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Bind    string `yaml:"bind"` // address to listen on
+	Port    int    `yaml:"port"`
+}
+
+// CardDAVConfig holds CardDAV server settings
+type CardDAVConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Bind    string `yaml:"bind"` // address to listen on
+	Port    int    `yaml:"port"`
+}
+
+// JMAPConfig holds JMAP server settings
+type JMAPConfig struct {
+	Enabled     bool     `yaml:"enabled"`
+	Bind        string   `yaml:"bind"` // address to listen on
+	Port        int      `yaml:"port"`
+	CorsOrigins []string `yaml:"cors_origins"`
+}
+
+// DMARCConfig holds DMARC reporting settings
+type DMARCConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	OrgName     string `yaml:"org_name"`     // Organization name for reports
+	FromEmail   string `yaml:"from_email"`   // Sender email for reports
+	ReportEmail string `yaml:"report_email"` // Email to send reports to
+	Interval    string `yaml:"interval"`     // Report interval (e.g., "24h")
 }
 
 // Load loads configuration from file with defaults and env overrides

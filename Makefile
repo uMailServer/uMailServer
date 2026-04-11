@@ -141,6 +141,8 @@ build-web:
 	cd webmail && npm ci && npm run build
 	@echo "Building admin panel..."
 	cd web/admin && npm ci && npm run build
+	@echo "Building account portal..."
+	cd web/account && npm ci && npm run build
 
 # Build benchmark client
 build-client:

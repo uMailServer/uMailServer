@@ -48,6 +48,12 @@ func (r DKIMResult) String() string {
 	}
 }
 
+// Package-level precompiled regex for canonicalization (hot path optimization)
+var (
+	whitespaceRegex = regexp.MustCompile(`[ \t]+`)
+	bTagRegex       = regexp.MustCompile(`b=([^;]*)`)
+)
+
 // DKIMSignature represents a parsed DKIM-Signature header
 type DKIMSignature struct {
 	Domain         string
@@ -448,8 +454,7 @@ func canonicalizeBodyRelaxed(body []byte) []byte {
 		line = strings.TrimSuffix(line, "\r")
 
 		// Replace multiple whitespace with single space
-		re := regexp.MustCompile(`[ \t]+`)
-		line = re.ReplaceAllString(line, " ")
+		line = whitespaceRegex.ReplaceAllString(line, " ")
 
 		// Trim trailing whitespace
 		line = strings.TrimRight(line, " \t")
@@ -532,8 +537,7 @@ func canonicalizeHeaderRelaxed(name, value string) string {
 	value = strings.ReplaceAll(value, "\n", "")
 
 	// Replace multiple whitespace with single space
-	re := regexp.MustCompile(`[ \t]+`)
-	value = re.ReplaceAllString(value, " ")
+	value = whitespaceRegex.ReplaceAllString(value, " ")
 
 	// Trim leading/trailing whitespace
 	value = strings.TrimSpace(value)
@@ -587,8 +591,7 @@ func (s *DKIMSigner) computeSignature(headers map[string][]string, body []byte, 
 // dkimHeaderWithoutSig returns the DKIM header value without the signature
 func dkimHeaderWithoutSig(header string) string {
 	// Remove the b= value from the header
-	re := regexp.MustCompile(`b=([^;]*)`)
-	return re.ReplaceAllString(header, "b=")
+	return bTagRegex.ReplaceAllString(header, "b=")
 }
 
 // buildHeader builds the complete DKIM-Signature header
@@ -620,7 +623,7 @@ func (s *DKIMSigner) buildHeaderWithoutSig(sig *DKIMSignature) string {
 // signRSA signs data with RSA-SHA256
 func signRSA(privateKey *rsa.PrivateKey, data []byte) (string, error) {
 	hash := sha256.Sum256(data)
-	signature, err := rsa.SignPKCS1v15(nil, privateKey, crypto.SHA256, hash[:])
+	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hash[:])
 	if err != nil {
 		return "", err
 	}

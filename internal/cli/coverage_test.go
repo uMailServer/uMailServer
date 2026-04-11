@@ -1566,6 +1566,9 @@ func TestBackupRestoreWithDeepDirectories(t *testing.T) {
 // --- Diagnostics: CheckTLS SMTP connects but fails, then IMAP fails ---
 
 func TestCheckTLSBothPathsFail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
 	cfg := &config.Config{
 		Server: config.ServerConfig{
 			Hostname: "192.0.2.1", // TEST-NET-1, should not be reachable
@@ -1587,6 +1590,9 @@ func TestCheckTLSBothPathsFail(t *testing.T) {
 // --- Diagnostics: checkSMTPTLS and checkIMAPTLS directly ---
 
 func TestCheckSMTPTLSDirectCall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
 	d := NewDiagnostics(nil)
 	result, err := d.checkSMTPTLS("192.0.2.1")
 	if err == nil {
@@ -1598,6 +1604,9 @@ func TestCheckSMTPTLSDirectCall(t *testing.T) {
 }
 
 func TestCheckIMAPTLSDirectCall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
 	d := NewDiagnostics(nil)
 	result, err := d.checkIMAPTLS("192.0.2.1")
 	if err == nil {
@@ -2488,6 +2497,9 @@ func TestCheckTLSWithTCPServer(t *testing.T) {
 // --- Diagnostics: CheckTLS covers the SMTP failure -> IMAP check path ---
 
 func TestCheckTLSSMTPFailsIMAPPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
 	cfg := &config.Config{
 		Server: config.ServerConfig{
 			Hostname: "192.0.2.1",

@@ -189,6 +189,56 @@ func (s *ARCSigner) Sign(headers map[string][]string, body []byte, authResults s
 	return arcSet, nil
 }
 
+// Seal adds ARC headers to the message for forwarding/relaying.
+// It creates a new ARC set with the given auth results and adds it to the message.
+// Returns the modified headers with ARC headers prepended.
+func (s *ARCSigner) Seal(headers map[string][]string, body []byte, authResults string) (map[string][]string, error) {
+	// Determine the next instance number
+	instance := determineNextInstance(headers)
+
+	// Sign to create the ARC set
+	arcSet, err := s.Sign(headers, body, authResults, instance)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign ARC set: %w", err)
+	}
+
+	// Create new headers map with ARC headers prepended
+	newHeaders := make(map[string][]string)
+
+	// Add ARC-Authentication-Results header first (as per RFC 8617)
+	newHeaders["ARC-Authentication-Results"] = []string{arcSet.AAR}
+
+	// Add ARC-Message-Signature header
+	newHeaders["ARC-Message-Signature"] = []string{arcSet.AMS}
+
+	// Add ARC-Seal header
+	newHeaders["ARC-Seal"] = []string{arcSet.AS}
+
+	// Copy all existing headers
+	for name, values := range headers {
+		newHeaders[name] = append(newHeaders[name], values...)
+	}
+
+	return newHeaders, nil
+}
+
+// determineNextInstance finds the next ARC instance number for the chain
+func determineNextInstance(headers map[string][]string) int {
+	maxInstance := 0
+
+	// Check all existing headers for ARC instance numbers
+	for _, values := range headers {
+		for _, value := range values {
+			instance := extractInstance(value)
+			if instance > maxInstance {
+				maxInstance = instance
+			}
+		}
+	}
+
+	return maxInstance + 1
+}
+
 // headerEntry represents a single header entry
 type headerEntry struct {
 	Name  string

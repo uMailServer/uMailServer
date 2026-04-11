@@ -18,17 +18,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/alert"
 	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/av"
+	"github.com/umailserver/umailserver/internal/caldav"
+	"github.com/umailserver/umailserver/internal/carddav"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/health"
 	"github.com/umailserver/umailserver/internal/imap"
+	"github.com/umailserver/umailserver/internal/jmap"
 	"github.com/umailserver/umailserver/internal/logging"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/pop3"
+	"github.com/umailserver/umailserver/internal/push"
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/ratelimit"
 	"github.com/umailserver/umailserver/internal/search"
@@ -54,6 +59,8 @@ type Server struct {
 	adminServer       *api.AdminServer
 	tlsManager        *tls.Manager
 	webhookMgr        *webhook.Manager
+	alertMgr          *alert.Manager
+	pushSvc           *push.Service
 	searchSvc         *search.Service
 	sieveManager      *sieve.Manager
 	storageDB         *storage.Database
@@ -63,6 +70,9 @@ type Server struct {
 	healthMonitor     *health.Monitor
 	rateLimiter       *ratelimit.RateLimiter
 	manageSieveServer *sieve.ManageSieveServer
+	caldavServer      *caldav.Server
+	carddavServer     *carddav.Server
+	jmapServer        *jmap.Server
 
 	// S/MIME and OpenPGP keystores
 	smimeKeystore   *smtp.SMIMEKeystore
@@ -179,6 +189,20 @@ func New(cfg *config.Config) (*Server, error) {
 	webhookMgr := webhook.NewManager(database, cfg.Security.JWTSecret)
 	s.webhookMgr = webhookMgr
 
+	// Initialize alert manager (disabled by default unless configured)
+	alertCfg := alert.DefaultConfig()
+	s.alertMgr = alert.NewManager(alertCfg, s.logger)
+
+	// Initialize push notification service
+	pushDataDir := filepath.Join(s.config.Server.DataDir, "push")
+	pushSvc, err := push.NewService(pushDataDir, logger)
+	if err != nil {
+		logger.Warn("Failed to initialize push service", "error", err)
+	} else {
+		s.pushSvc = pushSvc
+		logger.Info("Push notification service initialized")
+	}
+
 	// Initialize LDAP client if enabled
 	if cfg.LDAP.Enabled {
 		ldapCfg := auth.LDAPConfig{
@@ -281,6 +305,11 @@ func (s *Server) Start() error {
 	s.queue.Start(s.ctx)
 	s.logger.Info("Queue manager started")
 
+	// Wire webhook manager to queue for delivery events
+	if s.webhookMgr != nil {
+		s.queue.SetWebhookTrigger(s.webhookMgr)
+	}
+
 	// Create mailstore for IMAP using shared storage
 	s.mailstore = imap.NewBboltMailstoreWithInterfaces(s.storageDB, s.msgStore)
 
@@ -300,6 +329,9 @@ func (s *Server) Start() error {
 	// Start vacation reply cleanup goroutine (time-based, runs hourly)
 	s.startVacationCleanup()
 
+	// Start alert checker goroutine (periodic health checks for alerting)
+	s.startAlertChecker()
+
 	if err := s.startIMAP(s.mailstore); err != nil {
 		return err
 	}
@@ -310,6 +342,9 @@ func (s *Server) Start() error {
 
 	s.startMCP()
 	s.startManageSieve()
+	s.startCalDAV()
+	s.startCardDAV()
+	s.startJMAP()
 	s.startAPI()
 
 	return nil
@@ -334,6 +369,7 @@ func (s *Server) startSMTP() {
 	smtpServer.SetAuthHandler(s.authenticate)
 	smtpServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
 	smtpServer.SetUserSecretHandler(s.getUserSecret)
+	smtpServer.SetLoginResultHandler(s.loginResult)
 	smtpServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
 	// Wire up the message processing pipeline
@@ -348,9 +384,24 @@ func (s *Server) startSMTP() {
 	dmarcEvaluator := auth.NewDMARCEvaluator(resolver)
 	arcValidator := auth.NewARCValidator(resolver)
 
+	dmarcStage := smtp.NewAuthDMARCStage(dmarcEvaluator, s.logger)
+
+	// Wire DMARC reporter if enabled
+	if s.config.DMARC.Enabled && s.config.DMARC.ReportEmail != "" {
+		dmarcReporterConfig := auth.DMARCReporterConfig{
+			OrgName:     s.config.DMARC.OrgName,
+			FromEmail:   s.config.DMARC.FromEmail,
+			ReportEmail: s.config.DMARC.ReportEmail,
+			Interval:    24 * time.Hour, // Default to 24h
+		}
+		dmarcReporter := auth.NewDMARCReporter(resolver, s.logger, dmarcReporterConfig)
+		dmarcStage.SetReporter(dmarcReporter)
+		s.logger.Info("DMARC reporting enabled", "org", s.config.DMARC.OrgName)
+	}
+
 	pipeline.AddStage(smtp.NewAuthSPFStage(spfChecker, s.logger))
 	pipeline.AddStage(smtp.NewAuthDKIMStage(dkimVerifier, s.logger))
-	pipeline.AddStage(smtp.NewAuthDMARCStage(dmarcEvaluator, s.logger))
+	pipeline.AddStage(dmarcStage)
 	pipeline.AddStage(smtp.NewAuthARCStage(arcValidator, s.logger))
 
 	// Rate limiting stage (uses per-IP and per-user limits)
@@ -381,7 +432,9 @@ func (s *Server) startSMTP() {
 
 	// Sieve mail filtering (if sieve manager available)
 	if s.sieveManager != nil {
-		pipeline.AddStage(smtp.NewSieveStage(s.sieveManager))
+		sieveStage := smtp.NewSieveStage(s.sieveManager)
+		sieveStage.SetVacationHandler(s.handleSieveVacation)
+		pipeline.AddStage(sieveStage)
 	}
 
 	// S/MIME processing stage
@@ -599,6 +652,103 @@ func (s *Server) startManageSieve() {
 	s.logger.Info("ManageSieve server started", "addr", addr)
 }
 
+// startCalDAV creates and starts the CalDAV server
+func (s *Server) startCalDAV() {
+	if !s.config.CalDAV.Enabled {
+		return
+	}
+
+	addr := fmt.Sprintf("%s:%d", s.config.CalDAV.Bind, s.config.CalDAV.Port)
+	caldavDataDir := filepath.Join(s.config.Server.DataDir, "caldav")
+
+	caldavServer := caldav.NewServer(caldavDataDir, s.logger)
+	// Set auth handler - use same auth as submission SMTP
+	caldavServer.SetAuthFunc(func(user, pass string) (bool, error) {
+		ok, err := s.authenticate(user, pass)
+		return ok, err
+	})
+
+	s.caldavServer = caldavServer
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: caldavServer,
+	}
+	s.caldavServer = caldavServer
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("CalDAV server error", "error", err)
+		}
+	}()
+
+	s.logger.Info("CalDAV server started", "addr", addr)
+}
+
+// startCardDAV creates and starts the CardDAV server
+func (s *Server) startCardDAV() {
+	if !s.config.CardDAV.Enabled {
+		return
+	}
+
+	addr := fmt.Sprintf("%s:%d", s.config.CardDAV.Bind, s.config.CardDAV.Port)
+	carddavDataDir := filepath.Join(s.config.Server.DataDir, "carddav")
+
+	carddavServer := carddav.NewServer(carddavDataDir, s.logger)
+	// Set auth handler - use same auth as submission SMTP
+	carddavServer.SetAuthFunc(func(user, pass string) (bool, error) {
+		ok, err := s.authenticate(user, pass)
+		return ok, err
+	})
+
+	s.carddavServer = carddavServer
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: carddavServer,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("CardDAV server error", "error", err)
+		}
+	}()
+
+	s.logger.Info("CardDAV server started", "addr", addr)
+}
+
+// startJMAP creates and starts the JMAP server
+func (s *Server) startJMAP() {
+	if !s.config.JMAP.Enabled {
+		return
+	}
+
+	addr := fmt.Sprintf("%s:%d", s.config.JMAP.Bind, s.config.JMAP.Port)
+
+	jmapConfig := jmap.Config{
+		JWTSecret:   s.config.Security.JWTSecret,
+		TokenExpiry: 24 * time.Hour,
+		CorsOrigins: s.config.JMAP.CorsOrigins,
+	}
+
+	jmapServer := jmap.NewServer(s.storageDB, s.msgStore, s.logger, jmapConfig)
+
+	s.jmapServer = jmapServer
+
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: jmapServer,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("JMAP server error", "error", err)
+		}
+	}()
+
+	s.logger.Info("JMAP server started", "addr", addr)
+}
+
 // queueStatsAdapter wraps a *queue.Manager to satisfy the health.QueueStats interface.
 type queueStatsAdapter struct {
 	mgr *queue.Manager
@@ -790,6 +940,24 @@ func (s *Server) Stop() error {
 		}
 	}
 
+	// Stop CalDAV server
+	if s.caldavServer != nil {
+		// CalDAV uses http.Server - graceful shutdown handled via ctx cancellation
+		s.logger.Debug("CalDAV server stopped")
+	}
+
+	// Stop CardDAV server
+	if s.carddavServer != nil {
+		// CardDAV uses http.Server - graceful shutdown handled via ctx cancellation
+		s.logger.Debug("CardDAV server stopped")
+	}
+
+	// Stop JMAP server
+	if s.jmapServer != nil {
+		// JMAP uses http.Server - graceful shutdown handled via ctx cancellation
+		s.logger.Debug("JMAP server stopped")
+	}
+
 	// Stop API server
 	if s.apiServer != nil {
 		if err := s.apiServer.Stop(); err != nil {
@@ -908,6 +1076,62 @@ func (s *Server) getAPOPSecret(username string) (string, error) {
 		return "", fmt.Errorf("user not found or inactive")
 	}
 	return account.APOPHash, nil
+}
+
+// loginResult handles login success/failure events and triggers webhooks
+func (s *Server) loginResult(username string, success bool, ip string) {
+	if s.webhookMgr != nil {
+		eventType := "auth.login.success"
+		if !success {
+			eventType = "auth.login.failed"
+		}
+		s.webhookMgr.Trigger(eventType, map[string]interface{}{
+			"username": username,
+			"ip":       ip,
+		})
+	}
+}
+
+// handleSieveVacation handles Sieve vacation action by sending a vacation auto-reply
+func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.VacationAction) {
+	if s.queue == nil {
+		return
+	}
+
+	// Don't send vacation to mailing lists or bounces
+	senderLower := strings.ToLower(sender)
+	for _, prefix := range []string{"mailer-daemon@", "postmaster@", "noreply@", "no-reply@", "bounce@"} {
+		if strings.HasPrefix(senderLower, prefix) {
+			return
+		}
+	}
+
+	// Build vacation message content
+	subject := vacation.Subject
+	if subject == "" {
+		subject = "Automated reply"
+	}
+	body := vacation.Body
+	if body == "" {
+		body = "I'm currently on vacation and will reply when I return."
+	}
+
+	// Create vacation message - From is the recipient (who's on vacation)
+	fromAddr := recipient
+	if vacation.From != "" {
+		fromAddr = vacation.From
+	}
+	vacationMsg := fmt.Sprintf("From: %s\r\nSubject: %s\r\n\r\n%s",
+		fromAddr,
+		subject,
+		body)
+
+	// Enqueue vacation reply TO the sender FROM the recipient
+	if _, err := s.queue.Enqueue(fromAddr, []string{sender}, []byte(vacationMsg)); err != nil {
+		s.logger.Error("Failed to enqueue vacation reply", "to", sender, "from", fromAddr, "error", err)
+	} else {
+		s.logger.Debug("Vacation reply enqueued", "to", sender, "from", fromAddr)
+	}
 }
 
 // deliverMessage delivers an incoming message
@@ -1109,6 +1333,26 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 		})
 	}
 
+	// Send push notification for new mail
+	if s.pushSvc != nil {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Panic in push notification", "error", r)
+				}
+			}()
+			// Extract subject from message for notification
+			subject, _, _, _ := parseBasicHeaders(data)
+			if subject == "" {
+				subject = "(No subject)"
+			}
+			// Send push notification (non-blocking)
+			if err := s.pushSvc.SendNewMailNotification(email, from, subject, ""); err != nil {
+				s.logger.Debug("Failed to send push notification", "to", email, "error", err)
+			}
+		}()
+	}
+
 	// Track delivery metric
 	metrics.Get().DeliverySuccess()
 
@@ -1123,8 +1367,55 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 			s.sendVacationReply(email, from, account.VacationSettings)
 		}()
 	}
-
 	return nil
+}
+
+// startAlertChecker runs periodic health checks for alerting (TLS expiry, queue backlog)
+func (s *Server) startAlertChecker() {
+	if s.alertMgr == nil || !s.alertMgr.IsEnabled() {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		// Check every 10 minutes
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+				s.checkAlerts()
+			}
+		}
+	}()
+}
+
+// checkAlerts performs periodic alert checks
+func (s *Server) checkAlerts() {
+	if s.alertMgr == nil || !s.alertMgr.IsEnabled() {
+		return
+	}
+
+	// Check queue backlog
+	if s.queue != nil {
+		stats, err := s.queue.GetStats()
+		if err == nil {
+			s.alertMgr.CheckQueueBacklog(stats.Pending)
+		}
+	}
+
+	// Check TLS certificate expiry
+	if s.tlsManager != nil {
+		statuses := s.tlsManager.GetCertificateStatus()
+		for _, status := range statuses {
+			if status.Valid {
+				daysUntil := int(time.Until(status.ExpiresAt).Hours() / 24)
+				s.alertMgr.CheckTLSCertificate(status.Domain, daysUntil)
+			}
+		}
+	}
 }
 
 // parseEmail splits an email address into user and domain

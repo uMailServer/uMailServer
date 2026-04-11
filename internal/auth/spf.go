@@ -497,13 +497,30 @@ func (c *spfCache) set(domain, record string, ttl time.Duration) {
 	}
 }
 
-// isTemporaryError checks if an error is temporary
+// isTemporaryError checks if an error is temporary.
+// Uses proper net.Error type assertion per RFC 7208.
 func isTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for timeout or temporary errors
-	// This is simplified - real implementation would check net.Error
-	return strings.Contains(err.Error(), "timeout") ||
-		strings.Contains(err.Error(), "temporary")
+	// Check for net.Error with Temporary() method
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Temporary() {
+			return true
+		}
+		// Timeout implies temporary
+		if netErr.Timeout() {
+			return true
+		}
+	}
+	// Check for context cancellation/deadline exceeded
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// Fallback: string-based matching for errors that don't implement net.Error
+	// (e.g., errors from mock resolvers in tests, or third-party libraries)
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "timeout") ||
+		strings.Contains(errMsg, "temporary")
 }

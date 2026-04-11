@@ -1502,6 +1502,21 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	// Get actual metrics from metrics collector
 	stats := metrics.Get().GetStats()
+
+	// Add queue stats if queue manager is available
+	if s.queueMgr != nil {
+		if queueStats, err := s.queueMgr.GetStats(); err == nil {
+			stats["queue"] = map[string]int{
+				"pending":   queueStats.Pending,
+				"sending":   queueStats.Sending,
+				"failed":    queueStats.Failed,
+				"delivered": queueStats.Delivered,
+				"bounced":   queueStats.Bounced,
+				"total":     queueStats.Total,
+			}
+		}
+	}
+
 	s.sendJSON(w, http.StatusOK, stats)
 }
 

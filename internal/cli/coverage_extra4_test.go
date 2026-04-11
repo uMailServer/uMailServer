@@ -39,6 +39,9 @@ func TestDiagnostics_CheckDNS_NilConfig(t *testing.T) {
 }
 
 func TestDiagnostics_CheckDeliverability_NilConfig(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping network test in short mode")
+	}
 	d := &Diagnostics{}
 
 	result, err := d.CheckDeliverability("example.com")

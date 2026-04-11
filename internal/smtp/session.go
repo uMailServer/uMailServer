@@ -785,6 +785,9 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 			if m := metrics.Get(); m != nil {
 				m.SMTPAuthFailure()
 			}
+			if s.server.onLoginResult != nil {
+				s.server.onLoginResult(username, false, getIPFromAddr(s.conn.RemoteAddr().String()))
+			}
 			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
 	}
@@ -792,6 +795,9 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	s.isAuth = true
 	s.username = username
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
+	if s.server.onLoginResult != nil {
+		s.server.onLoginResult(username, true, getIPFromAddr(s.conn.RemoteAddr().String()))
+	}
 
 	return s.WriteResponse(235, "Authentication successful")
 }
@@ -847,6 +853,9 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 			if m := metrics.Get(); m != nil {
 				m.SMTPAuthFailure()
 			}
+			if s.server.onLoginResult != nil {
+				s.server.onLoginResult(username, false, getIPFromAddr(s.conn.RemoteAddr().String()))
+			}
 			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
 	}
@@ -854,6 +863,9 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	s.isAuth = true
 	s.username = username
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
+	if s.server.onLoginResult != nil {
+		s.server.onLoginResult(username, true, getIPFromAddr(s.conn.RemoteAddr().String()))
+	}
 
 	return s.WriteResponse(235, "Authentication successful")
 }
@@ -890,12 +902,18 @@ func (s *Session) handleAuthCRAMMD5() error {
 		if m := metrics.Get(); m != nil {
 			m.SMTPAuthFailure()
 		}
+		if s.server.onLoginResult != nil {
+			s.server.onLoginResult("", false, getIPFromAddr(s.conn.RemoteAddr().String()))
+		}
 		return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 	}
 
 	s.isAuth = true
 	s.username = username
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
+	if s.server.onLoginResult != nil {
+		s.server.onLoginResult(username, true, getIPFromAddr(s.conn.RemoteAddr().String()))
+	}
 
 	return s.WriteResponse(235, "Authentication successful")
 }
