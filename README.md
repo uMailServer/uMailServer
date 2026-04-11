@@ -27,7 +27,7 @@
 
 ---
 
-> **Note:** This project is in active development. For production use, please report any issues found.
+> **Note:** uMailServer v0.1.0 is production ready. Please report any issues found.
 
 
 **uMailServer** is a modern, self-hosted email server written in Go. It provides everything you need to run a complete email infrastructure: SMTP, IMAP, webmail, admin panel, spam filtering, automatic TLS certificates, and more — all in a single binary.
@@ -62,31 +62,34 @@
 
 ### Installation
 
+#### Linux/macOS
 ```bash
-# Install with one command
-curl -fsSL https://get.umailserver.com | sudo bash
+# Download and run installer
+curl -fsSL https://get.umailserver.com/install.sh | sudo bash
 
-# Or download from releases
-wget https://github.com/umailserver/umailserver/releases/latest/download/umailserver-linux-amd64
-chmod +x umailserver-linux-amd64
-sudo mv umailserver-linux-amd64 /usr/local/bin/umailserver
-```
+# Or manually
+wget https://github.com/umailserver/umailserver/releases/latest/download/umailserver-linux-amd64.tar.gz
+tar -xzf umailserver-linux-amd64.tar.gz
+sudo ./install.sh
 
-### Quickstart Command
-
-```bash
-# Setup your first domain and admin account
+# Quick start (creates config and first account)
 sudo umailserver quickstart admin@example.com
 
-# Start the server
+# Start server
 sudo umailserver serve
-
-# Or with custom config
-sudo umailserver serve --config /etc/umailserver/umailserver.yaml
 ```
 
-### Docker
+#### Windows
+```powershell
+# Run PowerShell as Administrator
+irm https://get.umailserver.com/install.ps1 | iex
 
+# Or download and run manually
+# Download umailserver.exe from releases
+.\install.ps1 -Hostname mail.example.com -AdminEmail admin@example.com -Domain example.com
+```
+
+#### Docker
 ```bash
 # Run with Docker Compose
 docker compose up -d
@@ -94,15 +97,11 @@ docker compose up -d
 # Or run directly
 docker run -d \
   --name umailserver \
-  -p 25:25 \
-  -p 587:587 \
-  -p 465:465 \
-  -p 143:143 \
-  -p 993:993 \
-  -p 995:995 \
-  -p 4190:4190 \
-  -p 443:443 \
-  -v umail_data:/data \
+  -p 25:25 -p 587:587 -p 465:465 \
+  -p 143:143 -p 993:993 -p 995:995 \
+  -p 4190:4190 -p 443:443 -p 8443:8443 \
+  -p 8080:8080 -p 3000:3000 \
+  -v umail_data:/var/lib/umailserver \
   ghcr.io/umailserver/umailserver:latest
 ```
 
@@ -118,6 +117,8 @@ docker run -d \
 | 995 | POP3 | POP3 (Implicit TLS) |
 | 4190 | ManageSieve | Sieve script management |
 | 443 | HTTPS | Webmail + Admin Panel + REST API |
+| 8443 | HTTPS | Admin Panel only (localhost:8443) |
+| 8080 | HTTP | Prometheus Metrics |
 | 3000 | HTTP | MCP Server (Model Context Protocol) |
 
 ## Configuration
@@ -196,15 +197,16 @@ Access the webmail at `https://mail.example.com/`
 
 ## Admin Panel
 
-Access the admin panel at `https://127.0.0.1/`
+Access the admin panel at `https://localhost:8443/` (localhost only, port 8443)
 
 Features:
 - Dashboard with real-time stats
 - Domain management with DNS helper
-- Account management
-- Queue monitoring
+- Account management with TOTP 2FA
+- **Alias management** — create, update, delete email aliases
+- Queue monitoring with retry/drop
 - Rate limiting management
-- Security settings
+- Security settings (JWT rotation, Argon2id/bcrypt)
 
 ## CLI Commands
 
@@ -297,24 +299,18 @@ make docker
 ## Requirements
 
 - Linux, macOS, or Windows
-- Go 1.25+ (for building)
+- Go 1.25+ (for building from source)
 - Node.js 20+ (for UI development)
 - Docker (optional)
 
-## Ports
+## Default Paths
 
-| Port | Protocol | Description |
-|------|----------|-------------|
-| 25   | TCP      | SMTP (inbound mail) |
-| 587  | TCP      | SMTP Submission (STARTTLS) |
-| 465  | TCP      | SMTP Submission (Implicit TLS) |
-| 143  | TCP      | IMAP (STARTTLS) |
-| 993  | TCP      | IMAP (Implicit TLS) |
-| 995  | TCP      | POP3 (Implicit TLS) |
-| 4190 | TCP      | ManageSieve |
-| 443 | TCP      | Webmail + Admin Panel + REST API (HTTPS) |
-| 3000 | TCP      | MCP Server (HTTP) |
-| 9090 | TCP      | Prometheus Metrics (optional) |
+| Path | Linux/macOS | Windows |
+|------|-------------|---------|
+| **Config** | `/etc/umailserver/umailserver.yaml` | `C:\Program Files\umailserver\umailserver.yaml` |
+| **Data** | `/var/lib/umailserver` | `C:\ProgramData\umailserver` |
+| **Logs** | `/var/log/umailserver` | `C:\ProgramData\umailserver\logs` |
+| **Admin API** | `127.0.0.1:8443` | `127.0.0.1:8443` |
 
 ## Documentation
 
