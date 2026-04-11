@@ -27,15 +27,15 @@ jobs:
 
       - name: Build webmail
         run: |
-          cd webmail && npm ci && npm run build
+          cd webmail && npm ci --legacy-peer-deps && npm run build
 
       - name: Build admin panel
         run: |
-          cd web/admin && npm ci && npm run build
+          cd web/admin && npm ci --legacy-peer-deps && npm run build
 
       - name: Build account panel
         run: |
-          cd web/account && npm install && npm run build
+          cd web/account && npm install --legacy-peer-deps && npm run build
 
       - name: Build binaries
         run: |
