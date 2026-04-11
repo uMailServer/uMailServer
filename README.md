@@ -101,8 +101,7 @@ docker run -d \
   -p 993:993 \
   -p 995:995 \
   -p 4190:4190 \
-  -p 8443:8443 \
-  -p 9443:9443 \
+  -p 443:443 \
   -v umail_data:/data \
   ghcr.io/umailserver/umailserver:latest
 ```
@@ -118,8 +117,7 @@ docker run -d \
 | 993 | IMAP | IMAP (Implicit TLS) |
 | 995 | POP3 | POP3 (Implicit TLS) |
 | 4190 | ManageSieve | Sieve script management |
-| 8443 | HTTPS | Webmail and API |
-| 9443 | HTTPS | Admin Panel |
+| 443 | HTTPS | Webmail + Admin Panel + REST API |
 | 3000 | HTTP | MCP Server (Model Context Protocol) |
 
 ## Configuration
@@ -156,11 +154,11 @@ imap:
 
 http:
   enabled: true
-  port: 8443
+  port: 443
 
 admin:
   enabled: true
-  port: 9443
+  # port: 8443  # Note: Not currently used, admin served on HTTP port
   bind: 127.0.0.1
 
 spam:
@@ -181,7 +179,7 @@ See [umailserver.yaml.example](umailserver.yaml.example) for full configuration 
 
 ## Webmail
 
-Access the webmail at `https://mail.example.com:8443/`
+Access the webmail at `https://mail.example.com/`
 
 **Keyboard shortcuts:**
 
@@ -198,7 +196,7 @@ Access the webmail at `https://mail.example.com:8443/`
 
 ## Admin Panel
 
-Access the admin panel at `https://127.0.0.1:9443/`
+Access the admin panel at `https://127.0.0.1/`
 
 Features:
 - Dashboard with real-time stats
@@ -257,7 +255,7 @@ umailserver version
 ┌─────────────────────────────────────────────────────────────┐
 │                        uMailServer                           │
 ├─────────────────────────────────────────────────────────────┤
-│  SMTP (25, 587, 465)  │  IMAP (143, 993)  │  HTTP (8443)     │
+│  SMTP (25, 587, 465)  │  IMAP (143, 993)  │  HTTP (443)      │
 ├───────────────────────┼───────────────────┼──────────────────┤
 │  Message Pipeline     │  Mailstore        │  REST API        │
 │  - SPF/DKIM/DMARC     │  - Maildir++      │  - Auth (JWT)    │
@@ -314,8 +312,7 @@ make docker
 | 993  | TCP      | IMAP (Implicit TLS) |
 | 995  | TCP      | POP3 (Implicit TLS) |
 | 4190 | TCP      | ManageSieve |
-| 8443 | TCP      | Webmail and API (HTTPS) |
-| 9443 | TCP      | Admin Panel (HTTPS) |
+| 443 | TCP      | Webmail + Admin Panel + REST API (HTTPS) |
 | 3000 | TCP      | MCP Server (HTTP) |
 | 9090 | TCP      | Prometheus Metrics (optional) |
 

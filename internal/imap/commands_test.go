@@ -2941,3 +2941,184 @@ func TestParseSearchCriteriaAllVariations(t *testing.T) {
 		})
 	}
 }
+
+// TestParseSearchCriteria_DateAndSize tests the date and size criteria parsing
+func TestParseSearchCriteria_DateAndSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		expected SearchCriteria
+	}{
+		{
+			name: "BEFORE with valid date",
+			args: []string{"BEFORE", "01-Jan-2024"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "ON with valid date",
+			args: []string{"ON", "15-Jan-2024"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "SINCE with valid date",
+			args: []string{"SINCE", "01-Jan-2024"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "SENTBEFORE with valid date",
+			args: []string{"SENTBEFORE", "01-Jan-2024"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "SENTON with valid date",
+			args: []string{"SENTON", "15-Jan-2024"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "SENTSINCE with valid date",
+			args: []string{"SENTSINCE", "01-Jan-2024"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "LARGER with size",
+			args: []string{"LARGER", "1000"},
+			expected: SearchCriteria{
+				All:   true,
+				Larger: 1000,
+			},
+		},
+		{
+			name: "SMALLER with size",
+			args: []string{"SMALLER", "500"},
+			expected: SearchCriteria{
+				All:    true,
+				Smaller: 500,
+			},
+		},
+		{
+			name: "LARGER with invalid size",
+			args: []string{"LARGER", "notanumber"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+		{
+			name: "SMALLER with invalid size",
+			args: []string{"SMALLER", "notanumber"},
+			expected: SearchCriteria{
+				All: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseSearchCriteria(tt.args)
+			if result.Larger != tt.expected.Larger {
+				t.Errorf("Larger = %v, want %v", result.Larger, tt.expected.Larger)
+			}
+			if result.Smaller != tt.expected.Smaller {
+				t.Errorf("Smaller = %v, want %v", result.Smaller, tt.expected.Smaller)
+			}
+		})
+	}
+}
+
+// TestParseSearchCriteria_BodyAndText tests BODY and TEXT criteria parsing
+func TestParseSearchCriteria_BodyAndText(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		validate func(SearchCriteria) bool
+	}{
+		{
+			name: "BODY with search term",
+			args: []string{"BODY", "searchtext"},
+			validate: func(c SearchCriteria) bool {
+				return c.Body == "searchtext"
+			},
+		},
+		{
+			name: "TEXT with search term",
+			args: []string{"TEXT", "searchtext"},
+			validate: func(c SearchCriteria) bool {
+				return c.Text == "searchtext"
+			},
+		},
+		{
+			name: "BODY at end with no value",
+			args: []string{"BODY"},
+			validate: func(c SearchCriteria) bool {
+				return c.Body == ""
+			},
+		},
+		{
+			name: "TEXT at end with no value",
+			args: []string{"TEXT"},
+			validate: func(c SearchCriteria) bool {
+				return c.Text == ""
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseSearchCriteria(tt.args)
+			if !tt.validate(result) {
+				t.Errorf("parseSearchCriteria(%v) failed validation", tt.args)
+			}
+		})
+	}
+}
+
+// TestParseSearchCriteria_Header tests HEADER criteria parsing
+func TestParseSearchCriteria_Header(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		validate func(SearchCriteria) bool
+	}{
+		{
+			name: "HEADER with name and value",
+			args: []string{"HEADER", "X-Custom", "value"},
+			validate: func(c SearchCriteria) bool {
+				return c.Header != nil && c.Header["X-Custom"] == "value"
+			},
+		},
+		{
+			name: "HEADER at end with missing value",
+			args: []string{"HEADER", "X-Custom"},
+			validate: func(c SearchCriteria) bool {
+				return c.Header == nil
+			},
+		},
+		{
+			name: "HEADER with only one arg",
+			args: []string{"HEADER"},
+			validate: func(c SearchCriteria) bool {
+				return c.Header == nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseSearchCriteria(tt.args)
+			if !tt.validate(result) {
+				t.Errorf("parseSearchCriteria(%v) failed validation", tt.args)
+			}
+		})
+	}
+}

@@ -14,7 +14,7 @@ scrape_configs:
 
   - job_name: 'umailserver'
     static_configs:
-      - targets: ['umailserver:8443']
+      - targets: ['umailserver:443']
     metrics_path: /metrics
     scheme: https
     tls_config:

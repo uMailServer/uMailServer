@@ -26,6 +26,9 @@ module.exports = defineConfig({
   /* Global setup - runs before any test */
   globalSetup: path.join(__dirname, 'global-setup.js'),
 
+  /* Global teardown - runs after all tests */
+  globalTeardown: path.join(__dirname, 'global-teardown.js'),
+
   /* Shared settings for all the projects below */
   use: {
     /* Base URL to use in actions like `await page.goto('/')` */
@@ -68,9 +71,10 @@ module.exports = defineConfig({
 
   /* Run local dev server before starting the tests */
   webServer: {
-    command: process.env.WEBSERVER_CMD || 'echo "Server should be running"',
+    // global-setup.js starts the server, Playwright just connects to it
+    command: 'echo "Server started by globalSetup"',
     url: process.env.BASE_URL || 'http://localhost:8080',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120000,
+    reuseExistingServer: true,
+    timeout: 0,
   },
 });

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"go.etcd.io/bbolt"
+
+	"github.com/umailserver/umailserver/internal/db/migrations"
 )
 
 // Bucket names
@@ -154,6 +156,19 @@ func Open(path string) (*DB, error) {
 // Close closes the database
 func (d *DB) Close() error {
 	return d.bolt.Close()
+}
+
+// BoltDB returns the underlying bbolt.DB for advanced operations
+func (d *DB) BoltDB() *bbolt.DB {
+	return d.bolt
+}
+
+// RunMigrations runs all pending database migrations
+func (d *DB) RunMigrations() error {
+	registry := migrations.NewRegistry()
+	migrations.InitMigrations(registry)
+	migrator := migrations.NewMigrator(d.bolt, registry)
+	return migrator.Migrate()
 }
 
 // initBuckets creates all required buckets

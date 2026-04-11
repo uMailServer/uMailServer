@@ -198,7 +198,7 @@ curl -k https://localhost:443/
 cat /etc/umailserver/umailserver.yaml | grep -A5 "^admin:"
 
 # Check if port is listening
-sudo ss -tlnp | grep :8443
+sudo ss -tlnp | grep :443
 ```
 
 ### "CORS errors in browser"

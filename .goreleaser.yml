@@ -1,0 +1,94 @@
+# .goreleaser.yml
+# GoReleaser configuration for automated releases
+# See: https://goreleaser.com/
+
+version: 2
+
+before:
+  hooks:
+    - go mod download
+    - go mod tidy
+
+builds:
+  - id: umailserver
+    dir: .
+    main: ./cmd/umailserver
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Version }}
+      - -X main.BuildDate={{ .Date }}
+      - -X main.GitCommit={{ .Commit }}
+    flags:
+      - -trimpath
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - LICENSE.AGPL
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+
+checksum:
+  id: default
+  algorithm: sha256
+  name_template: "{{ .ProjectName }}_{{.Version}}_checksums.txt"
+
+snapshot:
+  name_template: "{{ .Version }}-next"
+
+release:
+  github:
+    owner: umailserver
+    name: umailserver
+  draft: false
+  prerelease: auto
+  name_template: "{{ .Tag }}"
+
+docker:
+  - id: umailserver
+    image_templates:
+      - ghcr.io/umailserver/umailserver:{{ .Tag }}
+      - ghcr.io/umailserver/umailserver:latest
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - --build-arg VERSION={{ .Version }}
+      - --build-arg BUILD_DATE={{ .Date }}
+      - --build-arg COMMIT={{ .Commit }}
+    files:
+      - Dockerfile
+
+manifests:
+  - id: umailserver-manifest
+    type: application
+    image_templates:
+      - ghcr.io/umailserver/umailserver:{{ .Tag }}
+      - ghcr.io/umailserver/umailserver:latest
+    manifests:
+      - image: ghcr.io/umailserver/umailserver:{{ .Tag }}
+        platform:
+          architecture: amd64
+          os: linux
+      - image: ghcr.io/umailserver/umailserver:{{ .Tag }}
+        platform:
+          architecture: arm64
+          os: linux
+
+announce:
+  twitter:
+    enabled: false
+  slack:
+    enabled: false

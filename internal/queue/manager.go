@@ -47,6 +47,13 @@ type Manager struct {
 	maxQueueSize int
 	requireTLS   bool
 
+	// MX connection pool settings
+	mxPoolSize     int           // max connections per MX host (default 10)
+	mxIdleTimeout  time.Duration // idle connection timeout (default 5 min)
+
+	// MX connection pools keyed by MX host
+	mxPools map[string]*mxPool
+
 	// MTA-STS validator for TLS policy enforcement
 	mtastsValidator *auth.MTASTSValidator
 
@@ -56,6 +63,21 @@ type Manager struct {
 	// dialSMTP, if set, is used instead of net.DialTimeout for testing.
 	// It returns a net.Conn and is used by deliverToMX.
 	dialSMTP func(addr string) (net.Conn, error)
+}
+
+// mxPool represents a connection pool for a single MX host
+type mxPool struct {
+	mu       sync.Mutex
+	conns    []*mxConn // available connections
+	addr     string    // MX host:port
+	maxSize  int
+	idleTimeout time.Duration
+}
+
+// mxConn wraps an SMTP client connection with metadata
+type mxConn struct {
+	client   *smtp.Client
+	lastUsed time.Time
 }
 
 // QueueStats holds queue statistics
@@ -131,6 +153,9 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		logger:          logger,
 		maxRetries:      len(retryDelays),
 		maxQueueSize:    10000,
+		mxPoolSize:      10,
+		mxIdleTimeout:   5 * time.Minute,
+		mxPools:         make(map[string]*mxPool),
 		mtastsValidator: auth.NewMTASTSValidator(&realMTASTSDNSResolver{}),
 		daneValidator:   auth.NewDANEValidator(&realMTASTSDNSResolver{}),
 	}
@@ -385,6 +410,108 @@ func (m *Manager) deliver(entry *db.QueueEntry) {
 	}
 }
 
+// getMXPool gets or creates a connection pool for the given MX host
+func (m *Manager) getMXPool(mx string) *mxPool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if pool, ok := m.mxPools[mx]; ok {
+		return pool
+	}
+	pool := &mxPool{
+		addr:        mx,
+		maxSize:     m.mxPoolSize,
+		idleTimeout: m.mxIdleTimeout,
+		conns:       make([]*mxConn, 0),
+	}
+	m.mxPools[mx] = pool
+	return pool
+}
+
+// acquireMXConn acquires a connection from the pool or creates a new one.
+// Returns (client, fromPool, error).
+func (m *Manager) acquireMXConn(mx string) (*smtp.Client, bool, error) {
+	pool := m.getMXPool(mx)
+
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	now := time.Now()
+
+	// Try to find an idle connection that's still valid
+	for i := len(pool.conns) - 1; i >= 0; i-- {
+		conn := pool.conns[i]
+		if now.Sub(conn.lastUsed) > pool.idleTimeout {
+			// Connection expired, remove it
+			conn.client.Close()
+			pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
+			continue
+		}
+		// Check if connection is still alive by doing a no-op
+		if err := conn.client.Noop(); err == nil {
+			// Valid connection found
+			pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
+			return conn.client, true, nil
+		}
+		// Connection dead, remove it
+		conn.client.Close()
+		pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
+	}
+
+	// No valid connection in pool, need to create new
+	return nil, false, nil
+}
+
+// createMXConn creates a new SMTP connection to the given MX host
+func (m *Manager) createMXConn(mx string) (*smtp.Client, error) {
+	addr := mx + ":25"
+	var conn net.Conn
+	var err error
+	if m.dialSMTP != nil {
+		conn, err = m.dialSMTP(addr)
+	} else {
+		conn, err = net.DialTimeout("tcp", addr, 30*time.Second)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := smtp.NewClient(conn, mx)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	return client, nil
+}
+
+// releaseMXConn returns a connection to the pool
+func (m *Manager) releaseMXConn(mx string, client *smtp.Client, valid bool) {
+	if client == nil {
+		return
+	}
+
+	pool := m.getMXPool(mx)
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+
+	if !valid {
+		// Connection is dead, close it
+		client.Close()
+		return
+	}
+
+	// Return to pool if not at capacity
+	if len(pool.conns) < pool.maxSize {
+		pool.conns = append(pool.conns, &mxConn{
+			client:   client,
+			lastUsed: time.Now(),
+		})
+	} else {
+		// Pool full, close the connection
+		client.Close()
+	}
+}
+
 // deliverToMX delivers a message to a specific MX server
 func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error {
 	// Check MTA-STS policy for recipient domain
@@ -418,25 +545,41 @@ func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error 
 		}
 	}
 
-	// Connect to MX server
-	addr := mx + ":25"
-	var conn net.Conn
-	if m.dialSMTP != nil {
-		conn, err = m.dialSMTP(addr)
+	// Connect to MX server (try pool first, then create new)
+	client, fromPool, err := m.acquireMXConn(mx)
+	if err != nil {
+		return err
+	}
+	if fromPool {
+		// Got pooled connection - verify it's still good with RSET (Reset)
+		if err := client.Reset(); err != nil {
+			// Connection bad, release it and create new
+			m.releaseMXConn(mx, client, false)
+			client, err = m.createMXConn(mx)
+			if err != nil {
+				return err
+			}
+		}
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, 30*time.Second)
-	}
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
+		// Fresh connection, created inline
+		addr := mx + ":25"
+		var conn net.Conn
+		if m.dialSMTP != nil {
+			conn, err = m.dialSMTP(addr)
+		} else {
+			conn, err = net.DialTimeout("tcp", addr, 30*time.Second)
+		}
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
 
-	// Send message using SMTP
-	client, err := smtp.NewClient(conn, mx)
-	if err != nil {
-		return err
+		newClient, err := smtp.NewClient(conn, mx)
+		if err != nil {
+			return err
+		}
+		client = newClient
 	}
-	defer client.Close()
 
 	// Attempt STARTTLS
 	tlsConfig := &tls.Config{
@@ -489,11 +632,15 @@ func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error 
 
 	err = w.Close()
 	if err != nil {
+		// Return bad connection to pool (will be closed)
+		m.releaseMXConn(mx, client, false)
 		return err
 	}
 
-	// Quit
-	return client.Quit()
+	// Successful delivery - return connection to pool for reuse
+	// Skip QUIT since we're keeping the connection alive
+	m.releaseMXConn(mx, client, true)
+	return nil
 }
 
 // handleDeliverySuccess handles successful delivery

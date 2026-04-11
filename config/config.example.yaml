@@ -71,11 +71,11 @@ http:
                               # SECURITY: Only trust IPs of your reverse proxy (e.g., nginx, cloudflare)
                               # If empty, X-Forwarded-For is ignored (safer default)
 
-# Admin Panel Configuration
+# Admin Panel Configuration (legacy - admin panel is served by HTTP server)
 admin:
   enabled: true
-  port: 8443
-  bind: "127.0.0.1"
+  # port: 8443  # Note: Not currently used
+  bind: "127.0.0.1"  # Note: Not currently used
 
 # Security Configuration
 security:

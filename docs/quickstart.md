@@ -96,7 +96,7 @@ umailserver check tls mail.yourdomain.com
 
 ## First Login
 
-1. Access the admin panel: `https://<your-server-ip>:8443`
+1. Access the admin panel: `https://<your-server-ip>/`
 2. Login with: `admin@yourdomain.com` and your password
 3. Create additional email accounts
 

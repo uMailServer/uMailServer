@@ -15,10 +15,16 @@ services:
       - "587:587"
       # SMTP Submission (Implicit TLS)
       - "465:465"
+      # IMAP (STARTTLS)
+      - "143:143"
       # IMAPS
       - "993:993"
-      # Admin API
-      - "8443:8443"
+      # POP3S (Implicit TLS)
+      - "995:995"
+      # ManageSieve
+      - "4190:4190"
+      # HTTP API and Web UI
+      - "443:443"
     volumes:
       - umail_data:/data
       - ./config:/etc/umailserver:ro
@@ -29,7 +35,7 @@ services:
     networks:
       - mailnet
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8443/health"]
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:443/health"]
       interval: 30s
       timeout: 10s
       retries: 3

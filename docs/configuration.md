@@ -129,15 +129,15 @@ http:
 
 ## Admin Panel
 
+The admin panel is served by the HTTP server on the same port (443).
+The `admin` config section below exists for legacy/compatibility purposes
+but is not currently used — admin panel access is controlled by the HTTP server.
+
 ```yaml
 admin:
   enabled: true
-  port: 8443
-  bind: 127.0.0.1                  # Bind to localhost for security
-
-  # Use reverse proxy in production:
-  # bind: 0.0.0.0
-  # trusted_proxies: ["10.0.0.0/8"]
+  # port: 8443  # Note: Not currently used, admin served on HTTP port
+  bind: 127.0.0.1                  # Note: Not currently used
 ```
 
 ## Authentication

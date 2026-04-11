@@ -16,6 +16,7 @@ import (
 	"github.com/umailserver/umailserver/internal/cli"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/db/migrations"
 	"github.com/umailserver/umailserver/internal/server"
 	"github.com/umailserver/umailserver/internal/storage"
 	"golang.org/x/crypto/bcrypt"
@@ -55,6 +56,8 @@ func main() {
 		cmdRestore(os.Args[2:])
 	case "migrate":
 		cmdMigrate(os.Args[2:])
+	case "db":
+		cmdDB(os.Args[2:])
 	case "status":
 		cmdStatus(os.Args[2:])
 	case "stop":
@@ -89,6 +92,7 @@ Commands:
   backup       Create backup
   restore      Restore from backup
   migrate      Import from other mail servers
+  db           Database management (migrate, status)
   version      Show version
 
 Examples:
@@ -1095,6 +1099,121 @@ func cmdMigrate(args []string) {
 		fmt.Fprintf(os.Stderr, "Unknown source type: %s\n", *sourceType)
 		os.Exit(1)
 	}
+}
+
+func cmdDB(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Usage: umailserver db <subcommand>")
+		fmt.Println("Subcommands: status, migrate, rollback")
+		os.Exit(1)
+	}
+
+	subcmd := args[0]
+
+	switch subcmd {
+	case "status":
+		cmdDBStatus(args[1:])
+	case "migrate":
+		cmdDBMigrate(args[1:])
+	case "rollback":
+		cmdDBRollback(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown db subcommand: %s\n", subcmd)
+		fmt.Println("Usage: umailserver db <subcommand>")
+		fmt.Println("Subcommands: status, migrate, rollback")
+		os.Exit(1)
+	}
+}
+
+func cmdDBStatus(args []string) {
+	dataDir := config.GetDefaultDataDir()
+	if len(args) > 0 {
+		dataDir = args[0]
+	}
+
+	dbPath := filepath.Join(dataDir, "umailserver.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	registry := migrations.NewRegistry()
+	migrations.InitMigrations(registry)
+	migrator := migrations.NewMigrator(database.BoltDB(), registry)
+
+	status, err := migrator.Status()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to get migration status: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Database migrations:\n")
+	fmt.Printf("  Applied: %d\n", status.Applied)
+	fmt.Printf("  Pending: %d\n", status.Pending)
+	fmt.Printf("  Total:   %d\n", status.Total)
+
+	if status.Pending > 0 {
+		fmt.Println("\nRun 'umailserver db migrate' to apply pending migrations.")
+	}
+}
+
+func cmdDBMigrate(args []string) {
+	dataDir := config.GetDefaultDataDir()
+	if len(args) > 0 {
+		dataDir = args[0]
+	}
+
+	dbPath := filepath.Join(dataDir, "umailserver.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	fmt.Println("Running database migrations...")
+
+	registry := migrations.NewRegistry()
+	migrations.InitMigrations(registry)
+	migrator := migrations.NewMigrator(database.BoltDB(), registry)
+
+	if err := migrator.Migrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Migration failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	status, _ := migrator.Status()
+	fmt.Printf("Migration complete. Applied: %d, Pending: %d\n", status.Applied, status.Pending)
+}
+
+func cmdDBRollback(args []string) {
+	dataDir := config.GetDefaultDataDir()
+	if len(args) > 0 {
+		dataDir = args[0]
+	}
+
+	dbPath := filepath.Join(dataDir, "umailserver.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
+	fmt.Println("Rolling back last migration...")
+
+	registry := migrations.NewRegistry()
+	migrations.InitMigrations(registry)
+	migrator := migrations.NewMigrator(database.BoltDB(), registry)
+
+	if err := migrator.Rollback(); err != nil {
+		fmt.Fprintf(os.Stderr, "Rollback failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Rollback complete.")
 }
 
 func cmdStatus(args []string) {

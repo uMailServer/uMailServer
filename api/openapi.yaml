@@ -759,6 +759,129 @@ paths:
         '404':
           description: Message not found
 
+  # JWT Secret Rotation
+  /api/v1/admin/jwt/rotate:
+    post:
+      tags:
+        - Admin
+      summary: Rotate JWT secret
+      description: |
+        Rotates the JWT signing secret by generating a new key ID and secret.
+        The new secret is added to the version map while old secrets remain valid
+        for backward compatibility until they expire.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: JWT secret rotated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: rotated
+                  newKid:
+                    type: string
+                    description: New key ID
+                  message:
+                    type: string
+                  activeKeys:
+                    type: integer
+                    description: Number of active signing keys
+        '401':
+          description: Unauthorized
+        '403':
+          description: Admin access required
+
+  /api/v1/admin/jwt/status:
+    get:
+      tags:
+        - Admin
+      summary: Get JWT secret status
+      description: Returns information about the current JWT signing keys
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: JWT status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  currentKid:
+                    type: string
+                    description: Current active key ID
+                  activeKeys:
+                    type: integer
+                    description: Number of active signing keys
+                  activeKids:
+                    type: array
+                    items:
+                      type: string
+                    description: List of all active key IDs
+        '401':
+          description: Unauthorized
+        '403':
+          description: Admin access required
+
+  # Health & Readiness
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns the health status of the server
+      security: []
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Server is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness probe
+      description: |
+        Kubernetes-style readiness probe. Returns 200 if the server is ready
+        to accept traffic, 503 if the server is draining for graceful shutdown
+        or not yet ready.
+      security: []
+      responses:
+        '200':
+          description: Server is ready to accept traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        '503':
+          description: Server is not ready (draining or not initialized)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  reason:
+                    type: string
+
 components:
   securitySchemes:
     BearerAuth:

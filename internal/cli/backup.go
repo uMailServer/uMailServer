@@ -605,6 +605,168 @@ func (bm *BackupManager) Restore(backupFile string) error {
 	return nil
 }
 
+// Verify checks backup integrity without extracting files
+func (bm *BackupManager) Verify(backupFile string) error {
+	fmt.Printf("Verifying backup: %s\n", backupFile)
+
+	fileData, err := os.ReadFile(backupFile)
+	if err != nil {
+		return fmt.Errorf("failed to open backup file: %w", err)
+	}
+
+	// Try to decrypt if password is set
+	var tarData []byte
+	if bm.password != "" {
+		tarData, err = bm.decryptBackup(fileData)
+		if err != nil {
+			return fmt.Errorf("failed to decrypt backup: %w", err)
+		}
+		fmt.Println("Backup decrypted successfully.")
+	} else {
+		// Check if file is encrypted
+		if len(fileData) > len(backupMagic) && string(fileData[:len(backupMagic)]) == backupMagic {
+			return fmt.Errorf("backup is encrypted but no password provided; use SetPassword() first")
+		}
+		tarData = fileData
+	}
+
+	gr, err := gzip.NewReader(strings.NewReader(string(tarData)))
+	if err != nil {
+		return fmt.Errorf("failed to read gzip: %w", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+
+	// Read manifest and verify all file hashes
+	var manifest map[string]interface{}
+	var expectedHashes []fileHash
+	manifestFound := false
+	filesVerified := 0
+	filesFailed := 0
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar: %w", err)
+		}
+
+		if header.Name == "manifest.json" {
+			data := make([]byte, header.Size)
+			_, err := io.ReadFull(tr, data)
+			if err != nil {
+				return fmt.Errorf("failed to read manifest: %w", err)
+			}
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				return fmt.Errorf("failed to parse manifest: %w", err)
+			}
+			// Parse file hashes from manifest
+			if files, ok := manifest["files"].([]interface{}); ok {
+				for _, f := range files {
+					if fileMap, ok := f.(map[string]interface{}); ok {
+						h := fileHash{
+							Path: getString(fileMap, "path"),
+							Hash: getString(fileMap, "hash"),
+							Size: getInt64(fileMap, "size"),
+						}
+						expectedHashes = append(expectedHashes, h)
+					}
+				}
+			}
+			manifestFound = true
+			fmt.Printf("Backup created: %s\n", manifest["timestamp"])
+			fmt.Printf("Hostname: %s\n", manifest["hostname"])
+			continue
+		}
+
+		// Skip non-regular files
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		// Read file content to compute hash
+		content := make([]byte, header.Size)
+		_, err = io.ReadFull(tr, content)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", header.Name, err)
+		}
+
+		// Verify hash if we have expected hashes
+		if len(expectedHashes) > 0 {
+			computedHash := sha256.Sum256(content)
+			computedHashHex := hex.EncodeToString(computedHash[:])
+			for _, expected := range expectedHashes {
+				if expected.Path == header.Name {
+					if computedHashHex != expected.Hash {
+						fmt.Printf("  ✗ FAILED: %s\n", header.Name)
+						filesFailed++
+					} else {
+						fmt.Printf("  ✓ Verified: %s\n", header.Name)
+						filesVerified++
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if !manifestFound {
+		return fmt.Errorf("invalid backup: manifest not found")
+	}
+
+	fmt.Printf("\nVerification complete: %d files verified, %d failed\n", filesVerified, filesFailed)
+	if filesFailed > 0 {
+		return fmt.Errorf("backup verification failed: %d files have incorrect hashes", filesFailed)
+	}
+	return nil
+}
+
+// CleanupOldBackups removes backups older than the specified retention days
+func (bm *BackupManager) CleanupOldBackups(backupPath string, retentionDays int) (int, error) {
+	if retentionDays <= 0 {
+		return 0, fmt.Errorf("retention days must be positive")
+	}
+
+	entries, err := os.ReadDir(backupPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read backup directory: %w", err)
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	deleted := 0
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if filepath.Ext(name) != ".gz" && !strings.HasSuffix(name, ".tar.gz") {
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		if info.ModTime().Before(cutoff) {
+			backupFile := filepath.Join(backupPath, name)
+			if err := os.Remove(backupFile); err != nil {
+				fmt.Printf("Failed to delete %s: %v\n", name, err)
+				continue
+			}
+			fmt.Printf("Deleted old backup: %s (age: %s)\n", name, time.Since(info.ModTime()).Round(time.Hour))
+			deleted++
+		}
+	}
+
+	return deleted, nil
+}
+
 // ListBackups lists available backups in a directory
 func (bm *BackupManager) ListBackups(backupPath string) ([]BackupInfo, error) {
 	entries, err := os.ReadDir(backupPath)

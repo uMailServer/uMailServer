@@ -36,8 +36,10 @@ type Config struct {
 
 // ServerConfig holds general server settings
 type ServerConfig struct {
-	Hostname string `yaml:"hostname"` // FQDN: mail.example.com
-	DataDir  string `yaml:"data_dir"` // /var/lib/umailserver
+	Hostname         string `yaml:"hostname"` // FQDN: mail.example.com
+	DataDir          string `yaml:"data_dir"` // /var/lib/umailserver
+	GracefulTimeout   int    `yaml:"graceful_timeout"`   // Seconds to wait for connections to drain (default 30)
+	ForceCloseAfter  int    `yaml:"force_close_after"`  // Seconds after which to force close connections (default 60)
 }
 
 // TLSConfig holds TLS and certificate settings

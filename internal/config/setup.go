@@ -81,7 +81,7 @@ func (w *SetupWizard) Run() (*Config, error) {
 
 	w.Config.Admin.Enabled = w.askBool("Enable admin panel?", true)
 	if w.Config.Admin.Enabled {
-		w.Config.Admin.Port = w.askInt("Admin panel port", 8080)
+		w.Config.Admin.Port = w.askInt("Admin panel port", 8443)
 	}
 
 	// TLS configuration

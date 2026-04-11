@@ -51,6 +51,7 @@ type Server struct {
 	smtpServer        *smtp.Server
 	imapServer        *imap.Server
 	apiServer         *api.Server
+	adminServer       *api.AdminServer
 	tlsManager        *tls.Manager
 	webhookMgr        *webhook.Manager
 	searchSvc         *search.Service
@@ -140,6 +141,12 @@ func New(cfg *config.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	s.database = database
+
+	// Run pending database migrations
+	if err := database.RunMigrations(); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("failed to run migrations: %w", err)
+	}
 
 	// Initialize message store (use same path as IMAP mailstore)
 	msgStorePath := s.config.Server.DataDir + "/mail/messages"
@@ -657,9 +664,10 @@ func (s *Server) setupHealthChecks() {
 // startAPI creates and starts the HTTP API server (webmail + admin).
 func (s *Server) startAPI() {
 	apiCfg := api.Config{
-		Addr:        fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
-		JWTSecret:   s.config.Security.JWTSecret,
-		CorsOrigins: s.config.HTTP.CorsOrigins,
+		Addr:          fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
+		JWTSecret:     s.config.Security.JWTSecret,
+		CorsOrigins:   s.config.HTTP.CorsOrigins,
+		PasswordHasher: "bcrypt", // or "argon2id" (OWASP recommended)
 		AuditLog: api.AuditLogConfig{
 			Path:       s.config.Security.AuditLog.Path,
 			MaxSizeMB:  s.config.Security.AuditLog.MaxSizeMB,
@@ -693,6 +701,28 @@ func (s *Server) startAPI() {
 		}
 	}()
 	s.logger.Info("API server started", "addr", apiCfg.Addr)
+
+	// Start admin server on separate port (localhost only)
+	if s.config.Admin.Enabled {
+		adminCfg := api.AdminConfig{
+			Addr:      fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
+			JWTSecret: s.config.Security.JWTSecret,
+			AuditLog: api.AuditLogConfig{
+				Path:       s.config.Security.AuditLog.Path,
+				MaxSizeMB:  s.config.Security.AuditLog.MaxSizeMB,
+				MaxBackups: s.config.Security.AuditLog.MaxBackups,
+				MaxAgeDays: s.config.Security.AuditLog.MaxAgeDays,
+			},
+		}
+		s.adminServer = api.NewAdminServer(s.apiServer, adminCfg)
+
+		go func() {
+			if err := s.adminServer.Start(); err != nil {
+				s.logger.Error("Admin API server error", "error", err)
+			}
+		}()
+		s.logger.Info("Admin API server started", "addr", adminCfg.Addr)
+	}
 }
 
 // Stop gracefully stops all server components
@@ -764,6 +794,13 @@ func (s *Server) Stop() error {
 	if s.apiServer != nil {
 		if err := s.apiServer.Stop(); err != nil {
 			s.logger.Error("Failed to stop API server", "error", err)
+		}
+	}
+
+	// Stop admin server
+	if s.adminServer != nil {
+		if err := s.adminServer.Stop(); err != nil {
+			s.logger.Error("Failed to stop admin server", "error", err)
 		}
 	}
 
