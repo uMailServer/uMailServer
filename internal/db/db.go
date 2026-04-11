@@ -452,3 +452,38 @@ func (d *DB) ResolveAlias(domain, localPart string) (string, error) {
 	}
 	return alias.Target, nil
 }
+
+// ListAliases returns all aliases
+func (d *DB) ListAliases() ([]*AliasData, error) {
+	var aliases []*AliasData
+	err := d.ForEach(BucketAliases, func(key string, value []byte) error {
+		var alias AliasData
+		if err := json.Unmarshal(value, &alias); err != nil {
+			return err
+		}
+		aliases = append(aliases, &alias)
+		return nil
+	})
+	return aliases, err
+}
+
+// CreateAlias creates a new alias
+func (d *DB) CreateAlias(alias *AliasData) error {
+	if alias.CreatedAt.IsZero() {
+		alias.CreatedAt = time.Now()
+	}
+	key := alias.Domain + ":" + strings.ToLower(alias.Alias)
+	return d.Put(BucketAliases, key, alias)
+}
+
+// UpdateAlias updates an existing alias
+func (d *DB) UpdateAlias(alias *AliasData) error {
+	key := alias.Domain + ":" + strings.ToLower(alias.Alias)
+	return d.Put(BucketAliases, key, alias)
+}
+
+// DeleteAlias removes an alias
+func (d *DB) DeleteAlias(domain, localPart string) error {
+	key := domain + ":" + strings.ToLower(localPart)
+	return d.Delete(BucketAliases, key)
+}

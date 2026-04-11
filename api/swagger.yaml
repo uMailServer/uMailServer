@@ -92,6 +92,65 @@ paths:
       tags:
       - Accounts
       - Accounts
+  /api/v1/aliases:
+    get:
+      consumes:
+      - application/json
+      description: |-
+        Returns a list of all email aliases
+        Creates a new email alias
+      produces:
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: List of aliases
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "201":
+          description: Alias created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      summary: Create alias
+      tags:
+      - Aliases
+      - Aliases
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Returns a list of all email aliases
+        Creates a new email alias
+      produces:
+      - application/json
+      - application/json
+      responses:
+        "200":
+          description: List of aliases
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "201":
+          description: Alias created
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      - BearerAuth: []
+      summary: Create alias
+      tags:
+      - Aliases
+      - Aliases
   /api/v1/domains:
     get:
       consumes:

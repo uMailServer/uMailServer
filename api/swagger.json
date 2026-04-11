@@ -90,6 +90,92 @@
                 }
             }
         },
+        "/api/v1/aliases": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a list of all email aliases\nCreates a new email alias",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json",
+                    "application/json"
+                ],
+                "tags": [
+                    "Aliases",
+                    "Aliases"
+                ],
+                "summary": "Create alias",
+                "responses": {
+                    "200": {
+                        "description": "List of aliases",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
+                        }
+                    },
+                    "201": {
+                        "description": "Alias created",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Returns a list of all email aliases\nCreates a new email alias",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json",
+                    "application/json"
+                ],
+                "tags": [
+                    "Aliases",
+                    "Aliases"
+                ],
+                "summary": "Create alias",
+                "responses": {
+                    "200": {
+                        "description": "List of aliases",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": true
+                            }
+                        }
+                    },
+                    "201": {
+                        "description": "Alias created",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/domains": {
             "get": {
                 "security": [
