@@ -14,10 +14,11 @@ uMailServer is a **production-grade single-binary email server** for v0.1.0. Cor
 2. ✅ **Spam Bayesian filter** — Robinson-Fisher algorithm fully implemented (needs training data)
 3. ✅ **AV scanning** — ClamAV TCP INSTREAM protocol fully implemented (needs daemon)
 4. ✅ **ARC sealing** — `Seal()` method implemented in `auth/arc.go`
+5. ✅ **Architecture refactor** — Both monolith files split into focused per-subsystem files (2026-04-12)
 
-**Key Tech Debt (Architecture — not blocking for production):**
-1. `api/server.go` at 2550 lines — needs per-resource handler拆解
-2. `server/server.go` at 1689 lines — needs subsystem拆解
+**Key Tech Debt (Architecture — resolved 2026-04-12):**
+1. ✅ `api/server.go` at 2550 lines — ✅ Split into 14 focused files (→892 lines)
+2. ✅ `server/server.go` at 1689 lines — ✅ Split into 18 focused files (→284 lines)
 3. Distributed tracing — OpenTelemetry initialized but no spans in code
 
 ---
@@ -282,10 +283,10 @@ Add `web/account/` build to `build-web` target in Makefile.
 | P2 | Implement DMARC reporting | 2-3 days | Spec compliance |
 | P2 | Wire webhook system | 3-5 days | Integration |
 | P2 | Implement Sieve vacation | 2-3 days | Feature parity |
-| P3 | Split api/server.go | 1-2 weeks | Code quality |
-| P3 | Split server/server.go | 1 week | Code quality |
-| P3 | Wire push/alert systems | 3-5 days | UX |
-| P4 | CalDAV/CardDAV handlers | 1-2 weeks | Feature parity |
+| P3 | Split api/server.go | 1-2 weeks | ✅ DONE (2026-04-12) |
+| P3 | Split server/server.go | 1 week | ✅ DONE (2026-04-12) |
+| P3 | Wire push/alert systems | 3-5 days | ✅ DONE |
+| P4 | CalDAV/CardDAV handlers | 1-2 weeks | ✅ DONE |
 | P4 | JMAP method handlers | 1-2 weeks | Feature parity |
 | P5 | S/MIME encryption | 2-3 weeks | Spec compliance |
 | P5 | OpenPGP support | 2-3 weeks | Spec compliance |

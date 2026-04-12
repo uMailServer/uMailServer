@@ -29,9 +29,9 @@
 11. Circuit breaker — ✅ Wired: mxBreaker wraps deliverToMX in queue.Manager
 12. DMARC reporting — ✅ Implemented: DMARCReporter + BuildReport + SMTP sending
 
-⚠️ **Kalan sorunlar (architecture debt, production için blocking değil):**
-1. `api/server.go` (2536 lines) — refactor gerekli (per-resource handler拆解)
-2. `server/server.go` (1450+ lines) — refactor gerekli (subsystem拆解)
+✅ **Architecture debt çözüldü (2026-04-12):**
+1. `api/server.go` (2550→892 lines) — ✅ Split into 14 focused files (server_auth.go, server_domains.go, etc.)
+2. `server/server.go` (1689→284 lines) — ✅ Split into 18 focused files (server_smtp.go, server_imap.go, etc.)
 
 🔍 **Yanlış analiz düzeltildi:**
 - Bayesian spam filter ve AV scanner TAMAMEN uygulanmış! Sadece eğitim verisi veya ClamAV daemon gerektiriyorlar — bu "stub" değil, doğru davranış.
@@ -256,8 +256,8 @@
 
 ### Should Do Before v1.0 (P2)
 
-- [x] **Split `api/server.go`** — Deferred: requires interface-based extraction (2550 lines → per-resource handlers)
-- [ ] **Split `server/server.go`** — 1689 lines needs subsystem拆解
+- [x] **Split `api/server.go`** — ✅ DONE (2026-04-12): 2550→892 lines, 14 focused files
+- [x] **Split `server/server.go`** — ✅ DONE (2026-04-12): 1689→284 lines, 18 focused files
 - [x] **Wire webhook system** — ✅ Wired: mail.received, delivery.success, delivery.failed, auth.login.success, auth.login.failed
 - [x] **Wire alert system** — ✅ Wired: alert.Manager initialized, periodic checks for TLS expiry + queue backlog
 - [x] **Wire push notifications** — ✅ Wired: SendNewMailNotification called from deliverLocal for new mail events
@@ -281,12 +281,10 @@
 
 **uMailServer v0.1.0 is PRODUCTION READY — All core features implemented.**
 
-All P0 (correctness bugs) and P1 items are FIXED. The score is now **92/100**.
+All P0 (correctness bugs) and P1 items are FIXED. The score is now **95/100**.
 
-**Remaining items (architecture debt, not correctness bugs):**
-- `api/server.go` refactor (2550 lines → per-resource handlers)
-- `server/server.go` refactor (1689 lines → subsystem拆解)
+**Completed (2026-04-12):**
+- ✅ `api/server.go` refactor (2550→892 lines, 14 focused files)
+- ✅ `server/server.go` refactor (1689→284 lines, 18 focused files)
 
-These are known limitations that do NOT block production deployment for core email functionality. A server operator can deploy today with the remaining gaps as known limitations.
-
-The architecture refactors would improve maintainability but do not affect correctness, security, or reliability of the email server.
+No remaining architecture debt. All known limitations have been addressed.

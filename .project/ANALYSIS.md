@@ -116,9 +116,9 @@ Three independent React projects built to `dist/` and embedded:
 
 5. **AV scanning is a stub (av/scanner.go)**: `Scan()` always returns `Clean`. No actual ClamAV integration.
 
-6. **`api/server.go` at 2536 lines**: Should be split into `/domains`, `/accounts`, `/aliases`, `/queue` handler packages with shared middleware.
+6. **`api/server.go` at 2536 lines**: ✅ SPLIT (2026-04-12) — Now 892 lines, split into 14 focused files
 
-7. **`server/server.go` at 1399 lines**: Top-level orchestrator mixing init logic, lifecycle management, and subsystem wiring.
+7. **`server/server.go` at 1399 lines**: ✅ SPLIT (2026-04-12) — Now 284 lines, split into 18 focused files
 
 8. **`regexp.MustCompile` in hot paths (dkim.go:451, 535)**: Compiled on every message canonicalization. Should be package-level `var`.
 
@@ -245,8 +245,8 @@ Three independent React projects built to `dist/` and embedded:
 | ~~**Medium**~~ | ~~`isTemporaryError` fragile string matching~~ | ✅ FIXED |
 | ~~**High**~~ | ~~Queue thundering herd (no bounding)~~ | ✅ FIXED - bounded worker pool |
 | ~~**Low**~~ | ~~`realMTASTSDNSResolver` stub methods~~ | ✅ FIXED - returns errors |
-| High | `api/server.go` at 2536 lines | Refactor: 1-2 weeks |
-| High | `server/server.go` at 1399 lines | Refactor: 1 week |
+| ~~**High**~~ | ~~`api/server.go` at 2536 lines~~ | ✅ FIXED - split into 14 files (2026-04-12) |
+| ~~**High**~~ | ~~`server/server.go` at 1399 lines~~ | ✅ FIXED - split into 18 files (2026-04-12) |
 | ~~**High**~~ | ~~`regexp.MustCompile` in hot paths~~ | ✅ FIXED - package-level vars in dkim.go |
 | Medium | Account portal not in `make build-web` | 1 hour |
 | Medium | DMARC RUA/RUF reporting not wired | 2-3 days |
