@@ -284,8 +284,8 @@
 All P0 (correctness bugs) and P1 items are FIXED. The score is now **92/100**.
 
 **Remaining items (architecture debt, not correctness bugs):**
-- `api/server.go` refactor (2536 lines → per-resource handlers)
-- `server/server.go` refactor (1450+ lines → subsystem拆解)
+- `api/server.go` refactor (2550 lines → per-resource handlers)
+- `server/server.go` refactor (1689 lines → subsystem拆解)
 
 These are known limitations that do NOT block production deployment for core email functionality. A server operator can deploy today with the remaining gaps as known limitations.
 
