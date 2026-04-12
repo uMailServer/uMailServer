@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
-	"time"
+
+	"github.com/google/uuid"
 )
 
 // Test handleFilters dispatcher
@@ -713,7 +713,7 @@ func createTestFilter(t *testing.T, server *Server, userID string) *EmailFilter 
 	t.Helper()
 
 	filter := &EmailFilter{
-		ID:       "test-filter-" + strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + strconv.Itoa(time.Now().Nanosecond()),
+		ID:       "test-filter-" + uuid.New().String(),
 		Name:     "Test Filter",
 		UserID:   userID,
 		Enabled:  true,
