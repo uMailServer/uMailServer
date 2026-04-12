@@ -395,58 +395,8 @@ func runInbox() {
 	fmt.Println("IMAP connection successful!")
 }
 
-// ========== AUTOCONFIG ==========
-
-func runAutoconfig() {
-	cmd := flag.NewFlagSet("autoconfig", flag.ExitOnError)
-	domain := cmd.String("domain", "", "Email domain")
-	host := cmd.String("host", "localhost", "Server host")
-	port := cmd.Int("port", 80, "Server port")
-
-	cmd.Parse(os.Args[2:])
-	if *domain == "" {
-		fmt.Println("Error: --domain required")
-		os.Exit(1)
-	}
-
-	url := fmt.Sprintf("http://%s:%d/.well-known/autoconfig/mail/config-v1.1.xml?email=postmaster@%s",
-		*host, *port, *domain)
-	fmt.Printf("Fetching: %s\n", url)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		fmt.Printf("Request failed: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("Status: %d\n", resp.StatusCode)
-		os.Exit(1)
-	}
-
-	buf := make([]byte, 4096)
-	n, _ := resp.Body.Read(buf)
-	fmt.Printf("\nResponse:\n%s\n", string(buf[:n]))
-	fmt.Println("Autoconfig PASSED!")
-}
-
-// ========== AUTODISCOVER ==========
-
-func runAutodiscover() {
-	cmd := flag.NewFlagSet("autodiscover", flag.ExitOnError)
-	email := cmd.String("email", "", "Email address")
-	host := cmd.String("host", "localhost", "Server host")
-	port := cmd.Int("port", 80, "Server port")
-
-	cmd.Parse(os.Args[2:])
-	if *email == "" {
-		fmt.Println("Error: --email required")
-		os.Exit(1)
-	}
-
-	url := fmt.Sprintf("http://%s:%d/autodiscover/autodiscover.xml?email=%s", *host, *port, *email)
+// fetchAndPrint performs an HTTP GET and prints the response body.
+func fetchAndPrint(url string) {
 	fmt.Printf("Fetching: %s\n", url)
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -465,6 +415,44 @@ func runAutodiscover() {
 	buf := make([]byte, 8192)
 	n, _ := resp.Body.Read(buf)
 	fmt.Printf("\nResponse:\n%s\n", string(buf[:n]))
+}
+
+// ========== AUTOCONFIG ==========
+
+func runAutoconfig() {
+	cmd := flag.NewFlagSet("autoconfig", flag.ExitOnError)
+	domain := cmd.String("domain", "", "Email domain")
+	host := cmd.String("host", "localhost", "Server host")
+	port := cmd.Int("port", 80, "Server port")
+
+	cmd.Parse(os.Args[2:])
+	if *domain == "" {
+		fmt.Println("Error: --domain required")
+		os.Exit(1)
+	}
+
+	url := fmt.Sprintf("http://%s:%d/.well-known/autoconfig/mail/config-v1.1.xml?email=postmaster@%s",
+		*host, *port, *domain)
+	fetchAndPrint(url)
+	fmt.Println("Autoconfig PASSED!")
+}
+
+// ========== AUTODISCOVER ==========
+
+func runAutodiscover() {
+	cmd := flag.NewFlagSet("autodiscover", flag.ExitOnError)
+	email := cmd.String("email", "", "Email address")
+	host := cmd.String("host", "localhost", "Server host")
+	port := cmd.Int("port", 80, "Server port")
+
+	cmd.Parse(os.Args[2:])
+	if *email == "" {
+		fmt.Println("Error: --email required")
+		os.Exit(1)
+	}
+
+	url := fmt.Sprintf("http://%s:%d/autodiscover/autodiscover.xml?email=%s", *host, *port, *email)
+	fetchAndPrint(url)
 	fmt.Println("Autodiscover PASSED!")
 }
 
