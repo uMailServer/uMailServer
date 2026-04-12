@@ -211,8 +211,8 @@
 ### Gaps
 
 1. **No API reference documentation**: No generated OpenAPI spec despite `docs.go` and swag annotations.
-2. **README claims features that aren't implemented**: ❌ CORRECTION — S/MIME (`auth/smime.go`), OpenPGP (`auth/openpgp.go`), and Webhook event notifications ARE fully implemented. Only "TF-IDF based email search" is partial (search index exists but webmail doesn't use it yet).
-3. **No migration guide**: `docs/migration.md` exists but is mostly empty.
+2. **README claims features that aren't implemented**: ❌ CORRECTION — S/MIME, OpenPGP, Webhook fully implemented. "TF-IDF based email search" partial (API works, webmail doesn't use it).
+3. ~~**No migration guide**~~ — ✅ EXISTS: `docs/migration.md` has comprehensive content (Dovecot, IMAP, MBOX, Gmail, cPanel, imapsync).
 4. **No performance tuning guide**: No documentation on pool sizes, rate limits, queue settings for high-volume deployments.
 
 ---
