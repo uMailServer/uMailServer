@@ -256,8 +256,8 @@
 
 ### Should Do Before v1.0 (P2)
 
-- [x] **Split `api/server.go`** — Deferred: requires interface-based extraction (not method splitting), more invasive refactor
-- [ ] **Split `server/server.go`** — 1399 lines needs subsystem拆解
+- [x] **Split `api/server.go`** — Deferred: requires interface-based extraction (2550 lines → per-resource handlers)
+- [ ] **Split `server/server.go`** — 1689 lines needs subsystem拆解
 - [x] **Wire webhook system** — ✅ Wired: mail.received, delivery.success, delivery.failed, auth.login.success, auth.login.failed
 - [x] **Wire alert system** — ✅ Wired: alert.Manager initialized, periodic checks for TLS expiry + queue backlog
 - [x] **Wire push notifications** — ✅ Wired: SendNewMailNotification called from deliverLocal for new mail events
