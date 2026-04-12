@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Architecture refactor**: Split oversized monolith files into focused per-subsystem files
+  - `api/server.go`: 2550→892 lines (14 focused files)
+  - `server/server.go`: 1689→284 lines (18 focused files)
+
+### Fixed
+
+- Duplicate HTTP fetch logic in `cmd/umailclient/main.go` extracted to `fetchAndPrint()` helper
+- Error handling in `api/filters.go` - `saveFilter` error now properly logged instead of ignored
+
 ## [0.1.0] - 2026-04-11
 
 ### Added
