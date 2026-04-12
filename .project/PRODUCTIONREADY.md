@@ -79,8 +79,8 @@
 | OpenPGP | ✅ **Çalışıyor** | `auth/openpgp.go` — full sign/verify/encrypt/decrypt with keystore |
 | Sieve Vacation | ✅ **Çalışıyor** | `handleSieveVacation` + vacation deduplication cache + cleanup goroutine |
 | Full-text Search | 🟡 Bağlı değil | Index var ama webmail kullanmıyor |
-| JMAP | 🔴 Minimal | Method handler yok |
-| MCP Server | 🟡 Minimal | JSON-RPC skeleton |
+| JMAP | 🟡 Partial | Mailbox/get/query/set, Email/get/query/set/import, Thread/get, SearchSnippet/get, Identity/get/set implemented |
+| MCP Server | 🟡 Partial | JSON-RPC with initialize, tools/list, tools/call handlers |
 
 ---
 
