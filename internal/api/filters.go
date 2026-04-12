@@ -488,7 +488,9 @@ func (s *Server) reorderFilters(userID string, filterIDs []string) error {
 		}
 		filter.Priority = priority
 		filter.UpdatedAt = time.Now()
-		s.saveFilter(filter)
+		if err := s.saveFilter(filter); err != nil {
+			s.logger.Error("failed to update filter priority", "filterID", filterID, "error", err)
+		}
 	}
 
 	return nil
