@@ -9,21 +9,20 @@
 
 uMailServer is a **production-grade single-binary email server** for v0.1.0. Core protocols (SMTP/IMAP/POP3) are well-implemented with proper RFC compliance. Security features (SPF/DKIM/DMARC validation, JWT auth, rate limiting, brute-force protection) are solid. Build and tests pass cleanly.
 
-**Key Blockers for Production Readiness:**
-1. **`signRSA` nil hash bug** — dkim.go:623 passes `nil` to `rsa.SignPKCS1v15`, producing garbage signatures silently
-2. **Spam Bayesian filter is a stub** — `spam/bayes.go` always returns 0.0 score
-3. **AV scanning is a stub** — `av/scanner.go` always returns Clean regardless of actual content
-4. **ARC sealing not implemented** — server can validate ARC but cannot seal/relay with ARC
+**Key Blockers for Production Readiness:** ✅ ALL FIXED (2026-04-11)
+1. ✅ **`signRSA` nil hash bug** — `rand.Reader` added to `rsa.SignPKCS1v15` call
+2. ✅ **Spam Bayesian filter** — Robinson-Fisher algorithm fully implemented (needs training data)
+3. ✅ **AV scanning** — ClamAV TCP INSTREAM protocol fully implemented (needs daemon)
+4. ✅ **ARC sealing** — `Seal()` method implemented in `auth/arc.go`
 
-**Key Tech Debt:**
-1. `api/server.go` at 2536 lines — needs per-resource handler拆解
-2. `server/server.go` at 1399 lines — needs subsystem拆解
-3. Queue thundering herd problem — unbounded concurrent processing on each 30s tick
-4. 14 stub packages not wired (webhook, alert, push, vacation, caldav, carddav, jmap, mcp, etc.)
+**Key Tech Debt (Architecture — not blocking for production):**
+1. `api/server.go` at 2550 lines — needs per-resource handler拆解
+2. `server/server.go` at 1689 lines — needs subsystem拆解
+3. Distributed tracing — OpenTelemetry initialized but no spans in code
 
 ---
 
-## Phase 1: Critical Bug Fixes (Week 1)
+## Phase 1: Critical Bug Fixes (Week 1) ✅ COMPLETED
 
 ### 1.1 `signRSA` nil hash fix (1 line)
 
@@ -57,7 +56,7 @@ func isTemporaryError(err error) bool {
 
 ---
 
-## Phase 2: Core Feature Completion (Week 2-4)
+## Phase 2: Core Feature Completion (Week 2-4) ✅ COMPLETED
 
 ### 2.1 Implement Bayesian Spam Filter (3-5 days)
 
@@ -158,19 +157,18 @@ internal/server/
     mcp.go          # MCP server
 ```
 
-### 3.3 Fix Queue Thundering Herd (1-2 days)
+### 3.3 Fix Queue Thundering Herd (1-2 days) ✅ COMPLETED
 
-**File:** `internal/queue/manager.go:311-357`
+**File:** `internal/queue/manager.go`
 
-Replace 30s tick + unbounded concurrency with a proper worker pool:
-1. Maintain N delivery workers (configurable, default 10)
-2. Feed entries from a channel
-3. Each worker handles one delivery at a time
-4. Workers pick up retries from priority queue
+Bounded worker pool replaces unbounded concurrent processing:
+1. Persistent workers consume from a channel with bounded concurrency
+2. Semaphore limits concurrent deliveries to 20
+3. Proper panic recovery with `handleDeliveryFailure` called in defer
 
 ---
 
-## Phase 4: Stub Package Wiring (Week 5-8)
+## Phase 4: Stub Package Wiring (Week 5-8) ✅ COMPLETED
 
 ### 4.1 Wire Webhook System
 
