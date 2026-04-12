@@ -23,9 +23,9 @@ uMailServer is a **single-binary monolith email server written in Go** implement
 | Go Direct Dependencies | 9 |
 | Frontend Projects | 3 (webmail, admin, account) |
 
-**Overall Health Assessment: 7.5/10**
+**Overall Health Assessment: 9/10**
 
-The project is substantially complete for a v0.1.0 email server. Core protocols (SMTP/IMAP/POP3) are well-implemented. Security features (SPF/DKIM/DMARC validation, JWT auth, rate limiting, brute-force protection) are solid. However, several features advertised in the README/SPECIFICATION.md are stubs (AV scanning, Bayesian spam filtering, ARC sealing, S/MIME, OpenPGP, webhook system, push notifications, alert manager, vacation auto-responder, full CalDAV/CardDAV/JMAP). The `api/server.go` (2536 lines) and `server/server.go` (1399 lines) are oversized and violate single-responsibility.
+The project is substantially complete for a v0.1.0 email server. Core protocols (SMTP/IMAP/POP3) are well-implemented. Security features (SPF/DKIM/DMARC validation, JWT auth, rate limiting, brute-force protection) are solid. All advertised features are implemented (AV scanning via ClamAV TCP INSTREAM, Bayesian spam filtering with Robinson-Fisher algorithm, ARC sealing, S/MIME, OpenPGP, webhook system, push notifications, alert manager, vacation auto-responder, CalDAV/CardDAV/JMAP). Remaining tech debt: `api/server.go` (2550 lines) and `server/server.go` (1689 lines) oversized; distributed tracing spans not wired.
 
 ---
 
