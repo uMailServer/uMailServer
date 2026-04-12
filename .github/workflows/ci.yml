@@ -9,7 +9,7 @@ on:
 
 env:
   GO_VERSION: '1.25'
-  NODE_VERSION: 'lts'
+  NODE_VERSION: '20'
   GOTOOLCHAIN: auto
 
 jobs:

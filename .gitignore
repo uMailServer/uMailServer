@@ -87,3 +87,5 @@ security-report/
 .project/
 .claude/
 api/docs.go
+# Added by code-review-graph
+.code-review-graph/
