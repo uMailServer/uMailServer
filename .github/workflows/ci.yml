@@ -74,9 +74,9 @@ jobs:
 
       - name: Build web UIs
         run: |
-          (cd webmail && npm ci && npm run build) &&
-          (cd web/admin && npm ci && npm run build) &&
-          (cd web/account && npm install && npm run build)
+          (cd webmail && npm ci --legacy-peer-deps && npm run build) &&
+          (cd web/admin && npm ci --legacy-peer-deps && npm run build) &&
+          (cd web/account && npm install --legacy-peer-deps && npm run build)
 
       - name: Download dependencies
         run: go mod download
@@ -125,15 +125,15 @@ jobs:
 
       - name: Build webmail
         run: |
-          (cd webmail && npm ci && npm run build)
+          (cd webmail && npm ci --legacy-peer-deps && npm run build)
 
       - name: Build admin panel
         run: |
-          (cd web/admin && npm ci && npm run build)
+          (cd web/admin && npm ci --legacy-peer-deps && npm run build)
 
       - name: Build account portal
         run: |
-          (cd web/account && npm install && npm run build)
+          (cd web/account && npm install --legacy-peer-deps && npm run build)
 
       - name: Build binary
         run: |
