@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 // SPFResult represents the result of an SPF check
@@ -82,8 +84,11 @@ func NewSPFChecker(resolver DNSResolver) *SPFChecker {
 func (c *SPFChecker) CheckSPF(ctx context.Context, ip net.IP, domain string, sender string) (SPFResult, string) {
 	// Check cache first
 	if record, ok := c.cache.get(domain); ok {
+		metrics.Get().SPFCacheHit()
 		return c.evaluate(ctx, ip, domain, sender, record, 0, 0)
 	}
+
+	metrics.Get().SPFCacheMiss()
 
 	// Look up SPF record
 	record, err := c.lookupSPF(ctx, domain)

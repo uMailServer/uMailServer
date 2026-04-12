@@ -18,6 +18,8 @@ type SimpleMetrics struct {
 	spamDetected     uint64
 	hamDetected      uint64
 	apiRequests      uint64
+	spfCacheHits     uint64
+	spfCacheMisses   uint64
 }
 
 var (
@@ -74,6 +76,15 @@ func (m *SimpleMetrics) APIRequest() {
 	atomic.AddUint64(&m.apiRequests, 1)
 }
 
+// SPF cache metrics
+func (m *SimpleMetrics) SPFCacheHit() {
+	atomic.AddUint64(&m.spfCacheHits, 1)
+}
+
+func (m *SimpleMetrics) SPFCacheMiss() {
+	atomic.AddUint64(&m.spfCacheMisses, 1)
+}
+
 // GetStats returns current statistics
 func (m *SimpleMetrics) GetStats() map[string]interface{} {
 	return map[string]interface{}{
@@ -95,6 +106,10 @@ func (m *SimpleMetrics) GetStats() map[string]interface{} {
 		},
 		"api": map[string]uint64{
 			"requests": atomic.LoadUint64(&m.apiRequests),
+		},
+		"spf_cache": map[string]uint64{
+			"hits":   atomic.LoadUint64(&m.spfCacheHits),
+			"misses": atomic.LoadUint64(&m.spfCacheMisses),
 		},
 	}
 }

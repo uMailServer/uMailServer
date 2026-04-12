@@ -53,7 +53,7 @@
 | SPF Verification | ✅ Working | RFC 7208, all mechanisms |
 | DKIM Verification | ✅ Working | RSA-SHA256 + Ed25519 |
 | DMARC Evaluation | ✅ Working | RFC 7489 |
-| ARC Validation | ✅ Working (partial) | Validates but cannot seal |
+| ARC Validation | ✅ Working | Validates + seals (Seal() method implemented) |
 | DANE/TLSA | ✅ Working | RFC 6698 |
 | MTA-STS | ✅ Working | RFC 6711 |
 | Greylisting | ✅ Working | Triplet tracking |
@@ -192,7 +192,7 @@
 1. **Tracing has no actual spans**: `internal/tracing/tracing.go` initializes the tracer but no code actually creates spans.
 2. **No distributed tracing context propagation**: SMTP to IMAP to HTTP requests can't be correlated.
 3. ~~**Queue has no metrics**~~ — ✅ FIXED: `/api/v1/metrics` endpoint now includes queue stats (pending, sending, failed, delivered, bounced, total).
-4. **SPF/DKIM/DMARC cache hit rates**: Not exposed as metrics.
+4. **SPF cache hit rates**: ✅ FIXED: SPF cache hits/misses exposed via `/api/v1/metrics`. DKIM/DMARC cache hit rates still not exposed.
 5. ~~**No alerting from metrics**~~ — ✅ FIXED: Alert manager wired with `startAlertChecker()` goroutine (10min interval) for TLS expiry and queue backlog checks.
 
 ---
