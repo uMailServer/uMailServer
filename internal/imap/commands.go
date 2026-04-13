@@ -859,7 +859,7 @@ func (s *Session) handleIdle() error {
 		default:
 			close(s.idleStop)
 		}
-		s.conn.SetReadDeadline(time.Now())
+		_ = s.conn.SetReadDeadline(time.Now())
 		// Wait for goroutine with timeout to avoid deadlock
 		select {
 		case <-doneChan:
@@ -984,7 +984,7 @@ func (s *Session) handleCheck() error {
 // CLOSE command - RFC 3501: implicit EXPUNGE before deselecting
 func (s *Session) handleClose() error {
 	if s.selected != nil && s.server.mailstore != nil {
-		s.server.mailstore.Expunge(s.user, s.selected.Name)
+		_ = s.server.mailstore.Expunge(s.user, s.selected.Name)
 	}
 	s.selected = nil
 	s.state = StateAuthenticated

@@ -152,8 +152,8 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	w.WriteHeader(http.StatusMultiStatus)
 
 	output, _ := xml.MarshalIndent(multistatus, "", "  ")
-	w.Write([]byte(xml.Header))
-	w.Write(output)
+	_, _ = w.Write([]byte(xml.Header))
+	_, _ = w.Write(output)
 }
 
 // handleReport handles REPORT requests
@@ -283,7 +283,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 	w.Header().Set("ETag", etag)
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(eventData))
+	_, _ = w.Write([]byte(eventData))
 }
 
 // handleDelete handles DELETE requests
@@ -418,7 +418,9 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	// Delete from source
-	s.storage.DeleteEvent(username, sourceCalendarID, sourceEventUID)
+	if err := s.storage.DeleteEvent(username, sourceCalendarID, sourceEventUID); err != nil {
+		s.logger.Error("Failed to delete source event", "error", err)
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -609,7 +611,7 @@ func extractUIDFromICS(icsData string) string {
 func (s *Server) sendError(w http.ResponseWriter, code int, message string) {
 	w.WriteHeader(code)
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(message))
+	_, _ = w.Write([]byte(message))
 }
 
 // XML structures for WebDAV/CalDAV

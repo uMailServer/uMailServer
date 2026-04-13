@@ -86,7 +86,7 @@ func NewBboltMailstoreWithInterfaces(db *storage.Database, msgStore *storage.Mes
 // Close closes the mailstore
 func (m *BboltMailstore) Close() error {
 	if m.msgStore != nil {
-		m.msgStore.Close()
+		_ = m.msgStore.Close()
 	}
 	if m.db != nil {
 		return m.db.Close()
@@ -440,7 +440,7 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		}
 
 		// Save updated metadata
-		m.db.UpdateMessageMetadata(user, mailbox, uid, meta)
+		_ = m.db.UpdateMessageMetadata(user, mailbox, uid, meta)
 
 		// Notify about flag changes
 		GetNotificationHub().NotifyFlagsChanged(user, mailbox, uid, seqNum, meta.Flags)
@@ -477,8 +477,8 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 		// Check if deleted
 		if hasFlag(meta.Flags, "\\Deleted") {
 			// Delete message
-			m.msgStore.DeleteMessage(user, meta.MessageID)
-			m.db.DeleteMessage(user, mailbox, uid)
+			_ = m.msgStore.DeleteMessage(user, meta.MessageID)
+			_ = m.db.DeleteMessage(user, mailbox, uid)
 		}
 	}
 
@@ -658,7 +658,7 @@ func (m *BboltMailstore) updateThreadInfo(user, mailbox, threadID, subject, from
 	}
 
 	// Save thread
-	m.db.UpdateThread(user, thread)
+	_ = m.db.UpdateThread(user, thread)
 }
 
 // SearchMessages searches for messages matching criteria
@@ -1009,7 +1009,7 @@ func (m *BboltMailstore) CopyMessages(user, sourceMailbox, destMailbox string, s
 			To:           meta.To,
 		}
 
-		m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta)
+		_ = m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta)
 	}
 
 	return nil
@@ -1055,7 +1055,7 @@ func (m *BboltMailstore) MoveMessages(user, sourceMailbox, destMailbox string, s
 		// Add deleted flag
 		if !hasFlag(meta.Flags, "\\Deleted") {
 			meta.Flags = append(meta.Flags, "\\Deleted")
-			m.db.UpdateMessageMetadata(user, sourceMailbox, uid, meta)
+			_ = m.db.UpdateMessageMetadata(user, sourceMailbox, uid, meta)
 		}
 	}
 

@@ -163,8 +163,8 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	w.WriteHeader(http.StatusMultiStatus)
 
 	output, _ := xml.MarshalIndent(multistatus, "", "  ")
-	w.Write([]byte(xml.Header))
-	w.Write(output)
+	_, _ = w.Write([]byte(xml.Header))
+	_, _ = w.Write(output)
 }
 
 // handleReport handles REPORT requests
@@ -283,7 +283,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 
 	w.Header().Set("Content-Type", "text/vcard; charset=utf-8")
 	w.Header().Set("ETag", s.storage.GetETag(username, addressbookID, contactUID))
-	w.Write([]byte(vcardData))
+	_, _ = w.Write([]byte(vcardData))
 }
 
 // handleDelete handles DELETE requests
@@ -584,7 +584,7 @@ func (s *Server) buildAddressbookHomeResponse(username string) Response {
 func (s *Server) sendError(w http.ResponseWriter, code int, message string) {
 	w.WriteHeader(code)
 	w.Header().Set("Content-Type", "text/plain")
-	w.Write([]byte(message))
+	_, _ = w.Write([]byte(message))
 }
 
 // buildAddressbookResponse builds a PROPFIND response for an address book
