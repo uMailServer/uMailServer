@@ -56,7 +56,7 @@ func (s *Server) handleAutoconfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
 	// Write response
-	xml.NewEncoder(w).Encode(config)
+	_ = xml.NewEncoder(w).Encode(config)
 }
 
 // buildAutoconfig builds the autoconfig for a domain
@@ -180,5 +180,5 @@ func (s *Server) sendAutoconfigError(w http.ResponseWriter, status int, message 
 	resp.Error.Message = message
 	resp.Error.Language = "en"
 
-	xml.NewEncoder(w).Encode(resp)
+	_ = xml.NewEncoder(w).Encode(resp)
 }

@@ -313,7 +313,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		newHash, err := s.hashPassword(req.Password)
 		if err == nil {
 			account.PasswordHash = newHash
-			s.db.UpdateAccount(account)
+			_ = s.db.UpdateAccount(account)
 		}
 	}
 

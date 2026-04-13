@@ -737,14 +737,14 @@ func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
 		// Fallback: check admin FS for shared assets (e.g., /assets/...)
 		// Close the webmail file first if it was opened
 		if file != nil {
-			file.Close()
+			_ = file.Close()
 		}
 		file, err = adminFS.Open(path)
 		if err != nil {
 			// If file not found, serve index.html for SPA routing
 			// Close the admin file first if it was opened
 			if file != nil {
-				file.Close()
+				_ = file.Close()
 			}
 			file, err = webmailFS.Open("index.html")
 			if err != nil {
@@ -798,7 +798,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		// If file not found, serve index.html for SPA routing
 		// Close the first file if it was opened
 		if file != nil {
-			file.Close()
+			_ = file.Close()
 		}
 		file, err = adminFS.Open("index.html")
 		if err != nil {
@@ -934,7 +934,7 @@ func (s *Server) checkAPIRateLimit(ip string) bool {
 func (s *Server) sendJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (s *Server) sendError(w http.ResponseWriter, status int, message string) {

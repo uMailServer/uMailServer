@@ -154,7 +154,7 @@ func (c *SMTPClient) Send(from, to, subject, body string) error {
 	if _, err := w.Write([]byte(msg)); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
-	w.Close()
+	_ = w.Close()
 
 	return nil
 }
@@ -180,7 +180,7 @@ func runSend() {
 	tls := cmd.Bool("tls", false, "Use TLS")
 	insecure := cmd.Bool("insecure", false, "Skip TLS certificate verification (use for testing with self-signed certs only)")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 	if *from == "" || *to == "" {
 		fmt.Println("Error: --from and --to required")
 		os.Exit(1)
@@ -211,7 +211,7 @@ func runBench() {
 	user := cmd.String("user", "", "Username")
 	pass := cmd.String("pass", "", "Password")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 
 	fmt.Printf("Benchmark: %d emails, %d concurrent\n", *count, *concurrency)
 
@@ -293,7 +293,7 @@ func runStress() {
 	user := cmd.String("user", "", "Username")
 	pass := cmd.String("pass", "", "Password")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 
 	fmt.Printf("STRESS TEST: %d emails, %d concurrent\n", *count, *concurrency)
 
@@ -337,7 +337,7 @@ func runAuth() {
 	user := cmd.String("user", "", "Username")
 	pass := cmd.String("pass", "", "Password")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 	if *user == "" || *pass == "" {
 		fmt.Println("Error: --user and --pass required")
 		os.Exit(1)
@@ -363,7 +363,7 @@ func runInbox() {
 	useTLS := cmd.Bool("tls", true, "Use TLS")
 	insecure := cmd.Bool("insecure", false, "Skip TLS certificate verification (use for testing with self-signed certs only)")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 
 	addr := formatAddr(*host, *port)
 	fmt.Printf("Testing IMAP connection to %s (TLS=%v)...\n", addr, *useTLS)
@@ -425,7 +425,7 @@ func runAutoconfig() {
 	host := cmd.String("host", "localhost", "Server host")
 	port := cmd.Int("port", 80, "Server port")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 	if *domain == "" {
 		fmt.Println("Error: --domain required")
 		os.Exit(1)
@@ -445,7 +445,7 @@ func runAutodiscover() {
 	host := cmd.String("host", "localhost", "Server host")
 	port := cmd.Int("port", 80, "Server port")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 	if *email == "" {
 		fmt.Println("Error: --email required")
 		os.Exit(1)
@@ -465,7 +465,7 @@ func runDSN() {
 	to := cmd.String("to", "", "To email")
 	dsnNotify := cmd.String("notify", "SUCCESS,FAILURE", "DSN NOTIFY (NEVER,SUCCESS,FAILURE,DELAY)")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 	if *to == "" {
 		fmt.Println("Error: --to required")
 		os.Exit(1)
@@ -486,7 +486,7 @@ func runDSN() {
 		return strings.TrimSpace(resp)
 	}
 	sendCmd := func(cmd string) string {
-		conn.Write([]byte(cmd + "\r\n"))
+		_, _ = conn.Write([]byte(cmd + "\r\n"))
 		return readResp()
 	}
 
@@ -528,7 +528,7 @@ func runMDN() {
 	host := cmd.String("host", "localhost", "SMTP host")
 	port := cmd.Int("port", 25, "SMTP port")
 
-	cmd.Parse(os.Args[2:])
+	_ = cmd.Parse(os.Args[2:])
 	if *to == "" {
 		fmt.Println("Error: --to required")
 		os.Exit(1)

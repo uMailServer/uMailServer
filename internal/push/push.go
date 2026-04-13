@@ -225,12 +225,12 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 	if err != nil {
 		return fmt.Errorf("failed to send notification: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check for expired subscriptions
 	if resp.StatusCode == 410 || resp.StatusCode == 404 {
 		// Subscription is no longer valid, remove it
-		s.Unsubscribe(sub.UserID, sub.ID)
+		_ = s.Unsubscribe(sub.UserID, sub.ID)
 		return fmt.Errorf("subscription expired")
 	}
 
@@ -474,7 +474,7 @@ func (s *Service) CleanExpiredSubscriptions() error {
 				}
 			}
 
-			s.deleteSubscriptionFile(id)
+			_ = s.deleteSubscriptionFile(id)
 		}
 	}
 

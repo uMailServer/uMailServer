@@ -160,7 +160,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		ID:      req.ID,
 		Result:  result,
 	}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // Request/Response types
@@ -383,7 +383,7 @@ func (s *Server) toolListDomains() (map[string]interface{}, error) {
 // Write error response
 func (s *Server) writeError(w http.ResponseWriter, code int, message string) {
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(MCPResponse{
+	_ = json.NewEncoder(w).Encode(MCPResponse{
 		JSONRPC: "2.0",
 		Error: &MCPError{
 			Code:    code,

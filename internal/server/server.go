@@ -149,7 +149,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Run pending database migrations
 	if err := database.RunMigrations(); err != nil {
-		database.Close()
+		_ = database.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
@@ -157,7 +157,7 @@ func New(cfg *config.Config) (*Server, error) {
 	msgStorePath := s.config.Server.DataDir + "/mail/messages"
 	msgStore, err := storage.NewMessageStore(msgStorePath)
 	if err != nil {
-		database.Close()
+		_ = database.Close()
 		return nil, fmt.Errorf("failed to create message store: %w", err)
 	}
 	s.msgStore = msgStore
@@ -174,8 +174,8 @@ func New(cfg *config.Config) (*Server, error) {
 
 	tlsManager, err := tls.NewManager(tlsConfig, logger)
 	if err != nil {
-		msgStore.Close()
-		database.Close()
+		_ = msgStore.Close()
+		_ = database.Close()
 		return nil, fmt.Errorf("failed to create TLS manager: %w", err)
 	}
 	s.tlsManager = tlsManager
@@ -217,9 +217,9 @@ func New(cfg *config.Config) (*Server, error) {
 		}
 		ldapClient, err := auth.NewLDAPClient(ldapCfg)
 		if err != nil {
-			tlsManager.Close()
-			msgStore.Close()
-			database.Close()
+			_ = tlsManager.Close()
+			_ = msgStore.Close()
+			_ = database.Close()
 			return nil, fmt.Errorf("failed to create LDAP client: %w", err)
 		}
 		s.ldapClient = ldapClient
@@ -230,9 +230,9 @@ func New(cfg *config.Config) (*Server, error) {
 	storageDBPath := s.config.Server.DataDir + "/mail/mail.db"
 	storageDB, err := storage.OpenDatabase(storageDBPath)
 	if err != nil {
-		tlsManager.Close()
-		msgStore.Close()
-		database.Close()
+		_ = tlsManager.Close()
+		_ = msgStore.Close()
+		_ = database.Close()
 		return nil, fmt.Errorf("failed to open storage database: %w", err)
 	}
 

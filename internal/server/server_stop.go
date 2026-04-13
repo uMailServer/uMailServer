@@ -132,22 +132,22 @@ func (s *Server) Stop() error {
 
 	// Close message store
 	if s.msgStore != nil {
-		s.msgStore.Close()
+		_ = s.msgStore.Close()
 	}
 
 	// Close mailstore (IMAP bbolt database)
 	if s.mailstore != nil {
-		s.mailstore.Close()
+		_ = s.mailstore.Close()
 	}
 
 	// Close database
 	if s.database != nil {
-		s.database.Close()
+		_ = s.database.Close()
 	}
 
 	// Close storage database
 	if s.storageDB != nil {
-		s.storageDB.Close()
+		_ = s.storageDB.Close()
 	}
 
 	s.logger.Info("uMailServer stopped")

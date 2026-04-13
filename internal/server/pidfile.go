@@ -31,7 +31,7 @@ func (p *PIDFile) Create() error {
 				return fmt.Errorf("server already running (PID: %d)", pid)
 			}
 			// Stale PID file, remove it
-			os.Remove(p.path)
+			_ = os.Remove(p.path)
 		}
 	}
 

@@ -117,5 +117,5 @@ func (m *SimpleMetrics) GetStats() map[string]interface{} {
 // HTTPHandler returns metrics as JSON
 func (m *SimpleMetrics) HTTPHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m.GetStats())
+	_ = json.NewEncoder(w).Encode(m.GetStats())
 }

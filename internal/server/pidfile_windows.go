@@ -10,6 +10,6 @@ func isProcessRunning(pid int) bool {
 	if err != nil {
 		return false
 	}
-	syscall.CloseHandle(handle)
+	_ = syscall.CloseHandle(handle)
 	return true
 }

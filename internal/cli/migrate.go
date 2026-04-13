@@ -76,7 +76,7 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 		parts := strings.Split(host, ":")
 		host = parts[0]
 		if len(parts) > 1 {
-			fmt.Sscanf(parts[1], "%d", &port)
+			_, _ = fmt.Sscanf(parts[1], "%d", &port)
 		}
 	} else if u.Scheme == "imap" {
 		port = 143
@@ -242,7 +242,7 @@ func extractIMAPMessageData(msg *extimap.Message) ([]byte, error) {
 	body := msg.GetBody(section)
 	if body != nil {
 		data := make([]byte, body.Len())
-		body.Read(data)
+		_, _ = body.Read(data)
 		return data, nil
 	}
 	return nil, fmt.Errorf("no body found in message")

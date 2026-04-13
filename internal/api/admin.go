@@ -188,7 +188,7 @@ func writeError(w http.ResponseWriter, errCode, message string, status int) {
 		"code":    status,
 	})
 	w.WriteHeader(status)
-	w.Write(body)
+	_, _ = w.Write(body)
 }
 
 // handleAdmin serves the admin panel static files

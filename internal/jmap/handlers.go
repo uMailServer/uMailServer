@@ -437,7 +437,7 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 		// Parse first sort comparator
 		data, _ := json.Marshal(sort[0])
 		var comp Comparator
-		json.Unmarshal(data, &comp)
+		_ = json.Unmarshal(data, &comp)
 
 		// Sort messages
 		sortMessages(allMessages, comp)
@@ -716,7 +716,7 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 				}
 
 				// Delete from old mailbox
-				s.db.DeleteMessage(user, targetMbox, targetUID)
+				_ = s.db.DeleteMessage(user, targetMbox, targetUID)
 				targetMbox = newMbox
 			}
 		}
@@ -749,9 +749,9 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 					}
 					if meta.MessageID == emailID {
 						// Delete message data from store
-						s.msgStore.DeleteMessage(user, emailID)
+						_ = s.msgStore.DeleteMessage(user, emailID)
 						// Delete metadata from database
-						s.db.DeleteMessage(user, mbox, uid)
+						_ = s.db.DeleteMessage(user, mbox, uid)
 						found = true
 						break
 					}
@@ -1237,7 +1237,7 @@ func parseFilter(filter interface{}) *FilterCondition {
 	// Parse filter from JSON
 	data, _ := json.Marshal(filter)
 	var condition FilterCondition
-	json.Unmarshal(data, &condition)
+	_ = json.Unmarshal(data, &condition)
 	return &condition
 }
 

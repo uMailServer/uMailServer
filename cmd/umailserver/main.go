@@ -112,7 +112,7 @@ func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	fs.StringVar(&configPath, "config", "", "Path to config file")
 	fs.StringVar(&dataDir, "data-dir", "", "Override data directory")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	// Check if this is first run (no config exists)
 	if configPath == "" && config.CheckFirstRun(dataDir) {
@@ -139,7 +139,7 @@ func cmdServe(args []string) {
 		fmt.Println()
 
 		// Update cfg variable for use below
-		cfg.EnsureDataDir()
+		_ = cfg.EnsureDataDir()
 	}
 
 	// Load configuration
@@ -187,7 +187,7 @@ func cmdQuickstart(args []string) {
 	fs := flag.NewFlagSet("quickstart", flag.ExitOnError)
 	fs.StringVar(&dataDir, "data-dir", defaultDataDir, "Data directory")
 	fs.StringVar(&configPath, "config", defaultConfigPath, "Config file path")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	// Get email from remaining args
 	remaining := fs.Args()
@@ -211,7 +211,7 @@ func cmdQuickstart(args []string) {
 		fmt.Printf("Config file already exists: %s\n", configPath)
 		fmt.Print("Overwrite? (y/N): ")
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if response != "y" && response != "Y" {
 			fmt.Println("Aborted.")
 			os.Exit(0)
@@ -453,7 +453,7 @@ func readPassword() string {
 	}
 	// Fallback for non-terminal contexts
 	var password string
-	fmt.Scanln(&password)
+	_, _ = fmt.Scanln(&password)
 	return password
 }
 
@@ -600,7 +600,7 @@ func cmdDomain(args []string) {
 		// Confirm deletion
 		fmt.Printf("Are you sure you want to delete domain %s? This will delete all accounts! (y/N): ", domainName)
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if response != "y" && response != "Y" {
 			fmt.Println("Aborted.")
 			os.Exit(0)
@@ -798,7 +798,7 @@ func cmdAccount(args []string) {
 		// Confirm deletion
 		fmt.Printf("Are you sure you want to delete account %s? (y/N): ", email)
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if response != "y" && response != "Y" {
 			fmt.Println("Aborted.")
 			os.Exit(0)
@@ -1060,7 +1060,7 @@ func cmdMigrate(args []string) {
 	dryRun := fs.Bool("dry-run", false, "Dry run mode")
 	passwdFile := fs.String("passwd-file", "", "Password file (for Dovecot)")
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *sourceType == "" || *source == "" {
 		fmt.Println("Usage: umailserver migrate --type <type> --source <source>")
@@ -1306,7 +1306,7 @@ func cmdRestart(args []string) {
 	if pid, err := pidFile.Read(); err == nil && pid > 0 {
 		fmt.Printf("Stopping server (PID: %d)...\n", pid)
 		if proc, err := os.FindProcess(pid); err == nil {
-			proc.Signal(os.Interrupt)
+			_ = proc.Signal(os.Interrupt)
 			// Wait a bit for shutdown
 			time.Sleep(2 * time.Second)
 		}

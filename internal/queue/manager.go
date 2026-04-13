@@ -277,7 +277,7 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 		if err := m.db.Enqueue(entry); err != nil {
 			for j := 0; j < i; j++ {
 				rollbackID := fmt.Sprintf("%s-%d", baseID, j)
-				m.db.Dequeue(rollbackID)
+				_ = m.db.Dequeue(rollbackID)
 			}
 			deleteFile(messagePath)
 			return "", fmt.Errorf("failed to enqueue: %w", err)
@@ -433,7 +433,7 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 
 	// Update status to sending
 	entry.Status = "sending"
-	m.db.UpdateQueueEntry(entry)
+	_ = m.db.UpdateQueueEntry(entry)
 
 	// Read message from disk
 	message, err := readFile(entry.MessagePath)
@@ -737,7 +737,7 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 // handleDeliverySuccess handles successful delivery
 func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 	entry.Status = "delivered"
-	m.db.UpdateQueueEntry(entry)
+	_ = m.db.UpdateQueueEntry(entry)
 
 	// Send DSN if requested (NOTIFY includes SUCCESS)
 	if entry.Notify != 0 && int(entry.Notify)&int(DSNNotifySuccess) != 0 {
@@ -828,7 +828,7 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 		entry.Status = "pending"
 	}
 
-	m.db.UpdateQueueEntry(entry)
+	_ = m.db.UpdateQueueEntry(entry)
 
 	// Track metric
 	if m.metrics != nil {
@@ -989,7 +989,7 @@ func (m *Manager) getStats() (*QueueStats, error) {
 	}
 
 	// Count all queue entries by status
-	m.db.ForEach(db.BucketQueue, func(key string, value []byte) error {
+	_ = m.db.ForEach(db.BucketQueue, func(key string, value []byte) error {
 		var entry db.QueueEntry
 		if err := json.Unmarshal(value, &entry); err != nil {
 			return nil // skip malformed entries
@@ -1075,10 +1075,10 @@ func writeFile(path string, data []byte) error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	f.Close()
+	_ = f.Close()
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 
@@ -1089,7 +1089,7 @@ func writeFile(path string, data []byte) error {
 		return err
 	}
 	_ = dirFile.Sync()
-	dirFile.Close()
+	_ = dirFile.Close()
 	return nil
 }
 
@@ -1098,7 +1098,7 @@ func readFile(path string) ([]byte, error) {
 }
 
 func deleteFile(path string) {
-	os.Remove(path)
+	_ = os.Remove(path)
 }
 
 // countMessageRefs counts how many queue entries still reference the given
@@ -1108,7 +1108,7 @@ func (m *Manager) countMessageRefs(messagePath string) int {
 	// Lock must be held by caller
 
 	count := 0
-	m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+	_ = m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
 		var entry db.QueueEntry
 		if err := json.Unmarshal(value, &entry); err != nil {
 			return nil
@@ -1131,7 +1131,7 @@ func (m *Manager) deleteMessageFileIfUnreferenced(messagePath string) bool {
 	defer m.mu.Unlock()
 	// Re-check count under write lock for atomic check-and-delete
 	if m.countMessageRefsUnsafe(messagePath) == 0 {
-		os.Remove(messagePath)
+		_ = os.Remove(messagePath)
 		return true
 	}
 	return false
@@ -1140,7 +1140,7 @@ func (m *Manager) deleteMessageFileIfUnreferenced(messagePath string) bool {
 // countMessageRefsUnsafe counts references without locking. Caller must hold mu.
 func (m *Manager) countMessageRefsUnsafe(messagePath string) int {
 	count := 0
-	m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+	_ = m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
 		var entry db.QueueEntry
 		if err := json.Unmarshal(value, &entry); err != nil {
 			return nil

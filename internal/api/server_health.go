@@ -80,7 +80,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.draining.Load() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "not ready",
 			"reason": "server is draining for graceful shutdown",
 		})
@@ -92,7 +92,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.db.ListDomains(); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"status": "not ready",
 				"reason": "database unavailable",
 			})
@@ -102,7 +102,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ready",
 	})
 }

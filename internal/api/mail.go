@@ -431,7 +431,7 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	var msgID string
 	if h.msgStore != nil && h.mailDB != nil {
 		// Ensure Sent mailbox exists
-		h.mailDB.CreateMailbox(userEmail, "Sent")
+		_ = h.mailDB.CreateMailbox(userEmail, "Sent")
 
 		// Store message file - msgID is the hash-based ID returned by StoreMessage
 		storedMsgID, err := h.msgStore.StoreMessage(userEmail, []byte(rawEmail))

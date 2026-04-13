@@ -200,8 +200,8 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 	w.WriteHeader(http.StatusMultiStatus)
 
 	output, _ := xml.MarshalIndent(multistatus, "", "  ")
-	w.Write([]byte(xml.Header))
-	w.Write(output)
+	_, _ = w.Write([]byte(xml.Header))
+	_, _ = w.Write(output)
 }
 
 // handlePut handles PUT requests for creating/updating events

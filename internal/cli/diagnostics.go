@@ -356,7 +356,7 @@ func (d *Diagnostics) checkSMTPTLS(hostname string) (*TLSCheckResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to SMTP: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Create SMTP client
 	client, err := smtp.NewClient(conn, hostname)
@@ -406,7 +406,7 @@ func (d *Diagnostics) checkIMAPTLS(hostname string) (*TLSCheckResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to IMAPS: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	state := conn.ConnectionState()
 
@@ -718,11 +718,11 @@ func (d *Diagnostics) checkSMTPConnectivity(hostname string) (*SMTPCheckResult, 
 		issues = append(issues, fmt.Sprintf("SMTP: Port 25 unreachable - remote servers may not be able to deliver mail"))
 		return result, issues
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	result.Reachable = true
 
 	// Try reading the SMTP greeting
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, 1024)
 	n, err := conn.Read(buf)
 	if err != nil || n == 0 {

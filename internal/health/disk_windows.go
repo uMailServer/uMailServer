@@ -31,6 +31,7 @@ func DiskSpaceCheck(path string, warningThreshold, criticalThreshold float64) Ch
 
 		var freeBytesAvailable, totalBytes, totalFreeBytes uint64
 
+		// #nosec G103 -- required for Windows kernel32 syscall with unsafe.Pointer
 		ret, _, err := getDiskFreeSpaceEx.Call(
 			uintptr(unsafe.Pointer(pathPtr)),
 			uintptr(unsafe.Pointer(&freeBytesAvailable)),

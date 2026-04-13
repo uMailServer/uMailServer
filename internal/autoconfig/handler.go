@@ -94,7 +94,7 @@ func (h *Handler) HandleAutoconfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
-	xml.NewEncoder(w).Encode(config)
+	_ = xml.NewEncoder(w).Encode(config)
 }
 
 // HandleAutodiscover handles Microsoft Autodiscover requests
@@ -146,7 +146,7 @@ func (h *Handler) HandleAutodiscover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
-	xml.NewEncoder(w).Encode(resp)
+	_ = xml.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handler) extractDomain(r *http.Request) string {

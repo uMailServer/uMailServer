@@ -89,7 +89,7 @@ func (s *Server) handleAutodiscover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
 	// Write response
-	xml.NewEncoder(w).Encode(resp)
+	_ = xml.NewEncoder(w).Encode(resp)
 }
 
 // parseAutodiscoverPOST parses the POST body for email address
@@ -208,5 +208,5 @@ func (s *Server) sendAutodiscoverError(w http.ResponseWriter, status int, messag
 	resp.Error.Message = message
 	resp.Error.XmlMessage = "en-US"
 
-	xml.NewEncoder(w).Encode(resp)
+	_ = xml.NewEncoder(w).Encode(resp)
 }

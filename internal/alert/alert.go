@@ -375,7 +375,7 @@ func (m *Manager) sendEmail(alert Alert) error {
 // CheckDiskSpace checks disk usage and alerts if threshold exceeded
 func (m *Manager) CheckDiskSpace(usagePercent float64, path string) {
 	if usagePercent >= m.config.DiskThreshold {
-		m.Send(
+		_ = m.Send(
 			"disk_space_critical",
 			SeverityCritical,
 			fmt.Sprintf("Disk usage is %.1f%% on %s", usagePercent, path),
@@ -387,7 +387,7 @@ func (m *Manager) CheckDiskSpace(usagePercent float64, path string) {
 		)
 	} else if usagePercent >= m.config.DiskThreshold-10 {
 		// Warning at 10% below threshold
-		m.Send(
+		_ = m.Send(
 			"disk_space_warning",
 			SeverityWarning,
 			fmt.Sprintf("Disk usage is %.1f%% on %s", usagePercent, path),
@@ -403,7 +403,7 @@ func (m *Manager) CheckDiskSpace(usagePercent float64, path string) {
 // CheckMemory checks memory usage and alerts if threshold exceeded
 func (m *Manager) CheckMemory(usagePercent float64, usedMB, totalMB uint64) {
 	if usagePercent >= m.config.MemoryThreshold {
-		m.Send(
+		_ = m.Send(
 			"memory_critical",
 			SeverityCritical,
 			fmt.Sprintf("Memory usage is %.1f%% (%dMB / %dMB)", usagePercent, usedMB, totalMB),
@@ -420,7 +420,7 @@ func (m *Manager) CheckMemory(usagePercent float64, usedMB, totalMB uint64) {
 // CheckErrorRate checks error rate and alerts if threshold exceeded
 func (m *Manager) CheckErrorRate(errorRate float64, window string) {
 	if errorRate >= m.config.ErrorThreshold {
-		m.Send(
+		_ = m.Send(
 			"high_error_rate",
 			SeverityWarning,
 			fmt.Sprintf("Error rate is %.2f%% over %s", errorRate, window),
@@ -436,7 +436,7 @@ func (m *Manager) CheckErrorRate(errorRate float64, window string) {
 // CheckTLSCertificate checks TLS certificate expiry and alerts if near expiry
 func (m *Manager) CheckTLSCertificate(domain string, daysUntilExpiry int) {
 	if daysUntilExpiry <= 0 {
-		m.Send(
+		_ = m.Send(
 			"tls_certificate_expired",
 			SeverityCritical,
 			fmt.Sprintf("TLS certificate for %s has EXPIRED", domain),
@@ -446,7 +446,7 @@ func (m *Manager) CheckTLSCertificate(domain string, daysUntilExpiry int) {
 			},
 		)
 	} else if daysUntilExpiry <= m.config.TLSWarningDays {
-		m.Send(
+		_ = m.Send(
 			"tls_certificate_expiring",
 			SeverityWarning,
 			fmt.Sprintf("TLS certificate for %s expires in %d days", domain, daysUntilExpiry),
@@ -462,7 +462,7 @@ func (m *Manager) CheckTLSCertificate(domain string, daysUntilExpiry int) {
 // CheckQueueBacklog checks queue size and alerts if threshold exceeded
 func (m *Manager) CheckQueueBacklog(queueSize int) {
 	if queueSize >= m.config.QueueThreshold {
-		m.Send(
+		_ = m.Send(
 			"queue_backlog",
 			SeverityWarning,
 			fmt.Sprintf("Queue backlog is %d messages", queueSize),
