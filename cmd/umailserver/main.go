@@ -445,7 +445,7 @@ func readPassword() string {
 	// #nosec G115 -- file descriptors are small positive integers on all supported platforms
 	fd := int(os.Stdin.Fd())
 	if state, err := term.MakeRaw(fd); err == nil {
-		defer term.Restore(fd, state)
+		defer func() { _ = term.Restore(fd, state) }()
 		if pw, err := term.ReadPassword(fd); err == nil {
 			fmt.Println()
 			return string(pw)
