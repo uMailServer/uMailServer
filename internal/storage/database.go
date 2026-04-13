@@ -91,8 +91,8 @@ func (db *Database) GetMailbox(user, mailbox string) (*Mailbox, error) {
 		}
 		mb = Mailbox{
 			Name:        mailbox,
-			UIDValidity: uint32(btoi(b.Get([]byte("uidvalidity")))),
-			UIDNext:     uint32(btoi(b.Get([]byte("uidnext")))),
+			UIDValidity: btoi(b.Get([]byte("uidvalidity"))),
+			UIDNext:     btoi(b.Get([]byte("uidnext"))),
 		}
 		return nil
 	})
@@ -207,8 +207,8 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 		}
 
 		// Delete old buckets
-		_ = tx.DeleteBucket([]byte(oldKey))
-		_ = tx.DeleteBucket([]byte(oldMsgs))
+		_ = tx.DeleteBucket([]byte(oldKey))  // bucket may not exist in partial state
+		_ = tx.DeleteBucket([]byte(oldMsgs)) // bucket may not exist in partial state
 		return nil
 	})
 }
@@ -283,7 +283,7 @@ func (db *Database) GetNextUID(user, mailbox string) (uint32, error) {
 		if err != nil {
 			return err
 		}
-		uid = uint32(btoi(b.Get([]byte("uidnext"))))
+		uid = btoi(b.Get([]byte("uidnext")))
 		if uid == 0 {
 			uid = 1
 		}
@@ -348,7 +348,7 @@ func (db *Database) GetMessageUIDs(user, mailbox string) ([]uint32, error) {
 		}
 		c := b.Cursor()
 		for k, _ := c.First(); k != nil; k, _ = c.Next() {
-			uids = append(uids, uint32(btoi(k)))
+			uids = append(uids, btoi(k))
 		}
 		return nil
 	})

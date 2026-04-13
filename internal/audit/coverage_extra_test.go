@@ -115,7 +115,7 @@ func TestLogger_CleanupWithOldFiles(t *testing.T) {
 // --- ExtractIP coverage ---
 
 func TestExtractIP_WithXForwardedForMultiple(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "10.0.0.1:8080"
 	req.Header.Set("X-Forwarded-For", "203.0.113.1, 10.0.0.1, 192.168.1.1")
 
@@ -126,7 +126,7 @@ func TestExtractIP_WithXForwardedForMultiple(t *testing.T) {
 }
 
 func TestExtractIP_WithInvalidXForwardedFor(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "10.0.0.1:8080"
 	req.Header.Set("X-Forwarded-For", "not-an-ip")
 
@@ -138,7 +138,7 @@ func TestExtractIP_WithInvalidXForwardedFor(t *testing.T) {
 }
 
 func TestExtractIP_WithXRealIP(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "10.0.0.1:8080"
 	req.Header.Set("X-Real-IP", "203.0.113.2")
 
@@ -149,7 +149,7 @@ func TestExtractIP_WithXRealIP(t *testing.T) {
 }
 
 func TestExtractIP_WithInvalidXRealIP(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "10.0.0.1:8080"
 	req.Header.Set("X-Real-IP", "not-an-ip")
 
@@ -161,7 +161,7 @@ func TestExtractIP_WithInvalidXRealIP(t *testing.T) {
 }
 
 func TestExtractIP_NoHeaders(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "192.168.1.100:8080"
 
 	ip := ExtractIP(req)

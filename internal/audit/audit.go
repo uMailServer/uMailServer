@@ -56,7 +56,7 @@ func NewLogger(logPath string, maxSizeMB, maxBackups, maxAgeDays int) (*Logger, 
 
 	// Ensure directory exists
 	dir := filepath.Dir(logPath)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("audit: failed to create directory: %w", err)
 	}
 
@@ -108,7 +108,7 @@ func (r *rotatingWriter) open() error {
 		r.size = 0
 	}
 
-	f, err := os.OpenFile(r.filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(r.filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to open audit log: %w", err)
 	}
@@ -133,7 +133,9 @@ func (r *rotatingWriter) Write(p []byte) (n int, err error) {
 
 func (r *rotatingWriter) rotate() error {
 	if r.file != nil {
-		_ = r.file.Close() // Best-effort close during rotation
+		if err := r.file.Close(); err != nil {
+			return fmt.Errorf("failed to close audit log before rotation: %w", err)
+		}
 	}
 	timestamp := time.Now().Format("20060102-150405")
 	backupName := fmt.Sprintf("%s.%s", r.filename, timestamp)
@@ -153,29 +155,78 @@ func (r *rotatingWriter) cleanup() {
 	if r.maxBackups <= 0 && r.maxAge <= 0 {
 		return
 	}
-	matches, _ := filepath.Glob(r.filename + ".*")
+	matches, err := filepath.Glob(r.filename + ".*")
+	if err != nil {
+		return
+	}
+
+	validMatches := r.filterValidMatches(matches)
+	r.cleanupByAge(validMatches)
+
+	if r.maxBackups > 0 {
+		r.cleanupByCount()
+	}
+}
+
+func (r *rotatingWriter) filterValidMatches(matches []string) []string {
+	valid := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if _, err := os.Stat(match); err == nil {
+			valid = append(valid, match)
+		}
+	}
+	return valid
+}
+
+func (r *rotatingWriter) cleanupByAge(matches []string) {
+	if r.maxAge <= 0 {
+		return
+	}
+	cutoff := time.Now().Add(-r.maxAge)
 	for _, match := range matches {
 		info, err := os.Stat(match)
-		if err != nil {
-			continue
-		}
-		if r.maxAge > 0 && time.Since(info.ModTime()) > r.maxAge {
+		if err == nil && info.ModTime().Before(cutoff) {
 			_ = os.Remove(match)
 		}
 	}
-	// Keep only newest maxBackups
-	if r.maxBackups > 0 && len(matches) > r.maxBackups {
-		// Simple approach: remove oldest
-		oldest := matches[0]
-		for _, m := range matches[1:] {
-			info, _ := os.Stat(m)
-			oldestInfo, _ := os.Stat(oldest)
-			if info.ModTime().Before(oldestInfo.ModTime()) {
-				oldest = m
-			}
-		}
+}
+
+func (r *rotatingWriter) cleanupByCount() {
+	matches, err := filepath.Glob(r.filename + ".*")
+	if err != nil {
+		return
+	}
+	validMatches := r.filterValidMatches(matches)
+	if len(validMatches) <= r.maxBackups {
+		return
+	}
+
+	oldest, oldestInfo := r.findOldest(validMatches)
+	if oldestInfo != nil {
 		_ = os.Remove(oldest)
 	}
+}
+
+func (r *rotatingWriter) findOldest(matches []string) (string, os.FileInfo) {
+	if len(matches) == 0 {
+		return "", nil
+	}
+	oldest := matches[0]
+	oldestInfo, err := os.Stat(oldest)
+	if err != nil {
+		return "", nil
+	}
+	for _, m := range matches[1:] {
+		info, err := os.Stat(m)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(oldestInfo.ModTime()) {
+			oldest = m
+			oldestInfo = info
+		}
+	}
+	return oldest, oldestInfo
 }
 
 func (r *rotatingWriter) Close() error {

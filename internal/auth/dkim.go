@@ -805,6 +805,6 @@ func GetPublicKeyForDNS(privateKey *rsa.PrivateKey) string {
 // GetEd25519PublicKeyForDNS returns the Ed25519 public key in base64 format suitable for DNS TXT record
 func GetEd25519PublicKeyForDNS(privateKey ed25519.PrivateKey) string {
 	// Ed25519 private key: first 32 bytes are the seed, last 32 bytes are the public key
-	pubKey := ed25519.PrivateKey(privateKey).Public()
+	pubKey := privateKey.Public()
 	return base64.StdEncoding.EncodeToString([]byte(pubKey.(ed25519.PublicKey)))
 }

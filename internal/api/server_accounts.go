@@ -169,7 +169,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		Email:        req.Email,
 		LocalPart:    user,
 		Domain:       domain,
-		PasswordHash: string(hashedPassword),
+		PasswordHash: hashedPassword,
 		APOPHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password))),
 		IsAdmin:      req.IsAdmin,
 		IsActive:     true,
@@ -273,7 +273,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 			s.sendError(w, http.StatusInternalServerError, "failed to hash password")
 			return
 		}
-		account.PasswordHash = string(hashedPassword)
+		account.PasswordHash = hashedPassword
 		account.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
 	}
 	account.IsAdmin = req.IsAdmin

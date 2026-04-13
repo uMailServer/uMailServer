@@ -269,7 +269,7 @@ func runBench() {
 	fmt.Printf("Time:     %v\n", elapsed)
 	fmt.Printf("Rate:     %.2f msg/sec\n", float64(sent)/elapsed.Seconds())
 	if sent > 0 {
-		fmt.Printf("Avg:      %v\n", time.Duration(totalLat.Nanoseconds()/int64(sent)))
+		fmt.Printf("Avg:      %v\n", time.Duration(totalLat.Nanoseconds()/sent))
 		fmt.Printf("Min:      %v\n", minLat)
 		fmt.Printf("Max:      %v\n", maxLat)
 		if len(latencies) > 0 {

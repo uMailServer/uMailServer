@@ -155,7 +155,7 @@ func (c *LDAPClient) connect() (*ldap.Conn, error) {
 	}
 
 	var conn *ldap.Conn
-	timeout := time.Duration(c.config.Timeout)
+	timeout := c.config.Timeout
 
 	if u.Scheme == "ldaps" {
 		tlsConfig := &tls.Config{

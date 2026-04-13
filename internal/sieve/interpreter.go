@@ -489,9 +489,9 @@ func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {
 func (i *Interpreter) evaluateSizeTest(t *SizeTest) (bool, error) {
 	switch t.Relation {
 	case ":over", "over":
-		return i.ctx.Size > int64(t.Size), nil
+		return i.ctx.Size > t.Size, nil
 	case ":under", "under":
-		return i.ctx.Size < int64(t.Size), nil
+		return i.ctx.Size < t.Size, nil
 	}
 	return false, nil
 }
