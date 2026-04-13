@@ -265,6 +265,14 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Revoke the old token by adding it to the blacklist
+	authHeader := r.Header.Get("Authorization")
+	if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+		oldTokenStr := parts[1]
+		oldTokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldTokenStr)))
+		s.RevokeToken(oldTokenHash)
+	}
+
 	// The auth middleware already validated the token
 	user := r.Context().Value("user")
 	isAdmin := r.Context().Value("isAdmin")

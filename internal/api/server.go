@@ -97,6 +97,10 @@ type Server struct {
 
 	// Draining state for zero-downtime deployment
 	draining atomic.Bool
+
+	// Background task management
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // Config holds API server configuration
@@ -211,6 +215,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		tokenBlacklist: make(map[string]time.Time),
 		jwtSecrets:     jwtSecrets,
 		currentKid:     currentKid,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -308,6 +313,7 @@ func NewServerWithInterfaces(
 		tokenBlacklist: make(map[string]time.Time),
 		jwtSecrets:     jwtSecrets,
 		currentKid:     currentKid,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -511,12 +517,35 @@ func (s *Server) Start(addr string) error {
 	}
 	s.serverMu.Unlock()
 
+	// Start background token blacklist cleanup
+	go s.tokenBlacklistCleanup()
+
 	s.logger.Info("Admin API server starting", "addr", addr)
 	return s.httpServer.ListenAndServe()
 }
 
+// tokenBlacklistCleanup periodically removes expired entries from the token blacklist
+func (s *Server) tokenBlacklistCleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.CleanupExpiredTokens()
+		}
+	}
+}
+
 // Stop gracefully stops the API server
 func (s *Server) Stop() error {
+	// Signal background tasks to stop (sync.Once ensures only one call)
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
+
 	s.serverMu.Lock()
 	httpServer := s.httpServer
 	s.serverMu.Unlock()

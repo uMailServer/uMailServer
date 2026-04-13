@@ -209,7 +209,10 @@ func (m *Manager) isValidWebhookURL(rawURL string) bool {
 	}
 
 	// If private IPs are allowed (testing mode), skip checks
-	if m.allowPrivateIP {
+	m.mu.RLock()
+	allowPrivate := m.allowPrivateIP
+	m.mu.RUnlock()
+	if allowPrivate {
 		return true
 	}
 

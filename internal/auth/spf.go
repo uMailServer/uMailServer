@@ -59,10 +59,12 @@ type DNSResolver interface {
 	LookupMX(ctx context.Context, domain string) ([]*net.MX, error)
 }
 
-// spfCache caches SPF lookup results
+// spfCache caches SPF lookup results with bounded size
 type spfCache struct {
-	records map[string]*cacheEntry
-	mu      sync.RWMutex
+	records     map[string]*cacheEntry
+	mu          sync.RWMutex
+	maxSize     int
+	nextCleanup time.Time
 }
 
 type cacheEntry struct {
@@ -70,12 +72,17 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
+// defaultSPFMaxCacheSize is the maximum number of domains to cache
+const defaultSPFMaxCacheSize = 10000
+
 // NewSPFChecker creates a new SPF checker
 func NewSPFChecker(resolver DNSResolver) *SPFChecker {
 	return &SPFChecker{
 		resolver: resolver,
 		cache: &spfCache{
-			records: make(map[string]*cacheEntry),
+			records:     make(map[string]*cacheEntry),
+			maxSize:     defaultSPFMaxCacheSize,
+			nextCleanup: time.Now().Add(1 * time.Minute),
 		},
 	}
 }
@@ -486,6 +493,8 @@ func (c *spfCache) get(domain string) (string, bool) {
 	}
 
 	if time.Now().After(entry.expiresAt) {
+		// Note: we don't delete here to avoid write lock in read path
+		// The cleanup will happen on next set() or get() after expiry check
 		return "", false
 	}
 
@@ -496,9 +505,69 @@ func (c *spfCache) set(domain, record string, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Check if we need to evict old entries
+	if len(c.records) >= c.maxSize {
+		c.evictOldest()
+	}
+
 	c.records[domain] = &cacheEntry{
 		record:    record,
 		expiresAt: time.Now().Add(ttl),
+	}
+
+	// Periodic cleanup of expired entries
+	if time.Now().After(c.nextCleanup) {
+		c.cleanupExpired()
+		c.nextCleanup = time.Now().Add(1 * time.Minute)
+	}
+}
+
+// evictOldest removes the oldest entries when cache is full
+func (c *spfCache) evictOldest() {
+	// Remove 10% of entries (oldest first by expiry time)
+	targetSize := c.maxSize * 9 / 10
+	now := time.Now()
+
+	// Collect entries with their expiry times
+	type entryWithExpiry struct {
+		domain    string
+		expiresAt time.Time
+	}
+
+	var entries []entryWithExpiry
+	for domain, entry := range c.records {
+		entries = append(entries, entryWithExpiry{domain, entry.expiresAt})
+	}
+
+	// Sort by expiry time (oldest first)
+	for i := 0; i < len(entries); i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[i].expiresAt.After(entries[j].expiresAt) {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+		}
+	}
+
+	// Remove oldest entries until we're at target size
+	for i := 0; i < len(entries) && len(c.records) > targetSize; i++ {
+		delete(c.records, entries[i].domain)
+	}
+
+	// If we still need to free space, also remove expired entries
+	c.cleanupExpiredLocked(now)
+}
+
+// cleanupExpired removes all expired entries
+func (c *spfCache) cleanupExpired() {
+	c.cleanupExpiredLocked(time.Now())
+}
+
+// cleanupExpiredLocked removes expired entries (caller must hold lock)
+func (c *spfCache) cleanupExpiredLocked(now time.Time) {
+	for domain, entry := range c.records {
+		if now.After(entry.expiresAt) {
+			delete(c.records, domain)
+		}
 	}
 }
 
