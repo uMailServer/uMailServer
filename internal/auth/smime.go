@@ -362,7 +362,9 @@ func extractBase64Content(msg []byte) string {
 // generateBoundary generates a random boundary string
 func generateBoundary() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return "=_boundary_="
+	}
 	return fmt.Sprintf("=_%s_=", base64.StdEncoding.EncodeToString(b))
 }
 
