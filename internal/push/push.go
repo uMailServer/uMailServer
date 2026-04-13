@@ -431,7 +431,9 @@ func (s *Service) deleteSubscriptionFile(subscriptionID string) error {
 // generateSubscriptionID generates a unique subscription ID
 func generateSubscriptionID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
