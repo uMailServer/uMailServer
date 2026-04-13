@@ -68,10 +68,17 @@ func (s *MessageStore) Close() error {
 	return nil
 }
 
+// maxMessageSize is a defensive limit to prevent enormous messages from
+// exhausting memory during hashing or storage.
+const maxMessageSize = 100 * 1024 * 1024 // 100 MB
+
 // StoreMessage stores a message and returns its ID
 func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 	if err := validatePathComponent(user); err != nil {
 		return "", err
+	}
+	if len(data) > maxMessageSize {
+		return "", fmt.Errorf("message exceeds maximum size of %d bytes", maxMessageSize)
 	}
 	// Generate message ID from content hash
 	hash := sha256.Sum256(data)
@@ -91,11 +98,16 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 	}
 
 	// Check if already exists
-	if _, err := os.Stat(msgPath); err == nil {
-		return messageID, nil // Already exists
+	file, err := os.OpenFile(msgPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		if os.IsExist(err) {
+			return messageID, nil // Already exists
+		}
+		return "", err
 	}
-
-	if err := os.WriteFile(msgPath, data, 0600); err != nil {
+	_, err = file.Write(data)
+	file.Close()
+	if err != nil {
 		return "", err
 	}
 

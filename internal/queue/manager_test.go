@@ -1117,7 +1117,7 @@ func TestManagerDeliver(t *testing.T) {
 	database.Enqueue(entry)
 
 	// Call deliver - will likely fail due to no MX, but should not panic
-	manager.deliver(entry)
+	manager.deliver(context.Background(), entry)
 }
 
 func TestManagerDeliverToMX(t *testing.T) {
@@ -1134,7 +1134,7 @@ func TestManagerDeliverToMX(t *testing.T) {
 	message := []byte("From: sender@example.com\r\nTo: recipient@example.com\r\nSubject: Test\r\n\r\nTest content")
 
 	// Try to deliver to invalid MX - should return error
-	err = manager.deliverToMX("sender@example.com", "recipient@example.com", message, "invalid-mx-server-12345.xyz")
+	err = manager.deliverToMX(context.Background(), "sender@example.com", "recipient@example.com", message, "invalid-mx-server-12345.xyz")
 	if err == nil {
 		t.Log("deliverToMX to invalid MX did not return error (may have fallback)")
 	}
@@ -1164,7 +1164,7 @@ func TestManagerDeliverWithEmptyMessagePath(t *testing.T) {
 	database.Enqueue(entry)
 
 	// Call deliver - should handle empty path gracefully
-	manager.deliver(entry)
+	manager.deliver(context.Background(), entry)
 }
 
 // TestManagerDeliverWithNonExistentFile tests deliver with non-existent message file
@@ -1191,7 +1191,7 @@ func TestManagerDeliverWithNonExistentFile(t *testing.T) {
 	database.Enqueue(entry)
 
 	// Call deliver - should handle missing file gracefully
-	manager.deliver(entry)
+	manager.deliver(context.Background(), entry)
 }
 
 // TestManagerProcessQueue tests the processQueue function
@@ -1430,7 +1430,7 @@ func TestManagerDeliverLocalDomain(t *testing.T) {
 	database.Enqueue(entry)
 
 	// Call deliver - will attempt local delivery
-	manager.deliver(entry)
+	manager.deliver(context.Background(), entry)
 }
 
 func TestSignWithDKIMNoKey(t *testing.T) {
@@ -1823,7 +1823,7 @@ func TestDeliverToMX_Success(t *testing.T) {
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
 
 	// Test connection to localhost:25 which should fail quickly
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "127.0.0.1")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "127.0.0.1")
 	if err == nil {
 		t.Log("deliverToMX to 127.0.0.1:25 succeeded (unlikely)")
 	}
@@ -1836,7 +1836,7 @@ func TestDeliverToMX_ConnectionRefused(t *testing.T) {
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
 	// Port 1 is unlikely to have anything listening
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "127.0.0.1:1")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "127.0.0.1:1")
 	if err == nil {
 		t.Error("expected error connecting to non-existent server on port 1")
 	}
@@ -1847,7 +1847,7 @@ func TestDeliverToMX_InvalidHost(t *testing.T) {
 	defer database.Close()
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "invalid-host-that-does-not-exist-99999.xyz")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "invalid-host-that-does-not-exist-99999.xyz")
 	if err == nil {
 		t.Error("expected error delivering to invalid host")
 	}
@@ -1907,7 +1907,7 @@ func TestDeliverToMX_VerEncoding(t *testing.T) {
 	// The function extracts the domain from 'from', creates a VERP sender,
 	// and uses that as the envelope sender. We just verify it doesn't panic.
 	// It will fail at connection time.
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "nonexistent.invalid")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "nonexistent.invalid")
 	if err == nil {
 		t.Log("deliverToMX unexpectedly succeeded")
 	}
@@ -2031,7 +2031,7 @@ func TestDeliver_EmptyRecipientDomain(t *testing.T) {
 	database.Enqueue(entry)
 
 	// Should handle gracefully (invalid domain)
-	mgr.deliver(entry)
+	mgr.deliver(context.Background(), entry)
 
 	updated, _ := database.GetQueueEntry(entry.ID)
 	if updated == nil {
@@ -2058,7 +2058,7 @@ func TestDeliver_MultipleMXFallback(t *testing.T) {
 	}
 	database.Enqueue(entry)
 
-	mgr.deliver(entry)
+	mgr.deliver(context.Background(), entry)
 
 	updated, _ := database.GetQueueEntry(entry.ID)
 	if updated == nil {
@@ -2348,7 +2348,7 @@ func TestDeliverToMX_FullSMTPConversation(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello world\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	if err != nil {
 		t.Fatalf("deliverToMX failed: %v", err)
 	}
@@ -2392,7 +2392,7 @@ func TestDeliverToMX_StartTLSSuccess(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nTLS test\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	// Since deliverToMX uses tls.Config{ServerName: mx} with default verification,
 	// the self-signed cert will fail verification. The function should fall back
 	// to plaintext and still deliver. If it succeeds, data was received.
@@ -2430,7 +2430,7 @@ func TestDeliverToMX_StartTLSFailure(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nPlaintext fallback\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	// The function may succeed or fail depending on how the server reacts to a
 	// failed TLS handshake. Either way, it should not panic.
 	if err != nil {
@@ -2454,7 +2454,7 @@ func TestDeliverToMX_MailFailure(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	if err == nil {
 		t.Error("expected error when MAIL FROM is rejected")
 	}
@@ -2477,7 +2477,7 @@ func TestDeliverToMX_RcptFailure(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	if err == nil {
 		t.Error("expected error when RCPT TO is rejected")
 	}
@@ -2500,7 +2500,7 @@ func TestDeliverToMX_DataFailure(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	if err == nil {
 		t.Error("expected error when DATA is rejected")
 	}
@@ -2540,7 +2540,7 @@ func TestDeliver_FullSuccessPath(t *testing.T) {
 
 	// Call deliverToMX directly to exercise the SMTP conversation.
 	// Then verify handleDeliverySuccess by checking the resulting state.
-	err := mgr.deliverToMX(entry.From, entry.To[0], testMsg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), entry.From, entry.To[0], testMsg, "mx.example.com")
 	if err != nil {
 		t.Fatalf("deliverToMX failed: %v", err)
 	}
@@ -2591,7 +2591,7 @@ func TestDeliverToMX_WithDKIMSigning(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: DKIM test\r\n\r\nSigned message\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	if err != nil {
 		t.Fatalf("deliverToMX with DKIM failed: %v", err)
 	}

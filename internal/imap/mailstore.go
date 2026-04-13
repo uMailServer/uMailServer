@@ -23,6 +23,7 @@ type BboltMailstore struct {
 	mdnSent    map[string]bool // Message-Id -> true if MDN sent
 	mdnSentMu  sync.Mutex
 	mdnHandler func(from, to, messageID, inReplyTo string, msg []byte) error
+	mdnSem     chan struct{} // Bounds concurrent MDN goroutines
 }
 
 // MDNHandler defines the interface for sending MDN notifications
@@ -48,18 +49,26 @@ func NewBboltMailstore(dataDir string) (*BboltMailstore, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	closeOnErr := true
+	defer func() {
+		if closeOnErr {
+			_ = db.Close()
+		}
+	}()
+
 	msgStorePath := filepath.Join(dataDir, "messages")
 	msgStore, err := storage.NewMessageStore(msgStorePath)
 	if err != nil {
-		_ = db.Close() // Best-effort cleanup on error
 		return nil, fmt.Errorf("failed to create message store: %w", err)
 	}
 
+	closeOnErr = false
 	return &BboltMailstore{
 		dataDir:  dataDir,
 		db:       db,
 		msgStore: msgStore,
 		mdnSent:  make(map[string]bool),
+		mdnSem:   make(chan struct{}, 50),
 	}, nil
 }
 
@@ -70,6 +79,7 @@ func NewBboltMailstoreWithInterfaces(db *storage.Database, msgStore *storage.Mes
 		db:       db,
 		msgStore: msgStore,
 		mdnSent:  make(map[string]bool),
+		mdnSem:   make(chan struct{}, 50),
 	}
 }
 
@@ -301,14 +311,25 @@ func (m *BboltMailstore) checkAndSendMDN(user, messageID, from, to string, msgDa
 	inReplyTo := messageID
 
 	// Send MDN asynchronously using captured handler
-	go func() {
-		if err := handler(from, mdnTo, messageID, inReplyTo, msgData); err != nil {
-			// Log error but don't fail the fetch
-			m.mdnSentMu.Lock()
-			delete(m.mdnSent, messageID) // Allow retry on failure
-			m.mdnSentMu.Unlock()
-		}
-	}()
+	select {
+	case m.mdnSem <- struct{}{}:
+		go func() {
+			defer func() {
+				<-m.mdnSem
+				if r := recover(); r != nil {
+					// Silently swallow panic to avoid crashing the server
+				}
+			}()
+			if err := handler(from, mdnTo, messageID, inReplyTo, msgData); err != nil {
+				// Log error but don't fail the fetch
+				m.mdnSentMu.Lock()
+				delete(m.mdnSent, messageID) // Allow retry on failure
+				m.mdnSentMu.Unlock()
+			}
+		}()
+	default:
+		// Semaphore full; drop MDN to bound concurrency
+	}
 }
 
 // parseDispositionHeader extracts Disposition-Notification-To header value

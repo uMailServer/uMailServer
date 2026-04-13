@@ -30,6 +30,7 @@ func (s *Server) startCardDAV() {
 		Addr:    addr,
 		Handler: carddavServer,
 	}
+	s.carddavHTTPServer = srv
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

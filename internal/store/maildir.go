@@ -156,13 +156,10 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 	}
 
 	// Sync to disk for durability
-	file, err := os.Open(tmpPath)
-	if err != nil {
+	if err := syncFile(tmpPath); err != nil {
 		os.Remove(tmpPath)
-		return "", fmt.Errorf("failed to open temp file: %w", err)
+		return "", fmt.Errorf("failed to sync temp file: %w", err)
 	}
-	_ = file.Sync()  // Best-effort, best-effort sync failures are acceptable
-	_ = file.Close() // Best-effort close failures are acceptable
 
 	// Atomic rename to new/
 	if err := os.Rename(tmpPath, newPath); err != nil {
@@ -198,13 +195,10 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 	}
 
 	// Sync to disk for durability
-	file, err := os.OpenFile(tmpPath, os.O_RDWR, 0)
-	if err != nil {
+	if err := syncFile(tmpPath); err != nil {
 		os.Remove(tmpPath)
-		return "", fmt.Errorf("failed to open temp file: %w", err)
+		return "", fmt.Errorf("failed to sync temp file: %w", err)
 	}
-	_ = file.Sync()  // Best-effort, best-effort sync failures are acceptable
-	_ = file.Close() // Best-effort close failures are acceptable
 
 	// Atomic rename to cur/
 	if err := os.Rename(tmpPath, curPath); err != nil {
@@ -279,6 +273,18 @@ func (s *MaildirStore) syncDir(dir string) {
 	}
 	_ = f.Sync()  // Best-effort, best-effort sync failures are acceptable
 	_ = f.Close() // Best-effort close failures are acceptable
+}
+
+// syncFile opens a file with read-write access, syncs it to disk, and closes it.
+// Using a dedicated function ensures the file descriptor is released
+// before any rename operation (required on Windows).
+func syncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
 
 // Move moves a message from one folder to another

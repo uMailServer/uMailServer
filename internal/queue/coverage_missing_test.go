@@ -34,7 +34,7 @@ func TestDeliverToMX_RequireTLS(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
-	err := mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err := mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 
 	// Should fail because requireTLS=true and STARTTLS failed
 	if err == nil {
@@ -178,7 +178,9 @@ func TestDeleteMessageFileIfUnreferenced(t *testing.T) {
 	}
 
 	// countMessageRefs should return 0
+	mgr.mu.RLock()
 	count := mgr.countMessageRefs(msgPath)
+	mgr.mu.RUnlock()
 	if count != 0 {
 		t.Errorf("expected 0 refs, got %d", count)
 	}
@@ -226,7 +228,9 @@ func TestCountMessageRefs_WithMalformedJSON(t *testing.T) {
 	// Now corrupt the entry in the database
 	// This is tricky because we need to modify the database directly
 	// For now, just test that countMessageRefs works with valid data
+	mgr.mu.RLock()
 	count := mgr.countMessageRefs(msgPath)
+	mgr.mu.RUnlock()
 	if count != 1 {
 		t.Errorf("expected 1 ref, got %d", count)
 	}
@@ -353,7 +357,7 @@ func TestDeliver_MissingMessageFile(t *testing.T) {
 	database.Enqueue(entry)
 
 	// deliver should handle missing file gracefully
-	mgr.deliver(entry)
+	mgr.deliver(context.Background(), entry)
 }
 
 // TestDeliver_InvalidRecipientDomain tests deliver when recipient domain is empty
@@ -378,7 +382,7 @@ func TestDeliver_InvalidRecipientDomain(t *testing.T) {
 	database.Enqueue(entry)
 
 	// deliver should handle invalid domain gracefully
-	mgr.deliver(entry)
+	mgr.deliver(context.Background(), entry)
 }
 
 // TestDeliver_MultipleMXServers tests deliver when first MX fails but second succeeds
@@ -430,7 +434,7 @@ func TestDeliver_MultipleMXServers(t *testing.T) {
 	}
 
 	// This will try to deliver - first MX fails, second times out
-	mgr.deliver(entry)
+	mgr.deliver(context.Background(), entry)
 }
 
 // TestEnqueue_WriteFileError tests Enqueue when writeFile fails

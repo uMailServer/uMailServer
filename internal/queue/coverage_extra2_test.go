@@ -130,7 +130,7 @@ func TestDeliverMXNoVERP(t *testing.T) {
 	msg := []byte("From: sender\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
 
 	// Use an address with no @ to skip VERP encoding path
-	err := mgr.deliverToMX("sender-no-at", "rcpt@example.com", msg, "invalid-host-that-does-not-exist-99999.xyz")
+	err := mgr.deliverToMX(context.Background(), "sender-no-at", "rcpt@example.com", msg, "invalid-host-that-does-not-exist-99999.xyz")
 	if err == nil {
 		t.Log("deliverToMX without @ in from succeeded (unlikely)")
 	}
@@ -180,7 +180,7 @@ func TestDeliverToMX_WriteCloseError(t *testing.T) {
 	}
 
 	msg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nHello\r\n")
-	err = mgr.deliverToMX("sender@example.com", "rcpt@example.com", msg, "mx.example.com")
+	err = mgr.deliverToMX(context.Background(), "sender@example.com", "rcpt@example.com", msg, "mx.example.com")
 	if err == nil {
 		t.Log("deliverToMX succeeded despite connection closing")
 	}
@@ -281,7 +281,7 @@ func TestDeliverFullWithFakeServer(t *testing.T) {
 	database.Enqueue(entry)
 
 	// Call deliver() which goes through the full path
-	mgr.deliver(entry)
+	mgr.deliver(context.Background(), entry)
 
 	// Give goroutines time to complete
 	time.Sleep(200 * time.Millisecond)

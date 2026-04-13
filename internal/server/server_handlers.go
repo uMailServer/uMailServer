@@ -239,9 +239,8 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 		return fmt.Errorf("failed to store message: %w", err)
 	}
 
-	// Update quota
-	account.QuotaUsed += int64(len(data))
-	if err := s.database.UpdateAccount(account); err != nil {
+	// Update quota atomically
+	if err := s.database.IncrementQuota(domain, user, int64(len(data))); err != nil {
 		s.logger.Error("Failed to update quota", "email", email, "error", err)
 	}
 
@@ -293,22 +292,28 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 
 	// Send push notification for new mail
 	if s.pushSvc != nil {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					s.logger.Error("Panic in push notification", "error", r)
+		select {
+		case s.bgSem <- struct{}{}:
+			go func() {
+				defer func() {
+					<-s.bgSem
+					if r := recover(); r != nil {
+						s.logger.Error("Panic in push notification", "error", r)
+					}
+				}()
+				// Extract subject from message for notification
+				subject, _, _, _ := parseBasicHeaders(data)
+				if subject == "" {
+					subject = "(No subject)"
+				}
+				// Send push notification (non-blocking)
+				if err := s.pushSvc.SendNewMailNotification(email, from, subject, ""); err != nil {
+					s.logger.Debug("Failed to send push notification", "to", email, "error", err)
 				}
 			}()
-			// Extract subject from message for notification
-			subject, _, _, _ := parseBasicHeaders(data)
-			if subject == "" {
-				subject = "(No subject)"
-			}
-			// Send push notification (non-blocking)
-			if err := s.pushSvc.SendNewMailNotification(email, from, subject, ""); err != nil {
-				s.logger.Debug("Failed to send push notification", "to", email, "error", err)
-			}
-		}()
+		default:
+			s.logger.Warn("Background task semaphore full, dropping push notification", "email", email)
+		}
 	}
 
 	// Track delivery metric
@@ -316,14 +321,20 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 
 	// Send vacation auto-reply if configured
 	if account.VacationSettings != "" && s.queue != nil {
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					s.logger.Error("Panic in vacation reply", "error", r)
-				}
+		select {
+		case s.bgSem <- struct{}{}:
+			go func() {
+				defer func() {
+					<-s.bgSem
+					if r := recover(); r != nil {
+						s.logger.Error("Panic in vacation reply", "error", r)
+					}
+				}()
+				s.sendVacationReply(email, from, account.VacationSettings)
 			}()
-			s.sendVacationReply(email, from, account.VacationSettings)
-		}()
+		default:
+			s.logger.Warn("Background task semaphore full, dropping vacation reply", "email", email)
+		}
 	}
 	return nil
 }

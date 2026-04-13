@@ -79,10 +79,10 @@ func (h *NotificationHub) Notify(user string, notification MailboxNotification) 
 	notification.Timestamp = time.Now()
 
 	for _, ch := range channels {
-		// Non-blocking send with timeout
+		// Non-blocking send; drop if subscriber is slow
 		select {
 		case ch <- notification:
-		case <-time.After(100 * time.Millisecond):
+		default:
 			// Channel is full or blocked, skip this notification
 		}
 	}

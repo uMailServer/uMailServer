@@ -20,6 +20,8 @@ type RateLimiter struct {
 	userMu       sync.RWMutex
 	connLimits   map[string]*connCounter
 	connMu       sync.RWMutex
+	stopCh       chan struct{}
+	stopOnce     sync.Once
 }
 
 // Config holds rate limiting configuration
@@ -106,6 +108,7 @@ func New(bolt *bbolt.DB, cfg *Config) *RateLimiter {
 		ipCounters:   make(map[string]*ipBucket),
 		userCounters: make(map[string]*userBucket),
 		connLimits:   make(map[string]*connCounter),
+		stopCh:       make(chan struct{}),
 	}
 
 	// Initialize bbolt buckets for persistent user quotas
@@ -426,9 +429,21 @@ func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		rl.cleanup()
+	for {
+		select {
+		case <-ticker.C:
+			rl.cleanup()
+		case <-rl.stopCh:
+			return
+		}
 	}
+}
+
+// Stop cleanly shuts down the cleanup goroutine.
+func (rl *RateLimiter) Stop() {
+	rl.stopOnce.Do(func() {
+		close(rl.stopCh)
+	})
 }
 
 func (rl *RateLimiter) cleanup() {

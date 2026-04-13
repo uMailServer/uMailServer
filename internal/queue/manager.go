@@ -229,39 +229,37 @@ func (m *Manager) SetWebhookTrigger(w WebhookTrigger) {
 
 // Enqueue adds a message to the outbound queue
 func (m *Manager) Enqueue(from string, to []string, message []byte) (string, error) {
+	// Generate unique message ID and write to disk outside the lock
+	id := generateID()
+
+	queueDir := filepath.Join(m.dataDir, "queue")
+	if err := os.MkdirAll(queueDir, 0750); err != nil {
+		return "", fmt.Errorf("failed to create queue directory: %w", err)
+	}
+
+	messagePath := filepath.Join(queueDir, id+".msg")
+	if err := writeFile(messagePath, message); err != nil {
+		return "", fmt.Errorf("failed to store message: %w", err)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Check queue size limit
 	stats, err := m.getStats()
 	if err != nil {
+		deleteFile(messagePath)
 		return "", fmt.Errorf("failed to get queue stats: %w", err)
 	}
 	if stats.Total >= m.maxQueueSize {
+		deleteFile(messagePath)
 		return "", fmt.Errorf("queue is full (max %d entries)", m.maxQueueSize)
 	}
 
-	// Generate unique message ID
-	id := generateID()
-
-	// Create queue directory if not exists
-	queueDir := filepath.Join(m.dataDir, "queue")
-	if err := os.MkdirAll(queueDir, 0750); err != nil {
-		return "", fmt.Errorf("failed to create queue directory: %w", err)
-	}
-
-	// Store message on disk
-	messagePath := filepath.Join(queueDir, id+".msg")
-	if err := writeFile(messagePath, message); err != nil {
-		return "", fmt.Errorf("failed to store message: %w", err)
-	}
-
-	// Create queue entries for each recipient
 	now := time.Now()
 	baseID := id
 
 	for i, recipient := range to {
-		// Unique ID per recipient
 		entryID := fmt.Sprintf("%s-%d", baseID, i)
 
 		entry := &db.QueueEntry{
@@ -276,7 +274,6 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 		}
 
 		if err := m.db.Enqueue(entry); err != nil {
-			// Roll back entries already created for this message
 			for j := 0; j < i; j++ {
 				rollbackID := fmt.Sprintf("%s-%d", baseID, j)
 				m.db.Dequeue(rollbackID)
@@ -285,16 +282,12 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 			return "", fmt.Errorf("failed to enqueue: %w", err)
 		}
 
-		// Send to delivery channel for immediate processing (non-blocking)
-		// If channel is full, the periodic sweeper will pick it up
 		select {
 		case m.deliveryChan <- entry:
 		default:
-			// Channel full, sweeper will handle it
 		}
 	}
 
-	// Track metric
 	if m.metrics != nil {
 		// Queue enqueue metric would go here
 	}
@@ -411,7 +404,7 @@ func (m *Manager) deliveryWorker(ctx context.Context, id int) {
 			if !ok {
 				return
 			}
-			m.deliver(entry)
+			m.deliver(ctx, entry)
 		}
 	}
 }
@@ -429,7 +422,7 @@ func (m *Manager) processPendingEntries() {
 }
 
 // deliver attempts to deliver a message
-func (m *Manager) deliver(entry *db.QueueEntry) {
+func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 	defer func() {
 		if r := recover(); r != nil {
 			m.logger.Error("panic in delivery", "error", r, "to", entry.To)
@@ -467,7 +460,7 @@ func (m *Manager) deliver(entry *db.QueueEntry) {
 	var lastErr string
 
 	for _, mx := range mxRecords {
-		if err := m.deliverToMX(entry.From, entry.To[0], message, mx); err != nil {
+		if err := m.deliverToMX(ctx, entry.From, entry.To[0], message, mx); err != nil {
 			lastErr = err.Error()
 			continue
 		}
@@ -505,33 +498,37 @@ func (m *Manager) getMXPool(mx string) *mxPool {
 func (m *Manager) acquireMXConn(mx string) (*smtp.Client, bool, error) {
 	pool := m.getMXPool(mx)
 
-	pool.mu.Lock()
-	defer pool.mu.Unlock()
-
 	now := time.Now()
 
-	// Try to find an idle connection that's still valid
-	for i := len(pool.conns) - 1; i >= 0; i-- {
-		conn := pool.conns[i]
-		if now.Sub(conn.lastUsed) > pool.idleTimeout {
-			// Connection expired, remove it
-			_ = conn.client.Close() // Best-effort
+	for {
+		var conn *mxConn
+		pool.mu.Lock()
+		// Find the first non-expired connection from the end
+		for i := len(pool.conns) - 1; i >= 0; i-- {
+			c := pool.conns[i]
+			if now.Sub(c.lastUsed) > pool.idleTimeout {
+				_ = c.client.Close()
+				pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
+				continue
+			}
+			conn = c
 			pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
-			continue
+			break
 		}
-		// Check if connection is still alive by doing RSET
+		pool.mu.Unlock()
+
+		if conn == nil {
+			// No valid connection in pool, need to create new
+			return nil, false, nil
+		}
+
+		// Check connection health without holding the pool lock
 		if err := conn.client.Reset(); err == nil {
-			// Valid connection found
-			pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
 			return conn.client, true, nil
 		}
-		// Connection dead, remove it
-		_ = conn.client.Close() // Best-effort
-		pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
+		_ = conn.client.Close()
+		// Connection was dead, loop to try the next one
 	}
-
-	// No valid connection in pool, need to create new
-	return nil, false, nil
 }
 
 // createMXConn creates a new SMTP connection to the given MX host
@@ -586,28 +583,69 @@ func (m *Manager) releaseMXConn(mx string, client *smtp.Client, valid bool) {
 }
 
 // deliverToMX delivers a message to a specific MX server
-func (m *Manager) deliverToMX(from, to string, message []byte, mx string) error {
+func (m *Manager) deliverToMX(ctx context.Context, from, to string, message []byte, mx string) error {
 	// Use circuit breaker to prevent cascading failures from bad MX hosts
 	if m.mxBreaker != nil {
 		err := m.mxBreaker.Execute(func() error {
-			return m.doDeliverToMX(from, to, message, mx)
+			return m.doDeliverToMX(ctx, from, to, message, mx)
 		})
 		return err
 	}
-	return m.doDeliverToMX(from, to, message, mx)
+	return m.doDeliverToMX(ctx, from, to, message, mx)
+}
+
+// withMXConn acquires an MX connection, calls fn, and guarantees release.
+// It recovers from panics inside fn and returns them as errors.
+func (m *Manager) withMXConn(mx string, fn func(*smtp.Client) error) (err error) {
+	client, fromPool, err := m.acquireMXConn(mx)
+	if err != nil {
+		return err
+	}
+	if !fromPool && client == nil {
+		client, err = m.createMXConn(mx)
+		if err != nil {
+			return err
+		}
+	}
+
+	// For pooled connections: verify with RSET and always release
+	if fromPool {
+		if rerr := client.Reset(); rerr != nil {
+			m.releaseMXConn(mx, client, false)
+			client, err = m.createMXConn(mx)
+			if err != nil {
+				return err
+			}
+			fromPool = false
+		}
+		defer func() {
+			valid := err == nil && recover() == nil
+			m.releaseMXConn(mx, client, valid)
+		}()
+	} else {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic during MX delivery: %v", r)
+			}
+			if client != nil {
+				_ = client.Close()
+			}
+		}()
+	}
+
+	return fn(client)
 }
 
 // doDeliverToMX performs the actual MX delivery
-func (m *Manager) doDeliverToMX(from, to string, message []byte, mx string) error {
+func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []byte, mx string) error {
 	// Check MTA-STS policy for recipient domain
 	domain := extractDomain(to)
 	if m.mtastsValidator != nil && domain != "" {
-		allowed, policy, err := m.mtastsValidator.CheckPolicy(context.Background(), domain, mx)
+		allowed, policy, err := m.mtastsValidator.CheckPolicy(ctx, domain, mx)
 		if err != nil {
 			m.logger.Debug("MTA-STS check failed", "domain", domain, "mx", mx, "error", err)
 		}
 		if policy != nil && policy.Mode == auth.MTASTSModeEnforce && !allowed {
-			// Note: pooled connection will be released via defer in caller
 			return fmt.Errorf("MTA-STS policy violation: MX %s not allowed for domain %s", mx, domain)
 		}
 		if policy != nil && policy.Mode == auth.MTASTSModeEnforce {
@@ -631,107 +669,68 @@ func (m *Manager) doDeliverToMX(from, to string, message []byte, mx string) erro
 		}
 	}
 
-	// Connect to MX server (try pool first, then create new)
-	client, fromPool, err := m.acquireMXConn(mx)
-	if err != nil {
-		return err
-	}
-
-	// Handle connection based on source (pooled or fresh)
-	if fromPool {
-		// Got pooled connection - verify it's still good with RSET
-		if err := client.Reset(); err != nil {
-			// Connection bad, release it
-			m.releaseMXConn(mx, client, false)
-			// Create new connection
-			client, err = m.createMXConn(mx)
-			if err != nil {
-				return err
+	return m.withMXConn(mx, func(client *smtp.Client) error {
+		// Attempt STARTTLS
+		tlsConfig := &tls.Config{
+			ServerName: mx,
+			MinVersion: tls.VersionTLS12,
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			if m.requireTLS {
+				return fmt.Errorf("STARTTLS required but failed: %w", err)
 			}
-		}
-		// Defer release for pooled connections
-		defer m.releaseMXConn(mx, client, false)
-	} else {
-		// Fresh connection, created inline
-		addr := mx + ":25"
-		var conn net.Conn
-		if m.dialSMTP != nil {
-			conn, err = m.dialSMTP(addr)
+			// STARTTLS failed — continue with plaintext only if not required
 		} else {
-			conn, err = net.DialTimeout("tcp", addr, 30*time.Second)
-		}
-		if err != nil {
-			return err
-		}
-		defer func() { _ = conn.Close() }()
-
-		newClient, err := smtp.NewClient(conn, mx)
-		if err != nil {
-			return err
-		}
-		client = newClient
-	}
-
-	// Attempt STARTTLS
-	tlsConfig := &tls.Config{
-		ServerName: mx,
-		MinVersion: tls.VersionTLS12,
-	}
-	if err := client.StartTLS(tlsConfig); err != nil {
-		if m.requireTLS {
-			return fmt.Errorf("STARTTLS required but failed: %w", err)
-		}
-		// STARTTLS failed — continue with plaintext only if not required
-	} else {
-		// STARTTLS succeeded — validate with DANE if available
-		if m.daneValidator != nil {
-			if state, ok := client.TLSConnectionState(); ok {
-				result, daneErr := m.daneValidator.Validate(mx, 25, &state)
-				if daneErr != nil {
-					m.logger.Debug("DANE validation error", "mx", mx, "error", daneErr)
-				} else if result == auth.DANEValidated {
-					m.logger.Debug("DANE validation successful", "mx", mx)
-				} else if result == auth.DANEFailed {
-					m.logger.Warn("DANE validation failed", "mx", mx)
-					// If DANE is configured but validation failed, reject the connection
-					return fmt.Errorf("DANE validation failed for %s", mx)
+			// STARTTLS succeeded — validate with DANE if available
+			if m.daneValidator != nil {
+				if state, ok := client.TLSConnectionState(); ok {
+					result, daneErr := m.daneValidator.Validate(mx, 25, &state)
+					if daneErr != nil {
+						m.logger.Debug("DANE validation error", "mx", mx, "error", daneErr)
+					} else if result == auth.DANEValidated {
+						m.logger.Debug("DANE validation successful", "mx", mx)
+					} else if result == auth.DANEFailed {
+						m.logger.Warn("DANE validation failed", "mx", mx)
+						// If DANE is configured but validation failed, reject the connection
+						return fmt.Errorf("DANE validation failed for %s", mx)
+					}
 				}
 			}
 		}
-	}
 
-	// Set sender (VERP-encoded for bounce tracking)
-	if err := client.Mail(envelopeSender); err != nil {
-		return err
-	}
+		// Set sender (VERP-encoded for bounce tracking)
+		if err := client.Mail(envelopeSender); err != nil {
+			return err
+		}
 
-	// Set recipient
-	if err := client.Rcpt(to); err != nil {
-		return err
-	}
+		// Set recipient
+		if err := client.Rcpt(to); err != nil {
+			return err
+		}
 
-	// Send data
-	w, err := client.Data()
-	if err != nil {
-		return err
-	}
+		// Send data
+		w, err := client.Data()
+		if err != nil {
+			return err
+		}
 
-	_, err = w.Write(message)
-	if err != nil {
-		return err
-	}
+		_, err = w.Write(message)
+		if err != nil {
+			return err
+		}
 
-	err = w.Close()
-	if err != nil {
-		// Return bad connection to pool (will be closed)
-		m.releaseMXConn(mx, client, false)
-		return err
-	}
+		err = w.Close()
+		if err != nil {
+			// Return bad connection to pool (will be closed)
+			m.releaseMXConn(mx, client, false)
+			return err
+		}
 
-	// Successful delivery - return connection to pool for reuse
-	// Skip QUIT since we're keeping the connection alive
-	m.releaseMXConn(mx, client, true)
-	return nil
+		// Successful delivery - return connection to pool for reuse
+		// Skip QUIT since we're keeping the connection alive
+		m.releaseMXConn(mx, client, true)
+		return nil
+	})
 }
 
 // handleDeliverySuccess handles successful delivery
@@ -970,6 +969,7 @@ var retryDelays = []time.Duration{
 func (m *Manager) GetStats() (*QueueStats, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
 	return m.getStats()
 }
 
@@ -1099,8 +1099,8 @@ func deleteFile(path string) {
 // message file path. Used to avoid deleting a shared .msg file while other
 // recipients still need it. Must be called with mu held for read.
 func (m *Manager) countMessageRefs(messagePath string) int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// Lock must be held by caller
+
 	count := 0
 	m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
 		var entry db.QueueEntry

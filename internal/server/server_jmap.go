@@ -30,6 +30,7 @@ func (s *Server) startJMAP() {
 		Addr:    addr,
 		Handler: jmapServer,
 	}
+	s.jmapHTTPServer = srv
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

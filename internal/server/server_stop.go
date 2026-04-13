@@ -74,20 +74,32 @@ func (s *Server) Stop() error {
 	}
 
 	// Stop CalDAV server
-	if s.caldavServer != nil {
-		// CalDAV uses http.Server - graceful shutdown handled via ctx cancellation
+	if s.caldavHTTPServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.caldavHTTPServer.Shutdown(shutdownCtx); err != nil {
+			s.logger.Error("Failed to stop CalDAV server", "error", err)
+		}
+		shutdownCancel()
 		s.logger.Debug("CalDAV server stopped")
 	}
 
 	// Stop CardDAV server
-	if s.carddavServer != nil {
-		// CardDAV uses http.Server - graceful shutdown handled via ctx cancellation
+	if s.carddavHTTPServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.carddavHTTPServer.Shutdown(shutdownCtx); err != nil {
+			s.logger.Error("Failed to stop CardDAV server", "error", err)
+		}
+		shutdownCancel()
 		s.logger.Debug("CardDAV server stopped")
 	}
 
 	// Stop JMAP server
-	if s.jmapServer != nil {
-		// JMAP uses http.Server - graceful shutdown handled via ctx cancellation
+	if s.jmapHTTPServer != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.jmapHTTPServer.Shutdown(shutdownCtx); err != nil {
+			s.logger.Error("Failed to stop JMAP server", "error", err)
+		}
+		shutdownCancel()
 		s.logger.Debug("JMAP server stopped")
 	}
 
@@ -108,6 +120,11 @@ func (s *Server) Stop() error {
 	// Stop queue manager
 	if s.queue != nil {
 		s.queue.Stop()
+	}
+
+	// Stop rate limiter cleanup goroutine
+	if s.rateLimiter != nil {
+		s.rateLimiter.Stop()
 	}
 
 	// Wait for search index workers to drain before closing databases

@@ -59,8 +59,11 @@ type Server struct {
 	rateLimiter       *ratelimit.RateLimiter
 	manageSieveServer *sieve.ManageSieveServer
 	caldavServer      *caldav.Server
+	caldavHTTPServer  *http.Server
 	carddavServer     *carddav.Server
+	carddavHTTPServer *http.Server
 	jmapServer        *jmap.Server
+	jmapHTTPServer    *http.Server
 
 	// S/MIME and OpenPGP keystores
 	smimeKeystore   *smtp.SMIMEKeystore
@@ -79,6 +82,9 @@ type Server struct {
 	// Vacation reply deduplication: key = recipient+"|"+sender -> last sent time
 	vacationReplies   map[string]time.Time
 	vacationRepliesMu sync.Mutex
+
+	// Background task semaphore to limit concurrent goroutines spawned per delivery
+	bgSem chan struct{}
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -126,6 +132,7 @@ func New(cfg *config.Config) (*Server, error) {
 		sieveManager:    sieve.NewManager(),
 		smimeKeystore:   smtp.NewSMIMEKeystore(),
 		openpgpKeystore: smtp.NewOpenPGPKeystore(),
+		bgSem:           make(chan struct{}, 100),
 	}
 
 	// Initialize database

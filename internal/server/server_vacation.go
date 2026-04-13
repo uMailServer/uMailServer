@@ -73,7 +73,7 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 
 	// Cleanup old entries every 100 entries to prevent unbounded growth
 	if len(s.vacationReplies) > 100 {
-		s.cleanupVacationReplies()
+		s.cleanupVacationRepliesLocked()
 	}
 
 	s.vacationRepliesMu.Unlock()
@@ -116,14 +116,20 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 
 // cleanupVacationReplies removes entries older than 48 hours from vacationReplies map
 func (s *Server) cleanupVacationReplies() {
-	cutoff := time.Now().Add(-48 * time.Hour)
 	s.vacationRepliesMu.Lock()
+	defer s.vacationRepliesMu.Unlock()
+	s.cleanupVacationRepliesLocked()
+}
+
+// cleanupVacationRepliesLocked removes entries older than 48 hours.
+// Caller must hold s.vacationRepliesMu.
+func (s *Server) cleanupVacationRepliesLocked() {
+	cutoff := time.Now().Add(-48 * time.Hour)
 	for key, lastSent := range s.vacationReplies {
 		if lastSent.Before(cutoff) {
 			delete(s.vacationReplies, key)
 		}
 	}
-	s.vacationRepliesMu.Unlock()
 }
 
 // startVacationCleanup runs a hourly goroutine that removes vacation reply entries

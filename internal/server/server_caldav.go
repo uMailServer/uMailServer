@@ -30,7 +30,7 @@ func (s *Server) startCalDAV() {
 		Addr:    addr,
 		Handler: caldavServer,
 	}
-	s.caldavServer = caldavServer
+	s.caldavHTTPServer = srv
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
