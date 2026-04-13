@@ -1,48 +1,9 @@
 package pop3
 
 import (
-	"crypto/md5"
-	"fmt"
 	"strings"
 	"testing"
 )
-
-// --- APOP Tests ---
-
-func TestAPOPCommand_NoAPOPSecretHandler(t *testing.T) {
-	store := newMockMailstore()
-	srv, addr := startTestServer(t, store, nil)
-	defer srv.Stop()
-
-	// No APOP handler set - should fail
-
-	conn, reader := dialAndRead(t, addr)
-	defer conn.Close()
-
-	resp := sendCmd(t, conn, reader, "APOP testuser somedigest")
-	if !strings.HasPrefix(resp, "-ERR APOP not supported") {
-		t.Errorf("APOP no handler: expected -ERR APOP not supported, got %s", resp)
-	}
-}
-
-func TestAPOPCommand_InvalidDigest(t *testing.T) {
-	store := newMockMailstore()
-	srv, addr := startTestServer(t, store, nil)
-	defer srv.Stop()
-
-	srv.SetAPOPSecretHandler(func(username string) (string, error) {
-		return md5Digest("testpass"), nil
-	})
-
-	conn, reader := dialAndRead(t, addr)
-	defer conn.Close()
-
-	// APOP with invalid digest
-	resp := sendCmd(t, conn, reader, "APOP testuser invalid-digest")
-	if !strings.HasPrefix(resp, "-ERR") {
-		t.Errorf("APOP invalid: expected -ERR, got %s", resp)
-	}
-}
 
 // --- STLS Test ---
 
@@ -105,24 +66,6 @@ func TestPASSCommand_NoArgs(t *testing.T) {
 	resp := sendCmd(t, conn, reader, "PASS")
 	if !strings.HasPrefix(resp, "-ERR Usage: PASS") {
 		t.Errorf("PASS no args: expected -ERR Usage, got %s", resp)
-	}
-}
-
-func TestAPOPCommand_NoArgs(t *testing.T) {
-	store := newMockMailstore()
-	srv, addr := startTestServer(t, store, nil)
-	defer srv.Stop()
-
-	srv.SetAPOPSecretHandler(func(username string) (string, error) {
-		return "secret", nil
-	})
-
-	conn, reader := dialAndRead(t, addr)
-	defer conn.Close()
-
-	resp := sendCmd(t, conn, reader, "APOP")
-	if !strings.HasPrefix(resp, "-ERR Usage: APOP") {
-		t.Errorf("APOP no args: expected -ERR Usage, got %s", resp)
 	}
 }
 
@@ -286,8 +229,3 @@ func TestInvalidCommandInState(t *testing.T) {
 }
 
 // --- Helper functions ---
-
-func md5Digest(input string) string {
-	hash := md5.Sum([]byte(input))
-	return fmt.Sprintf("%x", hash)
-}

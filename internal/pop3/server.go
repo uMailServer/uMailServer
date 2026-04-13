@@ -2,9 +2,7 @@ package pop3
 
 import (
 	"bufio"
-	"crypto/md5"
 	"crypto/rand"
-	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
@@ -30,9 +28,8 @@ type Server struct {
 	stopOnce   sync.Once
 	running    atomic.Bool
 
-	authFunc        func(username, password string) (bool, error)
-	onGetAPOPSecret func(username string) (string, error) // Returns the APOP secret (MD5 of password) for a user
-	mailstore       Mailstore
+	authFunc  func(username, password string) (bool, error)
+	mailstore Mailstore
 
 	// Auth brute-force protection
 	maxLoginAttempts int
@@ -87,10 +84,10 @@ type Session struct {
 	writer        *bufio.Writer
 	server        *Server
 	state         State
-	user          string
-	messages      []*Message
-	isTLS         bool
-	apopTimestamp string // Timestamp from greeting for APOP auth
+	user              string
+	messages          []*Message
+	isTLS             bool
+	greetingTimestamp string // Timestamp from greeting banner
 }
 
 // State represents the POP3 session state
@@ -121,12 +118,6 @@ func NewServer(addr string, mailstore Mailstore, logger *slog.Logger) *Server {
 // SetAuthFunc sets the authentication function
 func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 	s.authFunc = fn
-}
-
-// SetAPOPSecretHandler sets the handler for retrieving a user's APOP secret
-// The secret should be MD5(password) stored per account, used for APOP authentication
-func (s *Server) SetAPOPSecretHandler(fn func(username string) (string, error)) {
-	s.onGetAPOPSecret = fn
 }
 
 // SetAuthLimits configures brute-force protection for POP3 AUTH
@@ -317,8 +308,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	s.logger.Info("New POP3 session", "session", session.ID(), "remote", conn.RemoteAddr())
 
-	// Send greeting with APOP timestamp
-	session.WriteResponse(fmt.Sprintf("+OK POP3 server ready <%s>", session.apopTimestamp))
+	// Send greeting with timestamp
+	session.WriteResponse(fmt.Sprintf("+OK POP3 server ready <%s>", session.greetingTimestamp))
 
 	// Handle commands
 	session.Handle()
@@ -333,17 +324,17 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 // NewSession creates a new POP3 session
 func NewSession(conn net.Conn, server *Server) *Session {
-	// Generate APOP timestamp: timestamp.secret@domain
+	// Generate greeting timestamp: timestamp.secret@domain
 	timestamp := time.Now().Unix()
 	secret := generateSessionID()
 	return &Session{
-		id:            generateSessionID(),
-		conn:          conn,
-		reader:        bufio.NewReader(conn),
-		writer:        bufio.NewWriter(conn),
-		server:        server,
-		apopTimestamp: fmt.Sprintf("%d.%s", timestamp, secret),
-		state:         StateAuthorization,
+		id:                generateSessionID(),
+		conn:              conn,
+		reader:            bufio.NewReader(conn),
+		writer:            bufio.NewWriter(conn),
+		server:            server,
+		greetingTimestamp: fmt.Sprintf("%d.%s", timestamp, secret),
+		state:             StateAuthorization,
 	}
 }
 
@@ -469,14 +460,6 @@ func truncateCommand(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// computeAPOPDigest computes MD5(timestamp + secret) for APOP authentication
-// The secret should be MD5(password) stored in the database
-func (s *Session) computeAPOPDigest(secret string) string {
-	data := s.apopTimestamp + secret
-	hash := md5.Sum([]byte(data))
-	return fmt.Sprintf("%x", hash)
-}
-
 // handleAuthorizationCommand handles commands in AUTHORIZATION state
 func (s *Session) handleAuthorizationCommand(command string, args []string) error {
 	switch command {
@@ -550,64 +533,6 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		s.state = StateTransaction
 		s.WriteResponse("+OK")
 
-	case "APOP":
-		if len(args) < 2 {
-			s.WriteResponse("-ERR Usage: APOP <username> <digest>")
-			return nil
-		}
-		if s.server.requireTLS && !s.isTLS {
-			s.WriteResponse("-ERR TLS required for authentication")
-			return nil
-		}
-
-		if s.server.onGetAPOPSecret == nil {
-			s.WriteResponse("-ERR APOP not supported")
-			return nil
-		}
-
-		username := args[0]
-		digest := args[1]
-
-		host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String())
-		if err != nil {
-			host = s.conn.RemoteAddr().String()
-		}
-		if s.server.isAuthLockedOut(host) {
-			s.WriteResponse("-ERR Too many failed authentication attempts")
-			return nil
-		}
-
-		// Get the APOP secret (stored MD5 of password) for this user
-		secret, err := s.server.onGetAPOPSecret(username)
-		if err != nil || secret == "" {
-			s.server.recordAuthFailure(host)
-			s.WriteResponse("-ERR Authentication failed")
-			return nil
-		}
-
-		// Compute expected digest: MD5(timestamp + secret)
-		// secret is MD5(password) stored in the database
-		expectedDigest := s.computeAPOPDigest(secret)
-		if subtle.ConstantTimeCompare([]byte(expectedDigest), []byte(digest)) != 1 {
-			s.server.recordAuthFailure(host)
-			s.WriteResponse("-ERR Authentication failed")
-			return nil
-		}
-
-		s.server.clearAuthFailures(host)
-
-		// Set user and load messages
-		s.user = username
-		messages, err := s.server.mailstore.ListMessages(s.user)
-		if err != nil {
-			s.WriteResponse("-ERR Unable to load messages")
-			return nil
-		}
-
-		s.messages = messages
-		s.state = StateTransaction
-		s.WriteResponse("+OK")
-
 	case "QUIT":
 		s.WriteResponse("+OK")
 		return fmt.Errorf("quit")
@@ -647,7 +572,6 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		s.WriteResponse("+OK Capability list follows")
 		s.WriteDataLine("USER")
 		s.WriteDataLine("PASS")
-		s.WriteDataLine("APOP")
 		s.WriteDataLine("STAT")
 		s.WriteDataLine("LIST")
 		s.WriteDataLine("RETR")

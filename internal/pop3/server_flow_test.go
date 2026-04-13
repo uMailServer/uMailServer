@@ -1118,21 +1118,6 @@ func TestServer_Unsupported_Transaction(t *testing.T) {
 	}
 }
 
-// Test APOP without argument
-func TestServer_APOP_NoArg(t *testing.T) {
-	store := newMockMailstore()
-	srv, addr := startTestServer(t, store, nil)
-	defer srv.Stop()
-
-	conn, reader := dialAndRead(t, addr)
-	defer conn.Close()
-
-	resp := sendCmd(t, conn, reader, "APOP")
-	if !strings.HasPrefix(resp, "-ERR") {
-		t.Errorf("APOP without arg: expected -ERR, got %s", resp)
-	}
-}
-
 // Test TOP with missing arguments
 func TestServer_TOP_MissingArgs(t *testing.T) {
 	store := newMockMailstore()

@@ -65,18 +65,6 @@ func (s *Server) getUserSecret(username string) (string, error) {
 	return account.PasswordHash, nil
 }
 
-// getAPOPSecret returns the APOP hash (MD5 of password) for a user, used by APOP authentication
-func (s *Server) getAPOPSecret(username string) (string, error) {
-	user, domain := parseEmail(username)
-	account, err := s.database.GetAccount(domain, user)
-	if err != nil {
-		return "", err
-	}
-	if account == nil || !account.IsActive {
-		return "", fmt.Errorf("user not found or inactive")
-	}
-	return account.APOPHash, nil
-}
 
 // loginResult handles login success/failure events and triggers webhooks
 func (s *Server) loginResult(username string, success bool, ip string) {

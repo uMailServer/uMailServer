@@ -323,7 +323,7 @@ func Load(path string) (*Config, error) {
 
 	// Load from file if provided
 	if path != "" {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -730,12 +730,11 @@ func checkFileReadable(path string) error {
 		return fmt.Errorf("path is a directory, not a file")
 	}
 	// Try to open for reading
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return fmt.Errorf("cannot read file: %w", err)
 	}
-	f.Close()
-	return nil
+	return f.Close()
 }
 
 // checkDirWritable verifies that the given directory can be written to.

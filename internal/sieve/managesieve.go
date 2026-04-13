@@ -148,7 +148,7 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Best-effort
 
 		if err := s.processCommandSession(session, line); err != nil {
-			s.sendResponse(conn, "NO %s", err.Error())
+			_ = s.sendResponse(conn, "NO %s", err.Error())
 			return
 		}
 	}
@@ -200,7 +200,9 @@ func (s *ManageSieveServer) processCommandSession(session *manageSieveSession, l
 	case "AUTHENTICATE":
 		return s.cmdAuthenticate(session, args)
 	case "LOGOUT":
-		s.sendResponse(session.conn, "OK \"Logout successful\"")
+		if err := s.sendResponse(session.conn, "OK \"Logout successful\""); err != nil {
+			return err
+		}
 		return io.EOF
 	case "PUTSCRIPT":
 		return s.cmdPutScript(session, args)
@@ -291,7 +293,9 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 		// Validate credentials using auth handler
 		if s.authHandler != nil && s.authHandler(authcid, password) {
 			session.user = authcid
-			s.sendResponse(session.conn, "OK \"Authentication successful\"")
+			if err := s.sendResponse(session.conn, "OK \"Authentication successful\""); err != nil {
+				return err
+			}
 			return nil
 		}
 
@@ -335,7 +339,9 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 		// Validate credentials
 		if s.authHandler != nil && s.authHandler(string(username), string(password)) {
 			session.user = string(username)
-			s.sendResponse(session.conn, "OK \"Authentication successful\"")
+			if err := s.sendResponse(session.conn, "OK \"Authentication successful\""); err != nil {
+				return err
+			}
 			return nil
 		}
 
@@ -400,7 +406,9 @@ func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []str
 		return fmt.Errorf("failed to store script: %w", err)
 	}
 
-	s.sendResponse(session.conn, "OK \"Script stored\"")
+	if err := s.sendResponse(session.conn, "OK \"Script stored\""); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -415,15 +423,23 @@ func (s *ManageSieveServer) cmdListScripts(session *manageSieveSession, _ []stri
 	scripts := s.manager.ListScripts(session.user)
 	activeName := s.manager.GetActiveScriptName(session.user)
 
-	s.sendResponse(session.conn, "OK \"List scripts\"")
+	if err := s.sendResponse(session.conn, "OK \"List scripts\""); err != nil {
+		return err
+	}
 	for _, name := range scripts {
 		if name == activeName {
-			s.sendResponse(session.conn, "%s \"active script\"", name)
+			if err := s.sendResponse(session.conn, "%s \"active script\"", name); err != nil {
+				return err
+			}
 		} else {
-			s.sendResponse(session.conn, "%s", name)
+			if err := s.sendResponse(session.conn, "%s", name); err != nil {
+				return err
+			}
 		}
 	}
-	s.sendResponse(session.conn, "OK \"List scripts complete\"")
+	if err := s.sendResponse(session.conn, "OK \"List scripts complete\""); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -448,7 +464,9 @@ func (s *ManageSieveServer) cmdSetActive(session *manageSieveSession, args []str
 		return fmt.Errorf("failed to set active script: %w", err)
 	}
 
-	s.sendResponse(session.conn, "OK \"Set active script\"")
+	if err := s.sendResponse(session.conn, "OK \"Set active script\""); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -470,7 +488,9 @@ func (s *ManageSieveServer) cmdDeleteScript(session *manageSieveSession, args []
 
 	// Delete script for the user
 	s.manager.DeleteScript(session.user, scriptName)
-	s.sendResponse(session.conn, "OK \"Script deleted\"")
+	if err := s.sendResponse(session.conn, "OK \"Script deleted\""); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -494,9 +514,13 @@ func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []str
 	}
 
 	// Send script content
-	s.sendResponse(session.conn, "{%d}", len(source))
+	if err := s.sendResponse(session.conn, "{%d}", len(source)); err != nil {
+		return err
+	}
 	_, _ = session.conn.Write([]byte(source)) // Best-effort write
-	s.sendResponse(session.conn, "OK \"Get script complete\"")
+	if err := s.sendResponse(session.conn, "OK \"Get script complete\""); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -535,14 +559,15 @@ func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []s
 		return fmt.Errorf("script validation failed: %w", err)
 	}
 
-	s.sendResponse(session.conn, "OK \"Script is valid\"")
+	if err := s.sendResponse(session.conn, "OK \"Script is valid\""); err != nil {
+		return err
+	}
 	return nil
 }
 
 // cmdNoop handles NOOP command
 func (s *ManageSieveServer) cmdNoop(conn net.Conn) error {
-	s.sendResponse(conn, "OK \"NOOP completed\"")
-	return nil
+	return s.sendResponse(conn, "OK \"NOOP completed\"")
 }
 
 // sendResponse sends a formatted response

@@ -21,8 +21,6 @@ func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	}
 	pop3Server := pop3.NewServer(pop3Addr, pop3Adapter, s.logger)
 	pop3Server.SetAuthFunc(s.authenticate)
-	// APOP is disabled by default for security (MD5 is cryptographically broken)
-	// pop3Server.SetAPOPSecretHandler(s.getAPOPSecret)
 	pop3Server.SetRequireTLS(true)
 	pop3Server.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	pop3Server.SetReadTimeout(10 * time.Minute)

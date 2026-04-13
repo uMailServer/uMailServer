@@ -83,7 +83,7 @@ func (s *Storage) GetAddressbook(username, addressbookID string) (*Addressbook, 
 	defer s.mu.RUnlock()
 
 	path := s.addressbookPath(username, addressbookID)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -129,7 +129,7 @@ func (s *Storage) GetAddressbooks(username string) ([]*Addressbook, error) {
 // getAddressbookUnsafe reads an addressbook without locking (caller must hold lock)
 func (s *Storage) getAddressbookUnsafe(username, addressbookID string) (*Addressbook, error) {
 	path := s.addressbookPath(username, addressbookID)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +196,7 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 	if ab, err := s.getAddressbookUnsafe(username, addressbookID); err == nil && ab != nil {
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
-		os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
+		_ = os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
 	}
 
 	return nil
@@ -208,7 +208,7 @@ func (s *Storage) GetContact(username, addressbookID, contactUID string) (string
 	defer s.mu.RUnlock()
 
 	path := s.contactPath(username, addressbookID, contactUID)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -237,7 +237,7 @@ func (s *Storage) GetContacts(username, addressbookID string) ([]string, error) 
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".vcf") {
 			path := filepath.Join(dir, entry.Name())
-			data, err := os.ReadFile(path)
+			data, err := os.ReadFile(filepath.Clean(path))
 			if err == nil {
 				contacts = append(contacts, string(data))
 			}
@@ -264,7 +264,7 @@ func (s *Storage) DeleteContact(username, addressbookID, contactUID string) erro
 	if ab, err := s.getAddressbookUnsafe(username, addressbookID); err == nil && ab != nil {
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
-		os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
+		_ = os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
 	}
 
 	return nil
