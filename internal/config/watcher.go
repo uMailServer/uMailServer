@@ -16,6 +16,7 @@ type Watcher struct {
 	logger      *slog.Logger
 	onChange    ChangeHandler
 	stopCh      chan struct{}
+	stopOnce    sync.Once
 	wg          sync.WaitGroup
 	lastModTime time.Time
 	lastHash    string
@@ -63,7 +64,9 @@ func (w *Watcher) Start(interval time.Duration) error {
 
 // Stop stops the watcher
 func (w *Watcher) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+	})
 	w.wg.Wait()
 	w.logger.Info("Config watcher stopped")
 }
