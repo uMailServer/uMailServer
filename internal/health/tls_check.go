@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -19,7 +20,7 @@ func TLSCertificateCheck(certPath, keyPath string, warningDays, criticalDays int
 		}
 
 		// Read certificate file
-		certPEM, err := os.ReadFile(certPath)
+		certPEM, err := os.ReadFile(filepath.Clean(certPath))
 		if err != nil {
 			// If cert doesn't exist (e.g., using ACME), check is skipped
 			if os.IsNotExist(err) {

@@ -203,6 +203,11 @@ func (m *BboltMailstore) FetchMessages(user, mailbox string, seqSet string, item
 	}
 
 	var messages []*Message
+	uidCount := len(uids)
+	if uidCount > 0x7FFFFFFF {
+		return nil, fmt.Errorf("mailbox exceeds maximum message count")
+	}
+	total := uint32(uidCount)
 	for i, uid := range uids {
 		// IMAP uses 1-based sequence numbers
 		seqNum := uint32(i + 1)
@@ -210,7 +215,7 @@ func (m *BboltMailstore) FetchMessages(user, mailbox string, seqSet string, item
 		// Check if this sequence number is in the requested set
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(seqNum, uint32(len(uids))) {
+			if r.Contains(seqNum, total) {
 				inSet = true
 				break
 			}
@@ -392,6 +397,11 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 	if err != nil {
 		return err
 	}
+	uidCount := len(uids)
+	if uidCount > 0x7FFFFFFF {
+		return fmt.Errorf("mailbox exceeds maximum message count")
+	}
+	total := uint32(uidCount)
 
 	for i, uid := range uids {
 		// IMAP uses 1-based sequence numbers
@@ -400,7 +410,7 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		// Check if in set
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(seqNum, uint32(len(uids))) {
+			if r.Contains(seqNum, total) {
 				inSet = true
 				break
 			}
@@ -611,7 +621,11 @@ func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, dat
 	// Get the sequence number for the new message
 	uids, err := m.db.GetMessageUIDs(user, mailbox)
 	if err == nil {
-		seqNum := uint32(len(uids))
+		uidCount := len(uids)
+		if uidCount > 0x7FFFFFFF {
+			return fmt.Errorf("mailbox exceeds maximum message count")
+		}
+		seqNum := uint32(uidCount)
 		// Notify subscribers about the new message
 		GetNotificationHub().NotifyNewMessage(user, mailbox, uid, seqNum)
 	}
@@ -956,13 +970,18 @@ func (m *BboltMailstore) CopyMessages(user, sourceMailbox, destMailbox string, s
 	if err != nil {
 		return err
 	}
+	uidCount := len(uids)
+	if uidCount > 0x7FFFFFFF {
+		return fmt.Errorf("mailbox exceeds maximum message count")
+	}
+	total := uint32(uidCount)
 
 	for i, uid := range uids {
 		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
 		// Check if in set
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(seqNum, uint32(len(uids))) {
+			if r.Contains(seqNum, total) {
 				inSet = true
 				break
 			}
@@ -1032,12 +1051,17 @@ func (m *BboltMailstore) MoveMessages(user, sourceMailbox, destMailbox string, s
 	if err != nil {
 		return err
 	}
+	uidCount := len(uids)
+	if uidCount > 0x7FFFFFFF {
+		return fmt.Errorf("mailbox exceeds maximum message count")
+	}
+	total := uint32(uidCount)
 
 	for i, uid := range uids {
 		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
 		inSet := false
 		for _, r := range ranges {
-			if r.Contains(seqNum, uint32(len(uids))) {
+			if r.Contains(seqNum, total) {
 				inSet = true
 				break
 			}

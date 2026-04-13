@@ -56,6 +56,7 @@ func (s *ManageSieveServer) Listen() error {
 	s.mu.Unlock()
 
 	// Start plain TCP listener
+	// #nosec G102 -- Bind address is a configurable default constant
 	ln, err := net.Listen("tcp", ManageSieveListenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to start listener: %w", err)
@@ -66,6 +67,7 @@ func (s *ManageSieveServer) Listen() error {
 
 	// Start TLS listener if TLS config is provided (on separate port)
 	if s.tlsCfg != nil {
+		// #nosec G102 -- Bind address is a configurable default constant
 		tlsLn, err := tls.Listen("tcp", ManageSieveTLSListenAddr, s.tlsCfg)
 		if err != nil {
 			return fmt.Errorf("failed to start TLS listener: %w", err)

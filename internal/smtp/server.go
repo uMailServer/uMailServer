@@ -236,7 +236,7 @@ func (s *Server) Serve(listener net.Listener) error {
 		}
 
 		if tl, ok := listener.(interface{ SetDeadline(time.Time) error }); ok {
-			tl.SetDeadline(time.Now().Add(time.Second))
+			_ = tl.SetDeadline(time.Now().Add(time.Second))
 		}
 		conn, err := listener.Accept()
 		if err != nil {
@@ -258,7 +258,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("Panic in SMTP connection handler", "error", r)
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 
@@ -270,7 +270,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if _, err := conn.Write([]byte("421 4.7.0 Too many connections, try again later\r\n")); err != nil {
 			s.logger.Debug("failed to write rate limit response", "error", err)
 		}
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -284,7 +284,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			if _, err := conn.Write([]byte("421 4.7.0 Rate limit exceeded, try again later\r\n")); err != nil {
 				s.logger.Debug("failed to write rate limit response", "error", err)
 			}
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 	}
@@ -306,7 +306,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		delete(s.connections, session.ID())
 		s.connMu.Unlock()
 
-		conn.Close()
+		_ = conn.Close()
 
 		s.logger.Debug("SMTP connection closed",
 			slog.String("remote_addr", conn.RemoteAddr().String()),
@@ -315,14 +315,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}()
 
 	// Send greeting
-	session.WriteResponse(220, fmt.Sprintf("%s ESMTP uMailServer", s.config.Hostname))
+	_ = session.WriteResponse(220, fmt.Sprintf("%s ESMTP uMailServer", s.config.Hostname))
 
 	// Handle commands
 	reader := bufio.NewReader(conn)
 	session.reader = reader
 	for {
 		if s.config.ReadTimeout > 0 {
-			conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout))
+			_ = conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout))
 		}
 
 		line, err := reader.ReadString('\n')
@@ -365,14 +365,14 @@ func (s *Server) Stop() error {
 	// Close all listeners
 	s.listenersMu.Lock()
 	for _, ln := range s.listeners {
-		ln.Close()
+		_ = ln.Close()
 	}
 	s.listenersMu.Unlock()
 
 	// Close all connections
 	s.connMu.Lock()
 	for _, session := range s.connections {
-		session.Close()
+		_ = session.Close()
 	}
 	s.connMu.Unlock()
 

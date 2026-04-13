@@ -157,13 +157,13 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 
 	// Sync to disk for durability
 	if err := syncFile(tmpPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to sync temp file: %w", err)
 	}
 
 	// Atomic rename to new/
 	if err := os.Rename(tmpPath, newPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to move message to new/: %w", err)
 	}
 
@@ -196,13 +196,13 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 
 	// Sync to disk for durability
 	if err := syncFile(tmpPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to sync temp file: %w", err)
 	}
 
 	// Atomic rename to cur/
 	if err := os.Rename(tmpPath, curPath); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to move message to cur/: %w", err)
 	}
 
@@ -226,7 +226,7 @@ func (s *MaildirStore) Fetch(domain, user, folder, filename string) ([]byte, err
 	}
 
 	for _, path := range paths {
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(filepath.Clean(path))
 		if err == nil {
 			return data, nil
 		}
@@ -252,7 +252,7 @@ func (s *MaildirStore) FetchReader(domain, user, folder, filename string) (io.Re
 	}
 
 	for _, path := range paths {
-		file, err := os.Open(path)
+		file, err := os.Open(filepath.Clean(path))
 		if err == nil {
 			return file, nil
 		}
@@ -267,7 +267,7 @@ func (s *MaildirStore) FetchReader(domain, user, folder, filename string) (io.Re
 // syncDir performs a best-effort fsync on a directory for durability.
 // On Windows this may fail silently, which is acceptable.
 func (s *MaildirStore) syncDir(dir string) {
-	f, err := os.Open(dir)
+	f, err := os.Open(filepath.Clean(dir))
 	if err != nil {
 		return
 	}
@@ -279,7 +279,7 @@ func (s *MaildirStore) syncDir(dir string) {
 // Using a dedicated function ensures the file descriptor is released
 // before any rename operation (required on Windows).
 func syncFile(path string) error {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	f, err := os.OpenFile(filepath.Clean(path), os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}

@@ -164,10 +164,11 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 func (m *Manager) GetTLSConfig() *tls.Config {
 	// Use configured min version or default to TLS 1.2
 	minVersion := m.config.MinVersion
-	if minVersion == 0 {
+	if minVersion < tls.VersionTLS12 {
 		minVersion = tls.VersionTLS12
 	}
 
+	// #nosec G402 -- MinVersion is runtime-validated to be >= TLS 1.2 above
 	return &tls.Config{
 		GetCertificate: m.GetCertificate,
 		MinVersion:     minVersion,
@@ -217,7 +218,9 @@ func (m *Manager) RenewCertificates(ctx context.Context) error {
 
 	// Force renewal by deleting cached certs
 	for _, domain := range m.config.Domains {
-		m.certManager.Cache.Delete(ctx, domain)
+		if err := m.certManager.Cache.Delete(ctx, domain); err != nil {
+			m.logger.Warn("Failed to delete cached cert", "domain", domain, "error", err)
+		}
 	}
 
 	m.logger.Info("Certificate renewal triggered", "domains", m.config.Domains)
@@ -236,7 +239,7 @@ func (m *Manager) GetCertificateStatus() []CertificateStatus {
 
 		// Try to load and check certificate
 		certPath := filepath.Join(m.certDir, domain+".crt")
-		data, err := os.ReadFile(certPath)
+		data, err := os.ReadFile(filepath.Clean(certPath))
 		if err != nil {
 			status.Error = err.Error()
 			statuses = append(statuses, status)

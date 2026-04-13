@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -391,7 +392,7 @@ func ParsePrivateKey(data []byte) (*rsa.PrivateKey, error) {
 
 // LoadCertificateFromFile loads a certificate from a PEM file
 func LoadCertificateFromFile(filename string) (*x509.Certificate, error) {
-	data, err := os.ReadFile(filename)
+	data, err := os.ReadFile(filepath.Clean(filename))
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +401,7 @@ func LoadCertificateFromFile(filename string) (*x509.Certificate, error) {
 
 // LoadPrivateKeyFromFile loads a private key from a PEM file
 func LoadPrivateKeyFromFile(filename string) (*rsa.PrivateKey, error) {
-	data, err := os.ReadFile(filename)
+	data, err := os.ReadFile(filepath.Clean(filename))
 	if err != nil {
 		return nil, err
 	}

@@ -98,7 +98,7 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 	}
 
 	// Check if already exists
-	file, err := os.OpenFile(msgPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := os.OpenFile(filepath.Clean(msgPath), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		if os.IsExist(err) {
 			return messageID, nil // Already exists
@@ -106,7 +106,9 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 		return "", err
 	}
 	_, err = file.Write(data)
-	file.Close()
+	if closeErr := file.Close(); closeErr != nil && err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return "", err
 	}
@@ -124,7 +126,7 @@ func (s *MessageStore) ReadMessage(user, messageID string) ([]byte, error) {
 	}
 
 	msgPath := filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID)
-	return os.ReadFile(msgPath)
+	return os.ReadFile(filepath.Clean(msgPath))
 }
 
 // DeleteMessage deletes a message

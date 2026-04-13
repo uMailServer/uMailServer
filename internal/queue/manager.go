@@ -7,12 +7,13 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	"math"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -817,7 +818,12 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 			idx = len(retryDelays) - 1 // Use last delay if we've exceeded the array
 		}
 		baseDelay := retryDelays[idx]
-		jitter := time.Duration(float64(baseDelay) * (0.8 + 0.4*rand.Float64()))
+		var n uint64
+		if err := binary.Read(crand.Reader, binary.BigEndian, &n); err != nil {
+			// Fallback to deterministic jitter if crypto/rand fails (extremely rare)
+			n = uint64(time.Now().UnixNano())
+		}
+		jitter := time.Duration(float64(baseDelay) * (0.8 + 0.4*(float64(n)/float64(math.MaxUint64))))
 		entry.NextRetry = time.Now().Add(jitter)
 		entry.Status = "pending"
 	}
@@ -1054,12 +1060,12 @@ func writeFile(path string, data []byte) error {
 
 	// Write to temp file first, then rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(tmpPath), data, 0600); err != nil {
 		return err
 	}
 
 	// Sync temp file before rename to ensure data durability
-	f, err := os.OpenFile(tmpPath, os.O_RDWR, 0)
+	f, err := os.OpenFile(filepath.Clean(tmpPath), os.O_RDWR, 0)
 	if err != nil {
 		_ = os.Remove(tmpPath)
 		return err
@@ -1078,7 +1084,7 @@ func writeFile(path string, data []byte) error {
 
 	// Sync parent directory to ensure the rename is durable.
 	// Directory sync may fail on Windows; file sync above is the critical part.
-	dirFile, err := os.Open(dir)
+	dirFile, err := os.Open(filepath.Clean(dir))
 	if err != nil {
 		return err
 	}
@@ -1088,7 +1094,7 @@ func writeFile(path string, data []byte) error {
 }
 
 func readFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
+	return os.ReadFile(filepath.Clean(path))
 }
 
 func deleteFile(path string) {

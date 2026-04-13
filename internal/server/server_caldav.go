@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/caldav"
 )
@@ -27,8 +28,9 @@ func (s *Server) startCalDAV() {
 	s.caldavServer = caldavServer
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: caldavServer,
+		Addr:              addr,
+		Handler:           caldavServer,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	s.caldavHTTPServer = srv
 

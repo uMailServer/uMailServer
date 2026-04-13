@@ -1227,4 +1227,3 @@ func TestSetWriteDeadline_WithTimeout(t *testing.T) {
 	session.setWriteDeadline()
 	// If we get here without panic, the test passes
 }
-

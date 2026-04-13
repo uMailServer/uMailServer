@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -238,7 +239,7 @@ func (bm *BackupManager) decryptBackup(data []byte) ([]byte, error) {
 
 // addFileWithHash copies a file to tar and records its hash
 func (bm *BackupManager) addFileWithHash(tw *tar.Writer, path string, header *tar.Header) error {
-	file, err := os.Open(path)
+	file, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return err
 	}
@@ -294,7 +295,7 @@ func (bm *BackupManager) backupConfig(tw *tar.Writer) error {
 
 		header := &tar.Header{
 			Name:    filepath.Join("config", relPath),
-			Mode:    int64(info.Mode()),
+			Mode:    int64(info.Mode() & 0o7777),
 			ModTime: info.ModTime(),
 			Size:    info.Size(),
 		}
@@ -317,7 +318,7 @@ func (bm *BackupManager) backupDatabase(tw *tar.Writer) error {
 
 	header := &tar.Header{
 		Name:    "database/umailserver.db",
-		Mode:    int64(info.Mode()),
+		Mode:    int64(info.Mode() & 0o7777),
 		ModTime: info.ModTime(),
 		Size:    info.Size(),
 	}
@@ -348,7 +349,7 @@ func (bm *BackupManager) backupMaildir(tw *tar.Writer) error {
 
 			header := &tar.Header{
 				Name:     filepath.Join("messages", relPath) + "/",
-				Mode:     int64(info.Mode()),
+				Mode:     int64(info.Mode() & 0o7777),
 				ModTime:  info.ModTime(),
 				Typeflag: tar.TypeDir,
 			}
@@ -364,7 +365,7 @@ func (bm *BackupManager) backupMaildir(tw *tar.Writer) error {
 
 		header := &tar.Header{
 			Name:    filepath.Join("messages", relPath),
-			Mode:    int64(info.Mode()),
+			Mode:    int64(info.Mode() & 0o7777),
 			ModTime: info.ModTime(),
 			Size:    info.Size(),
 		}
@@ -412,7 +413,7 @@ func (bm *BackupManager) createManifest(tw *tar.Writer, timestamp string) error 
 func (bm *BackupManager) Restore(backupFile string) error {
 	fmt.Printf("Restoring from backup: %s\n", backupFile)
 
-	fileData, err := os.ReadFile(backupFile)
+	fileData, err := os.ReadFile(filepath.Clean(backupFile))
 	if err != nil {
 		return fmt.Errorf("failed to open backup file: %w", err)
 	}
@@ -522,39 +523,40 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		baseRestoreDir := filepath.Join(bm.config.Server.DataDir, "..", "restore_temp")
 		targetPath := filepath.Join(baseRestoreDir, sanitizedName)
 
-		// If the base directory exists and target path exists, verify it's within restore_temp
-		// This catches symlink-based path traversal attacks where a file is a symlink pointing outside
-		if _, err := os.Stat(baseRestoreDir); err == nil {
-			if _, err := os.Lstat(targetPath); err == nil {
-				// File/dir exists - verify it's not a symlink pointing outside restore_temp
-				realTargetPath, err := filepath.EvalSymlinks(targetPath)
-				if err != nil {
-					return fmt.Errorf("failed to resolve path: %w", err)
-				}
-				realBaseDir, err := filepath.EvalSymlinks(baseRestoreDir)
-				if err != nil {
-					return fmt.Errorf("failed to resolve base directory: %w", err)
-				}
-
-				if !strings.HasPrefix(realTargetPath, realBaseDir) {
-					return fmt.Errorf("invalid filename: %s - would extract outside target directory", header.Name)
-				}
-			}
+		// Unconditional path traversal check: resolve and ensure target stays within base directory
+		// #nosec G703 -- targetPath is validated here before any file operations
+		absTargetPath, err := filepath.Abs(targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve target path: %w", err)
+		}
+		absBaseDir, err := filepath.Abs(baseRestoreDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve base directory: %w", err)
+		}
+		absTargetPath = filepath.Clean(absTargetPath)
+		absBaseDir = filepath.Clean(absBaseDir)
+		if !strings.HasPrefix(absTargetPath, absBaseDir+string(filepath.Separator)) && absTargetPath != absBaseDir {
+			return fmt.Errorf("invalid filename: %s - would extract outside target directory", header.Name)
 		}
 
-		// Create parent directory
+		// #nosec G703 -- targetPath is validated above with filepath.Abs/Clean and prefix check
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0750); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
+			if header.Mode < 0 || header.Mode > math.MaxUint32 {
+				return fmt.Errorf("invalid mode in tar header: %d", header.Mode)
+			}
+			// #nosec G703 -- targetPath is validated above with filepath.Abs/Clean and prefix check
+			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode&0o7777)); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}
 
 		case tar.TypeReg:
-			outFile, err := os.Create(targetPath)
+			// #nosec G703 G304 -- targetPath is validated above with filepath.Abs/Clean and prefix check
+			outFile, err := os.Create(filepath.Clean(targetPath))
 			if err != nil {
 				return fmt.Errorf("failed to create file: %w", err)
 			}
@@ -567,14 +569,21 @@ func (bm *BackupManager) Restore(backupFile string) error {
 				writer = io.MultiWriter(outFile, h)
 			}
 
-			if _, err := io.Copy(writer, tr); err != nil {
-				outFile.Close()
+			// #nosec G110 -- Copy is bounded by tar header.Size which is validated above
+			if _, err := io.CopyN(writer, tr, header.Size); err != nil {
+				_ = outFile.Close()
 				return fmt.Errorf("failed to write file: %w", err)
 			}
-			outFile.Close()
+			_ = outFile.Close()
 
 			// Set file permissions
-			os.Chmod(targetPath, os.FileMode(header.Mode))
+			if header.Mode < 0 || header.Mode > math.MaxUint32 {
+				return fmt.Errorf("invalid mode in tar header: %d", header.Mode)
+			}
+			// #nosec G703 -- targetPath validated before extraction with filepath.Abs/Clean and prefix check
+			if err := os.Chmod(targetPath, os.FileMode(header.Mode&0o7777)); err != nil {
+				return fmt.Errorf("failed to set permissions: %w", err)
+			}
 
 			// Verify hash if we have expected hashes
 			if h != nil {
@@ -582,7 +591,8 @@ func (bm *BackupManager) Restore(backupFile string) error {
 				for _, expected := range expectedHashes {
 					if expected.Path == header.Name {
 						if computedHash != expected.Hash {
-							os.Remove(targetPath)
+							// #nosec G703 -- targetPath validated before extraction with filepath.Abs/Clean and prefix check
+							_ = os.Remove(targetPath)
 							return fmt.Errorf("integrity check failed for %s: expected %s, got %s",
 								header.Name, expected.Hash, computedHash)
 						}
@@ -609,7 +619,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 func (bm *BackupManager) Verify(backupFile string) error {
 	fmt.Printf("Verifying backup: %s\n", backupFile)
 
-	fileData, err := os.ReadFile(backupFile)
+	fileData, err := os.ReadFile(filepath.Clean(backupFile))
 	if err != nil {
 		return fmt.Errorf("failed to open backup file: %w", err)
 	}

@@ -115,7 +115,7 @@ func (s *Session) Username() string {
 // WriteResponse writes an SMTP response to the client
 func (s *Session) WriteResponse(code int, message string) error {
 	if s.server.config.WriteTimeout > 0 {
-		s.conn.SetWriteDeadline(time.Now().Add(s.server.config.WriteTimeout))
+		_ = s.conn.SetWriteDeadline(time.Now().Add(s.server.config.WriteTimeout))
 	}
 
 	_, err := fmt.Fprintf(s.conn, "%d %s\r\n", code, message)
@@ -125,7 +125,7 @@ func (s *Session) WriteResponse(code int, message string) error {
 // WriteMultiLineResponse writes a multi-line SMTP response
 func (s *Session) WriteMultiLineResponse(code int, lines []string) error {
 	if s.server.config.WriteTimeout > 0 {
-		s.conn.SetWriteDeadline(time.Now().Add(s.server.config.WriteTimeout))
+		_ = s.conn.SetWriteDeadline(time.Now().Add(s.server.config.WriteTimeout))
 	}
 
 	var firstErr error
@@ -503,7 +503,7 @@ func (s *Session) readData() ([]byte, error) {
 
 	for {
 		if s.server.config.ReadTimeout > 0 {
-			s.conn.SetReadDeadline(time.Now().Add(s.server.config.ReadTimeout))
+			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.config.ReadTimeout))
 		}
 
 		line, err := reader.ReadBytes('\n')
@@ -702,7 +702,7 @@ func (s *Session) handleNOOP() error {
 
 // handleQUIT handles the QUIT command
 func (s *Session) handleQUIT() error {
-	s.WriteResponse(221, fmt.Sprintf("%s closing connection", s.server.config.Hostname))
+	_ = s.WriteResponse(221, fmt.Sprintf("%s closing connection", s.server.config.Hostname))
 	return ErrSessionQuit
 }
 
@@ -947,13 +947,13 @@ func (s *Session) handleSTARTTLS() error {
 	}
 
 	// Perform TLS handshake with a bounded timeout
-	s.conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = s.conn.SetDeadline(time.Now().Add(30 * time.Second))
 	tlsConn := tls.Server(s.conn, s.server.config.TLSConfig)
 	if err := tlsConn.Handshake(); err != nil {
-		s.conn.SetDeadline(time.Time{})
+		_ = s.conn.SetDeadline(time.Time{})
 		return err
 	}
-	s.conn.SetDeadline(time.Time{})
+	_ = s.conn.SetDeadline(time.Time{})
 
 	s.conn = tlsConn
 	s.isTLS = true

@@ -7,7 +7,7 @@ package auth
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- SHA1 required by RFC 6238 for TOTP compatibility
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base32"
@@ -89,14 +89,33 @@ func ValidateTOTPAtWithStep(secret, code string, now time.Time, algo TOTPAlgorit
 		return false, -1
 	}
 
-	timeStep := uint64(now.Unix()) / TOTPDefaultPeriod
+	unixTime := now.Unix()
+	if unixTime < 0 {
+		return false, -1
+	}
+	// #nosec G115 -- unixTime is validated non-negative above
+	timeStep := uint64(unixTime) / TOTPDefaultPeriod
 
 	// Check current, -1, and +1 time steps for clock drift tolerance
 	for _, offset := range []int64{-1, 0, 1} {
-		ts := uint64(int64(timeStep) + offset)
+		var ts uint64
+		if offset < 0 {
+			absOffset := uint64(-offset)
+			if timeStep < absOffset {
+				continue
+			}
+			ts = timeStep - absOffset
+		} else {
+			// #nosec G115 -- offset is 0 or 1, cannot overflow
+			ts = timeStep + uint64(offset)
+		}
 		expected := computeTOTP(key, ts, TOTPDefaultDigits, algo)
 		// Use constant-time comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
+			if ts > math.MaxInt64 {
+				return false, -1
+			}
+			// #nosec G115 -- ts is bounded above by math.MaxInt64
 			return true, int64(ts)
 		}
 	}

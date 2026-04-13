@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -61,7 +62,14 @@ func verifyPasswordArgon2id(password, encodedHash string) bool {
 		return false
 	}
 
+	// Validate parameters before casting
+	if time < 0 || time > math.MaxUint32 || memory < 0 || memory > math.MaxUint32 ||
+		threads < 1 || threads > 255 || len(storedHash) == 0 || len(storedHash) > math.MaxUint32 {
+		return false
+	}
+
 	// Compute hash with same parameters
+	// #nosec G115 -- parameters validated above: time/memory bounded by MaxUint32, threads by [1,255], storedHash by MaxUint32
 	computedHash := argon2.IDKey([]byte(password), salt, uint32(time), uint32(memory), uint8(threads), uint32(len(storedHash)))
 
 	// Constant-time comparison

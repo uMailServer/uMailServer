@@ -282,7 +282,7 @@ func (mm *MigrationManager) MigrateFromDovecot(maildirPath, passwdFile string) e
 func (mm *MigrationManager) importDovecotUsers(passwdFile string) error {
 	fmt.Printf("Importing users from: %s\n", passwdFile)
 
-	file, err := os.Open(passwdFile)
+	file, err := os.Open(filepath.Clean(passwdFile))
 	if err != nil {
 		return fmt.Errorf("failed to open passwd file: %w", err)
 	}
@@ -360,7 +360,7 @@ func (mm *MigrationManager) importMaildir(maildirPath string) error {
 // importMessage imports a single message
 func (mm *MigrationManager) importMessage(messagePath string) error {
 	// Read message file
-	data, err := os.ReadFile(messagePath)
+	data, err := os.ReadFile(filepath.Clean(messagePath))
 	if err != nil {
 		return err
 	}
@@ -447,7 +447,7 @@ func (mm *MigrationManager) MigrateFromMBOX(mboxPattern string) error {
 
 // importMBOXFile imports a single MBOX file
 func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
-	file, err := os.Open(mboxFile)
+	file, err := os.Open(filepath.Clean(mboxFile))
 	if err != nil {
 		return err
 	}

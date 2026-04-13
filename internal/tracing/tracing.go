@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -130,7 +131,7 @@ func generateID() string {
 	idMutex.Lock()
 	defer idMutex.Unlock()
 	idCounter++
-	return time.Now().Format("20060102150405") + string(rune(idCounter))
+	return time.Now().Format("20060102150405") + strconv.FormatUint(idCounter, 10)
 }
 
 // Provider manages tracing

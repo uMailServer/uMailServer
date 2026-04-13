@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -114,7 +115,11 @@ func (rm *ResourceMonitor) checkResources() {
 
 	// Update current values
 	rm.mu.Lock()
-	rm.currentMemory = int64(m.Alloc)
+	if m.Alloc > math.MaxInt64 {
+		rm.currentMemory = math.MaxInt64
+	} else {
+		rm.currentMemory = int64(m.Alloc)
+	}
 	rm.currentGoroutines = runtime.NumGoroutine()
 	memoryMB := rm.currentMemory / 1024 / 1024
 	rm.mu.Unlock()

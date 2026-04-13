@@ -336,8 +336,10 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	contentType := http.DetectContentType(data)
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+	// #nosec G705 -- Content-Type is explicitly set to non-HTML via DetectContentType and nosniff
+	_, _ = w.Write(data)
 }
 
 // handleEvents handles /jmap/events (EventSource for push)

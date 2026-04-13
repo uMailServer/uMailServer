@@ -283,6 +283,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 
 	w.Header().Set("Content-Type", "text/vcard; charset=utf-8")
 	w.Header().Set("ETag", s.storage.GetETag(username, addressbookID, contactUID))
+	// #nosec G705 -- Content-Type is explicitly text/vcard, not executable HTML
 	_, _ = w.Write([]byte(vcardData))
 }
 

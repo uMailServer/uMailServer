@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/mcp"
 )
@@ -32,8 +33,9 @@ func (s *Server) startMCP() {
 	mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
 
 	s.mcpHTTPServer = &http.Server{
-		Addr:    mcpAddr,
-		Handler: mux,
+		Addr:              mcpAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {

@@ -115,6 +115,9 @@ func (db *Database) CreateMailbox(user, mailbox string) error {
 		}
 		if b.Get([]byte("uidvalidity")) == nil {
 			now := time.Now().Unix()
+			if now < 0 || now > 0x7FFFFFFF {
+				return fmt.Errorf("timestamp out of range for uidvalidity")
+			}
 			if err := b.Put([]byte("uidvalidity"), itob(uint32(now))); err != nil {
 				return err
 			}
@@ -164,7 +167,11 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 			if err != nil {
 				return err
 			}
-			if err := newB.Put([]byte("uidvalidity"), itob(uint32(time.Now().Unix()))); err != nil {
+			now := time.Now().Unix()
+			if now < 0 || now > 0x7FFFFFFF {
+				return fmt.Errorf("timestamp out of range for uidvalidity")
+			}
+			if err := newB.Put([]byte("uidvalidity"), itob(uint32(now))); err != nil {
 				return err
 			}
 			if err := newB.Put([]byte("uidnext"), itob(1)); err != nil {
@@ -179,9 +186,11 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 		if err != nil {
 			return err
 		}
-		oldB.ForEach(func(k, v []byte) error {
+		if err := oldB.ForEach(func(k, v []byte) error {
 			return newB.Put(k, v)
-		})
+		}); err != nil {
+			return err
+		}
 
 		// Create new messages bucket and copy messages
 		oldMB := tx.Bucket([]byte(oldMsgs))
@@ -190,9 +199,11 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 			if err != nil {
 				return err
 			}
-			oldMB.ForEach(func(k, v []byte) error {
+			if err := oldMB.ForEach(func(k, v []byte) error {
 				return newMB.Put(k, v)
-			})
+			}); err != nil {
+				return err
+			}
 		}
 
 		// Delete old buckets
@@ -423,9 +434,13 @@ func HasFlag(flags []string, flag string) bool {
 // itob converts uint32 to 4-byte big-endian slice
 func itob(v uint32) []byte {
 	b := make([]byte, 4)
+	// #nosec G115 -- Intentional big-endian byte extraction from uint32
 	b[0] = byte(v >> 24)
+	// #nosec G115 -- Intentional big-endian byte extraction from uint32
 	b[1] = byte(v >> 16)
+	// #nosec G115 -- Intentional big-endian byte extraction from uint32
 	b[2] = byte(v >> 8)
+	// #nosec G115 -- Intentional big-endian byte extraction from uint32
 	b[3] = byte(v)
 	return b
 }

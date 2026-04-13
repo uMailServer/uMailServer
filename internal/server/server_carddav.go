@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/carddav"
 )
@@ -27,8 +28,9 @@ func (s *Server) startCardDAV() {
 	s.carddavServer = carddavServer
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: carddavServer,
+		Addr:              addr,
+		Handler:           carddavServer,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	s.carddavHTTPServer = srv
 

@@ -27,8 +27,9 @@ func (s *Server) startJMAP() {
 	s.jmapServer = jmapServer
 
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: jmapServer,
+		Addr:              addr,
+		Handler:           jmapServer,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 	s.jmapHTTPServer = srv
 

@@ -247,7 +247,7 @@ func (m *Manager) loadConfigs() error {
 
 // loadConfigFile loads a single config file
 func (m *Manager) loadConfigFile(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}

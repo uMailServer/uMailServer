@@ -306,7 +306,7 @@ func (s *Service) loadOrGenerateConfig() (*Config, error) {
 	configPath := filepath.Join(s.dataDir, "vapid.json")
 
 	// Try to load existing config
-	if data, err := os.ReadFile(configPath); err == nil {
+	if data, err := os.ReadFile(filepath.Clean(configPath)); err == nil {
 		var config Config
 		if err := json.Unmarshal(data, &config); err == nil {
 			return &config, nil
@@ -387,7 +387,7 @@ func (s *Service) loadSubscriptions() error {
 		}
 
 		path := filepath.Join(s.dataDir, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			continue
 		}

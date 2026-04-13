@@ -2,7 +2,7 @@ package auth
 
 import (
 	"crypto/hmac"
-	"crypto/md5"
+	"crypto/md5" // #nosec G501 -- MD5 required by CRAM-MD5 authentication protocol (RFC 2195)
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"

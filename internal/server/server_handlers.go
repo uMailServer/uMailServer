@@ -65,7 +65,6 @@ func (s *Server) getUserSecret(username string) (string, error) {
 	return account.PasswordHash, nil
 }
 
-
 // loginResult handles login success/failure events and triggers webhooks
 func (s *Server) loginResult(username string, success bool, ip string) {
 	if s.webhookMgr != nil {

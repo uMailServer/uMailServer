@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -475,14 +476,18 @@ func (rl *RateLimiter) loadUserSentToday(user string) int64 {
 		return 0
 	}
 	var count int64
-	rl.bolt.View(func(tx *bbolt.Tx) error {
+	_ = rl.bolt.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte("ratelimit_users"))
 		if bucket == nil {
 			return nil
 		}
 		key := []byte(user + ":sent_today")
 		if v := bucket.Get(key); len(v) == 8 {
-			count = int64(binary.BigEndian.Uint64(v))
+			c := binary.BigEndian.Uint64(v)
+			if c > uint64(math.MaxInt64) {
+				c = uint64(math.MaxInt64)
+			}
+			count = int64(c)
 		}
 		return nil
 	})
@@ -493,13 +498,17 @@ func (rl *RateLimiter) saveUserSentToday(user string, count int64) {
 	if rl.bolt == nil {
 		return
 	}
-	rl.bolt.Update(func(tx *bbolt.Tx) error {
+	_ = rl.bolt.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte("ratelimit_users"))
 		if bucket == nil {
 			return nil
 		}
 		key := []byte(user + ":sent_today")
 		var buf [8]byte
+		if count < 0 {
+			count = 0
+		}
+		// #nosec G115 -- count is validated non-negative above
 		binary.BigEndian.PutUint64(buf[:], uint64(count))
 		return bucket.Put(key, buf[:])
 	})

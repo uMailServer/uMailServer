@@ -78,12 +78,12 @@ type Message struct {
 
 // Session represents a POP3 client session
 type Session struct {
-	id            string
-	conn          net.Conn
-	reader        *bufio.Reader
-	writer        *bufio.Writer
-	server        *Server
-	state         State
+	id                string
+	conn              net.Conn
+	reader            *bufio.Reader
+	writer            *bufio.Writer
+	server            *Server
+	state             State
 	user              string
 	messages          []*Message
 	isTLS             bool

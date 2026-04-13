@@ -32,6 +32,14 @@ func (s *Storage) userDir(username string) string {
 	return filepath.Join(s.dataDir, safeUsername)
 }
 
+// validateID ensures an identifier does not contain path traversal sequences
+func validateID(id string) error {
+	if strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
+		return fmt.Errorf("invalid identifier: %s", id)
+	}
+	return nil
+}
+
 // addressbookDir returns the directory for a specific address book
 func (s *Storage) addressbookDir(username, addressbookID string) string {
 	return filepath.Join(s.userDir(username), addressbookID)
@@ -177,6 +185,13 @@ func (s *Storage) DeleteAddressbook(username, addressbookID string) error {
 
 // SaveContact saves a contact
 func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, vcardData string) error {
+	if err := validateID(addressbookID); err != nil {
+		return err
+	}
+	if err := validateID(contact.UID); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -188,6 +203,7 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 
 	// Write the raw vCard data
 	path := s.contactPath(username, addressbookID, contact.UID)
+	// #nosec G703 -- IDs are validated with validateID before use
 	if err := os.WriteFile(path, []byte(vcardData), 0600); err != nil {
 		return fmt.Errorf("failed to write contact: %w", err)
 	}
@@ -196,7 +212,8 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 	if ab, err := s.getAddressbookUnsafe(username, addressbookID); err == nil && ab != nil {
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
-		_ = os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
+		// #nosec G703 -- IDs are validated with validateID before use
+		_ = os.WriteFile(filepath.Clean(s.addressbookPath(username, addressbookID)), data, 0600)
 	}
 
 	return nil
@@ -249,6 +266,13 @@ func (s *Storage) GetContacts(username, addressbookID string) ([]string, error) 
 
 // DeleteContact deletes a contact
 func (s *Storage) DeleteContact(username, addressbookID, contactUID string) error {
+	if err := validateID(addressbookID); err != nil {
+		return err
+	}
+	if err := validateID(contactUID); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -264,7 +288,8 @@ func (s *Storage) DeleteContact(username, addressbookID, contactUID string) erro
 	if ab, err := s.getAddressbookUnsafe(username, addressbookID); err == nil && ab != nil {
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
-		_ = os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
+		// #nosec G703 -- IDs are validated with validateID before use
+		_ = os.WriteFile(filepath.Clean(s.addressbookPath(username, addressbookID)), data, 0600)
 	}
 
 	return nil

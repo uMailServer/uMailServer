@@ -224,7 +224,7 @@ func cmdQuickstart(args []string) {
 
 	// Generate DKIM key
 	dkimDir := filepath.Join(dataDir, "dkim")
-	os.MkdirAll(dkimDir, 0755)
+	_ = os.MkdirAll(dkimDir, 0750)
 	dkimKeyPath := filepath.Join(dkimDir, domain+".private.pem")
 
 	fmt.Println("Generating DKIM key pair...")
@@ -234,7 +234,7 @@ func cmdQuickstart(args []string) {
 	}
 
 	// Read public key for DNS
-	publicKey, err := os.ReadFile(dkimKeyPath + ".pub")
+	publicKey, err := os.ReadFile(filepath.Clean(dkimKeyPath + ".pub"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to read DKIM public key: %v\n", err)
 		os.Exit(1)
@@ -407,7 +407,7 @@ func generateDKIMKey(keyPath string) error {
 		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
 	}
 
-	privateKeyFile, err := os.Create(keyPath)
+	privateKeyFile, err := os.Create(filepath.Clean(keyPath))
 	if err != nil {
 		return err
 	}
@@ -428,7 +428,7 @@ func generateDKIMKey(keyPath string) error {
 		Bytes: publicKeyBytes,
 	}
 
-	publicKeyFile, err := os.Create(keyPath + ".pub")
+	publicKeyFile, err := os.Create(filepath.Clean(keyPath + ".pub"))
 	if err != nil {
 		return err
 	}
@@ -442,6 +442,7 @@ func generateDKIMKey(keyPath string) error {
 }
 
 func readPassword() string {
+	// #nosec G115 -- file descriptors are small positive integers on all supported platforms
 	fd := int(os.Stdin.Fd())
 	if state, err := term.MakeRaw(fd); err == nil {
 		defer term.Restore(fd, state)

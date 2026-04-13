@@ -32,6 +32,14 @@ func (s *Storage) userDir(username string) string {
 	return filepath.Join(s.dataDir, safeUsername)
 }
 
+// validateID ensures an identifier does not contain path traversal sequences
+func validateID(id string) error {
+	if strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
+		return fmt.Errorf("invalid identifier: %s", id)
+	}
+	return nil
+}
+
 // calendarDir returns the directory for a specific calendar
 func (s *Storage) calendarDir(username, calendarID string) string {
 	return filepath.Join(s.userDir(username), calendarID)
@@ -83,7 +91,7 @@ func (s *Storage) GetCalendar(username, calendarID string) (*Calendar, error) {
 	defer s.mu.RUnlock()
 
 	path := s.calendarPath(username, calendarID)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -129,7 +137,7 @@ func (s *Storage) GetCalendars(username string) ([]*Calendar, error) {
 // getCalendarUnsafe reads a calendar without locking (caller must hold lock)
 func (s *Storage) getCalendarUnsafe(username, calendarID string) (*Calendar, error) {
 	path := s.calendarPath(username, calendarID)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +185,13 @@ func (s *Storage) DeleteCalendar(username, calendarID string) error {
 
 // SaveEvent saves a calendar event
 func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, icsData string) error {
+	if err := validateID(calendarID); err != nil {
+		return err
+	}
+	if err := validateID(event.UID); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -188,6 +203,7 @@ func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, i
 
 	// Write the raw iCalendar data
 	path := s.eventPath(username, calendarID, event.UID)
+	// #nosec G703 -- IDs are validated with validateID before use
 	if err := os.WriteFile(path, []byte(icsData), 0600); err != nil {
 		return fmt.Errorf("failed to write event: %w", err)
 	}
@@ -196,7 +212,8 @@ func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, i
 	if cal, err := s.getCalendarUnsafe(username, calendarID); err == nil && cal != nil {
 		cal.Modified = time.Now()
 		data, _ := json.MarshalIndent(cal, "", "  ")
-		_ = os.WriteFile(s.calendarPath(username, calendarID), data, 0600)
+		// #nosec G703 -- IDs are validated with validateID before use
+		_ = os.WriteFile(filepath.Clean(s.calendarPath(username, calendarID)), data, 0600)
 	}
 
 	return nil
@@ -208,7 +225,7 @@ func (s *Storage) GetEvent(username, calendarID, eventUID string) (string, error
 	defer s.mu.RUnlock()
 
 	path := s.eventPath(username, calendarID, eventUID)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -237,7 +254,7 @@ func (s *Storage) GetEvents(username, calendarID string) ([]string, error) {
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".ics") {
 			path := filepath.Join(dir, entry.Name())
-			data, err := os.ReadFile(path)
+			data, err := os.ReadFile(filepath.Clean(path))
 			if err == nil {
 				events = append(events, string(data))
 			}
@@ -249,6 +266,13 @@ func (s *Storage) GetEvents(username, calendarID string) ([]string, error) {
 
 // DeleteEvent deletes a calendar event
 func (s *Storage) DeleteEvent(username, calendarID, eventUID string) error {
+	if err := validateID(calendarID); err != nil {
+		return err
+	}
+	if err := validateID(eventUID); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -264,7 +288,8 @@ func (s *Storage) DeleteEvent(username, calendarID, eventUID string) error {
 	if cal, err := s.getCalendarUnsafe(username, calendarID); err == nil && cal != nil {
 		cal.Modified = time.Now()
 		data, _ := json.MarshalIndent(cal, "", "  ")
-		_ = os.WriteFile(s.calendarPath(username, calendarID), data, 0600)
+		// #nosec G703 -- IDs are validated with validateID before use
+		_ = os.WriteFile(filepath.Clean(s.calendarPath(username, calendarID)), data, 0600)
 	}
 
 	return nil

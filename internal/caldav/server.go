@@ -283,6 +283,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 	w.Header().Set("ETag", etag)
 
 	w.WriteHeader(http.StatusOK)
+	// #nosec G705 -- Content-Type is explicitly text/calendar, not executable HTML
 	_, _ = w.Write([]byte(eventData))
 }
 

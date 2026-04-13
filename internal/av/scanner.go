@@ -95,11 +95,19 @@ func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 		chunk := data[offset:end]
 
 		// Write length (4 bytes, big-endian)
-		length := uint32(len(chunk))
+		chunkLen := len(chunk)
+		if chunkLen > 0x7FFFFFFF {
+			return nil, fmt.Errorf("chunk too large")
+		}
+		length := uint32(chunkLen)
 		_, err := conn.Write([]byte{
+			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
 			byte(length >> 24),
+			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
 			byte(length >> 16),
+			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
 			byte(length >> 8),
+			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
 			byte(length),
 		})
 		if err != nil {
