@@ -15,18 +15,18 @@ import (
 // LDAPConfig holds LDAP/AD connection configuration
 type LDAPConfig struct {
 	Enabled        bool          `yaml:"enabled"`
-	URL            string        `yaml:"url"`             // ldap://localhost:389 or ldaps://localhost:636
-	BindDN         string        `yaml:"bind_dn"`         // DN for initial bind (optional)
-	BindPassword   string        `yaml:"bind_password"`   // Password for initial bind (optional)
-	BaseDN         string        `yaml:"base_dn"`         // Base DN for user search
-	UserFilter     string        `yaml:"user_filter"`     // Filter for user search (default: "(uid=%s)")
-	EmailAttribute string        `yaml:"email_attribute"` // Attribute for email (default: "mail")
-	NameAttribute  string        `yaml:"name_attribute"`  // Attribute for display name (default: "cn")
-	GroupAttribute string        `yaml:"group_attribute"` // Attribute for group membership (default: "memberOf")
-	AdminGroups    []string      `yaml:"admin_groups"`    // Groups that grant admin access
-	StartTLS       bool          `yaml:"start_tls"`       // Use StartTLS on port 389
-	SkipVerify     bool          `yaml:"skip_verify"`     // Skip TLS certificate verification (dev only)
-	Timeout        time.Duration `yaml:"timeout"`         // Connection timeout
+	URL            string        `yaml:"url"`                    // ldap://localhost:389 or ldaps://localhost:636
+	BindDN         string        `yaml:"bind_dn"`                // DN for initial bind (optional)
+	BindPassword   string        `yaml:"bind_password" json:"-"` // Password for initial bind (optional)
+	BaseDN         string        `yaml:"base_dn"`                // Base DN for user search
+	UserFilter     string        `yaml:"user_filter"`            // Filter for user search (default: "(uid=%s)")
+	EmailAttribute string        `yaml:"email_attribute"`        // Attribute for email (default: "mail")
+	NameAttribute  string        `yaml:"name_attribute"`         // Attribute for display name (default: "cn")
+	GroupAttribute string        `yaml:"group_attribute"`        // Attribute for group membership (default: "memberOf")
+	AdminGroups    []string      `yaml:"admin_groups"`           // Groups that grant admin access
+	StartTLS       bool          `yaml:"start_tls"`              // Use StartTLS on port 389
+	SkipVerify     bool          `yaml:"skip_verify"`            // Skip TLS certificate verification (dev only)
+	Timeout        time.Duration `yaml:"timeout"`                // Connection timeout
 }
 
 // LDAPClient handles LDAP authentication
@@ -60,6 +60,18 @@ func NewLDAPClient(config LDAPConfig) (*LDAPClient, error) {
 	}
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
+	}
+
+	if config.Enabled && config.BindDN == "" {
+		return nil, fmt.Errorf("ldap: bind_dn is required when ldap is enabled")
+	}
+
+	if err := validateUserFilter(config.UserFilter); err != nil {
+		return nil, fmt.Errorf("ldap: invalid user_filter: %w", err)
+	}
+
+	if config.SkipVerify {
+		slog.Warn("ldap: tls certificate verification is disabled (skip_verify=true). This is insecure and should only be used in development.")
 	}
 
 	client := &LDAPClient{
@@ -353,4 +365,31 @@ func (c *LDAPClient) GetUser(username string) (*LDAPUser, error) {
 // IsEnabled returns whether LDAP authentication is enabled
 func (c *LDAPClient) IsEnabled() bool {
 	return c != nil && c.config.Enabled
+}
+
+// validateUserFilter checks that the LDAP user filter is safe.
+// It must contain exactly one %%s placeholder and have balanced parentheses.
+func validateUserFilter(filter string) error {
+	if filter == "" {
+		return nil // Will use default (uid=%s)
+	}
+	if strings.Count(filter, "%s") != 1 {
+		return fmt.Errorf("user_filter must contain exactly one %%s placeholder")
+	}
+	depth := 0
+	for _, c := range filter {
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return fmt.Errorf("user_filter has unbalanced parentheses")
+			}
+		}
+	}
+	if depth != 0 {
+		return fmt.Errorf("user_filter has unbalanced parentheses")
+	}
+	return nil
 }

@@ -76,18 +76,29 @@ func (s *Server) handlePutRateLimitConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Validate
-	if req.IPPerMinute < 0 {
-		s.sendError(w, http.StatusBadRequest, "ip_per_minute must be non-negative")
-		return
+	// Validate bounds for all fields
+	const maxRate = 10_000_000
+	fields := map[string]int{
+		"ip_per_minute":       req.IPPerMinute,
+		"ip_per_hour":         req.IPPerHour,
+		"ip_per_day":          req.IPPerDay,
+		"ip_connections":      req.IPConnections,
+		"user_per_minute":     req.UserPerMinute,
+		"user_per_hour":       req.UserPerHour,
+		"user_per_day":        req.UserPerDay,
+		"user_max_recipients": req.UserMaxRecipients,
+		"global_per_minute":   req.GlobalPerMinute,
+		"global_per_hour":     req.GlobalPerHour,
 	}
-	if req.IPPerHour < 0 {
-		s.sendError(w, http.StatusBadRequest, "ip_per_hour must be non-negative")
-		return
-	}
-	if req.UserPerDay < 0 {
-		s.sendError(w, http.StatusBadRequest, "user_per_day must be non-negative")
-		return
+	for name, val := range fields {
+		if val < 0 {
+			s.sendError(w, http.StatusBadRequest, name+" must be non-negative")
+			return
+		}
+		if val > maxRate {
+			s.sendError(w, http.StatusBadRequest, name+" exceeds maximum allowed value")
+			return
+		}
 	}
 
 	// Build new config from request

@@ -334,6 +334,20 @@ func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
 	}
 }
 
+// sanitizeHeaderValue removes CR/LF characters to prevent SMTP header injection.
+func sanitizeHeaderValue(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\n", "")
+}
+
+// sanitizeHeaderValues applies sanitizeHeaderValue to each element in a slice.
+func sanitizeHeaderValues(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = sanitizeHeaderValue(v)
+	}
+	return out
+}
+
 // handleMailSend sends an email and stores it in Sent folder
 //
 //	@Summary Send email
@@ -392,14 +406,19 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	dateStr := now.Format("Mon, 02 Jan 2006 15:04:05 -0700")
 
+	// Sanitize header values to prevent CRLF injection
+	safeSubject := sanitizeHeaderValue(req.Subject)
+	safeTo := sanitizeHeaderValues(req.To)
+	safeCC := sanitizeHeaderValues(req.CC)
+
 	// Build headers
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("From: %s\r\n", userEmail))
-	sb.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(req.To, ", ")))
-	if len(req.CC) > 0 {
-		sb.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(req.CC, ", ")))
+	sb.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(safeTo, ", ")))
+	if len(safeCC) > 0 {
+		sb.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(safeCC, ", ")))
 	}
-	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", req.Subject))
+	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", safeSubject))
 	sb.WriteString(fmt.Sprintf("Date: %s\r\n", dateStr))
 	sb.WriteString("MIME-Version: 1.0\r\n")
 	sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
@@ -434,9 +453,9 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Parse headers for metadata
-		subject := req.Subject
+		subject := safeSubject
 		from := userEmail
-		to := strings.Join(req.To, ", ")
+		to := strings.Join(safeTo, ", ")
 
 		// Store metadata with the hash-based message ID
 		meta := &storage.MessageMetadata{

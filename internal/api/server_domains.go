@@ -90,7 +90,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 
 	// Validate domain name format
 	if err := validateDomainName(req.Name); err != nil {
-		s.sendError(w, http.StatusBadRequest, err.Error())
+		s.sendError(w, http.StatusBadRequest, "invalid domain name")
 		return
 	}
 
