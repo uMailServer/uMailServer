@@ -1,6 +1,8 @@
 package store
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -435,7 +437,7 @@ func TestFetchReader(t *testing.T) {
 	// Read the content
 	content := make([]byte, len(msg)+100)
 	n, err := reader.Read(content)
-	if err != nil && err.Error() != "EOF" {
+	if err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("Read failed: %v", err)
 	}
 

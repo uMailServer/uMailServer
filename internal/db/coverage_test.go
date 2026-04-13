@@ -2,6 +2,7 @@ package db
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -376,6 +377,8 @@ func TestGetUnmarshalError(t *testing.T) {
 
 // --- ForEach corrupt data in callback ---
 
+var errStopIteration = errors.New("stop iteration")
+
 func TestForEachCallbackError(t *testing.T) {
 	database := helperDB(t)
 
@@ -384,9 +387,9 @@ func TestForEachCallbackError(t *testing.T) {
 	}
 
 	err := database.ForEach(BucketDomains, func(key string, value []byte) error {
-		return fmt.Errorf("stop iteration")
+		return errStopIteration
 	})
-	if err == nil || err.Error() != "stop iteration" {
+	if err == nil || !errors.Is(err, errStopIteration) {
 		t.Errorf("expected 'stop iteration' error, got %v", err)
 	}
 }
