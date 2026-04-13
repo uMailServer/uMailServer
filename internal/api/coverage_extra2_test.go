@@ -277,7 +277,7 @@ func TestUpdateDomain_Success2(t *testing.T) {
 	if result["max_accounts"] != 50.0 {
 		t.Errorf("Expected max_accounts=50, got %v", result["max_accounts"])
 	}
-	if result["is_active"] != false {
+	if v, ok := result["is_active"].(bool); !ok || v {
 		t.Errorf("Expected is_active=false, got %v", result["is_active"])
 	}
 }

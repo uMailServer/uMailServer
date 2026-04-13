@@ -507,7 +507,7 @@ func TestConfigStructFields(t *testing.T) {
 	cfg := DefaultConfig()
 
 	// Test all major struct fields are accessible
-	if cfg.TLS.ACME.Enabled != false {
+	if cfg.TLS.ACME.Enabled {
 		t.Error("expected ACME to be disabled by default")
 	}
 
@@ -519,7 +519,7 @@ func TestConfigStructFields(t *testing.T) {
 		t.Errorf("expected metrics path /metrics, got %s", cfg.Metrics.Path)
 	}
 
-	if cfg.Storage.Sync != true {
+	if !cfg.Storage.Sync {
 		t.Error("expected sync to be enabled by default")
 	}
 }
@@ -753,7 +753,7 @@ func TestAskBoolDefaultFalse(t *testing.T) {
 	wizard.reader = bufio.NewReader(strings.NewReader(input))
 
 	result := wizard.askBool("Enable?", false)
-	if result != false {
+	if result {
 		t.Errorf("expected false, got %v", result)
 	}
 }

@@ -2148,7 +2148,7 @@ func TestMockFileInfo_Mode(t *testing.T) {
 
 func TestMockFileInfo_IsDir(t *testing.T) {
 	fi := &mockFileInfo{name: "testfile.txt", size: 100}
-	if fi.IsDir() != false {
+	if fi.IsDir() {
 		t.Errorf("expected IsDir() = false, got %v", fi.IsDir())
 	}
 }

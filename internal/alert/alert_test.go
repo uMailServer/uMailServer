@@ -12,7 +12,7 @@ import (
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg.Enabled != false {
+	if cfg.Enabled {
 		t.Error("expected Enabled=false by default")
 	}
 	if cfg.DiskThreshold != 85.0 {
@@ -560,7 +560,8 @@ func TestManager_GetStats(t *testing.T) {
 
 	stats := mgr.GetStats()
 
-	if stats["enabled"] != true {
+	enabled, ok := stats["enabled"].(bool)
+	if !ok || !enabled {
 		t.Error("expected enabled=true")
 	}
 	if stats["max_alerts"] != 50 {

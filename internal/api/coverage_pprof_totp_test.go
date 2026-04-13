@@ -562,7 +562,7 @@ func TestAccountToJSON_WithVacation(t *testing.T) {
 	if result["email"] != "test@example.com" {
 		t.Error("email mismatch")
 	}
-	if result["is_admin"] != true {
+	if v, ok := result["is_admin"].(bool); !ok || !v {
 		t.Error("is_admin mismatch")
 	}
 	// Vacation settings should be included when present

@@ -34,7 +34,7 @@ func TestNewManager(t *testing.T) {
 		t.Fatal("Manager should not be nil")
 	}
 
-	if manager.config.Enabled != true {
+	if !manager.config.Enabled {
 		t.Error("Enabled should be true")
 	}
 

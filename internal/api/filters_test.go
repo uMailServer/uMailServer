@@ -437,7 +437,7 @@ func TestHandleUpdateFilter_ToggleEnabled(t *testing.T) {
 		t.Fatalf("Failed to parse response: %v", err)
 	}
 
-	if result.Enabled != false {
+	if result.Enabled {
 		t.Errorf("Expected enabled=false, got %v", result.Enabled)
 	}
 }
@@ -498,7 +498,7 @@ func TestHandleFilterToggle(t *testing.T) {
 	}
 
 	// Filter was created with enabled=true, toggle should make it false
-	if result.Enabled != false {
+	if result.Enabled {
 		t.Errorf("Expected enabled=false after toggle, got %v", result.Enabled)
 	}
 }

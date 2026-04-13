@@ -51,7 +51,7 @@ func TestDomainToJSON(t *testing.T) {
 	if result["max_accounts"] != 100 {
 		t.Errorf("Expected max_accounts 100, got %v", result["max_accounts"])
 	}
-	if result["is_active"] != true {
+	if v, ok := result["is_active"].(bool); !ok || !v {
 		t.Errorf("Expected is_active true, got %v", result["is_active"])
 	}
 }
@@ -69,7 +69,7 @@ func TestAccountToJSON(t *testing.T) {
 	if result["email"] != "user@example.com" {
 		t.Errorf("Expected email user@example.com, got %v", result["email"])
 	}
-	if result["is_admin"] != true {
+	if v, ok := result["is_admin"].(bool); !ok || !v {
 		t.Errorf("Expected is_admin true, got %v", result["is_admin"])
 	}
 	if result["quota_used"] != int64(1024) {
@@ -1760,7 +1760,7 @@ func TestCreateAccountWithAdminFlag(t *testing.T) {
 		t.Fatalf("Failed to decode JSON: %v", err)
 	}
 
-	if result["is_admin"] != true {
+	if v, ok := result["is_admin"].(bool); !ok || !v {
 		t.Errorf("Expected is_admin true, got %v", result["is_admin"])
 	}
 }
