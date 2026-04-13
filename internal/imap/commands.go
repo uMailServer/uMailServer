@@ -221,13 +221,13 @@ func (s *Session) handleStartTLS() error {
 	s.WriteResponse(s.tag, "OK Begin TLS negotiation now")
 
 	// Upgrade to TLS with a bounded handshake timeout
-	s.conn.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = s.conn.SetDeadline(time.Now().Add(30 * time.Second)) // Best-effort deadline
 	tlsConn := tls.Server(s.conn, s.server.tlsConfig)
 	if err := tlsConn.Handshake(); err != nil {
-		s.conn.SetDeadline(time.Time{})
+		_ = s.conn.SetDeadline(time.Time{}) // Best-effort deadline reset
 		return fmt.Errorf("TLS handshake failed: %w", err)
 	}
-	s.conn.SetDeadline(time.Time{})
+	_ = s.conn.SetDeadline(time.Time{}) // Best-effort deadline reset
 
 	s.tlsConn = tlsConn
 	s.conn = tlsConn
@@ -388,7 +388,10 @@ func (s *Session) handleAuthLogin() error {
 // okMsg is the human-readable text sent on success (e.g. "LOGIN completed").
 // failMsg is sent on authentication failure (e.g. "AUTHENTICATE failed").
 func clientIP(conn net.Conn) string {
-	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		return conn.RemoteAddr().String()
+	}
 	return host
 }
 

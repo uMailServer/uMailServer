@@ -359,6 +359,10 @@ func (s *Session) handleDATA() error {
 		if host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String()); err == nil {
 			remoteIP = net.ParseIP(host)
 		}
+		// Fallback for Unix sockets or invalid addresses
+		if remoteIP == nil {
+			remoteIP = net.IPv4zero
+		}
 
 		ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)
 		ctx.RemoteHost = s.helloDomain
@@ -600,6 +604,10 @@ func (s *Session) handleBDAT(arg string) error {
 			var remoteIP net.IP
 			if host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String()); err == nil {
 				remoteIP = net.ParseIP(host)
+			}
+			// Fallback for Unix sockets or invalid addresses
+			if remoteIP == nil {
+				remoteIP = net.IPv4zero
 			}
 
 			ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)

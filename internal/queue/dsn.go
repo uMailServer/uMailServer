@@ -102,7 +102,11 @@ type DSNRecipient struct {
 // GenerateMessageID generates a unique Message-ID for the DSN
 func GenerateMessageID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use timestamp + PID if crypto/rand fails (extremely rare)
+		b[0] = byte(time.Now().UnixNano() & 0xff)
+		b[1] = byte((time.Now().UnixNano() >> 8) & 0xff)
+	}
 	return fmt.Sprintf("<%d.%s@umailserver>", time.Now().UnixNano(), hex.EncodeToString(b))
 }
 
@@ -229,6 +233,10 @@ func extractHeaders(msg string) string {
 
 func generateBoundary() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback: use timestamp if crypto/rand fails (extremely rare)
+		b[0] = byte(time.Now().UnixNano() & 0xff)
+		b[1] = byte((time.Now().UnixNano() >> 8) & 0xff)
+	}
 	return hex.EncodeToString(b)
 }

@@ -246,7 +246,7 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 
 	// Create queue directory if not exists
 	queueDir := filepath.Join(m.dataDir, "queue")
-	if err := os.MkdirAll(queueDir, 0755); err != nil {
+	if err := os.MkdirAll(queueDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create queue directory: %w", err)
 	}
 
@@ -394,8 +394,7 @@ func (m *Manager) sweepPendingEntries() {
 		case m.deliveryChan <- entry:
 			// Sent to worker
 		default:
-			// Channel full, entry will be picked up on next sweep
-			return
+			// Channel full, try next entry - we'll get them on next sweep
 		}
 	}
 }
@@ -516,7 +515,7 @@ func (m *Manager) acquireMXConn(mx string) (*smtp.Client, bool, error) {
 		conn := pool.conns[i]
 		if now.Sub(conn.lastUsed) > pool.idleTimeout {
 			// Connection expired, remove it
-			conn.client.Close()
+			_ = conn.client.Close() // Best-effort
 			pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
 			continue
 		}
@@ -527,7 +526,7 @@ func (m *Manager) acquireMXConn(mx string) (*smtp.Client, bool, error) {
 			return conn.client, true, nil
 		}
 		// Connection dead, remove it
-		conn.client.Close()
+		_ = conn.client.Close() // Best-effort
 		pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
 	}
 
@@ -551,7 +550,7 @@ func (m *Manager) createMXConn(mx string) (*smtp.Client, error) {
 
 	client, err := smtp.NewClient(conn, mx)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close() // Best-effort
 		return nil, err
 	}
 
@@ -570,7 +569,7 @@ func (m *Manager) releaseMXConn(mx string, client *smtp.Client, valid bool) {
 
 	if !valid {
 		// Connection is dead, close it
-		client.Close()
+		_ = client.Close() // Best-effort
 		return
 	}
 
@@ -582,7 +581,7 @@ func (m *Manager) releaseMXConn(mx string, client *smtp.Client, valid bool) {
 		})
 	} else {
 		// Pool full, close the connection
-		client.Close()
+		_ = client.Close() // Best-effort
 	}
 }
 
@@ -658,7 +657,7 @@ func (m *Manager) doDeliverToMX(from, to string, message []byte, mx string) erro
 		if err != nil {
 			return err
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		newClient, err := smtp.NewClient(conn, mx)
 		if err != nil {
@@ -1025,7 +1024,11 @@ func (m *Manager) SetRequireTLS(require bool) {
 
 func generateID() string {
 	b := make([]byte, 8)
-	_, _ = crand.Read(b)
+	if _, err := crand.Read(b); err != nil {
+		// Fallback to partial random if crypto/rand fails (extremely rare)
+		b[0] = byte(time.Now().UnixNano() & 0xff)
+		b[1] = byte((time.Now().UnixNano() >> 8) & 0xff)
+	}
 	return fmt.Sprintf("%d-%x", time.Now().UnixNano(), b)
 }
 
@@ -1039,25 +1042,25 @@ func extractDomain(email string) string {
 
 func writeFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return err
 	}
 
 	// Write to temp file first, then rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return err
 	}
 
 	// Sync temp file before rename to ensure data durability
 	f, err := os.OpenFile(tmpPath, os.O_RDWR, 0)
 	if err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close() // Best-effort
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	f.Close()

@@ -326,7 +326,7 @@ func (s *Service) loadOrGenerateConfig() (*Config, error) {
 	}
 
 	// Save config
-	if err := os.MkdirAll(s.dataDir, 0755); err != nil {
+	if err := os.MkdirAll(s.dataDir, 0750); err != nil {
 		return nil, err
 	}
 
@@ -369,7 +369,7 @@ func generateVAPIDKeys() (privateKey, publicKey string, err error) {
 
 // loadSubscriptions loads subscriptions from disk
 func (s *Service) loadSubscriptions() error {
-	if err := os.MkdirAll(s.dataDir, 0755); err != nil {
+	if err := os.MkdirAll(s.dataDir, 0750); err != nil {
 		return err
 	}
 

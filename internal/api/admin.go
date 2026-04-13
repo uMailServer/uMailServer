@@ -156,6 +156,12 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 		user, _ := claims["sub"].(string)
 		isAdmin, _ := claims["admin"].(bool)
 
+		// Validate that we got valid values
+		if user == "" {
+			writeError(w, "unauthorized", "Invalid token: missing subject", http.StatusUnauthorized)
+			return
+		}
+
 		ctx := context.WithValue(r.Context(), "user", user)
 		ctx = context.WithValue(ctx, "isAdmin", isAdmin)
 		next.ServeHTTP(w, r.WithContext(ctx))

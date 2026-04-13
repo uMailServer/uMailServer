@@ -39,7 +39,7 @@ func NewRotatingWriter(filename string, maxSizeMB, maxBackups, maxAgeDays int) (
 
 	// Ensure log directory exists
 	dir := filepath.Dir(filename)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 

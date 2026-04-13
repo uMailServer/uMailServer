@@ -57,7 +57,7 @@ func (h *MailHandler) SetStorage(msgStore *storage.MessageStore, mailDB *storage
 func (h *MailHandler) sendError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message}) // Best-effort
 }
 
 // folderMap maps webmail folder names to internal mailbox names
@@ -98,11 +98,11 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 
 	// Get user from context (set by auth middleware)
 	user := r.Context().Value("user")
-	if user == nil {
+	userEmail, ok := user.(string)
+	if !ok {
 		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	userEmail := user.(string)
 
 	// Parse folder from query
 	folder := r.URL.Query().Get("folder")
@@ -123,7 +123,7 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"emails": emails,
 		"total":  len(emails),
 		"folder": folder,
@@ -141,7 +141,7 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 	if err != nil {
 		// Create mailbox if it doesn't exist (only for INBOX)
 		if mailbox == "INBOX" {
-			h.mailDB.CreateMailbox(userEmail, mailbox)
+			_ = h.mailDB.CreateMailbox(userEmail, mailbox) // Best-effort, already handling error // Best-effort, already handling error
 		}
 		return []Mail{}, nil
 	}
@@ -232,11 +232,11 @@ func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := r.Context().Value("user")
-	if user == nil {
+	userEmail, ok := user.(string)
+	if !ok {
 		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	userEmail := user.(string)
 
 	emailID := r.URL.Query().Get("id")
 	folder := r.URL.Query().Get("folder")
@@ -259,7 +259,7 @@ func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
 	h.markAsRead(userEmail, internalFolder, emailID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(email)
+	_ = json.NewEncoder(w).Encode(email)
 }
 
 // getEmailFromStorage retrieves a single email from storage
@@ -327,7 +327,7 @@ func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
 		if meta.MessageID == messageID {
 			if !hasFlag(meta.Flags, "\\Seen") {
 				meta.Flags = append(meta.Flags, "\\Seen")
-				h.mailDB.UpdateMessageMetadata(userEmail, mailbox, uid, meta)
+				_ = h.mailDB.UpdateMessageMetadata(userEmail, mailbox, uid, meta)
 			}
 			break
 		}
@@ -353,11 +353,11 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := r.Context().Value("user")
-	if user == nil {
+	userEmail, ok := user.(string)
+	if !ok {
 		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	userEmail := user.(string)
 
 	var req SendMailRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -450,11 +450,11 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 			From:         from,
 			To:           to,
 		}
-		h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta)
+		_ = h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"message": "Email sent successfully",
 		"id":      msgID,
 	})
@@ -517,7 +517,7 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"message": "Email deleted",
 		"id":      messageID,
 	})
@@ -539,7 +539,7 @@ func (h *MailHandler) deleteMessageMetadata(userEmail, messageID string) {
 				continue
 			}
 			if meta.MessageID == messageID {
-				h.mailDB.DeleteMessage(userEmail, mailbox, uid)
+				_ = h.mailDB.DeleteMessage(userEmail, mailbox, uid)
 				return
 			}
 		}

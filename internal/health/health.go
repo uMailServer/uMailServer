@@ -229,7 +229,7 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 
 	// Simple JSON encoding - in production use proper json marshaling
 	jsonData, _ := json.Marshal(data)
-	w.Write(jsonData)
+	_, _ = w.Write(jsonData) // Best-effort, client may disconnect
 }
 
 // Predefined check helpers

@@ -212,8 +212,14 @@ func (s *SSEServer) sendEvent(client *SSEClient, event string, data interface{})
 		return
 	}
 
-	fmt.Fprintf(client.writer, "event: %s\n", event)
-	fmt.Fprintf(client.writer, "data: %s\n\n", payload)
+	if _, err := fmt.Fprintf(client.writer, "event: %s\n", event); err != nil {
+		s.logger.Debug("failed to write SSE event", "error", err)
+		return
+	}
+	if _, err := fmt.Fprintf(client.writer, "data: %s\n\n", payload); err != nil {
+		s.logger.Debug("failed to write SSE data", "error", err)
+		return
+	}
 	client.flusher.Flush()
 }
 

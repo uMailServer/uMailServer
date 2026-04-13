@@ -214,7 +214,7 @@ func (m *Manager) GetAutoReplyMessage(user string) (subject, textBody, htmlBody 
 
 // loadConfigs loads all vacation configs from disk
 func (m *Manager) loadConfigs() error {
-	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
+	if err := os.MkdirAll(m.dataDir, 0750); err != nil {
 		return err
 	}
 
@@ -262,7 +262,7 @@ func (m *Manager) loadConfigFile(path string) (*Config, error) {
 
 // saveConfig saves a config to disk
 func (m *Manager) saveConfig(email string, config *Config) error {
-	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
+	if err := os.MkdirAll(m.dataDir, 0750); err != nil {
 		return err
 	}
 
@@ -272,7 +272,7 @@ func (m *Manager) saveConfig(email string, config *Config) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0600)
 }
 
 // sanitizeFilename sanitizes an email address for use as filename using base64

@@ -56,7 +56,7 @@ func NewLogger(logPath string, maxSizeMB, maxBackups, maxAgeDays int) (*Logger, 
 
 	// Ensure directory exists
 	dir := filepath.Dir(logPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return nil, fmt.Errorf("audit: failed to create directory: %w", err)
 	}
 
@@ -133,7 +133,7 @@ func (r *rotatingWriter) Write(p []byte) (n int, err error) {
 
 func (r *rotatingWriter) rotate() error {
 	if r.file != nil {
-		r.file.Close()
+		_ = r.file.Close() // Best-effort close during rotation
 	}
 	timestamp := time.Now().Format("20060102-150405")
 	backupName := fmt.Sprintf("%s.%s", r.filename, timestamp)
@@ -160,7 +160,7 @@ func (r *rotatingWriter) cleanup() {
 			continue
 		}
 		if r.maxAge > 0 && time.Since(info.ModTime()) > r.maxAge {
-			os.Remove(match)
+			_ = os.Remove(match)
 		}
 	}
 	// Keep only newest maxBackups
@@ -174,7 +174,7 @@ func (r *rotatingWriter) cleanup() {
 				oldest = m
 			}
 		}
-		os.Remove(oldest)
+		_ = os.Remove(oldest)
 	}
 }
 
@@ -215,7 +215,7 @@ func (l *Logger) Log(event Event) error {
 
 // LogLoginSuccess logs a successful login
 func (l *Logger) LogLoginSuccess(user, ip string) {
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    LoginSuccess,
 		User:    user,
 		IP:      ip,
@@ -226,7 +226,7 @@ func (l *Logger) LogLoginSuccess(user, ip string) {
 
 // LogLoginFailure logs a failed login attempt
 func (l *Logger) LogLoginFailure(user, ip, reason string) {
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    LoginFailure,
 		User:    user,
 		IP:      ip,
@@ -238,7 +238,7 @@ func (l *Logger) LogLoginFailure(user, ip, reason string) {
 
 // LogLogout logs a logout event
 func (l *Logger) LogLogout(user, ip string) {
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    Logout,
 		User:    user,
 		IP:      ip,
@@ -249,7 +249,7 @@ func (l *Logger) LogLogout(user, ip string) {
 
 // LogAccountCreate logs account creation
 func (l *Logger) LogAccountCreate(actor, target, ip string) {
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    AccountCreate,
 		User:    actor,
 		IP:      ip,
@@ -265,7 +265,7 @@ func (l *Logger) LogAccountUpdate(actor, target, ip string, changes []string) {
 	for _, c := range changes {
 		details["change_"+c] = c
 	}
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    AccountUpdate,
 		User:    actor,
 		IP:      ip,
@@ -277,7 +277,7 @@ func (l *Logger) LogAccountUpdate(actor, target, ip string, changes []string) {
 
 // LogAccountDelete logs account deletion
 func (l *Logger) LogAccountDelete(actor, target, ip string) {
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    AccountDelete,
 		User:    actor,
 		IP:      ip,
@@ -289,7 +289,7 @@ func (l *Logger) LogAccountDelete(actor, target, ip string) {
 
 // LogTOTPEnable logs TOTP 2FA enablement
 func (l *Logger) LogTOTPEnable(user, target, ip string) {
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    TOTPEnable,
 		User:    user,
 		IP:      ip,
@@ -301,7 +301,7 @@ func (l *Logger) LogTOTPEnable(user, target, ip string) {
 
 // LogTOTPDisable logs TOTP 2FA disablement
 func (l *Logger) LogTOTPDisable(user, target, ip string) {
-	l.Log(Event{
+	_ = l.Log(Event{
 		Type:    TOTPDisable,
 		User:    user,
 		IP:      ip,
@@ -332,8 +332,8 @@ func ExtractIP(r *http.Request) string {
 	}
 
 	// Fall back to RemoteAddr
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if ip == "" {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
 		ip = r.RemoteAddr
 	}
 	return ip

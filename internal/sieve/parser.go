@@ -444,7 +444,7 @@ func (p *Parser) parseNumber() (*NumberValue, error) {
 
 	value := p.input[start:p.pos]
 	var n int64
-	fmt.Sscanf(value, "%d", &n)
+	_, _ = fmt.Sscanf(value, "%d", &n)
 
 	return &NumberValue{Value: n}, nil
 }

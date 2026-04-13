@@ -218,7 +218,9 @@ func (s *Server) Stop() error {
 	s.stopOnce.Do(func() { close(s.shutdown) })
 
 	for _, listener := range s.listeners {
-		listener.Close()
+		if err := listener.Close(); err != nil {
+			s.logger.Debug("failed to close listener", "error", err)
+		}
 	}
 
 	// Close all sessions
@@ -267,8 +269,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	atLimit := s.maxConnections > 0 && len(s.sessions) >= s.maxConnections
 	s.sessionsMu.RUnlock()
 	if atLimit {
-		conn.Write([]byte("* BYE Too many connections\r\n"))
-		conn.Close()
+		_, _ = conn.Write([]byte("* BYE Too many connections\r\n"))
+		_ = conn.Close()
 		return
 	}
 
@@ -374,14 +376,14 @@ func (s *Session) Selected() *Mailbox {
 // Close closes the session
 func (s *Session) Close() {
 	s.state = StateLoggedOut
-	s.conn.Close()
+	_ = s.conn.Close() // Best-effort close
 }
 
 // Handle processes commands from the client
 func (s *Session) Handle() {
 	for s.state != StateLoggedOut {
 		if s.server.readTimeout > 0 && !s.idleActive {
-			s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout))
+			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout)) // Best-effort deadline
 		}
 		line, err := s.readLine()
 		if err != nil {
@@ -416,7 +418,7 @@ func (s *Session) readLine() (string, error) {
 // setWriteDeadline sets the write deadline if configured.
 func (s *Session) setWriteDeadline() {
 	if s.server.writeTimeout > 0 {
-		s.conn.SetWriteDeadline(time.Now().Add(s.server.writeTimeout))
+		_ = s.conn.SetWriteDeadline(time.Now().Add(s.server.writeTimeout)) // Best-effort deadline
 	}
 }
 
@@ -424,24 +426,24 @@ func (s *Session) setWriteDeadline() {
 func (s *Session) WriteResponse(tag string, response string) {
 	s.setWriteDeadline()
 	line := fmt.Sprintf("%s %s\r\n", tag, response)
-	s.writer.WriteString(line)
-	s.writer.Flush()
+	_, _ = s.writer.WriteString(line) // Best-effort write
+	_ = s.writer.Flush()              // Best-effort flush
 }
 
 // WriteContinuation writes a continuation request
 func (s *Session) WriteContinuation(text string) {
 	s.setWriteDeadline()
 	line := fmt.Sprintf("+ %s\r\n", text)
-	s.writer.WriteString(line)
-	s.writer.Flush()
+	_, _ = s.writer.WriteString(line) // Best-effort write
+	_ = s.writer.Flush()              // Best-effort flush
 }
 
 // WriteData writes an untagged response
 func (s *Session) WriteData(response string) {
 	s.setWriteDeadline()
 	line := fmt.Sprintf("* %s\r\n", response)
-	s.writer.WriteString(line)
-	s.writer.Flush()
+	_, _ = s.writer.WriteString(line) // Best-effort write
+	_ = s.writer.Flush()              // Best-effort flush
 }
 
 // generateSessionID generates a unique session ID

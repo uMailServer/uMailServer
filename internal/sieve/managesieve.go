@@ -117,7 +117,7 @@ func (s *ManageSieveServer) serveTLS(ln net.Listener) {
 // handleConn handles a ManageSieve connection
 func (s *ManageSieveServer) handleConn(conn net.Conn) {
 	defer s.wg.Done()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Create session state for this connection
 	session := &manageSieveSession{
@@ -128,7 +128,7 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 	}
 
 	// Set read timeout
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Best-effort
 
 	// Send greeting
 	if err := s.sendResponse(conn, "OK \"ManageSieve server ready\""); err != nil {
@@ -145,7 +145,7 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 		}
 
 		// Reset read deadline on command
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Best-effort
 
 		if err := s.processCommandSession(session, line); err != nil {
 			s.sendResponse(conn, "NO %s", err.Error())
@@ -369,7 +369,7 @@ func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []str
 
 	scriptName := args[0]
 	scriptSize := 0
-	fmt.Sscanf(args[1], "%d", &scriptSize)
+	_, _ = fmt.Sscanf(args[1], "%d", &scriptSize)
 
 	if scriptSize <= 0 || scriptSize > 1024*1024 {
 		return fmt.Errorf("invalid script size")
@@ -386,8 +386,7 @@ func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []str
 		totalRead += n
 	}
 
-	// Consume trailing newline
-	session.reader.ReadLine()
+	_, _ = session.reader.ReadLine() // Best-effort, trailing newline
 
 	scriptContent := string(scriptBytes)
 
@@ -496,7 +495,7 @@ func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []str
 
 	// Send script content
 	s.sendResponse(session.conn, "{%d}", len(source))
-	session.conn.Write([]byte(source))
+	_, _ = session.conn.Write([]byte(source)) // Best-effort write
 	s.sendResponse(session.conn, "OK \"Get script complete\"")
 	return nil
 }
@@ -509,7 +508,7 @@ func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []s
 	}
 
 	scriptSize := 0
-	fmt.Sscanf(args[0], "%d", &scriptSize)
+	_, _ = fmt.Sscanf(args[0], "%d", &scriptSize)
 
 	if scriptSize <= 0 || scriptSize > 1024*1024 {
 		return fmt.Errorf("invalid script size")
@@ -527,7 +526,7 @@ func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []s
 	}
 
 	// Consume trailing newline
-	session.reader.ReadLine()
+	_, _ = session.reader.ReadLine() // Best-effort, trailing newline
 
 	scriptContent := string(scriptBytes)
 
@@ -570,10 +569,10 @@ func (s *ManageSieveServer) Close() error {
 	close(s.done)
 
 	if s.tlsLn != nil {
-		s.tlsLn.Close()
+		_ = s.tlsLn.Close()
 	}
 	if s.ln != nil {
-		s.ln.Close()
+		_ = s.ln.Close()
 	}
 
 	s.wg.Wait()

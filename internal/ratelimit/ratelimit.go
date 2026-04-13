@@ -110,10 +110,13 @@ func New(bolt *bbolt.DB, cfg *Config) *RateLimiter {
 
 	// Initialize bbolt buckets for persistent user quotas
 	if rl.bolt != nil {
-		rl.bolt.Update(func(tx *bbolt.Tx) error {
+		if err := rl.bolt.Update(func(tx *bbolt.Tx) error {
 			_, err := tx.CreateBucketIfNotExists([]byte("ratelimit_users"))
 			return err
-		})
+		}); err != nil {
+			// Log but don't fail startup - rate limiting can work without persistence
+			fmt.Printf("ratelimit: failed to initialize bucket: %v\n", err)
+		}
 	}
 
 	// Start cleanup goroutine

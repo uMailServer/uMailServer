@@ -1,8 +1,12 @@
 package auth
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -134,8 +138,11 @@ func (e *OpenPGPEncryptor) EncryptMessage(msg []byte, from, to string) ([]byte, 
 		time.Now().Format(time.RFC1123Z),
 	)
 
-	// Create encrypted content placeholder (in production, use go-crypto library)
-	encrypted := e.encryptContent(msg)
+	// Create encrypted content
+	encrypted, err := e.encryptContent(msg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt message: %w", err)
+	}
 
 	// Build the encrypted message
 	encryptedMsg := headers +
@@ -150,16 +157,36 @@ func (e *OpenPGPEncryptor) EncryptMessage(msg []byte, from, to string) ([]byte, 
 	return []byte(encryptedMsg), nil
 }
 
-// encryptContent encrypts content (placeholder)
-func (e *OpenPGPEncryptor) encryptContent(content []byte) []byte {
-	// In production, use github.com/ProtonMail/go-crypto for actual encryption
-	// Simple XOR for demo
-	result := make([]byte, len(content))
-	key := []byte("demo-key-for-encryption")
-	for i, b := range content {
-		result[i] = b ^ key[i%len(key)]
+// encryptContent encrypts content using AES-GCM
+func (e *OpenPGPEncryptor) encryptContent(content []byte) ([]byte, error) {
+	if len(e.publicKeys) == 0 {
+		return nil, fmt.Errorf("public key not available")
 	}
-	return result
+
+	// Generate a random 32-byte key for AES-256
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, fmt.Errorf("failed to generate encryption key: %w", err)
+	}
+
+	// Encrypt content with AES-GCM
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, content, nil)
+	return ciphertext, nil
 }
 
 // OpenPGPDecryptor handles OpenPGP decryption

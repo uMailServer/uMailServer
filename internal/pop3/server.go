@@ -242,7 +242,9 @@ func (s *Server) Stop() error {
 	s.stopOnce.Do(func() { close(s.shutdown) })
 
 	if s.listener != nil {
-		s.listener.Close()
+		if err := s.listener.Close(); err != nil {
+			s.logger.Debug("failed to close listener", "error", err)
+		}
 	}
 
 	// Close all sessions
@@ -283,7 +285,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("Panic in POP3 connection handler", "error", r)
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 
@@ -291,8 +293,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 	atLimit := s.maxConnections > 0 && len(s.sessions) >= s.maxConnections
 	s.sessionsMu.RUnlock()
 	if atLimit {
-		conn.Write([]byte("-ERR Too many connections\r\n"))
-		conn.Close()
+		if _, err := conn.Write([]byte("-ERR Too many connections\r\n")); err != nil {
+			s.logger.Debug("failed to write connection limit response", "error", err)
+		}
+		_ = conn.Close()
 		return
 	}
 
@@ -341,7 +345,9 @@ func (s *Session) ID() string {
 
 // Close closes the session
 func (s *Session) Close() {
-	s.conn.Close()
+	if err := s.conn.Close(); err != nil {
+		s.server.logger.Debug("failed to close connection", "error", err)
+	}
 }
 
 // Handle processes commands from the client
@@ -367,7 +373,9 @@ func (s *Session) Handle() {
 // readLine reads a line from the connection
 func (s *Session) readLine() (string, error) {
 	if s.server.readTimeout > 0 {
-		s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout))
+		if err := s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout)); err != nil {
+			s.server.logger.Debug("failed to set read deadline", "error", err)
+		}
 	}
 	line, err := s.reader.ReadString('\n')
 	if err != nil {
@@ -379,15 +387,22 @@ func (s *Session) readLine() (string, error) {
 // setWriteDeadline sets the write deadline if configured.
 func (s *Session) setWriteDeadline() {
 	if s.server.writeTimeout > 0 {
-		s.conn.SetWriteDeadline(time.Now().Add(s.server.writeTimeout))
+		if err := s.conn.SetWriteDeadline(time.Now().Add(s.server.writeTimeout)); err != nil {
+			s.server.logger.Debug("failed to set write deadline", "error", err)
+		}
 	}
 }
 
 // WriteResponse writes a POP3 response
 func (s *Session) WriteResponse(response string) {
 	s.setWriteDeadline()
-	s.writer.WriteString(response + "\r\n")
-	s.writer.Flush()
+	if _, err := s.writer.WriteString(response + "\r\n"); err != nil {
+		s.server.logger.Debug("failed to write response", "error", err)
+		return
+	}
+	if err := s.writer.Flush(); err != nil {
+		s.server.logger.Debug("failed to flush response", "error", err)
+	}
 }
 
 // WriteDataLine writes a data line
@@ -397,14 +412,21 @@ func (s *Session) WriteDataLine(line string) {
 		line = "." + line
 	}
 	s.setWriteDeadline()
-	s.writer.WriteString(line + "\r\n")
+	if _, err := s.writer.WriteString(line + "\r\n"); err != nil {
+		s.server.logger.Debug("failed to write data line", "error", err)
+	}
 }
 
 // WriteDataEnd writes the end of data marker
 func (s *Session) WriteDataEnd() {
 	s.setWriteDeadline()
-	s.writer.WriteString(".\r\n")
-	s.writer.Flush()
+	if _, err := s.writer.WriteString(".\r\n"); err != nil {
+		s.server.logger.Debug("failed to write data end", "error", err)
+		return
+	}
+	if err := s.writer.Flush(); err != nil {
+		s.server.logger.Debug("failed to flush data end", "error", err)
+	}
 }
 
 // handleCommand parses and handles a POP3 command
@@ -467,7 +489,10 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 			return nil
 		}
 
-		host, _, _ := net.SplitHostPort(s.conn.RemoteAddr().String())
+		host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String())
+		if err != nil {
+			host = s.conn.RemoteAddr().String()
+		}
 		if s.server.isAuthLockedOut(host) {
 			s.WriteResponse("-ERR Too many failed authentication attempts")
 			s.user = ""
@@ -522,7 +547,10 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		username := args[0]
 		digest := args[1]
 
-		host, _, _ := net.SplitHostPort(s.conn.RemoteAddr().String())
+		host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String())
+		if err != nil {
+			host = s.conn.RemoteAddr().String()
+		}
 		if s.server.isAuthLockedOut(host) {
 			s.WriteResponse("-ERR Too many failed authentication attempts")
 			return nil
@@ -578,13 +606,13 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 			s.WriteResponse("-ERR TLS configuration error")
 			return nil
 		}
-		s.conn.SetDeadline(time.Now().Add(30 * time.Second))
+		_ = s.conn.SetDeadline(time.Now().Add(30 * time.Second))
 		tlsConn := tls.Server(s.conn, config)
 		if err := tlsConn.Handshake(); err != nil {
-			s.conn.SetDeadline(time.Time{})
+			_ = s.conn.SetDeadline(time.Time{})
 			return err
 		}
-		s.conn.SetDeadline(time.Time{})
+		_ = s.conn.SetDeadline(time.Time{})
 		s.conn = tlsConn
 		s.reader = bufio.NewReader(tlsConn)
 		s.writer = bufio.NewWriter(tlsConn)
@@ -689,9 +717,9 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 
 		s.WriteResponse(fmt.Sprintf("+OK %d octets", len(msg.Data)))
 		s.setWriteDeadline()
-		s.writer.Write(msg.Data)
+		_, _ = s.writer.Write(msg.Data)
 		if !strings.HasSuffix(string(msg.Data), "\n") {
-			s.writer.WriteString("\r\n")
+			_, _ = s.writer.WriteString("\r\n")
 		}
 		s.WriteDataEnd()
 
@@ -821,7 +849,7 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 	// Delete all marked messages
 	for i, msg := range s.messages {
 		if msg == nil {
-			s.server.mailstore.DeleteMessage(s.user, i)
+			_ = s.server.mailstore.DeleteMessage(s.user, i)
 		}
 	}
 
@@ -841,14 +869,14 @@ func (s *Session) sendTop(data []byte, lines int) {
 
 	if headerEnd == -1 {
 		// No headers found, send all
-		s.writer.Write(data)
+		_, _ = s.writer.Write(data)
 		s.WriteDataEnd()
 		return
 	}
 
 	// Send headers
-	s.writer.WriteString(content[:headerEnd])
-	s.writer.WriteString("\r\n\r\n")
+	_, _ = s.writer.WriteString(content[:headerEnd])
+	_, _ = s.writer.WriteString("\r\n\r\n")
 
 	// Send specified number of lines
 	body := content[headerEnd+4:]

@@ -308,7 +308,7 @@ domains:
 	// Initialize database
 	fmt.Println("\nInitializing database...")
 	dbPath := filepath.Join(dataDir, "umailserver.db")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}

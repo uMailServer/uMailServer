@@ -60,7 +60,7 @@ func (s *Storage) CreateAddressbook(username string, ab *Addressbook) error {
 	ab.Modified = now
 
 	dir := s.addressbookDir(username, ab.ID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create addressbook directory: %w", err)
 	}
 
@@ -70,7 +70,7 @@ func (s *Storage) CreateAddressbook(username string, ab *Addressbook) error {
 	}
 
 	path := s.addressbookPath(username, ab.ID)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write addressbook: %w", err)
 	}
 
@@ -155,7 +155,7 @@ func (s *Storage) UpdateAddressbook(username string, ab *Addressbook) error {
 	}
 
 	path := s.addressbookPath(username, ab.ID)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write addressbook: %w", err)
 	}
 
@@ -182,13 +182,13 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 
 	// Ensure addressbook directory exists
 	dir := s.addressbookDir(username, addressbookID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create addressbook directory: %w", err)
 	}
 
 	// Write the raw vCard data
 	path := s.contactPath(username, addressbookID, contact.UID)
-	if err := os.WriteFile(path, []byte(vcardData), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(vcardData), 0600); err != nil {
 		return fmt.Errorf("failed to write contact: %w", err)
 	}
 

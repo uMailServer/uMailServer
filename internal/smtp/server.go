@@ -262,7 +262,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 	atLimit := s.config.MaxConnections > 0 && len(s.connections) >= s.config.MaxConnections
 	s.connMu.RUnlock()
 	if atLimit {
-		conn.Write([]byte("421 4.7.0 Too many connections, try again later\r\n"))
+		if _, err := conn.Write([]byte("421 4.7.0 Too many connections, try again later\r\n")); err != nil {
+			s.logger.Debug("failed to write rate limit response", "error", err)
+		}
 		conn.Close()
 		return
 	}
@@ -274,7 +276,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 			s.logger.Warn("SMTP connection rate limited",
 				slog.String("remote_addr", conn.RemoteAddr().String()),
 			)
-			conn.Write([]byte("421 4.7.0 Rate limit exceeded, try again later\r\n"))
+			if _, err := conn.Write([]byte("421 4.7.0 Rate limit exceeded, try again later\r\n")); err != nil {
+				s.logger.Debug("failed to write rate limit response", "error", err)
+			}
 			conn.Close()
 			return
 		}

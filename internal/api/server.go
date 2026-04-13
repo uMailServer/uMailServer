@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -183,9 +183,9 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		if !ok {
 			return "", false, fmt.Errorf("invalid claims")
 		}
-		u, _ := claims["sub"].(string)
-		a, _ := claims["admin"].(bool)
-		return u, a, nil
+		user, _ = claims["sub"].(string)
+		isAdmin, _ = claims["admin"].(bool)
+		return user, isAdmin, nil
 	})
 
 	// Initialize audit logger
@@ -230,7 +230,7 @@ func NewServerWithInterfaces(
 	}
 	if config.JWTSecret == "" {
 		logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
-		config.JWTSecret = fmt.Sprintf("%d", time.Now().UnixNano())
+		config.JWTSecret = generateSecureJWTSecret()
 	}
 	if config.TokenExpiry == 0 {
 		config.TokenExpiry = 24 * time.Hour
@@ -281,9 +281,9 @@ func NewServerWithInterfaces(
 		if !ok {
 			return "", false, fmt.Errorf("invalid claims")
 		}
-		u, _ := claims["sub"].(string)
-		a, _ := claims["admin"].(bool)
-		return u, a, nil
+		user, _ = claims["sub"].(string)
+		isAdmin, _ = claims["admin"].(bool)
+		return user, isAdmin, nil
 	})
 
 	// Use provided FS or default to embedded
@@ -635,7 +635,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Check if token is revoked (logout)
-		tokenHash := fmt.Sprintf("%x", md5.Sum([]byte(tokenStr)))
+		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
 		if s.IsTokenRevoked(tokenHash) {
 			s.sendError(w, http.StatusUnauthorized, "token has been revoked")
 			return
@@ -660,8 +660,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 // Must be used after authMiddleware so that "isAdmin" is in context.
 func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isAdmin, _ := r.Context().Value("isAdmin").(bool)
-		if !isAdmin {
+		isAdmin, ok := r.Context().Value("isAdmin").(bool)
+		if !ok || !isAdmin {
 			s.sendJSON(w, http.StatusForbidden, map[string]string{
 				"error": "admin access required",
 			})
@@ -696,9 +696,17 @@ func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
 	file, err := webmailFS.Open(path)
 	if err != nil {
 		// Fallback: check admin FS for shared assets (e.g., /assets/...)
+		// Close the webmail file first if it was opened
+		if file != nil {
+			file.Close()
+		}
 		file, err = adminFS.Open(path)
 		if err != nil {
 			// If file not found, serve index.html for SPA routing
+			// Close the admin file first if it was opened
+			if file != nil {
+				file.Close()
+			}
 			file, err = webmailFS.Open("index.html")
 			if err != nil {
 				s.logger.Error("Failed to open index.html", "error", err)
@@ -749,6 +757,10 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	file, err := adminFS.Open(path)
 	if err != nil {
 		// If file not found, serve index.html for SPA routing
+		// Close the first file if it was opened
+		if file != nil {
+			file.Close()
+		}
 		file, err = adminFS.Open("index.html")
 		if err != nil {
 			s.logger.Error("Failed to open index.html", "error", err)

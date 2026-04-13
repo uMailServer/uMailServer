@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -166,12 +167,12 @@ func (m *Manager) send(hook *Webhook, event Event) {
 
 		// Success: 2xx status code
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			success = true
 			break
 		}
 
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 
 		// Don't retry on 4xx errors (client errors)
@@ -275,7 +276,9 @@ func (m *Manager) handleList(w http.ResponseWriter, r *http.Request) {
 	m.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"webhooks": hooks})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"webhooks": hooks}); err != nil {
+		log.Printf("webhook: failed to encode response: %v", err)
+	}
 }
 
 func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -303,7 +306,9 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(hook)
+	if err := json.NewEncoder(w).Encode(hook); err != nil {
+		log.Printf("webhook: failed to encode response: %v", err)
+	}
 }
 
 // GetCircuitBreakerMetrics returns circuit breaker metrics for all webhook URLs

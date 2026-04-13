@@ -127,10 +127,12 @@ func (c *Classifier) UpdateStats() error {
 	if c.bolt == nil {
 		return nil
 	}
+	// Get counts first (outside the Update transaction to avoid nested transactions)
 	totalHam, totalSpam, err := c.GetTotalCounts()
 	if err != nil {
 		return err
 	}
+	// Now update in a separate transaction
 	return c.bolt.Update(func(tx *bbolt.Tx) error {
 		statsBucket := tx.Bucket([]byte(StatsBucket))
 		if statsBucket == nil {

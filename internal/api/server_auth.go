@@ -1,7 +1,7 @@
 package api
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -36,11 +36,13 @@ func (s *Server) RevokeToken(tokenHash string) {
 
 // IsTokenRevoked checks if a token is in the blacklist
 func (s *Server) IsTokenRevoked(tokenHash string) bool {
-	s.tokenBlacklistMu.RLock()
-	defer s.tokenBlacklistMu.RUnlock()
+	s.tokenBlacklistMu.Lock()
+	defer s.tokenBlacklistMu.Unlock()
 	if expiry, ok := s.tokenBlacklist[tokenHash]; ok {
 		if time.Now().After(expiry) {
-			return false // Expired, remove from blacklist
+			// Expired - remove from blacklist (lazy cleanup)
+			delete(s.tokenBlacklist, tokenHash)
+			return false
 		}
 		return true
 	}
@@ -233,7 +235,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	tokenStr := parts[1]
 
 	// Revoke the token by adding it to blacklist
-	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte(tokenStr)))
+	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
 	s.RevokeToken(tokenHash)
 
 	// Audit logout

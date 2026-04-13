@@ -29,7 +29,7 @@ type MessageStore struct {
 
 // NewMessageStore creates a new message store
 func NewMessageStore(basePath string) (*MessageStore, error) {
-	if err := os.MkdirAll(basePath, 0755); err != nil {
+	if err := os.MkdirAll(basePath, 0750); err != nil {
 		return nil, err
 	}
 
@@ -52,14 +52,14 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 
 	// Create user directory
 	userPath := filepath.Join(s.basePath, user)
-	if err := os.MkdirAll(userPath, 0755); err != nil {
+	if err := os.MkdirAll(userPath, 0750); err != nil {
 		return "", err
 	}
 
 	// Store message using hash-based filename
 	// Split into subdirectories for better filesystem performance
 	msgPath := filepath.Join(userPath, messageID[:2], messageID[2:4], messageID)
-	if err := os.MkdirAll(filepath.Dir(msgPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(msgPath), 0750); err != nil {
 		return "", err
 	}
 
@@ -68,7 +68,7 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 		return messageID, nil // Already exists
 	}
 
-	if err := os.WriteFile(msgPath, data, 0644); err != nil {
+	if err := os.WriteFile(msgPath, data, 0600); err != nil {
 		return "", err
 	}
 

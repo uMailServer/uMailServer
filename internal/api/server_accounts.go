@@ -1,7 +1,7 @@
 package api
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -155,7 +155,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		LocalPart:    user,
 		Domain:       domain,
 		PasswordHash: string(hashedPassword),
-		APOPHash:     fmt.Sprintf("%x", md5.Sum([]byte(req.Password))),
+		APOPHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password))),
 		IsAdmin:      req.IsAdmin,
 		IsActive:     true,
 		CreatedAt:    time.Now(),
@@ -170,7 +170,9 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	// Audit account creation
 	actor := "system"
 	if authUser := r.Context().Value("user"); authUser != nil {
-		actor = authUser.(string)
+		if userStr, ok := authUser.(string); ok {
+			actor = userStr
+		}
 	}
 	s.auditLogger.LogAccountCreate(actor, req.Email, audit.ExtractIP(r))
 
@@ -224,6 +226,12 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		isAdmin, _ := authIsAdmin.(bool)
 		authenticatedUser, _ := authUser.(string)
 
+		// Validate type assertions
+		if !isAdmin || authenticatedUser == "" {
+			s.sendError(w, http.StatusForbidden, "invalid auth context")
+			return
+		}
+
 		// Prevent self-modification of IsAdmin flag
 		if authenticatedUser == email && req.IsAdmin != account.IsAdmin {
 			s.sendError(w, http.StatusForbidden, "cannot modify your own admin status")
@@ -245,7 +253,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 			return
 		}
 		account.PasswordHash = string(hashedPassword)
-		account.APOPHash = fmt.Sprintf("%x", md5.Sum([]byte(req.Password)))
+		account.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
 	}
 	account.IsAdmin = req.IsAdmin
 	account.IsActive = req.IsActive
@@ -274,7 +282,9 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 	// Audit account deletion
 	actor := "system"
 	if authUser := r.Context().Value("user"); authUser != nil {
-		actor = authUser.(string)
+		if userStr, ok := authUser.(string); ok {
+			actor = userStr
+		}
 	}
 	s.auditLogger.LogAccountDelete(actor, email, audit.ExtractIP(r))
 

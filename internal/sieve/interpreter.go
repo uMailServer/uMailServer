@@ -1,6 +1,7 @@
 package sieve
 
 import (
+	"context"
 	"fmt"
 	"net/mail"
 	"regexp"
@@ -101,36 +102,37 @@ func safeRegexMatch(pattern, value string, timeout time.Duration) (bool, error) 
 		return false, fmt.Errorf("regex pattern too complex (potential ReDoS)")
 	}
 
-	// Try to get from cache first
-	regexCache.RLock()
+	// Try to get from cache first with proper locking
+	regexCache.Lock()
 	re, ok := regexCache.patterns[pattern]
-	regexCache.RUnlock()
-
-	if !ok {
+	if ok {
+		regexCache.Unlock()
+	} else {
 		// Validate and compile
 		var err error
 		re, err = regexp.Compile(pattern)
 		if err != nil {
+			regexCache.Unlock()
 			return false, fmt.Errorf("invalid regex pattern: %w", err)
 		}
-
-		// Cache it
-		regexCache.Lock()
 		regexCache.patterns[pattern] = re
 		regexCache.Unlock()
 	}
 
-	// Channel for result
-	done := make(chan bool, 1)
+	// Use context with timeout for proper cancellation
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// Run regex match in goroutine with context cancellation
+	resultChan := make(chan bool, 1)
 	go func() {
-		done <- re.MatchString(value)
+		resultChan <- re.MatchString(value)
 	}()
 
-	// Wait with timeout
 	select {
-	case result := <-done:
+	case result := <-resultChan:
 		return result, nil
-	case <-time.After(timeout):
+	case <-ctx.Done():
 		return false, fmt.Errorf("regex match timed out (possible ReDoS)")
 	}
 }

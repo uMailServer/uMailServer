@@ -286,7 +286,7 @@ func (m *Manager) sendWebhook(alert Alert) error {
 	defer resp.Body.Close()
 
 	// Drain and discard response body to allow connection reuse
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)

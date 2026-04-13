@@ -114,7 +114,7 @@ func (s *MaildirStore) ensureFolder(domain, user, folder string) error {
 	subdirs := []string{"tmp", "new", "cur"}
 	for _, subdir := range subdirs {
 		path := filepath.Join(basePath, subdir)
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(path, 0750); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", path, err)
 		}
 	}
@@ -127,7 +127,7 @@ func (s *MaildirStore) ensureFolder(domain, user, folder string) error {
 func (s *MaildirStore) generateUniqueName() string {
 	timestamp := time.Now().Unix()
 	pid := os.Getpid()
-	hostname, _ := os.Hostname()
+	hostname, _ := os.Hostname() // Best-effort, fallback to localhost if error
 	if hostname == "" {
 		hostname = "localhost"
 	}
@@ -151,7 +151,7 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 	newPath := filepath.Join(basePath, "new", uniqueName)
 
 	// Write file
-	if err := os.WriteFile(tmpPath, msg, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, msg, 0600); err != nil {
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
@@ -161,8 +161,8 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to open temp file: %w", err)
 	}
-	file.Sync()
-	file.Close()
+	_ = file.Sync()  // Best-effort, best-effort sync failures are acceptable
+	_ = file.Close() // Best-effort close failures are acceptable
 
 	// Atomic rename to new/
 	if err := os.Rename(tmpPath, newPath); err != nil {
@@ -193,7 +193,7 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 	curPath := filepath.Join(basePath, "cur", uniqueName)
 
 	// Write file
-	if err := os.WriteFile(tmpPath, msg, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, msg, 0600); err != nil {
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
@@ -203,8 +203,8 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 		os.Remove(tmpPath)
 		return "", fmt.Errorf("failed to open temp file: %w", err)
 	}
-	file.Sync()
-	file.Close()
+	_ = file.Sync()  // Best-effort, best-effort sync failures are acceptable
+	_ = file.Close() // Best-effort close failures are acceptable
 
 	// Atomic rename to cur/
 	if err := os.Rename(tmpPath, curPath); err != nil {
@@ -277,8 +277,8 @@ func (s *MaildirStore) syncDir(dir string) {
 	if err != nil {
 		return
 	}
-	_ = f.Sync()
-	f.Close()
+	_ = f.Sync()  // Best-effort, best-effort sync failures are acceptable
+	_ = f.Close() // Best-effort close failures are acceptable
 }
 
 // Move moves a message from one folder to another
@@ -370,7 +370,7 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 	// If currently in new/, move to cur/
 	if subdir == "new" {
 		// Ensure cur/ exists
-		if err := os.MkdirAll(filepath.Join(basePath, "cur"), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(basePath, "cur"), 0750); err != nil {
 			return fmt.Errorf("failed to create cur directory: %w", err)
 		}
 	}

@@ -60,7 +60,7 @@ func (s *Storage) CreateCalendar(username string, cal *Calendar) error {
 	cal.Modified = now
 
 	dir := s.calendarDir(username, cal.ID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create calendar directory: %w", err)
 	}
 
@@ -70,7 +70,7 @@ func (s *Storage) CreateCalendar(username string, cal *Calendar) error {
 	}
 
 	path := s.calendarPath(username, cal.ID)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write calendar: %w", err)
 	}
 
@@ -155,7 +155,7 @@ func (s *Storage) UpdateCalendar(username string, cal *Calendar) error {
 	}
 
 	path := s.calendarPath(username, cal.ID)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("failed to write calendar: %w", err)
 	}
 
@@ -182,13 +182,13 @@ func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, i
 
 	// Ensure calendar directory exists
 	dir := s.calendarDir(username, calendarID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create calendar directory: %w", err)
 	}
 
 	// Write the raw iCalendar data
 	path := s.eventPath(username, calendarID, event.UID)
-	if err := os.WriteFile(path, []byte(icsData), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(icsData), 0600); err != nil {
 		return fmt.Errorf("failed to write event: %w", err)
 	}
 

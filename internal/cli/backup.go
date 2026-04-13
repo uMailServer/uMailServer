@@ -70,7 +70,7 @@ func (bm *BackupManager) Backup(backupPath string) error {
 	backupFile := filepath.Join(backupPath, fmt.Sprintf("umailserver_backup_%s%s", timestamp, extension))
 
 	// Create backup directory
-	if err := os.MkdirAll(backupPath, 0755); err != nil {
+	if err := os.MkdirAll(backupPath, 0750); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
@@ -132,7 +132,7 @@ func (bm *BackupManager) Backup(backupPath string) error {
 		fmt.Printf("WARNING: Backup is NOT ENCRYPTED. Sensitive data may be exposed.\n")
 		fmt.Printf("         Use SetPassword() to enable AES-256-GCM encryption.\n")
 
-		if err := os.WriteFile(backupFile, tarData, 0644); err != nil {
+		if err := os.WriteFile(backupFile, tarData, 0600); err != nil {
 			return fmt.Errorf("failed to write backup: %w", err)
 		}
 	}
@@ -543,7 +543,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		}
 
 		// Create parent directory
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0750); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 

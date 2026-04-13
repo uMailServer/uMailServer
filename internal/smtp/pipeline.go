@@ -394,22 +394,31 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 	if len(s.greylist) >= s.maxEntries {
 		// Remove oldest 50% of entries
 		cutoff := now.Add(-5 * time.Minute) // Keep entries newer than 5 minutes
+		// Collect keys to delete first to avoid modifying map during iteration
+		keysToDelete := make([]string, 0)
 		for key, entry := range s.greylist {
 			if entry.firstSeen.Before(cutoff) {
-				delete(s.greylist, key)
+				keysToDelete = append(keysToDelete, key)
 			}
-			if len(s.greylist) < s.maxEntries/2 {
+			if len(s.greylist)-len(keysToDelete) < s.maxEntries/2 {
 				break // Stop when we've removed enough
 			}
+		}
+		for _, key := range keysToDelete {
+			delete(s.greylist, key)
 		}
 	}
 
 	// Periodically clean up stale greylist entries to prevent unbounded growth
 	if now.Sub(s.lastCleanup) > 10*time.Minute {
+		keysToDelete := make([]string, 0)
 		for key, entry := range s.greylist {
 			if now.Sub(entry.firstSeen) > 6*time.Hour {
-				delete(s.greylist, key)
+				keysToDelete = append(keysToDelete, key)
 			}
+		}
+		for _, key := range keysToDelete {
+			delete(s.greylist, key)
 		}
 		s.lastCleanup = now
 	}
