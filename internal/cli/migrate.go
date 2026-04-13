@@ -97,7 +97,7 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to IMAP server: %w", err)
 	}
-	defer imapClient.Logout()
+	defer func() { _ = imapClient.Logout() }()
 
 	// Authenticate
 	if err := imapClient.Login(opts.Username, opts.Password); err != nil {
