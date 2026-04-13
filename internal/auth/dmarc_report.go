@@ -162,9 +162,7 @@ func BuildReport(orgName, email, domain, adkim, aspf string, policy DMARCPolicy,
 // ParseRUAEmail parses a mailto: URI and extracts email address
 func ParseRUAEmail(uri string) (string, error) {
 	uri = strings.TrimSpace(uri)
-	if strings.HasPrefix(uri, "mailto:") {
-		uri = uri[7:]
-	}
+	uri = strings.TrimPrefix(uri, "mailto:")
 	// Extract email from mailto:user@example.com?subject=...
 	if idx := strings.Index(uri, "?"); idx > 0 {
 		uri = uri[:idx]

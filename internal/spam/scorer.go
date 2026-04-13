@@ -29,7 +29,7 @@ func (fe *FeatureExtractor) Extract(headers map[string][]string, body []byte) []
 	features = append(features, bodyFeatures...)
 
 	// Add special features
-	features = fe.addSpecialFeatures(headers, body)
+	features = append(features, fe.addSpecialFeatures(headers, body)...)
 
 	return features
 }

@@ -116,12 +116,6 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 		}
 	}
 
-	// Determine depth
-	depth := r.Header.Get("Depth")
-	if depth == "" {
-		depth = "1"
-	}
-
 	// Build response
 	multistatus := &Multistatus{}
 

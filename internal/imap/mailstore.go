@@ -321,9 +321,7 @@ func (m *BboltMailstore) checkAndSendMDN(user, messageID, from, to string, msgDa
 		go func() {
 			defer func() {
 				<-m.mdnSem
-				if r := recover(); r != nil {
-					// Silently swallow panic to avoid crashing the server
-				}
+				recover() // Silently swallow panic to avoid crashing the server
 			}()
 			if err := handler(from, mdnTo, messageID, inReplyTo, msgData); err != nil {
 				// Log error but don't fail the fetch

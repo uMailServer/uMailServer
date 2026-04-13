@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/metrics"
 )
 
@@ -246,7 +245,7 @@ func (s *Session) handleHELO(arg string) error {
 	s.resetTransaction()
 	s.mutex.Unlock()
 
-	return s.WriteResponse(250, fmt.Sprintf("%s", s.server.config.Hostname))
+	return s.WriteResponse(250, s.server.config.Hostname)
 }
 
 // handleMAIL handles the MAIL FROM command
@@ -869,54 +868,6 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 			}
 			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
-	}
-
-	s.isAuth = true
-	s.username = username
-	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
-	if s.server.onLoginResult != nil {
-		s.server.onLoginResult(username, true, getIPFromAddr(s.conn.RemoteAddr().String()))
-	}
-
-	return s.WriteResponse(235, "Authentication successful")
-}
-
-// handleAuthCRAMMD5 handles CRAM-MD5 authentication (RFC 2195)
-func (s *Session) handleAuthCRAMMD5() error {
-	if s.server.onGetUserSecret == nil {
-		return s.WriteResponse(504, "5.5.4 Unrecognized authentication type")
-	}
-
-	// Generate challenge
-	_, challengeB64, err := auth.GenerateCRAMMD5Challenge()
-	if err != nil {
-		return s.WriteResponse(454, "4.7.0 Temporary authentication failure")
-	}
-
-	// Send challenge
-	if err := s.WriteResponse(334, challengeB64); err != nil {
-		return err
-	}
-
-	// Read client response
-	reader := bufio.NewReader(s.conn)
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return err
-	}
-	response := strings.TrimSpace(line)
-
-	// Verify using the shared auth function
-	username, ok := auth.VerifyCRAMMD5(challengeB64, response, s.server.onGetUserSecret)
-	if !ok {
-		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
-		if m := metrics.Get(); m != nil {
-			m.SMTPAuthFailure()
-		}
-		if s.server.onLoginResult != nil {
-			s.server.onLoginResult("", false, getIPFromAddr(s.conn.RemoteAddr().String()))
-		}
-		return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 	}
 
 	s.isAuth = true

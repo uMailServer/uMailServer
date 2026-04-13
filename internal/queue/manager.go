@@ -289,10 +289,6 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 		}
 	}
 
-	if m.metrics != nil {
-		// Queue enqueue metric would go here
-	}
-
 	return baseID, nil
 }
 
@@ -617,7 +613,6 @@ func (m *Manager) withMXConn(mx string, fn func(*smtp.Client) error) (err error)
 			if err != nil {
 				return err
 			}
-			fromPool = false
 		}
 		defer func() {
 			valid := err == nil && recover() == nil

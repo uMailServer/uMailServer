@@ -371,7 +371,7 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 		return resp
 	}
 
-	filter, _ := args["filter"]
+	filter := args["filter"]
 	sort, _ := args["sort"].([]interface{})
 	position, _ := args["position"].(float64)
 	limit, _ := args["limit"].(float64)
@@ -477,11 +477,6 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 func matchesFilter(meta *storage.MessageMetadata, filter *FilterCondition) bool {
 	if filter == nil {
 		return true
-	}
-
-	// Filter by inMailbox
-	if filter.InMailbox != "" {
-		// Already filtered at mailbox level
 	}
 
 	// Filter by unread

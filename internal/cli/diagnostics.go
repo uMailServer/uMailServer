@@ -480,8 +480,6 @@ func min(a, b int) int {
 // tlsVersionName returns human-readable TLS version name
 func tlsVersionName(version uint16) string {
 	switch version {
-	case tls.VersionSSL30:
-		return "SSL 3.0"
 	case tls.VersionTLS10:
 		return "TLS 1.0"
 	case tls.VersionTLS11:
@@ -715,7 +713,7 @@ func (d *Diagnostics) checkSMTPConnectivity(hostname string) (*SMTPCheckResult, 
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:25", hostname), 10*time.Second)
 	if err != nil {
 		result.Message = fmt.Sprintf("SMTP port 25 not reachable: %v", err)
-		issues = append(issues, fmt.Sprintf("SMTP: Port 25 unreachable - remote servers may not be able to deliver mail"))
+		issues = append(issues, "SMTP: Port 25 unreachable - remote servers may not be able to deliver mail")
 		return result, issues
 	}
 	defer func() { _ = conn.Close() }()

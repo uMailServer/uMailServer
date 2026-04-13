@@ -361,7 +361,11 @@ func generateVAPIDKeys() (privateKey, publicKey string, err error) {
 	privateKey = base64.RawURLEncoding.EncodeToString(privBytes)
 
 	// Encode public key
-	pubBytes := elliptic.Marshal(curve, priv.PublicKey.X, priv.PublicKey.Y)
+	ecPriv, err := priv.ECDH()
+	if err != nil {
+		return "", "", err
+	}
+	pubBytes := ecPriv.PublicKey().Bytes()
 	publicKey = base64.RawURLEncoding.EncodeToString(pubBytes)
 
 	return privateKey, publicKey, nil

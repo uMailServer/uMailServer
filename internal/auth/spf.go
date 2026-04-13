@@ -577,12 +577,9 @@ func isTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Check for net.Error with Temporary() method
+	// Check for net.Error with Timeout() method
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		if netErr.Temporary() {
-			return true
-		}
 		// Timeout implies temporary
 		if netErr.Timeout() {
 			return true

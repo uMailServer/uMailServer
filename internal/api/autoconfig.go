@@ -74,14 +74,6 @@ func (s *Server) buildAutoconfig(domain string) *AutoconfigClientConfig {
 	incomingType = "imap"
 	outgoingType = "smtp"
 
-	// Try to get domain-specific settings from config
-	if s.db != nil {
-		if d, err := s.db.GetDomain(domain); err == nil && d != nil {
-			// Use domain-specific settings if available
-			// For now, use defaults
-		}
-	}
-
 	config := &AutoconfigClientConfig{
 		Version: "1.1",
 		Providers: []AutoconfigProvider{

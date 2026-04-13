@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // Database represents the bbolt database interface
@@ -137,10 +138,10 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 		return nil
 	}
 	return db.bolt.Update(func(tx *bbolt.Tx) error {
-		if err := tx.DeleteBucket([]byte(mailboxKey(user, mailbox))); err != nil && err != bbolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket([]byte(mailboxKey(user, mailbox))); err != nil && err != bolterrors.ErrBucketNotFound {
 			return err
 		}
-		if err := tx.DeleteBucket([]byte(messagesBucket(user, mailbox))); err != nil && err != bbolt.ErrBucketNotFound {
+		if err := tx.DeleteBucket([]byte(messagesBucket(user, mailbox))); err != nil && err != bolterrors.ErrBucketNotFound {
 			return err
 		}
 		return nil

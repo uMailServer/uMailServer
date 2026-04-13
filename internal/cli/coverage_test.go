@@ -371,7 +371,6 @@ func TestTLSVersionNameComplete(t *testing.T) {
 		version  uint16
 		expected string
 	}{
-		{0x0300, "SSL 3.0"},
 		{0x0301, "TLS 1.0"},
 		{0x0302, "TLS 1.1"},
 		{0x0303, "TLS 1.2"},

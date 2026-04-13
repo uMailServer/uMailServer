@@ -164,9 +164,9 @@ func (c *LDAPClient) connect() (*ldap.Conn, error) {
 			ServerName:         u.Hostname(),
 			MinVersion:         tls.VersionTLS12,
 		}
-		conn, err = ldap.DialTLS("tcp", host, tlsConfig)
+		conn, err = ldap.DialURL(fmt.Sprintf("ldaps://%s", host), ldap.DialWithTLSConfig(tlsConfig))
 	} else {
-		conn, err = ldap.Dial("tcp", host)
+		conn, err = ldap.DialURL(fmt.Sprintf("ldap://%s", host))
 		if err == nil && c.config.StartTLS {
 			tlsConfig := &tls.Config{
 				// #nosec G402 -- SkipVerify is intentionally user-configurable for self-signed/internal CA environments

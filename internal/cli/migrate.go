@@ -365,32 +365,6 @@ func (mm *MigrationManager) importMessage(messagePath string) error {
 		return err
 	}
 
-	// Parse maildir filename to extract flags
-	// Format: timestamp.unique_info:2,flags
-	filename := filepath.Base(messagePath)
-	var mailFlags []string
-	if idx := strings.Index(filename, ":2,"); idx != -1 {
-		flagStr := filename[idx+3:]
-		// Map maildir flags to IMAP flags
-		// S = Seen, R = Answered, F = Flagged, T = Deleted, D = Draft
-		for _, f := range flagStr {
-			switch f {
-			case 'S':
-				mailFlags = append(mailFlags, "\\Seen")
-			case 'R':
-				mailFlags = append(mailFlags, "\\Answered")
-			case 'F':
-				mailFlags = append(mailFlags, "\\Flagged")
-			case 'T':
-				mailFlags = append(mailFlags, "\\Deleted")
-			case 'D':
-				mailFlags = append(mailFlags, "\\Draft")
-			}
-		}
-	}
-	// Note: mailFlags are parsed but StoreMessage doesn't currently support flags.
-	// The message is stored without preserving these flags.
-
 	// Extract user from path
 	// Format: /var/mail/domain/user/Maildir/...
 	parts := strings.Split(messagePath, string(os.PathSeparator))

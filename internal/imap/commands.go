@@ -496,7 +496,7 @@ func (s *Session) handleSelect(args []string) error {
 	s.WriteData("FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)")
 	s.WriteData("OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Flags permitted")
 
-	s.WriteResponse(s.tag, fmt.Sprintf("OK [READ-WRITE] SELECT completed"))
+	s.WriteResponse(s.tag, "OK [READ-WRITE] SELECT completed")
 	return nil
 }
 
