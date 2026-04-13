@@ -208,7 +208,7 @@ func TestCreateAccount_ClosedDB(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	database.Close()
 
-	body := map[string]interface{}{"email": "new@test.com", "password": "password123"}
+	body := map[string]interface{}{"email": "new@test.com", "password": "Password123!"}
 	jsonBody, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
@@ -518,7 +518,7 @@ func TestFullRouter_AccountCRUD(t *testing.T) {
 	defer database.Close()
 
 	// Create account via router
-	body := map[string]interface{}{"email": "new@test.com", "password": "password123"}
+	body := map[string]interface{}{"email": "new@test.com", "password": "Password123!"}
 	jsonBody, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -755,10 +755,11 @@ func TestUpdateAccount_NoPasswordChange(t *testing.T) {
 		t.Fatalf("create account: %v", err)
 	}
 
-	body := map[string]interface{}{"is_admin": true, "is_active": true, "password": ""}
+	body := map[string]interface{}{"is_admin": false, "is_active": true, "password": ""}
 	jsonBody, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@nopw.com", bytes.NewReader(jsonBody))
+	req = req.WithContext(context.WithValue(req.Context(), "user", "u@nopw.com"))
 	rec := httptest.NewRecorder()
 	server.updateAccount(rec, req, "u@nopw.com")
 
@@ -907,7 +908,6 @@ func TestAuthMiddleware_SkipsAuthPaths(t *testing.T) {
 	}{
 		{"health", "/health"},
 		{"login", "/api/v1/auth/login"},
-		{"refresh", "/api/v1/auth/refresh"},
 	}
 
 	for _, tt := range tests {

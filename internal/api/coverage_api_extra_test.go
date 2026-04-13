@@ -979,10 +979,11 @@ func TestHandleLogin_InvalidMethodExtra(t *testing.T) {
 
 // TestHandleRefresh_InvalidMethod tests refresh with invalid method
 func TestHandleRefresh_InvalidMethodExtra(t *testing.T) {
-	server, database, _ := helperSetupAccount(t)
+	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 

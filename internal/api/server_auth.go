@@ -26,21 +26,104 @@ type apiRateAttempt struct {
 	windowStart time.Time
 }
 
-// RevokeToken adds a token to the blacklist (for logout)
-func (s *Server) RevokeToken(tokenHash string) {
-	s.tokenBlacklistMu.Lock()
-	defer s.tokenBlacklistMu.Unlock()
-	// Blacklist expires when the token would have expired (1 hour from now for typical tokens)
-	s.tokenBlacklist[tokenHash] = time.Now().Add(time.Hour)
+// totpAttempt tracks failed TOTP attempts per account
+type totpAttempt struct {
+	count    int
+	lastSeen time.Time
 }
 
-// IsTokenRevoked checks if a token is in the blacklist
+const maxTOTPFailures = 5
+const totpLockoutDuration = 5 * time.Minute
+
+// isTOTPLockedOut returns true if the account has exceeded TOTP failure limits.
+func (s *Server) isTOTPLockedOut(email string) bool {
+	s.totpMu.Lock()
+	defer s.totpMu.Unlock()
+
+	if s.totpAttempts == nil {
+		s.totpAttempts = make(map[string]*totpAttempt)
+	}
+
+	attempt := s.totpAttempts[email]
+	if attempt.count >= maxTOTPFailures && time.Since(attempt.lastSeen) < totpLockoutDuration {
+		return true
+	}
+	return false
+}
+
+// recordTOTPFailure increments the failed TOTP attempt count for an account.
+func (s *Server) recordTOTPFailure(email string) {
+	s.totpMu.Lock()
+	defer s.totpMu.Unlock()
+
+	if s.totpAttempts == nil {
+		s.totpAttempts = make(map[string]*totpAttempt)
+	}
+
+	attempt := s.totpAttempts[email]
+	if attempt == nil {
+		attempt = &totpAttempt{}
+	}
+	attempt.count++
+	attempt.lastSeen = time.Now()
+	s.totpAttempts[email] = attempt
+}
+
+// clearTOTPFailures resets the TOTP failure count for an account.
+func (s *Server) clearTOTPFailures(email string) {
+	s.totpMu.Lock()
+	defer s.totpMu.Unlock()
+
+	delete(s.totpAttempts, email)
+}
+
+// clearAccountLoginFailures resets the account login failure count.
+func (s *Server) clearAccountLoginFailures(email string) {
+	s.accountLoginMu.Lock()
+	defer s.accountLoginMu.Unlock()
+
+	delete(s.accountLoginAttempts, email)
+}
+
+// RevokeToken adds a token to the blacklist (for logout).
+// If a database is configured, the revocation is persisted; otherwise it falls back to memory.
+func (s *Server) RevokeToken(tokenHash string) {
+	expiry := time.Now().Add(time.Hour)
+	if s.db != nil {
+		if err := s.db.StoreRevokedToken(tokenHash, expiry); err != nil {
+			// Fall back to in-memory on DB error
+			s.tokenBlacklistMu.Lock()
+			defer s.tokenBlacklistMu.Unlock()
+			if s.tokenBlacklist == nil {
+				s.tokenBlacklist = make(map[string]time.Time)
+			}
+			s.tokenBlacklist[tokenHash] = expiry
+		}
+		return
+	}
+	s.tokenBlacklistMu.Lock()
+	defer s.tokenBlacklistMu.Unlock()
+	if s.tokenBlacklist == nil {
+		s.tokenBlacklist = make(map[string]time.Time)
+	}
+	s.tokenBlacklist[tokenHash] = expiry
+}
+
+// IsTokenRevoked checks if a token is in the blacklist.
+// When a database is available the check is persistent; otherwise it uses the in-memory map.
+// DB errors are treated as revoked (fail-secure).
 func (s *Server) IsTokenRevoked(tokenHash string) bool {
+	if s.db != nil {
+		revoked, err := s.db.IsTokenRevoked(tokenHash)
+		if err != nil {
+			return true
+		}
+		return revoked
+	}
 	s.tokenBlacklistMu.Lock()
 	defer s.tokenBlacklistMu.Unlock()
 	if expiry, ok := s.tokenBlacklist[tokenHash]; ok {
 		if time.Now().After(expiry) {
-			// Expired - remove from blacklist (lazy cleanup)
 			delete(s.tokenBlacklist, tokenHash)
 			return false
 		}
@@ -49,8 +132,12 @@ func (s *Server) IsTokenRevoked(tokenHash string) bool {
 	return false
 }
 
-// CleanupExpiredTokens removes expired entries from the blacklist
+// CleanupExpiredTokens removes expired entries from the blacklist.
 func (s *Server) CleanupExpiredTokens() {
+	if s.db != nil {
+		_ = s.db.CleanupRevokedTokens()
+		return
+	}
 	s.tokenBlacklistMu.Lock()
 	defer s.tokenBlacklistMu.Unlock()
 	now := time.Now()
@@ -105,6 +192,50 @@ func (s *Server) recordLoginFailure(ip string) {
 	attempt.lastSeen = now
 }
 
+// checkAccountLoginRateLimit returns true if the account is allowed to attempt login.
+// Allows 5 attempts per 5-minute window per account; blocks after that.
+func (s *Server) checkAccountLoginRateLimit(email string) bool {
+	s.accountLoginMu.Lock()
+	defer s.accountLoginMu.Unlock()
+
+	if s.accountLoginAttempts == nil {
+		s.accountLoginAttempts = make(map[string]*loginAttempt)
+	}
+
+	now := time.Now()
+	attempt, exists := s.accountLoginAttempts[email]
+	if !exists || now.Sub(attempt.lastSeen) > 5*time.Minute {
+		s.accountLoginAttempts[email] = &loginAttempt{count: 1, lastSeen: now}
+		return true
+	}
+
+	if attempt.count >= 5 {
+		return false
+	}
+	attempt.count++
+	attempt.lastSeen = now
+	return true
+}
+
+// recordAccountLoginFailure increments the failed login counter for an account.
+func (s *Server) recordAccountLoginFailure(email string) {
+	s.accountLoginMu.Lock()
+	defer s.accountLoginMu.Unlock()
+
+	if s.accountLoginAttempts == nil {
+		s.accountLoginAttempts = make(map[string]*loginAttempt)
+	}
+
+	now := time.Now()
+	attempt, exists := s.accountLoginAttempts[email]
+	if !exists {
+		s.accountLoginAttempts[email] = &loginAttempt{count: 1, lastSeen: now}
+		return
+	}
+	attempt.count++
+	attempt.lastSeen = now
+}
+
 // handleLogin authenticates a user and returns a JWT token
 //
 //	@Summary Login
@@ -145,6 +276,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize email for rate limiting
+	emailKey := strings.ToLower(req.Email)
+
+	// Rate limit login attempts by account
+	if !s.checkAccountLoginRateLimit(emailKey) {
+		s.sendError(w, http.StatusTooManyRequests, "too many login attempts for this account")
+		return
+	}
+
 	// Parse email
 	user, domain := parseEmail(req.Email)
 
@@ -152,6 +292,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
 		s.recordLoginFailure(ip)
+		s.recordAccountLoginFailure(emailKey)
 		s.auditLogger.LogLoginFailure(req.Email, ip, "account_not_found")
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -161,6 +302,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	matches, needsRehash := s.verifyPassword(req.Password, account.PasswordHash)
 	if !matches {
 		s.recordLoginFailure(ip)
+		s.recordAccountLoginFailure(emailKey)
 		s.auditLogger.LogLoginFailure(req.Email, ip, "invalid_password")
 		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 		return
@@ -182,11 +324,38 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusUnauthorized, "TOTP code required")
 			return
 		}
-		if !auth.ValidateTOTP(account.TOTPSecret, req.TOTPCode) {
+		if s.isTOTPLockedOut(req.Email) {
+			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_locked_out")
+			s.sendError(w, http.StatusTooManyRequests, "too many failed TOTP attempts")
+			return
+		}
+		totpSecret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.config.JWTSecret)
+		if err != nil {
+			s.logger.Error("failed to decrypt TOTP secret", "error", err, "email", req.Email)
+			s.sendError(w, http.StatusInternalServerError, "authentication error")
+			return
+		}
+		valid, step := auth.ValidateTOTPAtWithStep(totpSecret, req.TOTPCode, time.Now(), auth.TOTPAlgorithmSHA1)
+		if !valid {
+			s.recordTOTPFailure(req.Email)
+			s.recordAccountLoginFailure(emailKey)
 			s.auditLogger.LogLoginFailure(req.Email, ip, "invalid_totp")
 			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 			return
 		}
+		// Replay protection: reject reuse of the same time step
+		if step <= account.TOTPLastUsedStep {
+			s.recordTOTPFailure(req.Email)
+			s.recordAccountLoginFailure(emailKey)
+			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_replay")
+			s.sendError(w, http.StatusUnauthorized, "TOTP code already used")
+			return
+		}
+		account.TOTPLastUsedStep = step
+		if err := s.db.UpdateAccount(account); err != nil {
+			s.logger.Error("failed to update TOTP last used step", "error", err, "email", req.Email)
+		}
+		s.clearTOTPFailures(req.Email)
 	}
 
 	// Generate JWT
@@ -209,6 +378,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"token":     tokenString,
 		"expiresIn": int(s.config.TokenExpiry.Seconds()),
 	})
+
+	// Clear login failures on successful login
+	s.clearAccountLoginFailures(emailKey)
 
 	// Initialize demo emails for the user on first login
 	InitDemoEmails(account.Email)

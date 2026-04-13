@@ -46,8 +46,15 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 		return
 	}
 
+	// Encrypt secret before storage
+	encryptedSecret, err := auth.EncryptTOTPSecret(secret, s.config.JWTSecret)
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to encrypt TOTP secret")
+		return
+	}
+
 	// Store secret but don't enable yet — user must verify first
-	account.TOTPSecret = secret
+	account.TOTPSecret = encryptedSecret
 	account.UpdatedAt = time.Now()
 	if err := s.db.UpdateAccount(account); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to save TOTP secret")
@@ -103,7 +110,14 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 		return
 	}
 
-	if !auth.ValidateTOTP(account.TOTPSecret, req.Code) {
+	totpSecret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.config.JWTSecret)
+	if err != nil {
+		s.logger.Error("failed to decrypt TOTP secret", "error", err, "email", email)
+		s.sendError(w, http.StatusInternalServerError, "authentication error")
+		return
+	}
+
+	if !auth.ValidateTOTP(totpSecret, req.Code) {
 		s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
 	}

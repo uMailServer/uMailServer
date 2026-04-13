@@ -3,6 +3,7 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,16 +16,17 @@ import (
 
 // Bucket names
 const (
-	BucketAccounts    = "accounts"
-	BucketDomains     = "domains"
-	BucketQueue       = "queue"
-	BucketSpam        = "spam"
-	BucketMetrics     = "metrics"
-	BucketMessageMeta = "messagemeta"
-	BucketIndex       = "index"
-	BucketAliases     = "aliases"
-	BucketContacts    = "contacts"
-	BucketFilters     = "filters"
+	BucketAccounts      = "accounts"
+	BucketDomains       = "domains"
+	BucketQueue         = "queue"
+	BucketSpam          = "spam"
+	BucketMetrics       = "metrics"
+	BucketMessageMeta   = "messagemeta"
+	BucketIndex         = "index"
+	BucketAliases       = "aliases"
+	BucketContacts      = "contacts"
+	BucketFilters       = "filters"
+	BucketRevokedTokens = "revoked_tokens"
 )
 
 // DB wraps bbolt database
@@ -38,9 +40,10 @@ type AccountData struct {
 	LocalPart        string    `json:"local_part"`
 	Domain           string    `json:"domain"`
 	PasswordHash     string    `json:"password_hash"`
-	APOPHash         string    `json:"apop_hash,omitempty"` // MD5(password) for APOP authentication
+	APOPHash         string    `json:"apop_hash,omitempty"` // SHA-256(password) for APOP authentication
 	TOTPSecret       string    `json:"totp_secret,omitempty"`
 	TOTPEnabled      bool      `json:"totp_enabled"`
+	TOTPLastUsedStep int64     `json:"totp_last_used_step,omitempty"`
 	QuotaUsed        int64     `json:"quota_used"`
 	QuotaLimit       int64     `json:"quota_limit"`
 	MaxMessageSize   int64     `json:"max_message_size"`
@@ -142,14 +145,21 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	closeOnErr := true
+	defer func() {
+		if closeOnErr {
+			_ = bolt.Close()
+		}
+	}()
+
 	db := &DB{bolt: bolt}
 
 	// Initialize buckets
 	if err := db.initBuckets(); err != nil {
-		bolt.Close()
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
 	}
 
+	closeOnErr = false
 	return db, nil
 }
 
@@ -310,6 +320,116 @@ func (d *DB) UpdateAccount(account *AccountData) error {
 	account.UpdatedAt = time.Now()
 	key := AccountKey(account.Domain, account.LocalPart)
 	return d.Put(BucketAccounts, key, account)
+}
+
+// IncrementQuota atomically adds delta to an account's QuotaUsed inside a bbolt transaction.
+// It returns an error if the account does not exist, quota would be exceeded, or int64 overflow.
+func (d *DB) IncrementQuota(domain, localPart string, delta int64) error {
+	key := AccountKey(domain, localPart)
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		data := b.Get([]byte(key))
+		if data == nil {
+			return fmt.Errorf("key not found: %s", key)
+		}
+		var account AccountData
+		if err := json.Unmarshal(data, &account); err != nil {
+			return err
+		}
+		if account.QuotaLimit > 0 && account.QuotaUsed+delta > account.QuotaLimit {
+			return fmt.Errorf("quota exceeded for user: %s", key)
+		}
+		if delta > 0 && account.QuotaUsed > math.MaxInt64-delta {
+			return fmt.Errorf("quota overflow for user: %s", key)
+		}
+		account.QuotaUsed += delta
+		account.UpdatedAt = time.Now()
+		newData, err := json.Marshal(&account)
+		if err != nil {
+			return fmt.Errorf("failed to marshal value: %w", err)
+		}
+		return b.Put([]byte(key), newData)
+	})
+}
+
+// StoreRevokedToken persists a revoked token hash with its expiry time.
+func (d *DB) StoreRevokedToken(tokenHash string, expiry time.Time) error {
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(BucketRevokedTokens))
+		if err != nil {
+			return err
+		}
+		data, _ := json.Marshal(expiry)
+		return b.Put([]byte(tokenHash), data)
+	})
+}
+
+// IsTokenRevoked checks whether a token hash is in the persistent revocation list.
+// It also performs lazy cleanup of expired entries.
+func (d *DB) IsTokenRevoked(tokenHash string) (bool, error) {
+	var revoked bool
+	var toDelete []string
+	now := time.Now()
+	err := d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketRevokedTokens))
+		if b == nil {
+			return nil
+		}
+		data := b.Get([]byte(tokenHash))
+		if data == nil {
+			return nil
+		}
+		var expiry time.Time
+		if err := json.Unmarshal(data, &expiry); err != nil {
+			// Invalid entry - delete it
+			toDelete = append(toDelete, tokenHash)
+			return nil
+		}
+		if now.After(expiry) {
+			toDelete = append(toDelete, tokenHash)
+			return nil
+		}
+		revoked = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	// Cleanup expired/invalid entries in a separate transaction
+	if len(toDelete) > 0 {
+		_ = d.bolt.Update(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(BucketRevokedTokens))
+			if b == nil {
+				return nil
+			}
+			for _, h := range toDelete {
+				_ = b.Delete([]byte(h))
+			}
+			return nil
+		})
+	}
+	return revoked, nil
+}
+
+// CleanupRevokedTokens removes all expired token revocation entries.
+func (d *DB) CleanupRevokedTokens() error {
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketRevokedTokens))
+		if b == nil {
+			return nil
+		}
+		now := time.Now()
+		return b.ForEach(func(k, v []byte) error {
+			var expiry time.Time
+			if err := json.Unmarshal(v, &expiry); err != nil || now.After(expiry) {
+				_ = b.Delete(k)
+			}
+			return nil
+		})
+	})
 }
 
 // DeleteAccount removes an account

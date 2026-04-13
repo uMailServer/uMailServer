@@ -73,13 +73,20 @@ func ValidateTOTP(secret, code string) bool {
 // ValidateTOTPAt validates a TOTP code against a secret at a specific time.
 // The algorithm parameter specifies which hash to use (SHA1 or SHA256).
 func ValidateTOTPAt(secret, code string, now time.Time, algo TOTPAlgorithm) bool {
+	valid, _ := ValidateTOTPAtWithStep(secret, code, now, algo)
+	return valid
+}
+
+// ValidateTOTPAtWithStep validates a TOTP code and returns the matched time step.
+// Returns (-1, false) if no valid time step matches.
+func ValidateTOTPAtWithStep(secret, code string, now time.Time, algo TOTPAlgorithm) (bool, int64) {
 	if len(code) != TOTPDefaultDigits {
-		return false
+		return false, -1
 	}
 
 	key, err := decodeTOTPSecret(secret)
 	if err != nil {
-		return false
+		return false, -1
 	}
 
 	timeStep := uint64(now.Unix()) / TOTPDefaultPeriod
@@ -90,11 +97,11 @@ func ValidateTOTPAt(secret, code string, now time.Time, algo TOTPAlgorithm) bool
 		expected := computeTOTP(key, ts, TOTPDefaultDigits, algo)
 		// Use constant-time comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
-			return true
+			return true, int64(ts)
 		}
 	}
 
-	return false
+	return false, -1
 }
 
 // decodeTOTPSecret decodes a base32 TOTP secret to bytes

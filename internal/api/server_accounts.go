@@ -75,6 +75,21 @@ func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) {
 // Account handlers
 
 func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
+	authUser, _ := r.Context().Value("user").(string)
+	isAdmin, _ := r.Context().Value("isAdmin").(bool)
+
+	// Non-admins may only view their own account
+	if !isAdmin && authUser != "" {
+		user, domain := parseEmail(authUser)
+		account, err := s.db.GetAccount(domain, user)
+		if err != nil || account == nil {
+			s.sendError(w, http.StatusNotFound, "account not found")
+			return
+		}
+		s.sendJSON(w, http.StatusOK, []map[string]interface{}{accountToJSON(account)})
+		return
+	}
+
 	domain := r.URL.Query().Get("domain")
 
 	var accounts []*db.AccountData
@@ -131,13 +146,13 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 
 	// Validate email format
 	if err := validateEmailFormat(req.Email); err != nil {
-		s.sendError(w, http.StatusBadRequest, err.Error())
+		s.sendError(w, http.StatusBadRequest, "invalid email format")
 		return
 	}
 
 	// Validate password strength
 	if err := validatePassword(req.Password); err != nil {
-		s.sendError(w, http.StatusBadRequest, err.Error())
+		s.sendError(w, http.StatusBadRequest, "password does not meet complexity requirements")
 		return
 	}
 
@@ -211,11 +226,14 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 
 	// Authorization check: prevent privilege escalation
-	authUser, _ := r.Context().Value("user").(string)
+	authUser, ok := r.Context().Value("user").(string)
+	if !ok || authUser == "" {
+		s.sendError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 	isAdmin, _ := r.Context().Value("isAdmin").(bool)
 
-	// If auth context exists, enforce ownership/non-admin restrictions
-	if authUser != "" && !isAdmin && authUser != user+"@"+domain {
+	if !isAdmin && authUser != user+"@"+domain {
 		s.sendError(w, http.StatusForbidden, "access denied")
 		return
 	}
@@ -236,9 +254,8 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
-	// Non-admin cannot grant admin privileges (only when auth context exists AND user is confirmed non-admin)
-	// If no auth context (authUser is empty), default behavior allows admin promotion for backward compatibility
-	if authUser != "" && !isAdmin && req.IsAdmin {
+	// Non-admin cannot grant admin privileges
+	if !isAdmin && req.IsAdmin {
 		s.sendError(w, http.StatusForbidden, "only admins can grant admin privileges")
 		return
 	}

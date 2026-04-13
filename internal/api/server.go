@@ -71,6 +71,14 @@ type Server struct {
 	loginMu       sync.Mutex
 	loginAttempts map[string]*loginAttempt
 
+	// Account-based login rate limiting
+	accountLoginMu       sync.Mutex
+	accountLoginAttempts map[string]*loginAttempt
+
+	// TOTP attempt limiting
+	totpMu       sync.Mutex
+	totpAttempts map[string]*totpAttempt
+
 	// API rate limiting (HTTPRequestsPerMinute)
 	apiRateMu       sync.Mutex
 	apiRateAttempts map[string]*apiRateAttempt
@@ -357,19 +365,21 @@ func (s *Server) initRouter() {
 		metrics.Get().HTTPHandler(w, r)
 	}))).ServeHTTP)
 
-	// SSE endpoint for real-time updates
-	mux.HandleFunc("/api/v1/events", s.sseServer.Handler())
+	// SSE endpoint for real-time updates (requires auth)
+	mux.Handle("/api/v1/events", s.authMiddleware(s.sseServer.Handler()))
 
 	// MCP endpoint (protected by auth)
 	mux.Handle("/mcp", s.authMiddleware(http.HandlerFunc(s.mcpServer.HandleHTTP)))
 
 	// Authentication
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
-	mux.HandleFunc("/api/v1/auth/refresh", s.handleRefresh)
 	mux.Handle("/api/v1/auth/logout", s.authMiddleware(http.HandlerFunc(s.handleLogout)))
 
 	// Protected routes
 	api := http.NewServeMux()
+
+	// Refresh token (requires auth)
+	api.HandleFunc("/api/v1/auth/refresh", s.handleRefresh)
 
 	// Domains (admin only)
 	api.HandleFunc("/api/v1/domains", s.adminMiddleware(http.HandlerFunc(s.handleDomains)).ServeHTTP)
@@ -469,8 +479,8 @@ func (s *Server) limitBodyMiddleware(next http.Handler) http.Handler {
 // Exempts health check and authentication endpoints.
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip rate limiting for health and auth endpoints
-		if r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/api/v1/auth/") {
+		// Skip rate limiting for health checks (probes must not be throttled)
+		if r.URL.Path == "/health" || r.URL.Path == "/health/ready" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -619,7 +629,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip auth for health and login endpoints
-		if r.URL.Path == "/health" || strings.HasPrefix(r.URL.Path, "/api/v1/auth/") {
+		if r.URL.Path == "/health" || r.URL.Path == "/api/v1/auth/login" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -656,7 +666,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			}
 			// Last resort: try legacy JWTSecret
 			return []byte(s.config.JWTSecret), nil
-		})
+		}, jwt.WithValidMethods([]string{"HS256"}))
 
 		if err != nil || !token.Valid {
 			s.sendError(w, http.StatusUnauthorized, "invalid token")

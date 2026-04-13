@@ -460,7 +460,7 @@ func TestCreateAccount(t *testing.T) {
 
 	body := map[string]interface{}{
 		"email":    "user@test.com",
-		"password": "password123",
+		"password": "Password123!",
 	}
 	jsonBody, _ := json.Marshal(body)
 
@@ -1370,6 +1370,9 @@ func TestUpdateAccount(t *testing.T) {
 	jsonBody, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	ctx := context.WithValue(req.Context(), "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	server.handleAccountDetail(rec, req)
@@ -1412,6 +1415,7 @@ func TestUpdateAccountInvalidBody(t *testing.T) {
 
 	// Send invalid body
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader([]byte("invalid")))
+	req = req.WithContext(context.WithValue(req.Context(), "user", "user@test.com"))
 	rec := httptest.NewRecorder()
 
 	server.handleAccountDetail(rec, req)
@@ -1741,7 +1745,7 @@ func TestCreateAccountWithAdminFlag(t *testing.T) {
 
 	body := map[string]interface{}{
 		"email":    "admin@admin-test.com",
-		"password": "adminpass123",
+		"password": "Adminpass123!",
 		"is_admin": true,
 	}
 	jsonBody, _ := json.Marshal(body)
@@ -2223,6 +2227,9 @@ func TestUpdateAccountWithPassword(t *testing.T) {
 	jsonBody, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@updpass.com", bytes.NewReader(jsonBody))
+	ctx := context.WithValue(req.Context(), "user", "admin@updpass.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	server.handleAccountDetail(rec, req)

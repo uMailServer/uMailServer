@@ -133,6 +133,7 @@ func TestUpdateAccount_WithPasswordChange(t *testing.T) {
 		"password": "newpassword", "is_admin": false, "is_active": true,
 	})
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@pwchg.com", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), "user", "u@pwchg.com"))
 	rec := httptest.NewRecorder()
 	server.updateAccount(rec, req, "u@pwchg.com")
 
@@ -172,6 +173,7 @@ func TestUpdateAccount_InvalidBody(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@inv.com", bytes.NewReader([]byte("invalid json")))
+	req = req.WithContext(context.WithValue(req.Context(), "user", "u@inv.com"))
 	rec := httptest.NewRecorder()
 	server.updateAccount(rec, req, "u@inv.com")
 

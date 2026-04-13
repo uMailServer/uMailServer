@@ -20,11 +20,32 @@ func (s *Server) handleJWTRotate(w http.ResponseWriter, r *http.Request) {
 	newKid := fmt.Sprintf("k%d", time.Now().UnixNano())
 	newSecret := generateSecureJWTSecret()
 
-	// Add new secret to versions map (keeping old ones for backward compatibility)
+	// Add new secret to versions map, pruning old secrets to limit exposure
+	const maxJWTSecretVersions = 5
 	s.jwtSecrets[newKid] = newSecret
 	s.currentKid = newKid
+	if len(s.jwtSecrets) > maxJWTSecretVersions {
+		// Prune oldest secrets (lowest numeric kid, since kid is k<timestamp>)
+		for len(s.jwtSecrets) > maxJWTSecretVersions {
+			var oldest string
+			for kid := range s.jwtSecrets {
+				if kid == s.currentKid {
+					continue
+				}
+				if oldest == "" || kid < oldest {
+					oldest = kid
+				}
+			}
+			if oldest != "" {
+				delete(s.jwtSecrets, oldest)
+				s.logger.Info("Pruned old JWT secret", "kid", oldest)
+			} else {
+				break
+			}
+		}
+	}
 
-	s.logger.Info("JWT secret rotated", "newKid", newKid)
+	s.logger.Info("JWT secret rotated", "newKid", newKid, "activeKeys", len(s.jwtSecrets))
 
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"status":     "rotated",
