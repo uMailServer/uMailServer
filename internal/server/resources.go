@@ -30,10 +30,11 @@ func DefaultResourceLimits() ResourceLimits {
 
 // ResourceMonitor monitors and enforces resource limits
 type ResourceMonitor struct {
-	limits ResourceLimits
-	logger Logger
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	limits   ResourceLimits
+	logger   Logger
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 
 	// Current values
 	currentMemory      int64
@@ -83,7 +84,9 @@ func (rm *ResourceMonitor) Start() {
 
 // Stop stops the resource monitor
 func (rm *ResourceMonitor) Stop() {
-	close(rm.stopCh)
+	rm.stopOnce.Do(func() {
+		close(rm.stopCh)
+	})
 	rm.wg.Wait()
 }
 
