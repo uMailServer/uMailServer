@@ -196,7 +196,7 @@ func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, i
 	if cal, err := s.getCalendarUnsafe(username, calendarID); err == nil && cal != nil {
 		cal.Modified = time.Now()
 		data, _ := json.MarshalIndent(cal, "", "  ")
-		os.WriteFile(s.calendarPath(username, calendarID), data, 0644)
+		os.WriteFile(s.calendarPath(username, calendarID), data, 0600)
 	}
 
 	return nil
@@ -264,7 +264,7 @@ func (s *Storage) DeleteEvent(username, calendarID, eventUID string) error {
 	if cal, err := s.getCalendarUnsafe(username, calendarID); err == nil && cal != nil {
 		cal.Modified = time.Now()
 		data, _ := json.MarshalIndent(cal, "", "  ")
-		os.WriteFile(s.calendarPath(username, calendarID), data, 0644)
+		os.WriteFile(s.calendarPath(username, calendarID), data, 0600)
 	}
 
 	return nil

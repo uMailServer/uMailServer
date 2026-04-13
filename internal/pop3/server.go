@@ -3,8 +3,10 @@ package pop3
 import (
 	"bufio"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/subtle"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -44,6 +46,12 @@ type Server struct {
 
 	// Connection limits
 	maxConnections int
+	requireTLS     bool
+}
+
+// SetRequireTLS sets whether TLS is required before authentication.
+func (s *Server) SetRequireTLS(require bool) {
+	s.requireTLS = require
 }
 
 // TLSConfig holds TLS configuration
@@ -477,6 +485,10 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 			s.WriteResponse("-ERR Usage: USER <username>")
 			return nil
 		}
+		if s.server.requireTLS && !s.isTLS {
+			s.WriteResponse("-ERR TLS required for authentication")
+			return nil
+		}
 		s.user = args[0]
 		s.WriteResponse("+OK")
 
@@ -487,6 +499,10 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		}
 		if s.user == "" {
 			s.WriteResponse("-ERR USER required first")
+			return nil
+		}
+		if s.server.requireTLS && !s.isTLS {
+			s.WriteResponse("-ERR TLS required for authentication")
 			return nil
 		}
 
@@ -537,6 +553,10 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 	case "APOP":
 		if len(args) < 2 {
 			s.WriteResponse("-ERR Usage: APOP <username> <digest>")
+			return nil
+		}
+		if s.server.requireTLS && !s.isTLS {
+			s.WriteResponse("-ERR TLS required for authentication")
 			return nil
 		}
 
@@ -892,5 +912,10 @@ func (s *Session) sendTop(data []byte, lines int) {
 
 // generateSessionID generates a unique session ID
 func generateSessionID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to time-based entropy only on crypto/rand failure
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }

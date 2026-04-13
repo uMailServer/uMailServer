@@ -215,15 +215,16 @@ func (s *Session) handleEHLO(arg string) error {
 		capabilities = append(capabilities, "STARTTLS")
 	}
 
-	// Only advertise AUTH after TLS or if insecure auth is allowed
-	if s.isTLS || s.server.config.AllowInsecure {
+	// Only advertise AUTH after TLS or if insecure auth is allowed on submission
+	if s.isTLS || (s.server.config.IsSubmission && s.server.config.AllowInsecure) {
 		authMechs := []string{"AUTH PLAIN LOGIN"}
-		if s.server.onGetUserSecret != nil {
-			authMechs = append(authMechs, "CRAM-MD5")
-		}
+		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
+		// if s.server.onGetUserSecret != nil {
+		// 	authMechs = append(authMechs, "CRAM-MD5")
+		// }
 		capabilities = append(capabilities, strings.Join(authMechs, " "))
 		// Warn if AUTH is advertised over non-TLS connection
-		if !s.isTLS && s.server.config.AllowInsecure {
+		if !s.isTLS && s.server.config.IsSubmission && s.server.config.AllowInsecure {
 			s.server.logger.Warn("SMTP AUTH advertised over unencrypted connection - credentials may be exposed",
 				"remote_addr", s.conn.RemoteAddr().String(),
 				"allow_insecure", s.server.config.AllowInsecure)
@@ -710,8 +711,9 @@ func (s *Session) handleAUTH(arg string) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	// Require TLS for authentication (unless insecure auth is allowed)
-	if !s.isTLS && !s.server.config.AllowInsecure {
+	// Require TLS for authentication. Port 25 never allows insecure auth;
+	// submission only allows it when explicitly configured.
+	if !s.isTLS && (!s.server.config.IsSubmission || !s.server.config.AllowInsecure) {
 		return s.WriteResponse(538, "5.7.10 Encryption required for requested authentication mechanism")
 	}
 
@@ -739,7 +741,8 @@ func (s *Session) handleAUTH(arg string) error {
 	case "LOGIN":
 		return s.handleAuthLOGIN(parts)
 	case "CRAM-MD5":
-		return s.handleAuthCRAMMD5()
+		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
+		return s.WriteResponse(504, "CRAM-MD5 authentication mechanism is disabled")
 	default:
 		return s.WriteResponse(504, "Unrecognized authentication type")
 	}

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"os"
 	"sync"
@@ -150,20 +152,15 @@ func (w *Watcher) reload() {
 	w.logger.Info("Config reloaded successfully")
 }
 
-// fileHash calculates a simple hash of the file content
+// fileHash calculates a SHA-256 hash of the file content
 func (w *Watcher) fileHash() (string, error) {
 	data, err := os.ReadFile(w.path)
 	if err != nil {
 		return "", err
 	}
 
-	// Simple hash: sum of bytes
-	var sum uint64
-	for _, b := range data {
-		sum += uint64(b)
-	}
-
-	return string(rune(sum)), nil
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // SetCurrentConfig sets the current config (called after initial load)

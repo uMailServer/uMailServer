@@ -1267,6 +1267,7 @@ func TestHandleAUTH_AlreadyAuthenticated(t *testing.T) {
 	defer clientConn.Close()
 
 	session.server.config.AllowInsecure = true
+	session.server.config.IsSubmission = true
 	session.mutex.Lock()
 	session.isAuth = true
 	session.state = StateGreeted
@@ -1293,6 +1294,7 @@ func TestHandleAUTH_BadSequenceNewState(t *testing.T) {
 	defer clientConn.Close()
 
 	session.server.config.AllowInsecure = true
+	session.server.config.IsSubmission = true
 	// StateNew — should fail
 
 	err := session.handleAUTH("PLAIN credentials")
@@ -1689,6 +1691,7 @@ func TestHandleAuthLOGIN_InvalidBase64Username(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -1729,6 +1732,7 @@ func TestHandleAuthLOGIN_InvalidBase64Password(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -1823,6 +1827,7 @@ func TestHandleEHLO_AuthAdvertisedWhenAllowInsecure(t *testing.T) {
 
 	// AllowInsecure=true, isTLS=false => AUTH SHOULD be advertised
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.isTLS = false
 	s.mutex.Unlock()
@@ -2058,6 +2063,7 @@ func TestHandleAUTH_UnrecognizedMechanism(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.mutex.Unlock()
@@ -2078,6 +2084,7 @@ func TestHandleAuthPLAIN_InvalidBase64(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -2101,6 +2108,7 @@ func TestHandleAuthPLAIN_BadCredentialFormat(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -2127,6 +2135,7 @@ func TestHandleAuthPLAIN_AuthFails(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -2158,6 +2167,7 @@ func TestHandleAuthLOGIN_Success(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false

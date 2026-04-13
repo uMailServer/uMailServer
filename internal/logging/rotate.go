@@ -63,7 +63,7 @@ func (w *RotatingWriter) open() error {
 		w.size = 0
 	}
 
-	f, err := os.OpenFile(w.filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(w.filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -191,7 +191,7 @@ func (w *RotatingWriter) cleanup() {
 		}
 
 		if shouldDelete {
-			os.Remove(f.path)
+			_ = os.Remove(f.path)
 		}
 	}
 }

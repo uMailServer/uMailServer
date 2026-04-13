@@ -120,9 +120,11 @@ func TestCoverListenAndServeTLS(t *testing.T) {
 }
 
 func TestCoverEHLO_CRAMMD5Capability(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.server.onGetUserSecret = func(username string) (string, error) {
 		return "shared-secret", nil
 	}
@@ -194,9 +196,11 @@ func TestCoverRCPT_FromRcptToState(t *testing.T) {
 }
 
 func TestCoverAuthCRAMMD5_NoSecretHandler(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -214,9 +218,11 @@ func TestCoverAuthCRAMMD5_NoSecretHandler(t *testing.T) {
 }
 
 func TestCoverAuthCRAMMD5_FullFlow(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -275,9 +281,11 @@ func TestCoverAuthCRAMMD5_FullFlow(t *testing.T) {
 }
 
 func TestCoverAuthCRAMMD5_InvalidResponse(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -311,9 +319,11 @@ func TestCoverAuthCRAMMD5_InvalidResponse(t *testing.T) {
 }
 
 func TestCoverAuthCRAMMD5_WrongHMAC(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -348,9 +358,11 @@ func TestCoverAuthCRAMMD5_WrongHMAC(t *testing.T) {
 }
 
 func TestCoverAuthCRAMMD5_SecretLookupError(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -385,8 +397,10 @@ func TestCoverAuthCRAMMD5_SecretLookupError(t *testing.T) {
 }
 
 func TestCoverAuthCRAMMD5_ConnectionClosedDuringChallenge(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, _ := createSessionWithPipe(t)
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -425,6 +439,7 @@ func TestCoverSTARTTLS_WriteResponseError(t *testing.T) {
 func TestCoverAuthLOGIN_PasswordReadError(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -545,6 +560,7 @@ func TestCoverDATA_DeliveryError(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.server.onDeliver = func(from string, to []string, data []byte) error {
 		return fmt.Errorf("delivery failed")
 	}
@@ -608,6 +624,7 @@ func TestCoverBDAT_LastChunkWithDelivery(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	var deliveredFrom, deliveredData string
 	var deliveredTo []string
 	s.server.onDeliver = func(from string, to []string, data []byte) error {
@@ -653,6 +670,7 @@ func TestCoverBDAT_DeliveryError(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.server.onDeliver = func(from string, to []string, data []byte) error {
 		return fmt.Errorf("delivery error")
 	}
@@ -682,6 +700,7 @@ func TestCoverBDAT_MultiChunk(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	var deliveredData string
 	s.server.onDeliver = func(from string, to []string, data []byte) error {
 		deliveredData = string(data)
@@ -787,6 +806,7 @@ func TestCoverBDAT_MissingSize(t *testing.T) {
 func TestCoverAuthLOGIN_UsernameReadError(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -810,6 +830,7 @@ func TestCoverAuthLOGIN_InvalidBase64Username(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -841,6 +862,7 @@ func TestCoverAuthLOGIN_InvalidBase64Password(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -879,6 +901,7 @@ func TestCoverAuthLOGIN_AuthReject(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -919,6 +942,7 @@ func TestCoverAuthLOGIN_Success(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -969,6 +993,7 @@ func TestCoverAuthPLAIN_InlineCredentials(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -999,6 +1024,7 @@ func TestCoverAuthPLAIN_InvalidBase64(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -1021,6 +1047,7 @@ func TestCoverAuthPLAIN_BadFormat(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -1045,6 +1072,7 @@ func TestCoverAuthPLAIN_AuthReject(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -1070,6 +1098,7 @@ func TestCoverAuthPLAIN_AuthReject(t *testing.T) {
 func TestCoverAuthPLAIN_ConnectionClosed(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -1089,6 +1118,7 @@ func TestCoverAUTH_AlreadyAuthenticated(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isAuth = true
@@ -1129,6 +1159,7 @@ func TestCoverAUTH_UnrecognizedMechanism(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -1149,6 +1180,7 @@ func TestCoverAUTH_BeforeEHLO(t *testing.T) {
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateNew
 	s.mutex.Unlock()

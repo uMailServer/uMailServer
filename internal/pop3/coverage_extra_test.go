@@ -2,12 +2,12 @@ package pop3
 
 import (
 	"bufio"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -241,7 +241,6 @@ func TestTruncateCommand_Coverage(t *testing.T) {
 // TestGenerateSessionID_Coverage tests generateSessionID function.
 func TestGenerateSessionID_Coverage(t *testing.T) {
 	id1 := generateSessionID()
-	time.Sleep(time.Millisecond) // Small delay to ensure different timestamp
 	id2 := generateSessionID()
 
 	if id1 == "" {
@@ -250,9 +249,15 @@ func TestGenerateSessionID_Coverage(t *testing.T) {
 	if id2 == "" {
 		t.Error("session ID 2 should not be empty")
 	}
-	// IDs should be numeric (timestamps)
-	if _, err := strconv.ParseInt(id1, 10, 64); err != nil {
-		t.Error("session ID should be numeric")
+	if id1 == id2 {
+		t.Error("session IDs should be unique")
+	}
+	// IDs should be hex strings (32 chars = 16 bytes)
+	if len(id1) != 32 {
+		t.Errorf("session ID length should be 32, got %d", len(id1))
+	}
+	if _, err := hex.DecodeString(id1); err != nil {
+		t.Error("session ID should be valid hex")
 	}
 }
 

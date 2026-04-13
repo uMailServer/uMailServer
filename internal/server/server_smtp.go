@@ -28,7 +28,8 @@ func (s *Server) startSMTP() {
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
 	smtpServer.SetAuthHandler(s.authenticate)
 	smtpServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
-	smtpServer.SetUserSecretHandler(s.getUserSecret)
+	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken (CVE-2022-37454, etc.)
+	// smtpServer.SetUserSecretHandler(s.getUserSecret)
 	smtpServer.SetLoginResultHandler(s.loginResult)
 	smtpServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
@@ -143,7 +144,8 @@ func (s *Server) startSMTP() {
 		submissionServer := smtp.NewServer(submissionCfg, s.logger)
 		submissionServer.SetAuthHandler(s.authenticate)
 		submissionServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
-		submissionServer.SetUserSecretHandler(s.getUserSecret)
+		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
+		// submissionServer.SetUserSecretHandler(s.getUserSecret)
 		submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
 		go func() {
@@ -174,7 +176,8 @@ func (s *Server) startSMTP() {
 		submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
 		submissionTLSServer.SetAuthHandler(s.authenticate)
 		submissionTLSServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
-		submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
+		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
+		// submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
 		submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 
 		tlsConfig := s.tlsManager.GetTLSConfig()

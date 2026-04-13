@@ -394,6 +394,7 @@ func TestHandleAuthLOGIN_ReadUsernameError(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -421,6 +422,7 @@ func TestHandleAuthPLAIN_ReadCredentialError(t *testing.T) {
 	s, clientConn, _ := createSessionWithPipe(t)
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false

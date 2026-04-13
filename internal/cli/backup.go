@@ -395,7 +395,7 @@ func (bm *BackupManager) createManifest(tw *tar.Writer, timestamp string) error 
 
 	header := &tar.Header{
 		Name:    "manifest.json",
-		Mode:    0644,
+		Mode:    0600,
 		ModTime: time.Now(),
 		Size:    int64(len(data)),
 	}

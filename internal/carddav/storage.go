@@ -196,7 +196,7 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 	if ab, err := s.getAddressbookUnsafe(username, addressbookID); err == nil && ab != nil {
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
-		os.WriteFile(s.addressbookPath(username, addressbookID), data, 0644)
+		os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
 	}
 
 	return nil
@@ -264,7 +264,7 @@ func (s *Storage) DeleteContact(username, addressbookID, contactUID string) erro
 	if ab, err := s.getAddressbookUnsafe(username, addressbookID); err == nil && ab != nil {
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
-		os.WriteFile(s.addressbookPath(username, addressbookID), data, 0644)
+		os.WriteFile(s.addressbookPath(username, addressbookID), data, 0600)
 	}
 
 	return nil

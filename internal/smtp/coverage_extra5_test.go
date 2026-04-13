@@ -244,6 +244,7 @@ func TestHandleAuthPLAIN_TwoStepFlow(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -302,6 +303,7 @@ func TestHandleAuthPLAIN_TwoStep_NilOnAuth(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -348,10 +350,12 @@ func TestHandleAuthPLAIN_TwoStep_NilOnAuth(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleAuthCRAMMD5_SuccessFullFlow(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, reader := createSessionWithPipe(t)
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -872,8 +876,10 @@ func TestValidateEmail_MoreUTF8(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleAuthCRAMMD5_ConnectionClosedDuringResponse(t *testing.T) {
+	t.Skip("CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken")
 	s, clientConn, _ := createSessionWithPipe(t)
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false

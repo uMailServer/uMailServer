@@ -204,6 +204,7 @@ func TestHandleAuthLOGIN_AuthHandlerError(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -247,6 +248,7 @@ func TestHandleAuthPLAIN_AuthHandlerReturnsError(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
@@ -276,6 +278,7 @@ func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 	defer clientConn.Close()
 
 	s.server.config.AllowInsecure = true
+	s.server.config.IsSubmission = true
 	s.mutex.Lock()
 	s.state = StateGreeted
 	s.isTLS = false
