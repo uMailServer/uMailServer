@@ -3,7 +3,9 @@ package smtp
 import (
 	"bufio"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/mail"
@@ -14,6 +16,9 @@ import (
 
 	"github.com/umailserver/umailserver/internal/metrics"
 )
+
+// ErrSessionQuit is returned when the session handles a QUIT command
+var ErrSessionQuit = errors.New("QUIT")
 
 // Server represents an SMTP server
 type Server struct {
@@ -322,7 +327,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			if err.Error() != "EOF" {
+			if !errors.Is(err, io.EOF) {
 				s.logger.Debug("read error", slog.Any("error", err))
 			}
 			return
@@ -339,7 +344,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		)
 
 		if err := session.HandleCommand(line); err != nil {
-			if err.Error() == "QUIT" {
+			if errors.Is(err, ErrSessionQuit) {
 				return
 			}
 			s.logger.Debug("command error",

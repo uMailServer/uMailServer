@@ -182,6 +182,16 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getAccount(w http.ResponseWriter, r *http.Request, email string) {
 	user, domain := parseEmail(email)
 
+	// Authorization check: ensure user owns this account or is admin
+	authUser, _ := r.Context().Value("user").(string)
+	isAdmin, _ := r.Context().Value("isAdmin").(bool)
+
+	// If auth context exists, enforce ownership
+	if authUser != "" && !isAdmin && authUser != user+"@"+domain {
+		s.sendError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
 		s.sendError(w, http.StatusNotFound, "account not found")
@@ -201,9 +211,14 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 
 	// Authorization check: prevent privilege escalation
-	// Only enforce when context is properly set (i.e., through HTTP middleware)
-	authUser := r.Context().Value("user")
-	authIsAdmin := r.Context().Value("isAdmin")
+	authUser, _ := r.Context().Value("user").(string)
+	isAdmin, _ := r.Context().Value("isAdmin").(bool)
+
+	// If auth context exists, enforce ownership/non-admin restrictions
+	if authUser != "" && !isAdmin && authUser != user+"@"+domain {
+		s.sendError(w, http.StatusForbidden, "access denied")
+		return
+	}
 
 	// Parse request body first to check IsAdmin modification
 	var req struct {
@@ -221,28 +236,17 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
-	// Only enforce authorization when context is properly set (authenticated request)
-	if authUser != nil && authIsAdmin != nil {
-		isAdmin, _ := authIsAdmin.(bool)
-		authenticatedUser, _ := authUser.(string)
+	// Non-admin cannot grant admin privileges (only when auth context exists AND user is confirmed non-admin)
+	// If no auth context (authUser is empty), default behavior allows admin promotion for backward compatibility
+	if authUser != "" && !isAdmin && req.IsAdmin {
+		s.sendError(w, http.StatusForbidden, "only admins can grant admin privileges")
+		return
+	}
 
-		// Validate type assertions
-		if !isAdmin || authenticatedUser == "" {
-			s.sendError(w, http.StatusForbidden, "invalid auth context")
-			return
-		}
-
-		// Prevent self-modification of IsAdmin flag
-		if authenticatedUser == email && req.IsAdmin != account.IsAdmin {
-			s.sendError(w, http.StatusForbidden, "cannot modify your own admin status")
-			return
-		}
-
-		// Prevent non-admin from setting IsAdmin to true
-		if !isAdmin && req.IsAdmin {
-			s.sendError(w, http.StatusForbidden, "only admins can grant admin privileges")
-			return
-		}
+	// Admins can only promote other users (not themselves) to admin
+	if isAdmin && req.IsAdmin && authUser == email && account.IsAdmin != req.IsAdmin {
+		s.sendError(w, http.StatusForbidden, "cannot modify your own admin status")
+		return
 	}
 
 	if req.Password != "" {
@@ -274,6 +278,16 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email string) {
 	user, domain := parseEmail(email)
 
+	// Authorization check: ensure user owns this account or is admin
+	authUser, _ := r.Context().Value("user").(string)
+	isAdmin, _ := r.Context().Value("isAdmin").(bool)
+
+	// If auth context exists, enforce ownership/non-admin restrictions
+	if authUser != "" && !isAdmin && authUser != user+"@"+domain {
+		s.sendError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
 	if err := s.db.DeleteAccount(domain, user); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to delete account")
 		return
@@ -281,10 +295,8 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 
 	// Audit account deletion
 	actor := "system"
-	if authUser := r.Context().Value("user"); authUser != nil {
-		if userStr, ok := authUser.(string); ok {
-			actor = userStr
-		}
+	if authUser != "" {
+		actor = authUser
 	}
 	s.auditLogger.LogAccountDelete(actor, email, audit.ExtractIP(r))
 

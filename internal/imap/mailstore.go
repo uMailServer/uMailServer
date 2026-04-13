@@ -266,12 +266,15 @@ func (m *BboltMailstore) getMessage(user, mailbox string, seqNum, uid uint32, it
 
 // checkAndSendMDN checks if an MDN should be sent for this message
 func (m *BboltMailstore) checkAndSendMDN(user, messageID, from, to string, msgData []byte) {
-	if m.mdnHandler == nil {
+	// Capture handler under lock to avoid race with SetMDNHandler
+	m.mdnSentMu.Lock()
+	handler := m.mdnHandler
+	if handler == nil {
+		m.mdnSentMu.Unlock()
 		return
 	}
 
 	// Check if MDN already sent for this message
-	m.mdnSentMu.Lock()
 	if m.mdnSent == nil {
 		m.mdnSent = make(map[string]bool)
 	}
@@ -279,6 +282,7 @@ func (m *BboltMailstore) checkAndSendMDN(user, messageID, from, to string, msgDa
 		m.mdnSentMu.Unlock()
 		return
 	}
+	m.mdnSent[messageID] = true
 	m.mdnSentMu.Unlock()
 
 	// Parse message to check for Disposition-Notification-To header
@@ -296,14 +300,9 @@ func (m *BboltMailstore) checkAndSendMDN(user, messageID, from, to string, msgDa
 	// Extract In-Reply-To for the MDN
 	inReplyTo := messageID
 
-	// Mark as sent before sending to prevent duplicate sends
-	m.mdnSentMu.Lock()
-	m.mdnSent[messageID] = true
-	m.mdnSentMu.Unlock()
-
-	// Send MDN asynchronously
+	// Send MDN asynchronously using captured handler
 	go func() {
-		if err := m.mdnHandler(from, mdnTo, messageID, inReplyTo, msgData); err != nil {
+		if err := handler(from, mdnTo, messageID, inReplyTo, msgData); err != nil {
 			// Log error but don't fail the fetch
 			m.mdnSentMu.Lock()
 			delete(m.mdnSent, messageID) // Allow retry on failure

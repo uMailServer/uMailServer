@@ -607,6 +607,7 @@ func (m *Manager) doDeliverToMX(from, to string, message []byte, mx string) erro
 			m.logger.Debug("MTA-STS check failed", "domain", domain, "mx", mx, "error", err)
 		}
 		if policy != nil && policy.Mode == auth.MTASTSModeEnforce && !allowed {
+			// Note: pooled connection will be released via defer in caller
 			return fmt.Errorf("MTA-STS policy violation: MX %s not allowed for domain %s", mx, domain)
 		}
 		if policy != nil && policy.Mode == auth.MTASTSModeEnforce {
@@ -635,16 +636,21 @@ func (m *Manager) doDeliverToMX(from, to string, message []byte, mx string) erro
 	if err != nil {
 		return err
 	}
+
+	// Handle connection based on source (pooled or fresh)
 	if fromPool {
-		// Got pooled connection - verify it's still good with RSET (Reset)
+		// Got pooled connection - verify it's still good with RSET
 		if err := client.Reset(); err != nil {
-			// Connection bad, release it and create new
+			// Connection bad, release it
 			m.releaseMXConn(mx, client, false)
+			// Create new connection
 			client, err = m.createMXConn(mx)
 			if err != nil {
 				return err
 			}
 		}
+		// Defer release for pooled connections
+		defer m.releaseMXConn(mx, client, false)
 	} else {
 		// Fresh connection, created inline
 		addr := mx + ":25"

@@ -702,7 +702,7 @@ func (s *Session) handleNOOP() error {
 // handleQUIT handles the QUIT command
 func (s *Session) handleQUIT() error {
 	s.WriteResponse(221, fmt.Sprintf("%s closing connection", s.server.config.Hostname))
-	return fmt.Errorf("QUIT")
+	return ErrSessionQuit
 }
 
 // handleAUTH handles the AUTH command

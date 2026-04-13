@@ -80,13 +80,23 @@ type TLSARecord struct {
 
 // DANEValidator handles DANE TLSA validation
 type DANEValidator struct {
-	resolver DNSResolver
+	resolver  DNSResolver
+	dnsServer string // Custom DNS server for TLSA lookups (defaults to system resolver)
 }
 
 // NewDANEValidator creates a new DANE validator
 func NewDANEValidator(resolver DNSResolver) *DANEValidator {
 	return &DANEValidator{
-		resolver: resolver,
+		resolver:  resolver,
+		dnsServer: "", // Use system resolver by default
+	}
+}
+
+// NewDANEValidatorWithDNS creates a new DANE validator with a custom DNS server
+func NewDANEValidatorWithDNS(resolver DNSResolver, dnsServer string) *DANEValidator {
+	return &DANEValidator{
+		resolver:  resolver,
+		dnsServer: dnsServer,
 	}
 }
 
@@ -155,8 +165,13 @@ func (v *DANEValidator) lookupTLSARecords(query string) ([]*TLSARecord, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(query), dns.TypeTLSA)
 
-	// Use Google's DNS
-	resolverAddr := "8.8.8.8:53"
+	// Use configured DNS server or system default
+	resolverAddr := v.dnsServer
+	if resolverAddr == "" {
+		// Use system resolver - let the OS choose
+		// For miekg/dns, we need to pick a resolver; use empty string to let it use nameservers from /etc/resolv.conf
+		resolverAddr = "" // Will use system resolver
+	}
 
 	// Perform the TLSA query
 	reply, _, err := client.Exchange(msg, resolverAddr)

@@ -40,6 +40,7 @@ type Config struct {
 	Domains      []string
 	ACMEEndpoint string
 	UseStaging   bool
+	MinVersion   uint16 // TLS version (e.g., tls.VersionTLS12, tls.VersionTLS13). Default: TLS 1.2
 }
 
 // NewManager creates a new TLS certificate manager
@@ -161,9 +162,15 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 
 // GetTLSConfig returns a TLS configuration
 func (m *Manager) GetTLSConfig() *tls.Config {
+	// Use configured min version or default to TLS 1.2
+	minVersion := m.config.MinVersion
+	if minVersion == 0 {
+		minVersion = tls.VersionTLS12
+	}
+
 	return &tls.Config{
 		GetCertificate: m.GetCertificate,
-		MinVersion:     tls.VersionTLS12,
+		MinVersion:     minVersion,
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,

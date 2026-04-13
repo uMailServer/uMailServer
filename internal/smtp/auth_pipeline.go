@@ -85,8 +85,34 @@ func (s *AuthDKIMStage) Process(ctx *MessageContext) PipelineResult {
 	// Verify each DKIM signature
 	for _, dkimHeader := range dkimHeaders {
 		result, sig, err := s.verifier.Verify(ctx.Headers, ctx.Data, dkimHeader)
-		if err != nil && s.logger != nil {
-			s.logger.Debug("DKIM verification error", "error", err)
+
+		// If sig is available, use its domain even on error (it has parsed domain info)
+		domain := ""
+		if sig != nil {
+			domain = sig.Domain
+		}
+
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Debug("DKIM verification error", "error", err)
+			}
+			ctx.DKIMResult = DKIMResult{
+				Valid:  false,
+				Domain: domain,
+				Error:  fmt.Sprintf("verification failed: %v", err),
+			}
+			ctx.SpamScore += 1.0
+			continue
+		}
+
+		// sig should not be nil when err is nil, but guard anyway
+		if sig == nil {
+			if s.logger != nil {
+				s.logger.Debug("DKIM signature is nil")
+			}
+			ctx.DKIMResult = DKIMResult{Valid: false, Error: "DKIM signature is nil"}
+			ctx.SpamScore += 1.0
+			continue
 		}
 
 		if result == auth.DKIMPass {
@@ -105,10 +131,11 @@ func (s *AuthDKIMStage) Process(ctx *MessageContext) PipelineResult {
 			return ResultAccept
 		}
 
+		// Verification failed (result != DKIMPass) but sig is valid
 		ctx.DKIMResult = DKIMResult{
 			Valid:  false,
-			Domain: sig.Domain,
-			Error:  fmt.Sprintf("verification failed: %v", err),
+			Domain: domain,
+			Error:  fmt.Sprintf("verification failed: result=%v", result),
 		}
 		ctx.SpamScore += 1.0
 	}

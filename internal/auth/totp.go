@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
@@ -87,7 +88,8 @@ func ValidateTOTPAt(secret, code string, now time.Time, algo TOTPAlgorithm) bool
 	for _, offset := range []int64{-1, 0, 1} {
 		ts := uint64(int64(timeStep) + offset)
 		expected := computeTOTP(key, ts, TOTPDefaultDigits, algo)
-		if expected == code {
+		// Use constant-time comparison to prevent timing attacks
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(code)) == 1 {
 			return true
 		}
 	}

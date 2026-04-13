@@ -3,6 +3,7 @@ package pop3
 import (
 	"bufio"
 	"crypto/md5"
+	"crypto/subtle"
 	"crypto/tls"
 	"fmt"
 	"log/slog"
@@ -567,7 +568,7 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		// Compute expected digest: MD5(timestamp + secret)
 		// secret is MD5(password) stored in the database
 		expectedDigest := s.computeAPOPDigest(secret)
-		if expectedDigest != digest {
+		if subtle.ConstantTimeCompare([]byte(expectedDigest), []byte(digest)) != 1 {
 			s.server.recordAuthFailure(host)
 			s.WriteResponse("-ERR Authentication failed")
 			return nil

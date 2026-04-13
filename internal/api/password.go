@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -67,11 +68,8 @@ func verifyPasswordArgon2id(password, encodedHash string) bool {
 	if len(computedHash) != len(storedHash) {
 		return false
 	}
-	var result byte
-	for i := range computedHash {
-		result |= computedHash[i] ^ storedHash[i]
-	}
-	return result == 0
+	// Use crypto/subtle for timing-safe comparison
+	return subtle.ConstantTimeCompare(computedHash, storedHash) == 1
 }
 
 // hashPassword hashes a password using the configured hasher

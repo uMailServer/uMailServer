@@ -22,6 +22,33 @@ func validatePathComponent(s string) error {
 	return nil
 }
 
+// isValidMessageID checks that messageID is safe to use in a file path
+// MessageIDs must not contain null bytes, path traversal, and must be long enough
+func isValidMessageID(messageID string) bool {
+	if messageID == "" {
+		return false
+	}
+	// Must be at least 4 characters for the path slicing (messageID[:2], messageID[2:4])
+	if len(messageID) < 4 {
+		return false
+	}
+	// Block null bytes (cannot occur in valid Go strings but check anyway)
+	for _, c := range messageID {
+		if c == 0 {
+			return false
+		}
+	}
+	// Block path traversal sequences (but allow forward slashes for maildir paths)
+	if strings.Contains(messageID, "..") {
+		return false
+	}
+	// MessageID should not be too long (prevent other injection)
+	if len(messageID) > 256 {
+		return false
+	}
+	return true
+}
+
 // MessageStore handles storage of raw message data
 type MessageStore struct {
 	basePath string
@@ -80,7 +107,7 @@ func (s *MessageStore) ReadMessage(user, messageID string) ([]byte, error) {
 	if err := validatePathComponent(user); err != nil {
 		return nil, err
 	}
-	if len(messageID) < 4 {
+	if !isValidMessageID(messageID) {
 		return nil, fmt.Errorf("invalid message ID")
 	}
 
@@ -93,7 +120,7 @@ func (s *MessageStore) DeleteMessage(user, messageID string) error {
 	if err := validatePathComponent(user); err != nil {
 		return err
 	}
-	if len(messageID) < 4 {
+	if !isValidMessageID(messageID) {
 		return fmt.Errorf("invalid message ID")
 	}
 
@@ -106,7 +133,7 @@ func (s *MessageStore) MessageExists(user, messageID string) bool {
 	if err := validatePathComponent(user); err != nil {
 		return false
 	}
-	if len(messageID) < 4 {
+	if !isValidMessageID(messageID) {
 		return false
 	}
 
