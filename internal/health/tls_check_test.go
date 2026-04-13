@@ -72,7 +72,7 @@ ATAKBggqhkjOPQQDAgNIADBFAiEA7Yqf4/J0hy8ujWeBEXj
 eDOPXpe/8PZmUip
 -----END CERTIFICATE-----
 `
-	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+	if err := os.WriteFile(certPath, []byte(certPEM), 0o644); err != nil {
 		t.Fatalf("failed to write test cert: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestTLSCertificateCheck_InvalidPEM(t *testing.T) {
 	certPath := filepath.Join(tempDir, "invalid.pem")
 
 	// Write invalid PEM content
-	if err := os.WriteFile(certPath, []byte("not a valid PEM"), 0644); err != nil {
+	if err := os.WriteFile(certPath, []byte("not a valid PEM"), 0o644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestTLSCertificateCheck_ReadError(t *testing.T) {
 	certPath := filepath.Join(tempDir, "unreadable")
 
 	// Create a directory instead of file to cause read error
-	if err := os.Mkdir(certPath, 0755); err != nil {
+	if err := os.Mkdir(certPath, 0o755); err != nil {
 		t.Fatalf("failed to create test directory: %v", err)
 	}
 
@@ -136,7 +136,7 @@ ATAKBggqhkjOPQQDAgNIADBFAiEA7Yqf4/J0hy8ujWeBEXjeDOPXpe/8PZmUip
 	tempDir := t.TempDir()
 	certPath := filepath.Join(tempDir, "expired.pem")
 
-	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+	if err := os.WriteFile(certPath, []byte(certPEM), 0o644); err != nil {
 		t.Fatalf("failed to write test cert: %v", err)
 	}
 
@@ -173,7 +173,7 @@ ATAKBggqhkjOPQQDAgNIADBFAiEA7Yqf4/J0hy8ujWeBEXjeDOPXpe/8PZmUip
 UeyMjgwRjYhDB/pC8K2CMxjMfg==
 -----END CERTIFICATE-----
 `
-	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+	if err := os.WriteFile(certPath, []byte(certPEM), 0o644); err != nil {
 		t.Fatalf("failed to write test cert: %v", err)
 	}
 
@@ -210,7 +210,7 @@ MIIBhTCCASugAwIBAgIQIRi6zePL6mKjOipn+dNuaTAKBggqhkjOPQQDAjASMRAw
 DgYDVQQKEwdBY21lIENvMB4XDTE3MTAyMDE5NDMwNlow
 -----END CERTIFICATE-----
 `
-	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+	if err := os.WriteFile(certPath, []byte(certPEM), 0o644); err != nil {
 		t.Fatalf("failed to write test cert: %v", err)
 	}
 
@@ -230,10 +230,10 @@ func TestTLSCertificateCheck_WarningThreshold(t *testing.T) {
 	certPath := filepath.Join(tempDir, "warning.pem")
 	keyPath := filepath.Join(tempDir, "warning.key")
 
-	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		t.Fatalf("failed to write cert: %v", err)
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0644); err != nil {
+	if err := os.WriteFile(keyPath, keyPEM, 0o644); err != nil {
 		t.Fatalf("failed to write key: %v", err)
 	}
 
@@ -254,10 +254,10 @@ func TestTLSCertificateCheck_CriticalThreshold(t *testing.T) {
 	certPath := filepath.Join(tempDir, "critical.pem")
 	keyPath := filepath.Join(tempDir, "critical.key")
 
-	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		t.Fatalf("failed to write cert: %v", err)
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0644); err != nil {
+	if err := os.WriteFile(keyPath, keyPEM, 0o644); err != nil {
 		t.Fatalf("failed to write key: %v", err)
 	}
 
@@ -278,10 +278,10 @@ func TestTLSCertificateCheck_Healthy(t *testing.T) {
 	certPath := filepath.Join(tempDir, "healthy.pem")
 	keyPath := filepath.Join(tempDir, "healthy.key")
 
-	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		t.Fatalf("failed to write cert: %v", err)
 	}
-	if err := os.WriteFile(keyPath, keyPEM, 0644); err != nil {
+	if err := os.WriteFile(keyPath, keyPEM, 0o644); err != nil {
 		t.Fatalf("failed to write key: %v", err)
 	}
 

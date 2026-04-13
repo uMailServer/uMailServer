@@ -402,7 +402,7 @@ func TestManagerGetCertificateStatusWithValidCert(t *testing.T) {
 		if err == nil {
 			// Write to the domain-specific location
 			domainCertPath := filepath.Join(tmpDir, "localhost.crt")
-			os.WriteFile(domainCertPath, certData, 0644)
+			os.WriteFile(domainCertPath, certData, 0o644)
 		}
 	}
 
@@ -618,8 +618,8 @@ func TestGetCertificateWithCacheHit(t *testing.T) {
 	domainCertPath := filepath.Join(tmpDir, "test.example.com.crt")
 	domainKeyPath := filepath.Join(tmpDir, "test.example.com.key")
 
-	os.WriteFile(domainCertPath, certData, 0644)
-	os.WriteFile(domainKeyPath, keyData, 0600)
+	os.WriteFile(domainCertPath, certData, 0o644)
+	os.WriteFile(domainKeyPath, keyData, 0o600)
 
 	// Set manager certDir to tmpDir so it can find the cert
 	manager.certDir = tmpDir
@@ -663,8 +663,8 @@ func TestGetCertificateWithServerSpecificCert(t *testing.T) {
 	domainCertPath := filepath.Join(tmpDir, "specific.example.com.crt")
 	domainKeyPath := filepath.Join(tmpDir, "specific.example.com.key")
 
-	os.WriteFile(domainCertPath, certData, 0644)
-	os.WriteFile(domainKeyPath, keyData, 0600)
+	os.WriteFile(domainCertPath, certData, 0o644)
+	os.WriteFile(domainKeyPath, keyData, 0o600)
 
 	// Set manager certDir to tmpDir
 	manager.certDir = tmpDir
@@ -687,8 +687,8 @@ func TestGetCertificateWithConfigPaths(t *testing.T) {
 	certPath := filepath.Join(tmpDir, "cert.pem")
 	keyPath := filepath.Join(tmpDir, "key.pem")
 
-	os.WriteFile(certPath, certData, 0644)
-	os.WriteFile(keyPath, keyData, 0600)
+	os.WriteFile(certPath, certData, 0o644)
+	os.WriteFile(keyPath, keyData, 0o600)
 
 	config := Config{
 		Enabled:  true,
@@ -785,7 +785,7 @@ func TestGetCertificateStatusWithExpiringCert(t *testing.T) {
 	// Create certificate expiring in 3 days (should trigger warning)
 	certData := generateTestCertWithExpiry(t, "expiring.example.com", 3*24*time.Hour)
 	certPath := filepath.Join(tmpDir, "expiring.example.com.crt")
-	os.WriteFile(certPath, certData, 0644)
+	os.WriteFile(certPath, certData, 0o644)
 
 	statuses := manager.GetCertificateStatus()
 	if len(statuses) != 1 {
@@ -822,7 +822,7 @@ func TestGetCertificateStatusWithValidCert(t *testing.T) {
 	// Create certificate expiring in 30 days (no warning)
 	certData := generateTestCertWithExpiry(t, "valid.example.com", 30*24*time.Hour)
 	certPath := filepath.Join(tmpDir, "valid.example.com.crt")
-	os.WriteFile(certPath, certData, 0644)
+	os.WriteFile(certPath, certData, 0o644)
 
 	statuses := manager.GetCertificateStatus()
 	if len(statuses) != 1 {
@@ -854,7 +854,7 @@ func TestGetCertificateStatusWithInvalidCert(t *testing.T) {
 
 	// Create invalid certificate data
 	certPath := filepath.Join(tmpDir, "invalid.example.com.crt")
-	os.WriteFile(certPath, []byte("invalid cert data"), 0644)
+	os.WriteFile(certPath, []byte("invalid cert data"), 0o644)
 
 	statuses := manager.GetCertificateStatus()
 	if len(statuses) != 1 {
@@ -886,7 +886,7 @@ func TestGetCertificateStatusMultipleDomains(t *testing.T) {
 
 	// Create certificate for domain1 only
 	certData := generateTestCert(t, "domain1.com")
-	os.WriteFile(filepath.Join(tmpDir, "domain1.com.crt"), certData, 0644)
+	os.WriteFile(filepath.Join(tmpDir, "domain1.com.crt"), certData, 0o644)
 
 	statuses := manager.GetCertificateStatus()
 	if len(statuses) != 3 {
@@ -940,8 +940,8 @@ func TestGetManualCertificateWithInvalidFiles(t *testing.T) {
 	// Create invalid cert files
 	certPath := filepath.Join(tmpDir, "test.crt")
 	keyPath := filepath.Join(tmpDir, "test.key")
-	os.WriteFile(certPath, []byte("invalid cert"), 0644)
-	os.WriteFile(keyPath, []byte("invalid key"), 0600)
+	os.WriteFile(certPath, []byte("invalid cert"), 0o644)
+	os.WriteFile(keyPath, []byte("invalid key"), 0o600)
 
 	config := Config{
 		Enabled:  true,
@@ -1078,8 +1078,8 @@ func TestGetCertificateWithAutocertEnabled(t *testing.T) {
 
 	certPath := filepath.Join(tmpDir, "cert.pem")
 	keyPath := filepath.Join(tmpDir, "key.pem")
-	os.WriteFile(certPath, certData, 0644)
-	os.WriteFile(keyPath, keyData, 0600)
+	os.WriteFile(certPath, certData, 0o644)
+	os.WriteFile(keyPath, keyData, 0o600)
 
 	config := Config{
 		Enabled:  true,
@@ -1152,7 +1152,7 @@ func TestGetManualCertificateWithServerSpecificCertOnlyKey(t *testing.T) {
 
 	// Create only the .crt file (no matching .key file)
 	certOnlyPath := filepath.Join(tmpDir, "partial.example.com.crt")
-	os.WriteFile(certOnlyPath, []byte("cert"), 0644)
+	os.WriteFile(certOnlyPath, []byte("cert"), 0o644)
 
 	// Should fail because no cert/key is configured and server-specific pair is incomplete
 	cert, err := manager.getManualCertificate("partial.example.com")
@@ -1182,8 +1182,8 @@ func TestGetManualCertificateWithServerSpecificCertAndKey(t *testing.T) {
 	manager.certDir = tmpDir
 
 	// Create server-specific cert and key files
-	os.WriteFile(filepath.Join(tmpDir, "specific.example.com.crt"), certData, 0644)
-	os.WriteFile(filepath.Join(tmpDir, "specific.example.com.key"), keyData, 0600)
+	os.WriteFile(filepath.Join(tmpDir, "specific.example.com.crt"), certData, 0o644)
+	os.WriteFile(filepath.Join(tmpDir, "specific.example.com.key"), keyData, 0o600)
 
 	// Should successfully load the server-specific certificate
 	cert, err := manager.getManualCertificate("specific.example.com")
@@ -1213,8 +1213,8 @@ func TestGetManualCertificateEmptyServerNameWithConfigPaths(t *testing.T) {
 
 	certPath := filepath.Join(tmpDir, "cert.pem")
 	keyPath := filepath.Join(tmpDir, "key.pem")
-	os.WriteFile(certPath, certData, 0644)
-	os.WriteFile(keyPath, keyData, 0600)
+	os.WriteFile(certPath, certData, 0o644)
+	os.WriteFile(keyPath, keyData, 0o600)
 
 	config := Config{
 		Enabled:  true,

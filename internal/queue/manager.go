@@ -234,7 +234,7 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 	id := generateID()
 
 	queueDir := filepath.Join(m.dataDir, "queue")
-	if err := os.MkdirAll(queueDir, 0750); err != nil {
+	if err := os.MkdirAll(queueDir, 0o750); err != nil {
 		return "", fmt.Errorf("failed to create queue directory: %w", err)
 	}
 
@@ -1054,13 +1054,13 @@ func extractDomain(email string) string {
 
 func writeFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 
 	// Write to temp file first, then rename for atomicity
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(filepath.Clean(tmpPath), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Clean(tmpPath), data, 0o600); err != nil {
 		return err
 	}
 

@@ -13,7 +13,7 @@ func TestOpen_WithExistingFile(t *testing.T) {
 	logFile := filepath.Join(tempDir, "test.log")
 
 	// Create existing file with content
-	if err := os.WriteFile(logFile, []byte("existing content\n"), 0644); err != nil {
+	if err := os.WriteFile(logFile, []byte("existing content\n"), 0o644); err != nil {
 		t.Fatalf("failed to create existing file: %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestRotate_CloseErrorPath(t *testing.T) {
 	}
 
 	// Manually open a file
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatalf("failed to open file: %v", err)
 	}
@@ -152,8 +152,8 @@ func TestRotate_RenameFailsThenSucceeds(t *testing.T) {
 	}
 
 	// Make file read-only so rename fails
-	os.Chmod(logFile, 0444)
-	defer os.Chmod(logFile, 0644)
+	os.Chmod(logFile, 0o444)
+	defer os.Chmod(logFile, 0o644)
 
 	// Try to rotate - should fail on rename
 	w.mu.Lock()
@@ -161,7 +161,7 @@ func TestRotate_RenameFailsThenSucceeds(t *testing.T) {
 	w.mu.Unlock()
 
 	// Restore permissions for cleanup
-	os.Chmod(logFile, 0644)
+	os.Chmod(logFile, 0o644)
 	w.Close()
 
 	if err == nil {
@@ -182,7 +182,7 @@ func TestCleanup_StatError(t *testing.T) {
 
 	// Create a backup file
 	backupFile := logFile + ".20240101-120000"
-	if err := os.WriteFile(backupFile, []byte("old log"), 0644); err != nil {
+	if err := os.WriteFile(backupFile, []byte("old log"), 0o644); err != nil {
 		t.Fatalf("failed to create backup file: %v", err)
 	}
 

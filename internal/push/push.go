@@ -326,7 +326,7 @@ func (s *Service) loadOrGenerateConfig() (*Config, error) {
 	}
 
 	// Save config
-	if err := os.MkdirAll(s.dataDir, 0750); err != nil {
+	if err := os.MkdirAll(s.dataDir, 0o750); err != nil {
 		return nil, err
 	}
 
@@ -335,7 +335,7 @@ func (s *Service) loadOrGenerateConfig() (*Config, error) {
 		return nil, err
 	}
 
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
 		return nil, err
 	}
 
@@ -369,7 +369,7 @@ func generateVAPIDKeys() (privateKey, publicKey string, err error) {
 
 // loadSubscriptions loads subscriptions from disk
 func (s *Service) loadSubscriptions() error {
-	if err := os.MkdirAll(s.dataDir, 0750); err != nil {
+	if err := os.MkdirAll(s.dataDir, 0o750); err != nil {
 		return err
 	}
 
@@ -414,7 +414,7 @@ func (s *Service) saveSubscription(sub *Subscription) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0600)
+	return os.WriteFile(path, data, 0o600)
 }
 
 // deleteSubscriptionFile removes a subscription file

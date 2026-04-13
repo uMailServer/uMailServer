@@ -36,7 +36,7 @@ func TestCovExtra2BackupMkdirAllError(t *testing.T) {
 	// On Windows, creating a file where a directory is expected causes MkdirAll to fail.
 	// Create a regular file at the backup path so MkdirAll fails.
 	blockFile := filepath.Join(tempDir, "blockdir")
-	os.WriteFile(blockFile, []byte("block"), 0644)
+	os.WriteFile(blockFile, []byte("block"), 0o644)
 
 	err := bm.Backup(blockFile)
 	if err == nil {
@@ -61,10 +61,10 @@ func TestCovExtra2BackupCreateFileError(t *testing.T) {
 
 	// Create a read-only directory so os.Create inside Backup fails
 	backupDir := filepath.Join(tempDir, "readonly")
-	os.MkdirAll(backupDir, 0555)
+	os.MkdirAll(backupDir, 0o555)
 	// Make it truly read-only
-	os.Chmod(backupDir, 0555)
-	defer os.Chmod(backupDir, 0755)
+	os.Chmod(backupDir, 0o555)
+	defer os.Chmod(backupDir, 0o755)
 
 	err := bm.Backup(backupDir)
 	if err != nil {
@@ -90,8 +90,8 @@ func TestCovExtra2BackupConfigWalkError(t *testing.T) {
 	// DataDir at a path that makes Rel fail. Instead, let's directly test
 	// backupConfig with a config dir that has been removed after Stat check.
 	configDir := filepath.Join(tempDir, "config")
-	os.MkdirAll(configDir, 0755)
-	os.WriteFile(filepath.Join(configDir, "test.conf"), []byte("data"), 0644)
+	os.MkdirAll(configDir, 0o755)
+	os.WriteFile(filepath.Join(configDir, "test.conf"), []byte("data"), 0o644)
 
 	// Open a tar writer to a file
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
@@ -130,7 +130,7 @@ func TestCovExtra2BackupDatabaseStatNonNotExistError(t *testing.T) {
 
 	// Create a directory named "umailserver.db" so os.Stat succeeds but it's a dir
 	dbPath := filepath.Join(tempDir, "umailserver.db")
-	os.MkdirAll(dbPath, 0755)
+	os.MkdirAll(dbPath, 0o755)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -165,9 +165,9 @@ func TestCovExtra2BackupDatabaseOpenError(t *testing.T) {
 
 	// Create db file then make it unreadable
 	dbFile := filepath.Join(tempDir, "umailserver.db")
-	os.WriteFile(dbFile, []byte("data"), 0644)
-	os.Chmod(dbFile, 0222) // write-only
-	defer os.Chmod(dbFile, 0644)
+	os.WriteFile(dbFile, []byte("data"), 0o644)
+	os.Chmod(dbFile, 0o222) // write-only
+	defer os.Chmod(dbFile, 0o644)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -199,8 +199,8 @@ func TestCovExtra2BackupMaildirWalkError(t *testing.T) {
 
 	// Create messages dir with a file
 	msgDir := filepath.Join(tempDir, "messages")
-	os.MkdirAll(msgDir, 0755)
-	os.WriteFile(filepath.Join(msgDir, "test.eml"), []byte("data"), 0644)
+	os.MkdirAll(msgDir, 0o755)
+	os.WriteFile(filepath.Join(msgDir, "test.eml"), []byte("data"), 0o644)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -235,8 +235,8 @@ func TestCovExtra2BackupMaildirWithNestedDirs(t *testing.T) {
 
 	// Create nested messages directory structure
 	deepDir := filepath.Join(tempDir, "messages", "user@example.com", "INBOX", "cur")
-	os.MkdirAll(deepDir, 0755)
-	os.WriteFile(filepath.Join(deepDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0644)
+	os.MkdirAll(deepDir, 0o755)
+	os.WriteFile(filepath.Join(deepDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0o644)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -271,8 +271,8 @@ func TestCovExtra2BackupMaildirWriteHeaderError(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	msgDir := filepath.Join(tempDir, "messages", "user")
-	os.MkdirAll(msgDir, 0755)
-	os.WriteFile(filepath.Join(msgDir, "msg.eml"), []byte("data"), 0644)
+	os.MkdirAll(msgDir, 0o755)
+	os.WriteFile(filepath.Join(msgDir, "msg.eml"), []byte("data"), 0o644)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -306,11 +306,11 @@ func TestCovExtra2BackupMaildirFileOpenError(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	msgDir := filepath.Join(tempDir, "messages", "user")
-	os.MkdirAll(msgDir, 0755)
+	os.MkdirAll(msgDir, 0o755)
 	msgFile := filepath.Join(msgDir, "msg.eml")
-	os.WriteFile(msgFile, []byte("data"), 0644)
-	os.Chmod(msgFile, 0222) // write-only, cannot open for read
-	defer os.Chmod(msgFile, 0644)
+	os.WriteFile(msgFile, []byte("data"), 0o644)
+	os.Chmod(msgFile, 0o222) // write-only, cannot open for read
+	defer os.Chmod(msgFile, 0o644)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -454,13 +454,13 @@ func TestCovExtra2RestoreTarReadErrorSecondPass(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	// Add a file
 	content := []byte("test data")
-	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 
@@ -468,7 +468,7 @@ func TestCovExtra2RestoreTarReadErrorSecondPass(t *testing.T) {
 	gw.Close()
 
 	// Append garbage after valid gzip to corrupt the second-pass re-read
-	f2, _ := os.OpenFile(backupFile, os.O_WRONLY|os.O_APPEND, 0644)
+	f2, _ := os.OpenFile(backupFile, os.O_WRONLY|os.O_APPEND, 0o644)
 	f2.Write([]byte("GARBAGE_GARBAGE_GARBAGE"))
 	f2.Close()
 
@@ -483,11 +483,11 @@ func TestCovExtra2RestoreMkdirAllError(t *testing.T) {
 	tempDir := t.TempDir()
 	// Use a data dir path where the parent of restore_temp is a file (blocks MkdirAll)
 	blockFile := filepath.Join(tempDir, "block")
-	os.WriteFile(blockFile, []byte("x"), 0644)
+	os.WriteFile(blockFile, []byte("x"), 0o644)
 
 	// DataDir points to a dir under blockFile, so ".." + "restore_temp" hits the block
 	dataDir := filepath.Join(tempDir, "block", "subdir", "data")
-	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(dataDir, 0o755)
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -513,13 +513,13 @@ func TestCovExtra2RestoreMkdirAllError(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	// Add a file that will be extracted
 	content := []byte("test data")
-	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 
@@ -541,7 +541,7 @@ func TestCovExtra2RestoreMkdirAllError(t *testing.T) {
 func TestCovExtra2RestoreFileCreateError(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
-	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(dataDir, 0o755)
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -567,13 +567,13 @@ func TestCovExtra2RestoreFileCreateError(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	// Add a file to extract - the target path should be writable
 	content := []byte("test data")
-	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 
@@ -592,7 +592,7 @@ func TestCovExtra2RestoreFileCreateError(t *testing.T) {
 func TestCovExtra2RestoreIOCopyError(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
-	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(dataDir, 0o755)
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -618,12 +618,12 @@ func TestCovExtra2RestoreIOCopyError(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	// Add a file with Size=100 but write less data
-	fh := &tar.Header{Name: "config/bigfile.conf", Size: 100, Mode: 0644}
+	fh := &tar.Header{Name: "config/bigfile.conf", Size: 100, Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write([]byte("short")) // Only 5 bytes, header says 100
 
@@ -650,7 +650,7 @@ func TestCovExtra2ListBackupsEntryInfoError(t *testing.T) {
 
 	// Create a .tar.gz file
 	backupFile := filepath.Join(tempDir, "test.tar.gz")
-	os.WriteFile(backupFile, []byte("data"), 0644)
+	os.WriteFile(backupFile, []byte("data"), 0o644)
 
 	backups, err := bm.ListBackups(tempDir)
 	if err != nil {
@@ -675,9 +675,9 @@ func TestCovExtra2BackupConfigErrorPropagation(t *testing.T) {
 
 	// Create config dir with an unreadable file inside a symlink loop
 	configDir := filepath.Join(tempDir, "config")
-	os.MkdirAll(configDir, 0755)
+	os.MkdirAll(configDir, 0o755)
 	// Create a file
-	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("key=value"), 0644)
+	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("key=value"), 0o644)
 
 	backupDir := t.TempDir()
 	err := bm.Backup(backupDir)
@@ -700,7 +700,7 @@ func TestCovExtra2BackupDatabaseErrorPropagation(t *testing.T) {
 
 	// Create database as a directory instead of file (will cause issues in io.Copy)
 	dbDir := filepath.Join(tempDir, "umailserver.db")
-	os.MkdirAll(dbDir, 0755)
+	os.MkdirAll(dbDir, 0o755)
 
 	backupDir := t.TempDir()
 	err := bm.Backup(backupDir)
@@ -722,11 +722,11 @@ func TestCovExtra2BackupMaildirErrorPropagation(t *testing.T) {
 
 	// Create messages dir
 	msgDir := filepath.Join(tempDir, "messages", "user@example.com", "cur")
-	os.MkdirAll(msgDir, 0755)
+	os.MkdirAll(msgDir, 0o755)
 	msgFile := filepath.Join(msgDir, "msg.eml")
-	os.WriteFile(msgFile, []byte("data"), 0644)
-	os.Chmod(msgFile, 0222) // Make unreadable
-	defer os.Chmod(msgFile, 0644)
+	os.WriteFile(msgFile, []byte("data"), 0o644)
+	os.Chmod(msgFile, 0o222) // Make unreadable
+	defer os.Chmod(msgFile, 0o644)
 
 	backupDir := t.TempDir()
 	err := bm.Backup(backupDir)
@@ -888,11 +888,11 @@ func TestCovExtra2ImportMaildirNewPath(t *testing.T) {
 
 	// Create a maildir structure with a message in /new/ directory
 	newDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "new")
-	if err := os.MkdirAll(newDir, 0755); err != nil {
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	msgFile := filepath.Join(newDir, "1234567890.1")
-	os.WriteFile(msgFile, []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody"), 0644)
+	os.WriteFile(msgFile, []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody"), 0o644)
 
 	err = mm.importMaildir(filepath.Join(tmpDir, "maildir"))
 	if err != nil {
@@ -924,7 +924,7 @@ func TestCovExtra2ImportDovecotUsersCreateAccountError(t *testing.T) {
 
 	passwdFile := filepath.Join(tmpDir, "passwd")
 	content := "dup@example.com:new_hash:1000:1000::/home/dup:/bin/bash\n"
-	os.WriteFile(passwdFile, []byte(content), 0644)
+	os.WriteFile(passwdFile, []byte(content), 0o644)
 
 	err = mm.importDovecotUsers(passwdFile)
 	if err != nil {
@@ -964,9 +964,9 @@ func TestCovExtra2ImportMessageStoreMessageError(t *testing.T) {
 
 	// Create proper Maildir path
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")
-	os.MkdirAll(userDir, 0755)
+	os.MkdirAll(userDir, 0o755)
 	msgFile := filepath.Join(userDir, "12345.eml")
-	os.WriteFile(msgFile, []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody"), 0644)
+	os.WriteFile(msgFile, []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody"), 0o644)
 
 	err = mm.importMessage(msgFile)
 	if err != nil {
@@ -998,7 +998,7 @@ func TestCovExtra2ImportMBOXFileProcessErrorEOFPath(t *testing.T) {
 	content += "Subject: EOF Test\n"
 	content += "\n"
 	content += "Body content\n"
-	os.WriteFile(mboxFile, []byte(content), 0644)
+	os.WriteFile(mboxFile, []byte(content), 0o644)
 
 	err = mm.importMBOXFile(mboxFile)
 	if err != nil {
@@ -1025,7 +1025,7 @@ func TestCovExtra2ImportMBOXFileProcessErrorMidStream(t *testing.T) {
 	content += "From: sender1@example.com\nSubject: Msg 1\n\nBody 1\n"
 	content += "From sender2@example.com Mon Jan 01 00:00:01 2024\n"
 	content += "From: sender2@example.com\nSubject: Msg 2\n\nBody 2\n"
-	os.WriteFile(mboxFile, []byte(content), 0644)
+	os.WriteFile(mboxFile, []byte(content), 0o644)
 
 	err = mm.importMBOXFile(mboxFile)
 	if err != nil {
@@ -1050,7 +1050,7 @@ func TestCovExtra2ImportMBOXFileReadStringError(t *testing.T) {
 	// Create a valid mbox file - ReadString should work fine
 	mboxFile := filepath.Join(tmpDir, "normal.mbox")
 	content := "From sender@example.com Mon Jan 01 00:00:00 2024\nSubject: Test\n\nBody\n"
-	os.WriteFile(mboxFile, []byte(content), 0644)
+	os.WriteFile(mboxFile, []byte(content), 0o644)
 
 	err = mm.importMBOXFile(mboxFile)
 	if err != nil {
@@ -1074,8 +1074,8 @@ func TestCovExtra2BackupConfigClosedWriter(t *testing.T) {
 
 	// Create config with a file
 	configDir := filepath.Join(tempDir, "config")
-	os.MkdirAll(configDir, 0755)
-	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("data"), 0644)
+	os.MkdirAll(configDir, 0o755)
+	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("data"), 0o644)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -1107,7 +1107,7 @@ func TestCovExtra2BackupDatabaseClosedWriter(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	// Create db file
-	os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("data"), 0644)
+	os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("data"), 0o644)
 
 	backupFile := filepath.Join(tempDir, "out.tar.gz")
 	f, err := os.Create(backupFile)
@@ -1142,13 +1142,13 @@ func TestCovExtra2BackupFullWithData(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	// Create full structure
-	os.MkdirAll(filepath.Join(tempDir, "config"), 0755)
-	os.WriteFile(filepath.Join(tempDir, "config", "app.conf"), []byte("key=value"), 0644)
-	os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("database content"), 0644)
+	os.MkdirAll(filepath.Join(tempDir, "config"), 0o755)
+	os.WriteFile(filepath.Join(tempDir, "config", "app.conf"), []byte("key=value"), 0o644)
+	os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("database content"), 0o644)
 
 	msgDir := filepath.Join(tempDir, "messages", "user@example.com", "INBOX", "cur")
-	os.MkdirAll(msgDir, 0755)
-	os.WriteFile(filepath.Join(msgDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0644)
+	os.MkdirAll(msgDir, 0o755)
+	os.WriteFile(filepath.Join(msgDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0o644)
 
 	err := bm.Backup(backupDir)
 	if err != nil {
@@ -1168,7 +1168,7 @@ func TestCovExtra2BackupFullWithData(t *testing.T) {
 func TestCovExtra2RestoreWithDirectoryEntry(t *testing.T) {
 	tempDir := t.TempDir()
 	dataDir := filepath.Join(tempDir, "data")
-	os.MkdirAll(dataDir, 0755)
+	os.MkdirAll(dataDir, 0o755)
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -1194,17 +1194,17 @@ func TestCovExtra2RestoreWithDirectoryEntry(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	// Add a directory entry
-	dh := &tar.Header{Name: "config/", Mode: 0755, Typeflag: tar.TypeDir}
+	dh := &tar.Header{Name: "config/", Mode: 0o755, Typeflag: tar.TypeDir}
 	tw.WriteHeader(dh)
 
 	// Add a regular file
 	content := []byte("test config")
-	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 

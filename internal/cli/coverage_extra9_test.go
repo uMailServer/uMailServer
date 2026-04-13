@@ -49,7 +49,7 @@ func TestCleanupOldBackups_NoOldBackups(t *testing.T) {
 
 	// Create a recent backup file
 	recentFile := filepath.Join(tempDir, "umailserver_backup_20240101_120000.tar.gz")
-	os.WriteFile(recentFile, []byte("recent backup"), 0644)
+	os.WriteFile(recentFile, []byte("recent backup"), 0o644)
 
 	// Try to cleanup with 30 day retention - file is from 2024 so should not be deleted
 	deleted, err := bm.CleanupOldBackups(tempDir, 30)
@@ -103,7 +103,7 @@ func TestCleanupOldBackups_SkipsNonBackupFiles(t *testing.T) {
 
 	// Create a non-backup file
 	nonBackupFile := filepath.Join(tempDir, "readme.txt")
-	os.WriteFile(nonBackupFile, []byte("not a backup"), 0644)
+	os.WriteFile(nonBackupFile, []byte("not a backup"), 0o644)
 
 	// Create a backup file that is old
 	oldBackupFile := filepath.Join(tempDir, "umailserver_backup_old.tar.gz")
@@ -134,7 +134,7 @@ func TestCleanupOldBackups_SkipsDirectories(t *testing.T) {
 
 	// Create a subdirectory
 	subDir := filepath.Join(tempDir, "subdir")
-	os.Mkdir(subDir, 0755)
+	os.Mkdir(subDir, 0o755)
 
 	// Create an old backup file
 	oldBackupFile := filepath.Join(tempDir, "old_backup.tar.gz")
@@ -159,7 +159,7 @@ func TestCleanupOldBackups_ProcessesPlainGZFiles(t *testing.T) {
 
 	// Create a .gz file (not .tar.gz)
 	gzFile := filepath.Join(tempDir, "somefile.gz")
-	os.WriteFile(gzFile, []byte("gz data"), 0644)
+	os.WriteFile(gzFile, []byte("gz data"), 0o644)
 
 	// Set to old time
 	oldTime := time.Now().AddDate(0, 0, -100)

@@ -218,7 +218,7 @@ func TestWriteFile_ToReadOnlyDir_Cov4(t *testing.T) {
 	}
 	tmpDir := t.TempDir()
 	subDir := filepath.Join(tmpDir, "readonly")
-	if err := os.MkdirAll(subDir, 0555); err != nil {
+	if err := os.MkdirAll(subDir, 0o555); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(subDir, "test.msg")

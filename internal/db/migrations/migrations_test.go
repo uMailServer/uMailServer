@@ -10,7 +10,7 @@ import (
 func setupTestDB(t *testing.T) *bbolt.DB {
 	t.Helper()
 	tmpFile := t.TempDir() + "/test.db"
-	db, err := bbolt.Open(tmpFile, 0600, nil)
+	db, err := bbolt.Open(tmpFile, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open test db: %v", err)
 	}

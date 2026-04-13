@@ -43,7 +43,7 @@ func TestCoverImportDovecotUsersClosedDB(t *testing.T) {
 
 	passwdFile := filepath.Join(tmpDir, "passwd")
 	content := "user@example.com:hash:1000:1000::/home/user:/bin/bash\n"
-	if err := os.WriteFile(passwdFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(passwdFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,8 +83,8 @@ func TestCoverImportMaildirCurAndNewPaths(t *testing.T) {
 	maildirPath := filepath.Join(tmpDir, "maildir")
 	curDir := maildirPath + "/cur"
 	newDir := maildirPath + "/new"
-	os.MkdirAll(curDir, 0755)
-	os.MkdirAll(newDir, 0755)
+	os.MkdirAll(curDir, 0o755)
+	os.MkdirAll(newDir, 0o755)
 
 	// Create message files using forward slash paths
 	// filepath.Join on Windows still uses backslash, but the raw string "/cur/" and "/new/"
@@ -92,8 +92,8 @@ func TestCoverImportMaildirCurAndNewPaths(t *testing.T) {
 	// We can use a direct string concatenation to force forward slash presence
 	curMsg := filepath.Join(tmpDir, "maildir", "cur", "msg1.eml")
 	newMsg := filepath.Join(tmpDir, "maildir", "new", "msg2.eml")
-	os.WriteFile(curMsg, []byte("From: test\r\n\r\nHello from cur"), 0644)
-	os.WriteFile(newMsg, []byte("From: test\r\n\r\nHello from new"), 0644)
+	os.WriteFile(curMsg, []byte("From: test\r\n\r\nHello from cur"), 0o644)
+	os.WriteFile(newMsg, []byte("From: test\r\n\r\nHello from new"), 0o644)
 
 	// Walk will provide paths with backslashes on Windows
 	// The strings.Contains check for "/cur/" and "/new/" will fail
@@ -130,7 +130,7 @@ func TestCoverImportMessageStoreErrorBlockedPath(t *testing.T) {
 
 	// Create message store with blocked user directory
 	msgStoreBase := filepath.Join(tmpDir, "msgstore")
-	os.MkdirAll(msgStoreBase, 0755)
+	os.MkdirAll(msgStoreBase, 0o755)
 	msgStore, err := storage.NewMessageStore(msgStoreBase)
 	if err != nil {
 		t.Fatalf("Failed to create message store: %v", err)
@@ -138,15 +138,15 @@ func TestCoverImportMessageStoreErrorBlockedPath(t *testing.T) {
 
 	// Block the user directory by creating a file at the user path
 	userBlockPath := filepath.Join(msgStoreBase, "user@example.com")
-	os.WriteFile(userBlockPath, []byte("block"), 0644)
+	os.WriteFile(userBlockPath, []byte("block"), 0o644)
 
 	mm := NewMigrationManager(database, msgStore, nil)
 
 	// Create proper Maildir path
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")
-	os.MkdirAll(userDir, 0755)
+	os.MkdirAll(userDir, 0o755)
 	msgFile := filepath.Join(userDir, "test.eml")
-	os.WriteFile(msgFile, []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody"), 0644)
+	os.WriteFile(msgFile, []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody"), 0o644)
 
 	err = mm.importMessage(msgFile)
 	if err != nil {

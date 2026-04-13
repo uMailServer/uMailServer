@@ -100,7 +100,7 @@ func TestIndexMessage_WithMsgStoreAndContent(t *testing.T) {
 	defer database.Close()
 
 	storePath := tmpDir + "/messages"
-	err = os.MkdirAll(storePath, 0755)
+	err = os.MkdirAll(storePath, 0o755)
 	if err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

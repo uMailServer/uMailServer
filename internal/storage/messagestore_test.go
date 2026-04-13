@@ -356,7 +356,7 @@ func TestStoreMessageUserDirBlocked(t *testing.T) {
 
 	// Create a file where the user directory would go, blocking MkdirAll
 	userDirPath := filepath.Join(tmpDir, "blockeduser")
-	if err := os.WriteFile(userDirPath, []byte("not a directory"), 0644); err != nil {
+	if err := os.WriteFile(userDirPath, []byte("not a directory"), 0o644); err != nil {
 		t.Fatalf("Failed to create blocking file: %v", err)
 	}
 	defer os.Remove(userDirPath)
@@ -386,10 +386,10 @@ func TestStoreMessageSubDirBlocked(t *testing.T) {
 
 	// Create a file where the first hash subdirectory should go
 	subDir1Path := filepath.Join(tmpDir, user, messageID[:2])
-	if err := os.MkdirAll(filepath.Dir(subDir1Path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(subDir1Path), 0o755); err != nil {
 		t.Fatalf("Failed to create user dir: %v", err)
 	}
-	if err := os.WriteFile(subDir1Path, []byte("blocker"), 0644); err != nil {
+	if err := os.WriteFile(subDir1Path, []byte("blocker"), 0o644); err != nil {
 		t.Fatalf("Failed to create blocking file: %v", err)
 	}
 
@@ -418,10 +418,10 @@ func TestStoreMessageWriteFileBlockedByDir(t *testing.T) {
 
 	// Create the subdirectories, but make the target path a DIRECTORY
 	msgPath := filepath.Join(tmpDir, user, messageID[:2], messageID[2:4], messageID)
-	if err := os.MkdirAll(filepath.Dir(msgPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(msgPath), 0o755); err != nil {
 		t.Fatalf("Failed to create subdirectories: %v", err)
 	}
-	if err := os.MkdirAll(msgPath, 0755); err != nil {
+	if err := os.MkdirAll(msgPath, 0o755); err != nil {
 		t.Fatalf("Failed to create blocking directory: %v", err)
 	}
 

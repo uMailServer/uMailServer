@@ -57,7 +57,7 @@ func NewManager(config Config, logger *slog.Logger) (*Manager, error) {
 	}
 
 	// Ensure cert directory exists
-	if err := os.MkdirAll(m.certDir, 0700); err != nil {
+	if err := os.MkdirAll(m.certDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create cert directory: %w", err)
 	}
 

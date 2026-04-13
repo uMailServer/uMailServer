@@ -322,10 +322,10 @@ func TestList_WithSubdirectories(t *testing.T) {
 	// Create a subdirectory inside new/
 	maildir, _ := s.userMaildirPath("example.com", "testuser")
 	newPath := filepath.Join(maildir, "new")
-	os.MkdirAll(newPath+"/subdir", 0755)
+	os.MkdirAll(newPath+"/subdir", 0o755)
 
 	// Create a file
-	os.WriteFile(newPath+"/testfile", []byte("data"), 0644)
+	os.WriteFile(newPath+"/testfile", []byte("data"), 0o644)
 
 	msgs, err := s.List("example.com", "testuser", "INBOX")
 	if err != nil {

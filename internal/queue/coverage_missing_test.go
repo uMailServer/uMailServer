@@ -82,7 +82,7 @@ func TestEnqueue_MkdirAllError(t *testing.T) {
 
 	// Create a file where the queue directory should be
 	queueDir := filepath.Join(dataDir, "queue")
-	if err := os.WriteFile(queueDir, []byte("blocker"), 0644); err != nil {
+	if err := os.WriteFile(queueDir, []byte("blocker"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,7 +173,7 @@ func TestDeleteMessageFileIfUnreferenced(t *testing.T) {
 
 	// Create a message file that is not referenced by any queue entry
 	msgPath := filepath.Join(dataDir, "unreferenced.msg")
-	if err := os.WriteFile(msgPath, []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(msgPath, []byte("test"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -455,7 +455,7 @@ func TestEnqueue_WriteFileError(t *testing.T) {
 
 	// Create queue dir first
 	queueDir := filepath.Join(dataDir, "queue")
-	if err := os.MkdirAll(queueDir, 0755); err != nil {
+	if err := os.MkdirAll(queueDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 

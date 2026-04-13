@@ -71,7 +71,7 @@ func (bm *BackupManager) Backup(backupPath string) error {
 	backupFile := filepath.Join(backupPath, fmt.Sprintf("umailserver_backup_%s%s", timestamp, extension))
 
 	// Create backup directory
-	if err := os.MkdirAll(backupPath, 0750); err != nil {
+	if err := os.MkdirAll(backupPath, 0o750); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
@@ -125,7 +125,7 @@ func (bm *BackupManager) Backup(backupPath string) error {
 		if err != nil {
 			return fmt.Errorf("failed to encrypt backup: %w", err)
 		}
-		if err := os.WriteFile(backupFile, encrypted, 0600); err != nil {
+		if err := os.WriteFile(backupFile, encrypted, 0o600); err != nil {
 			return fmt.Errorf("failed to write encrypted backup: %w", err)
 		}
 	} else {
@@ -133,7 +133,7 @@ func (bm *BackupManager) Backup(backupPath string) error {
 		fmt.Printf("WARNING: Backup is NOT ENCRYPTED. Sensitive data may be exposed.\n")
 		fmt.Printf("         Use SetPassword() to enable AES-256-GCM encryption.\n")
 
-		if err := os.WriteFile(backupFile, tarData, 0600); err != nil {
+		if err := os.WriteFile(backupFile, tarData, 0o600); err != nil {
 			return fmt.Errorf("failed to write backup: %w", err)
 		}
 	}
@@ -396,7 +396,7 @@ func (bm *BackupManager) createManifest(tw *tar.Writer, timestamp string) error 
 
 	header := &tar.Header{
 		Name:    "manifest.json",
-		Mode:    0600,
+		Mode:    0o600,
 		ModTime: time.Now(),
 		Size:    int64(len(data)),
 	}
@@ -540,7 +540,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		}
 
 		// #nosec G703 -- targetPath is validated above with filepath.Abs/Clean and prefix check
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0750); err != nil {
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
 			return fmt.Errorf("failed to create directory: %w", err)
 		}
 

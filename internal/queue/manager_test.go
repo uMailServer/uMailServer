@@ -997,7 +997,7 @@ func TestDeleteFileSilent(t *testing.T) {
 	// Should work when deleting existing file
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "to-delete.txt")
-	os.WriteFile(testFile, []byte("delete me"), 0644)
+	os.WriteFile(testFile, []byte("delete me"), 0o644)
 
 	deleteFile(testFile)
 
@@ -2663,7 +2663,7 @@ func TestDeleteMessageFileIfUnreferencedNoDeadlockRegression(t *testing.T) {
 
 	// Create a message file that is not referenced by any queue entry
 	msgPath := filepath.Join(dataDir, "unreferenced.msg")
-	if err := os.WriteFile(msgPath, []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(msgPath, []byte("test"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

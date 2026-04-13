@@ -26,7 +26,7 @@ func TestDeliver_RenameFailure(t *testing.T) {
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
-		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+		os.MkdirAll(filepath.Join(maildir, sub), 0o755)
 	}
 
 	newDir := filepath.Join(maildir, "new")
@@ -52,8 +52,8 @@ func TestDeliver_RenameFailure(t *testing.T) {
 		defer windows.CloseHandle(h)
 	} else {
 		// On Unix, make new/ read-only so rename into it fails
-		os.Chmod(newDir, 0555)
-		defer os.Chmod(newDir, 0755) // restore for cleanup
+		os.Chmod(newDir, 0o555)
+		defer os.Chmod(newDir, 0o755) // restore for cleanup
 	}
 
 	msg := []byte("Subject: Rename Fail\r\n\r\nBody")
@@ -77,7 +77,7 @@ func TestDeliverWithFlags_RenameFailure(t *testing.T) {
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
-		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+		os.MkdirAll(filepath.Join(maildir, sub), 0o755)
 	}
 
 	curDir := filepath.Join(maildir, "cur")
@@ -103,8 +103,8 @@ func TestDeliverWithFlags_RenameFailure(t *testing.T) {
 		defer windows.CloseHandle(h)
 	} else {
 		// On Unix, make cur/ read-only so rename into it fails
-		os.Chmod(curDir, 0555)
-		defer os.Chmod(curDir, 0755) // restore for cleanup
+		os.Chmod(curDir, 0o555)
+		defer os.Chmod(curDir, 0o755) // restore for cleanup
 	}
 
 	msg := []byte("Subject: Rename Fail\r\n\r\nBody")
@@ -134,7 +134,7 @@ func TestDeliver_OpenFailure(t *testing.T) {
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
-		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+		os.MkdirAll(filepath.Join(maildir, sub), 0o755)
 	}
 
 	tmpDirPath := filepath.Join(maildir, "tmp")
@@ -208,7 +208,7 @@ func TestMessageCount_ListError(t *testing.T) {
 
 	// Pre-create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
-		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+		os.MkdirAll(filepath.Join(maildir, sub), 0o755)
 	}
 
 	// Deliver a message so that the maildir exists with content
@@ -240,7 +240,7 @@ func TestMessageCount_ListError(t *testing.T) {
 	} else {
 		// On Unix, replace new/ with a file
 		os.RemoveAll(newDir)
-		os.WriteFile(newDir, []byte("not a directory"), 0644)
+		os.WriteFile(newDir, []byte("not a directory"), 0o644)
 		cleanup = func() {}
 	}
 
@@ -400,8 +400,8 @@ func TestSetFlags_RenameFailure(t *testing.T) {
 		}
 		defer windows.CloseHandle(h)
 	} else {
-		os.Chmod(curDir, 0555)
-		defer os.Chmod(curDir, 0755)
+		os.Chmod(curDir, 0o555)
+		defer os.Chmod(curDir, 0o755)
 	}
 
 	// SetFlags should fail because rename into cur/ is blocked
@@ -431,7 +431,7 @@ func TestMove_RenameFailure(t *testing.T) {
 	maildir, _ := store.userMaildirPath(domain, user)
 	destPath := store.folderPath(domain, user, "Archive")
 	for _, sub := range []string{"tmp", "new", "cur"} {
-		os.MkdirAll(filepath.Join(destPath, sub), 0755)
+		os.MkdirAll(filepath.Join(destPath, sub), 0o755)
 	}
 
 	// Lock the source file to prevent rename
@@ -454,8 +454,8 @@ func TestMove_RenameFailure(t *testing.T) {
 		defer windows.CloseHandle(h)
 	} else {
 		// On Unix, make source file read-only
-		os.Chmod(filePath, 0444)
-		defer os.Chmod(filePath, 0644)
+		os.Chmod(filePath, 0o444)
+		defer os.Chmod(filePath, 0o644)
 	}
 
 	err = store.Move(domain, user, "INBOX", "Archive", fn)
@@ -573,9 +573,9 @@ func TestDeliver_EnsureFolderFailure(t *testing.T) {
 	domain := "example.com"
 	user := "testuser"
 	maildir, _ := store.userMaildirPath(domain, user)
-	os.MkdirAll(filepath.Dir(maildir), 0755)
+	os.MkdirAll(filepath.Dir(maildir), 0o755)
 	// Create a file at the Maildir path to cause MkdirAll to fail
-	os.WriteFile(maildir, []byte("blocker"), 0644)
+	os.WriteFile(maildir, []byte("blocker"), 0o644)
 
 	msg := []byte("Subject: Fail\r\n\r\nBody")
 	_, err := store.Deliver(domain, user, "INBOX", msg)
@@ -591,8 +591,8 @@ func TestDeliverWithFlags_EnsureFolderFailure(t *testing.T) {
 	domain := "example.com"
 	user := "testuser"
 	maildir, _ := store.userMaildirPath(domain, user)
-	os.MkdirAll(filepath.Dir(maildir), 0755)
-	os.WriteFile(maildir, []byte("blocker"), 0644)
+	os.MkdirAll(filepath.Dir(maildir), 0o755)
+	os.WriteFile(maildir, []byte("blocker"), 0o644)
 
 	msg := []byte("Subject: Fail\r\n\r\nBody")
 	_, err := store.DeliverWithFlags(domain, user, "INBOX", msg, "S")
@@ -612,10 +612,10 @@ func TestDeliver_WriteFileFails(t *testing.T) {
 	// Create the maildir structure ourselves, but make tmp a file
 	maildir, _ := store.userMaildirPath(domain, user)
 	for _, sub := range []string{"new", "cur"} {
-		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+		os.MkdirAll(filepath.Join(maildir, sub), 0o755)
 	}
 	// Create tmp as a file instead of a directory
-	os.WriteFile(filepath.Join(maildir, "tmp"), []byte("not a dir"), 0644)
+	os.WriteFile(filepath.Join(maildir, "tmp"), []byte("not a dir"), 0o644)
 
 	msg := []byte("Subject: Fail\r\n\r\nBody")
 	_, err := store.Deliver(domain, user, "INBOX", msg)
@@ -634,9 +634,9 @@ func TestDeliverWithFlags_WriteFileFails(t *testing.T) {
 
 	maildir, _ := store.userMaildirPath(domain, user)
 	for _, sub := range []string{"new", "cur"} {
-		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+		os.MkdirAll(filepath.Join(maildir, sub), 0o755)
 	}
-	os.WriteFile(filepath.Join(maildir, "tmp"), []byte("not a dir"), 0644)
+	os.WriteFile(filepath.Join(maildir, "tmp"), []byte("not a dir"), 0o644)
 
 	msg := []byte("Subject: Fail\r\n\r\nBody")
 	_, err := store.DeliverWithFlags(domain, user, "INBOX", msg, "S")
@@ -1207,8 +1207,8 @@ func TestMove_EnsureFolderDestFails(t *testing.T) {
 	// The dest folder "Archive" maps to userMaildirPath + "/.Archive"
 	destMaildir := store.folderPath(domain, user, "Archive")
 	// Create the parent directory but put a file at the Archive path
-	os.MkdirAll(filepath.Dir(destMaildir), 0755)
-	os.WriteFile(destMaildir, []byte("blocker"), 0644)
+	os.MkdirAll(filepath.Dir(destMaildir), 0o755)
+	os.WriteFile(destMaildir, []byte("blocker"), 0o644)
 
 	err = store.Move(domain, user, "INBOX", "Archive", fn)
 	if err == nil {

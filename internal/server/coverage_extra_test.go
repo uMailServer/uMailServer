@@ -38,14 +38,14 @@ func TestCovExtra_New_TLSManagerError(t *testing.T) {
 			t.Fatalf("failed to remove existing certs dir: %v", err)
 		}
 	}
-	if err := os.WriteFile(certBlocker, []byte("blocker"), 0644); err != nil {
+	if err := os.WriteFile(certBlocker, []byte("blocker"), 0o644); err != nil {
 		t.Fatalf("failed to create blocker file: %v", err)
 	}
 	// Guaranteed cleanup.
 	t.Cleanup(func() {
 		os.Remove(certBlocker)
 		// Restore the certs directory.
-		os.MkdirAll(certBlocker, 0700)
+		os.MkdirAll(certBlocker, 0o700)
 	})
 
 	tmpDir := t.TempDir()
@@ -371,7 +371,7 @@ func TestCovExtra_Start_PIDFileConflict(t *testing.T) {
 
 	// Write PID file with current PID to block Start().
 	pidPath := filepath.Join(tmpDir, "umailserver.pid")
-	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644)
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644)
 
 	err = srv.Start()
 	if err != nil {

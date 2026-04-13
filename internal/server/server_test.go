@@ -727,8 +727,8 @@ func TestServerWithTLSConfig(t *testing.T) {
 	}
 
 	// Create dummy cert files
-	os.WriteFile(cfg.TLS.CertFile, []byte("dummy cert"), 0644)
-	os.WriteFile(cfg.TLS.KeyFile, []byte("dummy key"), 0644)
+	os.WriteFile(cfg.TLS.CertFile, []byte("dummy cert"), 0o644)
+	os.WriteFile(cfg.TLS.KeyFile, []byte("dummy key"), 0o644)
 
 	server, err := New(cfg)
 	if err != nil {
@@ -1017,7 +1017,7 @@ func TestPIDFileCreateExisting(t *testing.T) {
 	pidPath := filepath.Join(tmpDir, "test.pid")
 
 	// Create existing PID file with different content
-	os.WriteFile(pidPath, []byte("99999\n"), 0644)
+	os.WriteFile(pidPath, []byte("99999\n"), 0o644)
 
 	pidFile := NewPIDFile(pidPath)
 
@@ -1344,7 +1344,7 @@ func TestPIDFileCreateWithRunningProcess(t *testing.T) {
 	// Write a PID file with the current process ID (which is running)
 	currentPID := os.Getpid()
 	pidPath := filepath.Join(tmpDir, "umailserver.pid")
-	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", currentPID)), 0644)
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", currentPID)), 0o644)
 
 	// Create should fail because the current process IS running
 	err := pidFile.Create()
@@ -1373,7 +1373,7 @@ func TestPIDFileCreateWithStalePID(t *testing.T) {
 	// Write a PID file with a very high PID that is very likely NOT running
 	// but is a positive number so isProcessRunning will be called
 	stalePID := 99999999
-	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", stalePID)), 0644)
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", stalePID)), 0o644)
 
 	// isProcessRunning on Windows always returns true for FindProcess,
 	// but on Unix with signal 0 it returns false for non-existent PIDs.
@@ -1404,7 +1404,7 @@ func TestPIDFileReadInvalidContent(t *testing.T) {
 	pidPath := filepath.Join(tmpDir, "umailserver.pid")
 
 	// Write invalid (non-numeric) content
-	os.WriteFile(pidPath, []byte("not-a-number\n"), 0644)
+	os.WriteFile(pidPath, []byte("not-a-number\n"), 0o644)
 
 	pid, err := pidFile.Read()
 	if err == nil {
@@ -1424,7 +1424,7 @@ func TestPIDFileCreateWithEmptyExistingFile(t *testing.T) {
 	pidPath := filepath.Join(tmpDir, "umailserver.pid")
 
 	// Write an empty PID file
-	os.WriteFile(pidPath, []byte(""), 0644)
+	os.WriteFile(pidPath, []byte(""), 0o644)
 
 	err := pidFile.Create()
 	if err != nil {
@@ -2356,7 +2356,7 @@ func TestDeliverLocal_StoreMessageError(t *testing.T) {
 	// Also make the parent directory read-only so MkdirAll fails
 	// Instead, close the msgStore basePath and make it a file to prevent recreation
 	msgFile := msgStorePath
-	os.WriteFile(msgFile, []byte("blocker"), 0644)
+	os.WriteFile(msgFile, []byte("blocker"), 0o644)
 	defer os.Remove(msgFile)
 
 	msgData := []byte("Subject: Test\r\n\r\nBody")
@@ -2529,7 +2529,7 @@ func TestNew_MessageStoreError(t *testing.T) {
 
 	// Create a file at the messages path to prevent MkdirAll from creating a directory
 	msgPath := filepath.Join(tmpDir, "messages")
-	os.WriteFile(msgPath, []byte("blocker"), 0644)
+	os.WriteFile(msgPath, []byte("blocker"), 0o644)
 
 	cfg := &config.Config{
 		Server: config.ServerConfig{
@@ -2953,7 +2953,7 @@ func TestStart_PIDFileExistsWithRunningProcess(t *testing.T) {
 
 	// Create a PID file with the current process ID to block Start()
 	pidPath := filepath.Join(tmpDir, "umailserver.pid")
-	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0644)
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644)
 
 	err = srv.Start()
 	if err != nil {
@@ -3012,7 +3012,7 @@ func TestStart_MailstoreBlocked(t *testing.T) {
 
 	// Block the mailstore directory path with a file
 	mailPath := filepath.Join(tmpDir, "mail")
-	os.WriteFile(mailPath, []byte("blocker"), 0644)
+	os.WriteFile(mailPath, []byte("blocker"), 0o644)
 
 	err = srv.Start()
 	if err != nil {

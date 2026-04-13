@@ -136,7 +136,7 @@ func TestRotatingWriter_CleanupMaxBackups(t *testing.T) {
 	// Create old backup files manually
 	for i := 0; i < 5; i++ {
 		backupName := logFile + ".20240101-12000" + string(rune('0'+i))
-		if err := os.WriteFile(backupName, []byte("old log"), 0644); err != nil {
+		if err := os.WriteFile(backupName, []byte("old log"), 0o644); err != nil {
 			t.Fatalf("failed to create backup file: %v", err)
 		}
 		// Sleep to ensure different modification times
@@ -174,7 +174,7 @@ func TestRotatingWriter_CleanupMaxAge(t *testing.T) {
 
 	// Create a recent backup file
 	recentBackup := logFile + ".20241201-120000"
-	if err := os.WriteFile(recentBackup, []byte("recent log"), 0644); err != nil {
+	if err := os.WriteFile(recentBackup, []byte("recent log"), 0o644); err != nil {
 		t.Fatalf("failed to create recent backup: %v", err)
 	}
 
@@ -314,7 +314,7 @@ func TestRotatingWriter_AppendToExisting(t *testing.T) {
 	logFile := filepath.Join(tempDir, "test.log")
 
 	// Create existing file with content
-	if err := os.WriteFile(logFile, []byte("existing content\n"), 0644); err != nil {
+	if err := os.WriteFile(logFile, []byte("existing content\n"), 0o644); err != nil {
 		t.Fatalf("failed to create existing file: %v", err)
 	}
 
@@ -513,8 +513,8 @@ func TestRotate_RenameError(t *testing.T) {
 	}
 
 	// Make the log file read-only to cause rename to fail
-	os.Chmod(logFile, 0444)
-	defer os.Chmod(logFile, 0644)
+	os.Chmod(logFile, 0o444)
+	defer os.Chmod(logFile, 0o644)
 
 	// Trigger rotation
 	w.mu.Lock()
@@ -550,13 +550,13 @@ func TestRotate_OpenError(t *testing.T) {
 	os.Remove(logFile)
 
 	// Make parent dir read-only so open fails
-	os.Chmod(tempDir, 0555)
+	os.Chmod(tempDir, 0o555)
 
 	// Create new writer to trigger rotate
 	w2, err := NewRotatingWriter(logFile, 1, 3, 7)
 	if err != nil {
 		// Expected on some platforms
-		os.Chmod(tempDir, 0755)
+		os.Chmod(tempDir, 0o755)
 		return
 	}
 
@@ -565,7 +565,7 @@ func TestRotate_OpenError(t *testing.T) {
 	_, _ = w2.Write(largeData)
 
 	// Cleanup
-	os.Chmod(tempDir, 0755)
+	os.Chmod(tempDir, 0o755)
 	w2.Close()
 
 	// The error may or may not occur depending on timing

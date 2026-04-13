@@ -223,7 +223,7 @@ func TestWriteFileMkdirAllError(t *testing.T) {
 
 	// Create a file at "blocked"
 	blockPath := filepath.Join(tmpDir, "blocked")
-	if err := os.WriteFile(blockPath, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(blockPath, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -513,13 +513,13 @@ func TestLoadSubscriptions_VariousFiles(t *testing.T) {
 
 	// Create some invalid files in the directory
 	invalidJSONPath := tmpDir + "/invalid.json"
-	os.WriteFile(invalidJSONPath, []byte("not valid json"), 0644)
+	os.WriteFile(invalidJSONPath, []byte("not valid json"), 0o644)
 
 	txtFilePath := tmpDir + "/readme.txt"
-	os.WriteFile(txtFilePath, []byte("readme"), 0644)
+	os.WriteFile(txtFilePath, []byte("readme"), 0o644)
 
 	dirPath := tmpDir + "/subdir"
-	os.Mkdir(dirPath, 0755)
+	os.Mkdir(dirPath, 0o755)
 
 	// Create new service to trigger reload
 	service2, err := NewService(tmpDir, nil)
@@ -572,7 +572,7 @@ func TestLoadOrGenerateConfig_Invalid(t *testing.T) {
 
 	// Create invalid vapid.json
 	vapidPath := filepath.Join(tmpDir, "vapid.json")
-	os.WriteFile(vapidPath, []byte("invalid json"), 0644)
+	os.WriteFile(vapidPath, []byte("invalid json"), 0o644)
 
 	// Create service should handle invalid config gracefully
 	service, err := NewService(tmpDir, nil)
@@ -609,7 +609,7 @@ func TestLoadSubscriptions_UnreadableFile(t *testing.T) {
 
 	// Create a subscription file with invalid permissions (directory instead of file)
 	subDir := filepath.Join(tmpDir, "sub_test.json")
-	if err := os.Mkdir(subDir, 0755); err != nil {
+	if err := os.Mkdir(subDir, 0o755); err != nil {
 		t.Fatalf("Failed to create test directory: %v", err)
 	}
 
@@ -660,7 +660,7 @@ func TestLoadOrGenerateConfig_ReadError(t *testing.T) {
 
 	// Create vapid.json as a directory to cause read error on some systems
 	vapidPath := filepath.Join(tmpDir, "vapid.json")
-	if err := os.Mkdir(vapidPath, 0755); err != nil {
+	if err := os.Mkdir(vapidPath, 0o755); err != nil {
 		t.Fatalf("Failed to create test directory: %v", err)
 	}
 
@@ -686,7 +686,7 @@ func TestSaveSubscription_InvalidDir(t *testing.T) {
 
 	// Create a file with the same name as the data directory to block writes
 	blockFile := filepath.Join(tmpDir, "sub_test123.json")
-	if err := os.WriteFile(blockFile, []byte("block"), 0644); err != nil {
+	if err := os.WriteFile(blockFile, []byte("block"), 0o644); err != nil {
 		t.Fatalf("Failed to create block file: %v", err)
 	}
 

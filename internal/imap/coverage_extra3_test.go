@@ -17,7 +17,7 @@ func TestNewBboltMailstore_MessageStoreError(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Create a file at the messages path to prevent directory creation
 	msgPath := tmpDir + "/messages"
-	if err := os.WriteFile(msgPath, []byte("blocker"), 0644); err != nil {
+	if err := os.WriteFile(msgPath, []byte("blocker"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 

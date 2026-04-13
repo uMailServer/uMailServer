@@ -626,7 +626,7 @@ func TestLoadConfigFile_InvalidJSON(t *testing.T) {
 	// Create a file with invalid JSON
 	invalidJSON := []byte(`{"invalid json`)
 	filePath := tmpDir + "/user_at_example_com.json"
-	os.WriteFile(filePath, invalidJSON, 0600)
+	os.WriteFile(filePath, invalidJSON, 0o600)
 
 	// NewManager should skip invalid files
 	manager := NewManager(tmpDir, nil)
@@ -664,7 +664,7 @@ func TestLoadConfigFile_EmptyFile(t *testing.T) {
 
 	// Create an empty file
 	filePath := tmpDir + "/user_at_example_com.json"
-	os.WriteFile(filePath, []byte(""), 0600)
+	os.WriteFile(filePath, []byte(""), 0o600)
 
 	// NewManager should skip empty files
 	manager := NewManager(tmpDir, nil)
@@ -683,7 +683,7 @@ func TestLoadConfigFile_PartialJSON(t *testing.T) {
 	// Create a file with partial valid JSON
 	partialJSON := []byte(`{"enabled": true, "subject": "Test"` + "\n")
 	filePath := tmpDir + "/user_at_example_com.json"
-	os.WriteFile(filePath, partialJSON, 0600)
+	os.WriteFile(filePath, partialJSON, 0o600)
 
 	// NewManager should skip invalid files
 	manager := NewManager(tmpDir, nil)
@@ -827,7 +827,7 @@ func TestSaveConfig_WriteError(t *testing.T) {
 
 	// Create a directory where the config file should go
 	configDir := tmpDir + "/subdir"
-	os.Mkdir(configDir, 0755)
+	os.Mkdir(configDir, 0o755)
 
 	manager := NewManager(configDir, nil)
 
@@ -839,7 +839,7 @@ func TestSaveConfig_WriteError(t *testing.T) {
 
 	// Create a file with same name as directory to block write
 	blockPath := configDir + "/user_at_example.com.json"
-	os.WriteFile(blockPath, []byte("block"), 0755)
+	os.WriteFile(blockPath, []byte("block"), 0o755)
 
 	// Try to save - may fail or succeed depending on OS
 	err := manager.SetConfig("user@example.com", config)

@@ -11,7 +11,7 @@ func TestClassifier_Initialize(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "spam_test.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestClassifier_TrainSpam(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "spam_train.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestClassifier_TrainHam(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "ham_train.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestClassifier_GetTokenFrequency(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "freq.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestClassifier_TrainFromEmail(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "from_email.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestClassifier_TrainFromEmail_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "empty.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestClassifier_Train_DuplicateTokens(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "dup.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestUpdateStats(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "stats.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestClassifier_Classify_WithTraining(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "classify.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestClassifier_IncrementToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "increment.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -336,7 +336,7 @@ func TestClassifier_IncrementToken_Ham(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "increment_ham.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestGetTotalCounts_EmptyDB(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "empty_counts.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestClassifier_Classify_HighSpamScore(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "highspam.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestClassifier_Classify_HighHamScore(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "highham.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -514,7 +514,7 @@ func TestCountAllTokens(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "count.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}

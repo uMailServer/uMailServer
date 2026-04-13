@@ -135,9 +135,9 @@ func TestBboltStore_GetMessageDataINBOXFallback(t *testing.T) {
 	//   basePath/user/IN/BO/INBOX/1000
 	// (first 2 chars of "INBOX/1000" = "IN", next 2 = "BO")
 	inboxDir := filepath.Join(tmpDir, "messages", user, "IN", "BO", "INBOX")
-	os.MkdirAll(inboxDir, 0755)
+	os.MkdirAll(inboxDir, 0o755)
 	testData := []byte("INBOX fallback data!!")
-	os.WriteFile(filepath.Join(inboxDir, "1000"), testData, 0644)
+	os.WriteFile(filepath.Join(inboxDir, "1000"), testData, 0o644)
 
 	store := NewBboltStore(db, msgStore)
 	defer db.Close()

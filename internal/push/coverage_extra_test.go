@@ -55,7 +55,7 @@ func TestLoadSubscriptions_InvalidJSON(t *testing.T) {
 
 	// Create invalid subscription file
 	invalidJSON := []byte(`{"invalid json`)
-	err := os.WriteFile(filepath.Join(tmpDir, "sub_invalid.json"), invalidJSON, 0600)
+	err := os.WriteFile(filepath.Join(tmpDir, "sub_invalid.json"), invalidJSON, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestLoadSubscriptions_NonJSONFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a non-JSON file
-	err := os.WriteFile(filepath.Join(tmpDir, "notjson.txt"), []byte("not json"), 0600)
+	err := os.WriteFile(filepath.Join(tmpDir, "notjson.txt"), []byte("not json"), 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestLoadOrGenerateConfig_InvalidJSON(t *testing.T) {
 
 	// Create invalid vapid.json
 	invalidJSON := []byte(`{"invalid json`)
-	err := os.WriteFile(filepath.Join(tmpDir, "vapid.json"), invalidJSON, 0600)
+	err := os.WriteFile(filepath.Join(tmpDir, "vapid.json"), invalidJSON, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestLoadOrGenerateConfig_NoPrivateKey(t *testing.T) {
 		"subject":   "mailto:test@example.com",
 	}
 	data, _ := json.Marshal(config)
-	err := os.WriteFile(filepath.Join(tmpDir, "vapid.json"), data, 0600)
+	err := os.WriteFile(filepath.Join(tmpDir, "vapid.json"), data, 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestLoadSubscriptions_EmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create an empty JSON file
-	err := os.WriteFile(filepath.Join(tmpDir, "sub_empty.json"), []byte("not valid json"), 0600)
+	err := os.WriteFile(filepath.Join(tmpDir, "sub_empty.json"), []byte("not valid json"), 0o600)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,8 +271,8 @@ func TestLoadSubscriptions_MultipleFiles(t *testing.T) {
 	data1, _ := json.Marshal(sub1)
 	data2, _ := json.Marshal(sub2)
 
-	os.WriteFile(filepath.Join(tmpDir, "sub_sub-1.json"), data1, 0600)
-	os.WriteFile(filepath.Join(tmpDir, "sub_sub-2.json"), data2, 0600)
+	os.WriteFile(filepath.Join(tmpDir, "sub_sub-1.json"), data1, 0o600)
+	os.WriteFile(filepath.Join(tmpDir, "sub_sub-2.json"), data2, 0o600)
 
 	// Create service
 	service, err := NewService(tmpDir, nil)

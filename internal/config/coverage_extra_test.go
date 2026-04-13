@@ -337,7 +337,7 @@ func TestWatcherCheck_Coverage(t *testing.T) {
 	configFile := filepath.Join(tmpDir, "test.yaml")
 
 	// Write initial config
-	err := os.WriteFile(configFile, []byte("server:\n  hostname: test.com\n"), 0644)
+	err := os.WriteFile(configFile, []byte("server:\n  hostname: test.com\n"), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestWatcherCheck_Coverage(t *testing.T) {
 
 	// Wait a bit and modify the file
 	time.Sleep(50 * time.Millisecond)
-	os.WriteFile(configFile, []byte("server:\n  hostname: test2.com\n"), 0644)
+	os.WriteFile(configFile, []byte("server:\n  hostname: test2.com\n"), 0o644)
 
 	// Give time for the watcher to detect the change
 	time.Sleep(100 * time.Millisecond)
@@ -392,7 +392,7 @@ spam:
   junk_threshold: 5.0
   quarantine_threshold: 10.0
 `
-	err := os.WriteFile(configFile, []byte(configContent), 0644)
+	err := os.WriteFile(configFile, []byte(configContent), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,7 +706,7 @@ func TestWatcherCheck_FileRemoved(t *testing.T) {
 	configFile := filepath.Join(tmpDir, "test.yaml")
 
 	// Write initial config
-	err := os.WriteFile(configFile, []byte("server:\n  hostname: test.com\n"), 0644)
+	err := os.WriteFile(configFile, []byte("server:\n  hostname: test.com\n"), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +737,7 @@ func TestNewReloadable_InvalidConfig(t *testing.T) {
 	configFile := filepath.Join(tmpDir, "test.yaml")
 
 	// Write invalid config
-	err := os.WriteFile(configFile, []byte("invalid: yaml: content: ["), 0644)
+	err := os.WriteFile(configFile, []byte("invalid: yaml: content: ["), 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}

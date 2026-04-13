@@ -82,8 +82,8 @@ cX6QdQH5gPkX7Bj5dGaYICKiFtS5HPBh8LNGHqLgEWQq8wZnRmU7YDTxpBxoqHvZ
 N2D4Mw6fHkJHbMkAqX3q2S0t4YpP9qR9tRfBvLF3bgQqEhQhE7HM5mk0VZqEFiNj
 VqJF0hBsINp0SgEOqQEWBXqAo0m9RbhEAkEA7cV3rEaWDTGtqK9qYaXFDzQfDYLP
 YoVcJqLHBfFPcVq`
-	os.WriteFile(cfg.TLS.CertFile, []byte(certContent), 0644)
-	os.WriteFile(cfg.TLS.KeyFile, []byte(keyContent), 0644)
+	os.WriteFile(cfg.TLS.CertFile, []byte(certContent), 0o644)
+	os.WriteFile(cfg.TLS.KeyFile, []byte(keyContent), 0o644)
 
 	// Start server to initialize queue and msgStore
 	startDone := make(chan error, 1)

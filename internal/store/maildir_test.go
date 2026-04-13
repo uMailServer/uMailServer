@@ -746,10 +746,10 @@ func TestListWithSubdirectories(t *testing.T) {
 	maildir, _ := store.userMaildirPath("example.com", "testuser")
 	// Create the maildir structure
 	for _, sub := range []string{"tmp", "new", "cur"} {
-		os.MkdirAll(filepath.Join(maildir, sub), 0755)
+		os.MkdirAll(filepath.Join(maildir, sub), 0o755)
 	}
 	// Create a subdirectory inside new/ that should be skipped by List
-	os.MkdirAll(filepath.Join(maildir, "new", "subdir"), 0755)
+	os.MkdirAll(filepath.Join(maildir, "new", "subdir"), 0o755)
 
 	msg := []byte("Subject: SubdirTest\r\n\r\nBody")
 	_, err := store.Deliver("example.com", "testuser", "INBOX", msg)

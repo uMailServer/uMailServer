@@ -2141,7 +2141,7 @@ func TestMockFileInfo_Size(t *testing.T) {
 func TestMockFileInfo_Mode(t *testing.T) {
 	fi := &mockFileInfo{name: "testfile.txt", size: 100}
 	mode := fi.Mode()
-	if mode != 0644 {
+	if mode != 0o644 {
 		t.Errorf("expected Mode() = 0644, got %o", mode)
 	}
 }
@@ -2272,7 +2272,7 @@ func TestEmbedFSAdapter_ReadFile(t *testing.T) {
 
 	// Create test file
 	testFile := filepath.Join(tempDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("test content"), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte("test content"), 0o644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
@@ -2307,7 +2307,7 @@ func TestEmbedFSAdapter_Exists(t *testing.T) {
 
 	// Create test file
 	testFile := filepath.Join(tempDir, "exists.txt")
-	if err := os.WriteFile(testFile, []byte("content"), 0644); err != nil {
+	if err := os.WriteFile(testFile, []byte("content"), 0o644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 

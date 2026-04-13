@@ -167,9 +167,9 @@ func BenchmarkMaildirMove(b *testing.B) {
 
 	// Create Sent folder
 	sentDir := filepath.Join(tempDir, "domains", "example.com", "users", "user", "Maildir", ".Sent")
-	os.MkdirAll(filepath.Join(sentDir, "cur"), 0755)
-	os.MkdirAll(filepath.Join(sentDir, "new"), 0755)
-	os.MkdirAll(filepath.Join(sentDir, "tmp"), 0755)
+	os.MkdirAll(filepath.Join(sentDir, "cur"), 0o755)
+	os.MkdirAll(filepath.Join(sentDir, "new"), 0o755)
+	os.MkdirAll(filepath.Join(sentDir, "tmp"), 0o755)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

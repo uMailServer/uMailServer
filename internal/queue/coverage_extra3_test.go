@@ -14,7 +14,7 @@ import (
 func TestWriteFileDirError(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "afile")
-	if err := os.WriteFile(filePath, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	err := writeFile(filepath.Join(filePath, "sub", "test.msg"), []byte("data"))
@@ -63,7 +63,7 @@ func TestWriteFile_RenameError(t *testing.T) {
 	targetPath := filepath.Join(tmpDir, "blocked.msg")
 
 	// Create the target as a directory so rename from file to directory fails
-	os.MkdirAll(targetPath, 0755)
+	os.MkdirAll(targetPath, 0o755)
 
 	err := writeFile(targetPath, []byte("data"))
 	if err == nil {
@@ -242,7 +242,7 @@ func TestEnqueue_WriteFileFailure(t *testing.T) {
 
 	// Create a file where the queue directory would go to prevent writeFile
 	queueDir := filepath.Join(dataDir, "queue")
-	os.WriteFile(queueDir, []byte("blocker"), 0644)
+	os.WriteFile(queueDir, []byte("blocker"), 0o644)
 
 	_, err = mgr.Enqueue("sender@example.com", []string{"rcpt@example.com"}, []byte("test"))
 	if err == nil {

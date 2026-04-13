@@ -18,7 +18,7 @@ server:
   hostname: test.example.com
   data_dir: /tmp/test
 `
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to create test config: %v", err)
 	}
 
@@ -42,7 +42,7 @@ server:
   hostname: test.example.com
   data_dir: /tmp/test
 `
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to create test config: %v", err)
 	}
 
@@ -71,7 +71,7 @@ server:
 security:
   jwt_secret: "this-is-a-32-character-secret-min"
 `
-	if err := os.WriteFile(configPath, []byte(content1), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content1), 0o644); err != nil {
 		t.Fatalf("failed to create test config: %v", err)
 	}
 
@@ -103,7 +103,7 @@ server:
 security:
   jwt_secret: "this-is-a-32-character-secret-min"
 `
-	if err := os.WriteFile(configPath, []byte(content2), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content2), 0o644); err != nil {
 		t.Fatalf("failed to modify test config: %v", err)
 	}
 
@@ -136,7 +136,7 @@ server:
 security:
   jwt_secret: "this-is-a-32-character-secret-min"
 `
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to create test config: %v", err)
 	}
 
@@ -166,7 +166,7 @@ server:
 security:
   jwt_secret: "this-is-a-32-character-secret-min"
 `
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to create test config: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestNewReloadable_InvalidPath(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "invalid.yaml")
 
 	// Write invalid YAML that will cause parse errors
-	if err := os.WriteFile(configPath, []byte("invalid: yaml: content: ["), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("invalid: yaml: content: ["), 0o644); err != nil {
 		t.Fatalf("failed to create invalid config: %v", err)
 	}
 
@@ -217,7 +217,7 @@ server:
 security:
   jwt_secret: "this-is-a-32-character-secret-min"
 `
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to create test config: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestWatcher_fileHash(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "test.yaml")
 
 	content := "test content"
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestWatcher_fileHash(t *testing.T) {
 	}
 
 	// Different content should produce different hash
-	if err := os.WriteFile(configPath, []byte("different content"), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("different content"), 0o644); err != nil {
 		t.Fatalf("failed to modify test file: %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestWatcher_check(t *testing.T) {
 
 	// Create initial file
 	content := "initial content"
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
@@ -302,7 +302,7 @@ func TestWatcher_check(t *testing.T) {
 
 	// Modify file
 	time.Sleep(10 * time.Millisecond) // Ensure different mod time
-	if err := os.WriteFile(configPath, []byte("changed content"), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("changed content"), 0o644); err != nil {
 		t.Fatalf("failed to modify test file: %v", err)
 	}
 

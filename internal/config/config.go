@@ -739,11 +739,11 @@ func checkFileReadable(path string) error {
 
 // checkDirWritable verifies that the given directory can be written to.
 func checkDirWritable(dir string) error {
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
 	tmp := filepath.Join(dir, ".write_test_"+strconv.FormatInt(time.Now().UnixNano(), 10))
-	if err := os.WriteFile(tmp, []byte("test"), 0600); err != nil {
+	if err := os.WriteFile(tmp, []byte("test"), 0o600); err != nil {
 		return err
 	}
 	return os.Remove(tmp)
@@ -759,7 +759,7 @@ func (c *Config) EnsureDataDir() error {
 	}
 
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0750); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}

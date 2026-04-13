@@ -25,12 +25,12 @@ func OpenDatabase(path string) (*Database, error) {
 	// Create parent directories if they don't exist
 	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 	}
 
-	db, err := bbolt.Open(path, 0600, &bbolt.Options{Timeout: 1})
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 1})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database at %s: %w", path, err)
 	}

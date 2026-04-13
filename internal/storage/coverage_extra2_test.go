@@ -565,7 +565,7 @@ func TestNewMessageStore_MkdirError(t *testing.T) {
 	// Create a file at the base path to prevent MkdirAll
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "store")
-	os.WriteFile(filePath, []byte("x"), 0644)
+	os.WriteFile(filePath, []byte("x"), 0o644)
 
 	_, err := NewMessageStore(filePath + "/sub")
 	if err == nil {

@@ -234,7 +234,7 @@ func TestCheckFirstRun(t *testing.T) {
 
 	// Create config file
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("test"), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("test"), 0o644); err != nil {
 		t.Fatalf("failed to create config file: %v", err)
 	}
 
@@ -287,7 +287,7 @@ smtp:
 	// Replace placeholder with actual temp dir
 	configContent = strings.Replace(configContent, "TMPDIR_PLACEHOLDER", tmpDir, 1)
 
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
 
@@ -341,7 +341,7 @@ func TestLoadInvalidConfigFile(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "invalid.yaml")
 
 	// Create an invalid YAML file
-	if err := os.WriteFile(configPath, []byte("invalid: yaml: content: ["), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("invalid: yaml: content: ["), 0o644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
 
@@ -531,9 +531,9 @@ func TestEnsureDataDirAlreadyExists(t *testing.T) {
 	cfg.Server.DataDir = tmpDir
 
 	// Create directories first
-	os.MkdirAll(filepath.Join(tmpDir, "domains"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "tmp"), 0755)
-	os.MkdirAll(filepath.Join(tmpDir, "queue"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "domains"), 0o755)
+	os.MkdirAll(filepath.Join(tmpDir, "tmp"), 0o755)
+	os.MkdirAll(filepath.Join(tmpDir, "queue"), 0o755)
 
 	// Should not fail
 	err := cfg.EnsureDataDir()
@@ -1152,7 +1152,7 @@ server:
   hostname: mail.example.com
   data_dir: /var/lib/umailserver
 `
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
 
@@ -1179,7 +1179,7 @@ server:
   hostname: ""
   data_dir: /var/lib/umailserver
 `
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
 

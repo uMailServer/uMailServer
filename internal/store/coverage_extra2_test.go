@@ -33,8 +33,8 @@ func TestListFolders_SkipsFiles(t *testing.T) {
 
 	// Place regular files in the maildir root -- these should be skipped
 	maildir, _ := store.userMaildirPath(domain, user)
-	os.WriteFile(filepath.Join(maildir, "regularfile.txt"), []byte("test"), 0644)
-	os.WriteFile(filepath.Join(maildir, ".dotfile"), []byte("test"), 0644)
+	os.WriteFile(filepath.Join(maildir, "regularfile.txt"), []byte("test"), 0o644)
+	os.WriteFile(filepath.Join(maildir, ".dotfile"), []byte("test"), 0o644)
 
 	folders, err := store.ListFolders(domain, user)
 	if err != nil {
@@ -115,7 +115,7 @@ func TestSetFlags_MkdirAllFailure(t *testing.T) {
 	maildir, _ := store.userMaildirPath(domain, user)
 	curDir := filepath.Join(maildir, "cur")
 	os.RemoveAll(curDir)
-	os.WriteFile(curDir, []byte("blocker"), 0644)
+	os.WriteFile(curDir, []byte("blocker"), 0o644)
 
 	err = store.SetFlags(domain, user, "INBOX", fn, "S")
 	if err == nil {
@@ -184,7 +184,7 @@ func TestQuota_WalkErrorNonNotExist(t *testing.T) {
 		// Replace the maildir root with a file to cause Walk to error
 		maildir, _ := store.userMaildirPath(domain, user)
 		os.RemoveAll(maildir)
-		os.WriteFile(maildir, []byte("not a directory"), 0644)
+		os.WriteFile(maildir, []byte("not a directory"), 0o644)
 
 		used, _, err := store.Quota(domain, user)
 		if err == nil {
@@ -236,8 +236,8 @@ func TestQuota_SkipsInaccessibleFiles(t *testing.T) {
 		used, limit, err := store.Quota(domain, user)
 		t.Logf("Quota: used=%d, limit=%d, err=%v", used, limit, err)
 	} else {
-		os.Chmod(newDir, 0000)
-		defer os.Chmod(newDir, 0755)
+		os.Chmod(newDir, 0o000)
+		defer os.Chmod(newDir, 0o755)
 
 		used, limit, err := store.Quota(domain, user)
 		t.Logf("Quota: used=%d, limit=%d, err=%v", used, limit, err)

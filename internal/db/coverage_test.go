@@ -20,7 +20,7 @@ func TestOpenMkdirFail(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "afile")
 	// Create a regular file
-	if err := os.WriteFile(filePath, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
 		t.Fatalf("setup: write file: %v", err)
 	}
 	// Try to open a db under that file (e.g. afile/test.db)

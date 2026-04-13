@@ -224,7 +224,7 @@ func cmdQuickstart(args []string) {
 
 	// Generate DKIM key
 	dkimDir := filepath.Join(dataDir, "dkim")
-	_ = os.MkdirAll(dkimDir, 0750)
+	_ = os.MkdirAll(dkimDir, 0o750)
 	dkimKeyPath := filepath.Join(dkimDir, domain+".private.pem")
 
 	fmt.Println("Generating DKIM key pair...")
@@ -297,7 +297,7 @@ domains:
     max_mailbox_size: 5368709120  # 5GB
 `, email, domain, dataDir, email, domain, dkimKeyPath, domain)
 
-	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config: %v\n", err)
 		os.Exit(1)
 	}
@@ -308,7 +308,7 @@ domains:
 	// Initialize database
 	fmt.Println("\nInitializing database...")
 	dbPath := filepath.Join(dataDir, "umailserver.db")
-	if err := os.MkdirAll(dataDir, 0750); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}

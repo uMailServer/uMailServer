@@ -120,9 +120,9 @@ func TestMigrateFromDovecotValidPath(t *testing.T) {
 
 	// Create a valid maildir structure
 	maildirPath := filepath.Join(tmpDir, "maildir")
-	os.MkdirAll(filepath.Join(maildirPath, "cur"), 0755)
-	os.MkdirAll(filepath.Join(maildirPath, "new"), 0755)
-	os.MkdirAll(filepath.Join(maildirPath, "tmp"), 0755)
+	os.MkdirAll(filepath.Join(maildirPath, "cur"), 0o755)
+	os.MkdirAll(filepath.Join(maildirPath, "new"), 0o755)
+	os.MkdirAll(filepath.Join(maildirPath, "tmp"), 0o755)
 
 	// Test with valid path - may fail due to implementation, but should not panic
 	err = mm.MigrateFromDovecot(maildirPath, "")

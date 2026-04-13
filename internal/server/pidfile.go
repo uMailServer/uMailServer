@@ -37,7 +37,7 @@ func (p *PIDFile) Create() error {
 
 	pid := os.Getpid()
 	data := fmt.Sprintf("%d\n", pid)
-	return os.WriteFile(p.path, []byte(data), 0600)
+	return os.WriteFile(p.path, []byte(data), 0o600)
 }
 
 // Read reads the PID from the file

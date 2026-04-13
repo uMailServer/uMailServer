@@ -22,7 +22,7 @@ func TestMessageDeliveryFlow(t *testing.T) {
 	// Create temp directories
 	dataDir := t.TempDir()
 	msgDir := filepath.Join(dataDir, "messages")
-	if err := os.MkdirAll(msgDir, 0755); err != nil {
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
 		t.Fatalf("failed to create messages dir: %v", err)
 	}
 
@@ -388,7 +388,7 @@ func TestMessageSearchIndex(t *testing.T) {
 
 	dataDir := t.TempDir()
 	msgDir := filepath.Join(dataDir, "messages")
-	if err := os.MkdirAll(msgDir, 0755); err != nil {
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
 		t.Fatalf("failed to create messages dir: %v", err)
 	}
 

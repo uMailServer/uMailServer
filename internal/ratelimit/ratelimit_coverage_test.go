@@ -12,7 +12,7 @@ func TestRateLimiter_WithBoltDB(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "ratelimit_test.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestRateLimiter_CheckUser_WithDailyQuota(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "ratelimit_daily.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRateLimiter_SaveAndLoadUserSentToday(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "ratelimit_increment.db")
 
-	db, err := bbolt.Open(dbPath, 0600, nil)
+	db, err := bbolt.Open(dbPath, 0o600, nil)
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}

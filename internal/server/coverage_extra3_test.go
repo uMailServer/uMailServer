@@ -478,8 +478,8 @@ func TestCoverNew_StorageDBError(t *testing.T) {
 	// On Windows, we use a non-existent deep path to trigger an error.
 	storagePath := tmpDir + "/blocked_dir/nested/deep/test.db"
 	// Write the blocking directory as a file instead
-	os.MkdirAll(filepath.Dir(storagePath), 0755)
-	os.WriteFile(filepath.Dir(storagePath)+"/blocked_dir", []byte("x"), 0644)
+	os.MkdirAll(filepath.Dir(storagePath), 0o755)
+	os.WriteFile(filepath.Dir(storagePath)+"/blocked_dir", []byte("x"), 0o644)
 
 	// Alternative: test by creating the database at a path inside a read-only location.
 	// Instead, just test with a valid config that doesn't trigger the error path
@@ -610,8 +610,8 @@ cX6QdQH5gPkX7Bj5dGaYICKiFtS5HPBh8LNGHqLgEWQq8wZnRmU7YDTxpBxoqHvZ
 N2D4Mw6fHkJHbMkAqX3q2S0t4YpP9qR9tRfBvLF3bgQqEhQhE7HM5mk0VZqEFiNj
 VqJF0hBsINp0SgEOqQEWBXqAo0m9RbhEAkEA7cV3rEaWDTGtqK9qYaXFDzQfDYLP
 YoVcJqLHBfFPcVq`
-	os.WriteFile(cfg.TLS.CertFile, []byte(certContent), 0644)
-	os.WriteFile(cfg.TLS.KeyFile, []byte(keyContent), 0644)
+	os.WriteFile(cfg.TLS.CertFile, []byte(certContent), 0o644)
+	os.WriteFile(cfg.TLS.KeyFile, []byte(keyContent), 0o644)
 
 	srv, err := New(cfg)
 	if err != nil {

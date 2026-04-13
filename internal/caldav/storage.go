@@ -68,7 +68,7 @@ func (s *Storage) CreateCalendar(username string, cal *Calendar) error {
 	cal.Modified = now
 
 	dir := s.calendarDir(username, cal.ID)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create calendar directory: %w", err)
 	}
 
@@ -78,7 +78,7 @@ func (s *Storage) CreateCalendar(username string, cal *Calendar) error {
 	}
 
 	path := s.calendarPath(username, cal.ID)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write calendar: %w", err)
 	}
 
@@ -163,7 +163,7 @@ func (s *Storage) UpdateCalendar(username string, cal *Calendar) error {
 	}
 
 	path := s.calendarPath(username, cal.ID)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write calendar: %w", err)
 	}
 
@@ -197,14 +197,14 @@ func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, i
 
 	// Ensure calendar directory exists
 	dir := s.calendarDir(username, calendarID)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create calendar directory: %w", err)
 	}
 
 	// Write the raw iCalendar data
 	path := s.eventPath(username, calendarID, event.UID)
 	// #nosec G703 -- IDs are validated with validateID before use
-	if err := os.WriteFile(path, []byte(icsData), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(icsData), 0o600); err != nil {
 		return fmt.Errorf("failed to write event: %w", err)
 	}
 
@@ -213,7 +213,7 @@ func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, i
 		cal.Modified = time.Now()
 		data, _ := json.MarshalIndent(cal, "", "  ")
 		// #nosec G703 -- IDs are validated with validateID before use
-		_ = os.WriteFile(filepath.Clean(s.calendarPath(username, calendarID)), data, 0600)
+		_ = os.WriteFile(filepath.Clean(s.calendarPath(username, calendarID)), data, 0o600)
 	}
 
 	return nil
@@ -289,7 +289,7 @@ func (s *Storage) DeleteEvent(username, calendarID, eventUID string) error {
 		cal.Modified = time.Now()
 		data, _ := json.MarshalIndent(cal, "", "  ")
 		// #nosec G703 -- IDs are validated with validateID before use
-		_ = os.WriteFile(filepath.Clean(s.calendarPath(username, calendarID)), data, 0600)
+		_ = os.WriteFile(filepath.Clean(s.calendarPath(username, calendarID)), data, 0o600)
 	}
 
 	return nil

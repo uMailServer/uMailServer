@@ -216,7 +216,7 @@ func TestMessageStore_WriteError(t *testing.T) {
 
 	// Create a file at the path where user dir would be created
 	userDir := filepath.Join(tmpDir+"/store", "user")
-	os.WriteFile(userDir, []byte("x"), 0644)
+	os.WriteFile(userDir, []byte("x"), 0o644)
 
 	_, err = store.StoreMessage("user", []byte("test"))
 	if err == nil {

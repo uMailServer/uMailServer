@@ -39,7 +39,7 @@ func (m *BboltMailstore) SetMDNHandler(handler func(from, to, messageID, inReply
 // NewBboltMailstore creates a new mailstore backed by bbolt
 func NewBboltMailstore(dataDir string) (*BboltMailstore, error) {
 	// Ensure data directory exists
-	if err := os.MkdirAll(dataDir, 0750); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 

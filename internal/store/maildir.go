@@ -114,7 +114,7 @@ func (s *MaildirStore) ensureFolder(domain, user, folder string) error {
 	subdirs := []string{"tmp", "new", "cur"}
 	for _, subdir := range subdirs {
 		path := filepath.Join(basePath, subdir)
-		if err := os.MkdirAll(path, 0750); err != nil {
+		if err := os.MkdirAll(path, 0o750); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", path, err)
 		}
 	}
@@ -151,7 +151,7 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 	newPath := filepath.Join(basePath, "new", uniqueName)
 
 	// Write file
-	if err := os.WriteFile(tmpPath, msg, 0600); err != nil {
+	if err := os.WriteFile(tmpPath, msg, 0o600); err != nil {
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
@@ -190,7 +190,7 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 	curPath := filepath.Join(basePath, "cur", uniqueName)
 
 	// Write file
-	if err := os.WriteFile(tmpPath, msg, 0600); err != nil {
+	if err := os.WriteFile(tmpPath, msg, 0o600); err != nil {
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
@@ -376,7 +376,7 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 	// If currently in new/, move to cur/
 	if subdir == "new" {
 		// Ensure cur/ exists
-		if err := os.MkdirAll(filepath.Join(basePath, "cur"), 0750); err != nil {
+		if err := os.MkdirAll(filepath.Join(basePath, "cur"), 0o750); err != nil {
 			return fmt.Errorf("failed to create cur directory: %w", err)
 		}
 	}

@@ -68,7 +68,7 @@ func (s *Storage) CreateAddressbook(username string, ab *Addressbook) error {
 	ab.Modified = now
 
 	dir := s.addressbookDir(username, ab.ID)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create addressbook directory: %w", err)
 	}
 
@@ -78,7 +78,7 @@ func (s *Storage) CreateAddressbook(username string, ab *Addressbook) error {
 	}
 
 	path := s.addressbookPath(username, ab.ID)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write addressbook: %w", err)
 	}
 
@@ -163,7 +163,7 @@ func (s *Storage) UpdateAddressbook(username string, ab *Addressbook) error {
 	}
 
 	path := s.addressbookPath(username, ab.ID)
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write addressbook: %w", err)
 	}
 
@@ -197,14 +197,14 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 
 	// Ensure addressbook directory exists
 	dir := s.addressbookDir(username, addressbookID)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("failed to create addressbook directory: %w", err)
 	}
 
 	// Write the raw vCard data
 	path := s.contactPath(username, addressbookID, contact.UID)
 	// #nosec G703 -- IDs are validated with validateID before use
-	if err := os.WriteFile(path, []byte(vcardData), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(vcardData), 0o600); err != nil {
 		return fmt.Errorf("failed to write contact: %w", err)
 	}
 
@@ -213,7 +213,7 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
 		// #nosec G703 -- IDs are validated with validateID before use
-		_ = os.WriteFile(filepath.Clean(s.addressbookPath(username, addressbookID)), data, 0600)
+		_ = os.WriteFile(filepath.Clean(s.addressbookPath(username, addressbookID)), data, 0o600)
 	}
 
 	return nil
@@ -289,7 +289,7 @@ func (s *Storage) DeleteContact(username, addressbookID, contactUID string) erro
 		ab.Modified = time.Now()
 		data, _ := json.MarshalIndent(ab, "", "  ")
 		// #nosec G703 -- IDs are validated with validateID before use
-		_ = os.WriteFile(filepath.Clean(s.addressbookPath(username, addressbookID)), data, 0600)
+		_ = os.WriteFile(filepath.Clean(s.addressbookPath(username, addressbookID)), data, 0o600)
 	}
 
 	return nil

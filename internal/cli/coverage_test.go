@@ -174,13 +174,13 @@ func TestImportMessageWithMsgStore(t *testing.T) {
 
 	// Create maildir path: .../example.com/user/Maildir/cur/msg
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatalf("Failed to create directories: %v", err)
 	}
 
 	msgFile := filepath.Join(userDir, "1234567890.1:2,S")
 	msgContent := []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody\r\n")
-	if err := os.WriteFile(msgFile, msgContent, 0644); err != nil {
+	if err := os.WriteFile(msgFile, msgContent, 0o644); err != nil {
 		t.Fatalf("Failed to write message file: %v", err)
 	}
 
@@ -216,13 +216,13 @@ func TestImportMessageCannotDetermineUser(t *testing.T) {
 
 	// Create a file NOT in Maildir path structure (no "Maildir" in path)
 	curDir := filepath.Join(tmpDir, "cur")
-	if err := os.MkdirAll(curDir, 0755); err != nil {
+	if err := os.MkdirAll(curDir, 0o755); err != nil {
 		t.Fatalf("Failed to create dir: %v", err)
 	}
 
 	msgFile := filepath.Join(curDir, "testmsg.eml")
 	msgContent := []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody\r\n")
-	if err := os.WriteFile(msgFile, msgContent, 0644); err != nil {
+	if err := os.WriteFile(msgFile, msgContent, 0o644); err != nil {
 		t.Fatalf("Failed to write message file: %v", err)
 	}
 
@@ -249,13 +249,13 @@ func TestImportMessageNilMsgStore(t *testing.T) {
 	mm := NewMigrationManager(database, nil, nil)
 
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatalf("Failed to create directories: %v", err)
 	}
 
 	msgFile := filepath.Join(userDir, "1234567890.1:2,S")
 	msgContent := []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody\r\n")
-	if err := os.WriteFile(msgFile, msgContent, 0644); err != nil {
+	if err := os.WriteFile(msgFile, msgContent, 0o644); err != nil {
 		t.Fatalf("Failed to write message file: %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestImportMessageFlagCombinations(t *testing.T) {
 	}
 
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatalf("Failed to create directories: %v", err)
 	}
 
@@ -298,7 +298,7 @@ func TestImportMessageFlagCombinations(t *testing.T) {
 		t.Run(filename, func(t *testing.T) {
 			msgFile := filepath.Join(userDir, filename)
 			msgContent := []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Test\r\n\r\nBody\r\n")
-			if err := os.WriteFile(msgFile, msgContent, 0644); err != nil {
+			if err := os.WriteFile(msgFile, msgContent, 0o644); err != nil {
 				t.Fatalf("Failed to write message file: %v", err)
 			}
 
@@ -411,14 +411,14 @@ func TestMigrateFromDovecotWithMsgStore(t *testing.T) {
 
 	// Create dovecot maildir structure
 	userDir := filepath.Join(tmpDir, "dovecot", "example.com", "user", "Maildir", "cur")
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatalf("Failed to create directories: %v", err)
 	}
 
 	// Write a message file
 	msgFile := filepath.Join(userDir, "1234567890.M1:2,S")
 	msgContent := []byte("From: sender@example.com\r\nTo: user@example.com\r\nSubject: Hello\r\n\r\nWorld\r\n")
-	if err := os.WriteFile(msgFile, msgContent, 0644); err != nil {
+	if err := os.WriteFile(msgFile, msgContent, 0o644); err != nil {
 		t.Fatalf("Failed to write message file: %v", err)
 	}
 
@@ -457,7 +457,7 @@ func TestMigrateFromMBOXWithContent(t *testing.T) {
 
 	// Create mbox files
 	mboxDir := filepath.Join(tmpDir, "mbox")
-	if err := os.MkdirAll(mboxDir, 0755); err != nil {
+	if err := os.MkdirAll(mboxDir, 0o755); err != nil {
 		t.Fatalf("Failed to create mbox directory: %v", err)
 	}
 
@@ -476,7 +476,7 @@ func TestMigrateFromMBOXWithContent(t *testing.T) {
 	mboxContent += "Message body 2\n"
 
 	mboxFile := filepath.Join(mboxDir, "inbox.mbox")
-	if err := os.WriteFile(mboxFile, []byte(mboxContent), 0644); err != nil {
+	if err := os.WriteFile(mboxFile, []byte(mboxContent), 0o644); err != nil {
 		t.Fatalf("Failed to write mbox file: %v", err)
 	}
 
@@ -533,7 +533,7 @@ func TestImportMBOXFileSingleMessage(t *testing.T) {
 	content += "Subject: Single\n"
 	content += "\n"
 	content += "Just one message.\n"
-	if err := os.WriteFile(mboxFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(mboxFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("Failed to write mbox file: %v", err)
 	}
 
@@ -566,7 +566,7 @@ func TestImportDovecotUsersMixedContent(t *testing.T) {
 	content += "user1@example.com:hash1:1000:1000::/home/user1:/bin/bash\n"
 	content += "\n"
 	content += "user2@example.com:hash2:1001:1001::/home/user2:/bin/bash\n"
-	if err := os.WriteFile(passwdFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(passwdFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("Failed to write passwd file: %v", err)
 	}
 
@@ -629,11 +629,11 @@ func TestBackupRestoreFullCycle(t *testing.T) {
 	// Create full data structure
 	configDir := filepath.Join(tmpDir, "config")
 	msgDir := filepath.Join(tmpDir, "messages", "user@test.com")
-	os.MkdirAll(configDir, 0755)
-	os.MkdirAll(msgDir, 0755)
-	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("key=value"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "umailserver.db"), []byte("db content"), 0644)
-	os.WriteFile(filepath.Join(msgDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0644)
+	os.MkdirAll(configDir, 0o755)
+	os.MkdirAll(msgDir, 0o755)
+	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("key=value"), 0o644)
+	os.WriteFile(filepath.Join(tmpDir, "umailserver.db"), []byte("db content"), 0o644)
+	os.WriteFile(filepath.Join(msgDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0o644)
 
 	bm := NewBackupManager(cfg)
 
@@ -719,11 +719,11 @@ func TestBackupConfigWalkError(t *testing.T) {
 
 	// Create config dir with a file
 	configDir := filepath.Join(tempDir, "config")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	configFile := filepath.Join(configDir, "test.conf")
-	if err := os.WriteFile(configFile, []byte("key=value"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("key=value"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -758,7 +758,7 @@ func TestBackupDatabaseStatNonNotExistError(t *testing.T) {
 
 	// Create the database file
 	dbFile := filepath.Join(tempDir, "umailserver.db")
-	if err := os.WriteFile(dbFile, []byte("database content"), 0644); err != nil {
+	if err := os.WriteFile(dbFile, []byte("database content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -792,11 +792,11 @@ func TestBackupMaildirWithSubdirs(t *testing.T) {
 
 	// Create messages directory with nested subdirectories
 	msgDir := filepath.Join(tempDir, "messages", "user@example.com", "INBOX", "cur")
-	if err := os.MkdirAll(msgDir, 0755); err != nil {
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	msgFile := filepath.Join(msgDir, "test.eml")
-	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0644); err != nil {
+	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -958,13 +958,13 @@ func TestRestoreCorruptTarAfterManifest(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	// Write a valid file entry
 	content := []byte("test data")
-	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 
@@ -1001,7 +1001,7 @@ func TestRestoreWithManifestReadError(t *testing.T) {
 	tw := tar.NewWriter(gw)
 
 	// Write manifest header with a huge Size but small actual data
-	mh := &tar.Header{Name: "manifest.json", Size: 99999, Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: 99999, Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write([]byte("{\"version\":\"1.0.0\"}"))
 
@@ -1233,13 +1233,13 @@ func TestMigrateFromDovecotPasswdImportError(t *testing.T) {
 
 	// Create a valid maildir
 	maildirPath := filepath.Join(tmpDir, "maildir")
-	if err := os.MkdirAll(filepath.Join(maildirPath, "cur"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(maildirPath, "cur"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create passwd file with invalid path - use a directory as passwd file
 	passwdDir := filepath.Join(tmpDir, "passwd_dir")
-	if err := os.MkdirAll(passwdDir, 0755); err != nil {
+	if err := os.MkdirAll(passwdDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1268,7 +1268,7 @@ func TestImportDovecotUsersCreateAccountError(t *testing.T) {
 	// Create passwd file with a user entry
 	passwdFile := filepath.Join(tmpDir, "passwd")
 	content := "user@example.com:password_hash:1000:1000::/home/user:/bin/bash\n"
-	if err := os.WriteFile(passwdFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(passwdFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1300,11 +1300,11 @@ func TestImportMaildirNewPath(t *testing.T) {
 
 	// Create a maildir with a message in /new/ directory
 	newDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "new")
-	if err := os.MkdirAll(newDir, 0755); err != nil {
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	msgFile := filepath.Join(newDir, "1234567890.1")
-	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0644); err != nil {
+	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1336,11 +1336,11 @@ func TestImportMessageStoreMessageError(t *testing.T) {
 
 	// Create a message in proper Maildir path structure
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	msgFile := filepath.Join(userDir, "test.eml")
-	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0644); err != nil {
+	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1393,7 +1393,7 @@ func TestImportMBOXFileReadErrorMidStream(t *testing.T) {
 	content += "Subject: Test\n"
 	content += "\n"
 	content += "Message body\n"
-	if err := os.WriteFile(mboxFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(mboxFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1428,7 +1428,7 @@ func TestImportMBOXFileMultipleMessages(t *testing.T) {
 		content += "\n"
 		content += fmt.Sprintf("Message body %d\n", i)
 	}
-	if err := os.WriteFile(mboxFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(mboxFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1453,7 +1453,7 @@ func TestImportMBOXFileEmpty(t *testing.T) {
 
 	// Create an empty mbox file
 	mboxFile := filepath.Join(tmpDir, "empty.mbox")
-	if err := os.WriteFile(mboxFile, []byte(""), 0644); err != nil {
+	if err := os.WriteFile(mboxFile, []byte(""), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1497,7 +1497,7 @@ func TestListBackupsEntryInfoError(t *testing.T) {
 
 	// Create a .tar.gz file
 	backupFile := filepath.Join(tempDir, "test.tar.gz")
-	if err := os.WriteFile(backupFile, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(backupFile, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1526,14 +1526,14 @@ func TestBackupRestoreWithDeepDirectories(t *testing.T) {
 
 	// Create deep directory structures
 	configDir := filepath.Join(tmpDir, "config")
-	os.MkdirAll(configDir, 0755)
-	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("key=value"), 0644)
+	os.MkdirAll(configDir, 0o755)
+	os.WriteFile(filepath.Join(configDir, "app.conf"), []byte("key=value"), 0o644)
 
 	msgDir := filepath.Join(tmpDir, "messages", "user@example.com", "INBOX", "cur")
-	os.MkdirAll(msgDir, 0755)
-	os.WriteFile(filepath.Join(msgDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0644)
+	os.MkdirAll(msgDir, 0o755)
+	os.WriteFile(filepath.Join(msgDir, "msg1.eml"), []byte("From: test\r\n\r\nHello"), 0o644)
 
-	os.WriteFile(filepath.Join(tmpDir, "umailserver.db"), []byte("db content"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "umailserver.db"), []byte("db content"), 0o644)
 
 	bm := NewBackupManager(cfg)
 
@@ -1714,13 +1714,13 @@ func TestRestoreTarReadErrorSecondPass(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	// Add a regular file
 	content := []byte("config data")
-	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 
@@ -1748,14 +1748,14 @@ func TestMigrateFromDovecotWithPasswdEmptyMaildir(t *testing.T) {
 
 	// Create empty maildir
 	maildirPath := filepath.Join(tmpDir, "maildir")
-	if err := os.MkdirAll(maildirPath, 0755); err != nil {
+	if err := os.MkdirAll(maildirPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// Create passwd file with a user
 	passwdFile := filepath.Join(tmpDir, "passwd")
 	content := "testuser@example.com:hash:1000:1000::/home/testuser:/bin/bash\n"
-	if err := os.WriteFile(passwdFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(passwdFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1793,14 +1793,14 @@ func TestImportMaildirSkipsNonMessageFiles(t *testing.T) {
 
 	// Create a maildir with files in non-cur/non-new directories
 	tmpPath := filepath.Join(tmpDir, "maildir", "tmp")
-	if err := os.MkdirAll(tmpPath, 0755); err != nil {
+	if err := os.MkdirAll(tmpPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// Create a file in /tmp/ (should be skipped by importMaildir)
-	os.WriteFile(filepath.Join(tmpPath, "test.eml"), []byte("data"), 0644)
+	os.WriteFile(filepath.Join(tmpPath, "test.eml"), []byte("data"), 0o644)
 
 	// Create a file in root (should be skipped)
-	os.WriteFile(filepath.Join(tmpDir, "maildir", "dovecot.index"), []byte("index"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "maildir", "dovecot.index"), []byte("index"), 0o644)
 
 	err = mm.importMaildir(filepath.Join(tmpDir, "maildir"))
 	if err != nil {
@@ -1940,7 +1940,7 @@ func TestRestoreCorruptGzipAfterManifest(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 	tw.Close()
@@ -1948,7 +1948,7 @@ func TestRestoreCorruptGzipAfterManifest(t *testing.T) {
 	f.Close()
 
 	// Now append garbage to the file to potentially cause issues on second read
-	f, _ = os.OpenFile(backupFile, os.O_WRONLY|os.O_APPEND, 0644)
+	f, _ = os.OpenFile(backupFile, os.O_WRONLY|os.O_APPEND, 0o644)
 	f.Write([]byte("garbage data appended after gzip"))
 	f.Close()
 
@@ -2056,7 +2056,7 @@ func TestImportDovecotUsersDuplicateAccount(t *testing.T) {
 
 	passwdFile := filepath.Join(tmpDir, "passwd")
 	content := "dup@example.com:hash1:1000:1000::/home/dup:/bin/bash\n"
-	if err := os.WriteFile(passwdFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(passwdFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2085,11 +2085,11 @@ func TestImportMaildirMessageImportError(t *testing.T) {
 	mm := NewMigrationManager(database, nil, nil)
 
 	curDir := filepath.Join(tmpDir, "maildir", "cur")
-	if err := os.MkdirAll(curDir, 0755); err != nil {
+	if err := os.MkdirAll(curDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	msgFile := filepath.Join(curDir, "testmsg.eml")
-	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0644); err != nil {
+	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nHello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2113,7 +2113,7 @@ func TestMigrateFromMBOXImportError(t *testing.T) {
 	mm := NewMigrationManager(database, nil, nil)
 
 	mboxDir := filepath.Join(tmpDir, "unreadable.mbox")
-	if err := os.MkdirAll(mboxDir, 0755); err != nil {
+	if err := os.MkdirAll(mboxDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2138,7 +2138,7 @@ func TestImportMBOXFileReadStringError(t *testing.T) {
 
 	mboxFile := filepath.Join(tmpDir, "transient.mbox")
 	content := "From sender@example.com Mon Jan 01 00:00:00 2024\nSubject: Test\n\nBody\n"
-	if err := os.WriteFile(mboxFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(mboxFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2161,10 +2161,10 @@ func TestBackupConfigWriteToClosedWriter(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	configDir := filepath.Join(tempDir, "config")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "test.conf"), []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "test.conf"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2197,7 +2197,7 @@ func TestBackupDatabaseWriteToClosedWriter(t *testing.T) {
 	}
 	bm := NewBackupManager(cfg)
 
-	if err := os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2230,10 +2230,10 @@ func TestBackupMaildirWriteToClosedWriter(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	msgDir := filepath.Join(tempDir, "messages", "user", "cur")
-	if err := os.MkdirAll(msgDir, 0755); err != nil {
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(msgDir, "msg.eml"), []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(msgDir, "msg.eml"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2296,7 +2296,7 @@ func TestBackupWithReadOnlyBackupDir(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	backupDir := filepath.Join(tempDir, "readonly")
-	if err := os.MkdirAll(backupDir, 0555); err != nil {
+	if err := os.MkdirAll(backupDir, 0o555); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2332,12 +2332,12 @@ func TestRestoreWithFileCreationError(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
 	content := []byte("config data")
-	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/app.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 
@@ -2377,11 +2377,11 @@ func TestBackupConfigErrorPropagation(t *testing.T) {
 
 	// Create config dir with a file that can be backed up
 	configDir := filepath.Join(tempDir, "config")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	configFile := filepath.Join(configDir, "test.conf")
-	if err := os.WriteFile(configFile, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2406,7 +2406,7 @@ func TestBackupDatabaseErrorPropagation(t *testing.T) {
 	bm := NewBackupManager(cfg)
 
 	// Create database file
-	if err := os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tempDir, "umailserver.db"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2432,10 +2432,10 @@ func TestBackupMaildirErrorPropagation(t *testing.T) {
 
 	// Create messages dir
 	msgDir := filepath.Join(tempDir, "messages", "user")
-	if err := os.MkdirAll(msgDir, 0755); err != nil {
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(msgDir, "msg.eml"), []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(msgDir, "msg.eml"), []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2612,15 +2612,15 @@ func TestRestoreWithMkdirAllError(t *testing.T) {
 		"hostname":  "test.example.com",
 	}
 	manifestData, _ := json.Marshal(manifest)
-	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: int64(len(manifestData)), Mode: 0o644}
 	tw.WriteHeader(mh)
 	tw.Write(manifestData)
 
-	dh := &tar.Header{Name: "config/", Mode: 0755, Typeflag: tar.TypeDir}
+	dh := &tar.Header{Name: "config/", Mode: 0o755, Typeflag: tar.TypeDir}
 	tw.WriteHeader(dh)
 
 	content := []byte("test")
-	fh := &tar.Header{Name: "config/test.conf", Size: int64(len(content)), Mode: 0644}
+	fh := &tar.Header{Name: "config/test.conf", Size: int64(len(content)), Mode: 0o644}
 	tw.WriteHeader(fh)
 	tw.Write(content)
 
@@ -2662,7 +2662,7 @@ func TestImportDovecotUsersCreateAccountErrorLogged(t *testing.T) {
 	passwdFile := filepath.Join(tmpDir, "passwd")
 	content := "preexist@example.com:different_hash:1000:1000::/home/preexist:/bin/bash\n"
 	content += "newuser@test.com:hash:1001:1001::/home/newuser:/bin/bash\n"
-	if err := os.WriteFile(passwdFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(passwdFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2691,11 +2691,11 @@ func TestImportMaildirImportMessageErrorPropagation(t *testing.T) {
 	// Create a structure where files exist in /cur/ but the path
 	// doesn't contain "Maildir" so user/domain can't be determined
 	curDir := filepath.Join(tmpDir, "maildir", "cur")
-	if err := os.MkdirAll(curDir, 0755); err != nil {
+	if err := os.MkdirAll(curDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	msgFile := filepath.Join(curDir, "12345.eml")
-	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nBody"), 0644); err != nil {
+	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2742,11 +2742,11 @@ func TestImportMessageStoreError(t *testing.T) {
 
 	// Create a proper Maildir path structure
 	userDir := filepath.Join(tmpDir, "maildir", "example.com", "user", "Maildir", "cur")
-	if err := os.MkdirAll(userDir, 0755); err != nil {
+	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	msgFile := filepath.Join(userDir, "test.eml")
-	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nBody"), 0644); err != nil {
+	if err := os.WriteFile(msgFile, []byte("From: test\r\n\r\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2779,7 +2779,7 @@ func TestImportMBOXFileEOFPath(t *testing.T) {
 	content += "Subject: EOF Test\n"
 	content += "\n"
 	content += "Body line"
-	if err := os.WriteFile(mboxFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(mboxFile, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2803,16 +2803,16 @@ func TestBackupConfigFileOpenError(t *testing.T) {
 
 	// Create config dir with a file, then make it unreadable
 	configDir := filepath.Join(tempDir, "config")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	configFile := filepath.Join(configDir, "unreadable.conf")
-	if err := os.WriteFile(configFile, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// On Windows, try to make file unreadable
-	os.Chmod(configFile, 0222)
+	os.Chmod(configFile, 0o222)
 
 	backupFile := filepath.Join(tempDir, "test.tar.gz")
 	f, err := os.Create(backupFile)
@@ -2830,7 +2830,7 @@ func TestBackupConfigFileOpenError(t *testing.T) {
 	_ = err
 
 	// Restore permissions for cleanup
-	os.Chmod(configFile, 0644)
+	os.Chmod(configFile, 0o644)
 }
 
 // --- Backup: test backupDatabase with file open error ---
@@ -2847,12 +2847,12 @@ func TestBackupDatabaseFileOpenError(t *testing.T) {
 
 	// Create database file then make it unreadable
 	dbFile := filepath.Join(tempDir, "umailserver.db")
-	if err := os.WriteFile(dbFile, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(dbFile, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// Try to make unreadable
-	os.Chmod(dbFile, 0222)
+	os.Chmod(dbFile, 0o222)
 
 	backupFile := filepath.Join(tempDir, "test.tar.gz")
 	f, err := os.Create(backupFile)
@@ -2868,7 +2868,7 @@ func TestBackupDatabaseFileOpenError(t *testing.T) {
 	err = bm.backupDatabase(tw)
 	_ = err
 
-	os.Chmod(dbFile, 0644)
+	os.Chmod(dbFile, 0o644)
 }
 
 // --- Restore: test manifest read error with truncated manifest data ---
@@ -2894,7 +2894,7 @@ func TestRestoreManifestReadErrorDetailed(t *testing.T) {
 	tw := tar.NewWriter(gw)
 
 	// Write manifest header with Size larger than actual data
-	mh := &tar.Header{Name: "manifest.json", Size: 100, Mode: 0644}
+	mh := &tar.Header{Name: "manifest.json", Size: 100, Mode: 0o644}
 	tw.WriteHeader(mh)
 	// Only write 10 bytes when header says 100
 	tw.Write([]byte("{\"a\":1}"))
