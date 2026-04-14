@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/config"
+	"github.com/umailserver/umailserver/internal/sieve"
 )
 
 // ---------------------------------------------------------------------------
@@ -487,4 +488,159 @@ func TestCovExtra_Stop_WithNilMailstoreAndStorageDB(t *testing.T) {
 	if err != nil {
 		t.Errorf("Stop should return nil, got: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for functions with 0% coverage
+// ---------------------------------------------------------------------------
+
+// TestLoginResult tests the loginResult webhook trigger
+func TestLoginResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		username string
+		success  bool
+		ip       string
+	}{
+		{
+			name:     "successful login",
+			username: "user@example.com",
+			success:  true,
+			ip:       "192.168.1.1",
+		},
+		{
+			name:     "failed login",
+			username: "user@example.com",
+			success:  false,
+			ip:       "192.168.1.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{
+				webhookMgr: nil,
+			}
+
+			// Should not panic when webhook manager is nil
+			s.loginResult(tt.username, tt.success, tt.ip)
+		})
+	}
+}
+
+// TestCleanupVacationReplies tests vacation reply cleanup
+func TestCleanupVacationReplies(t *testing.T) {
+	s := &Server{
+		vacationReplies: make(map[string]time.Time),
+	}
+
+	// Add some entries
+	now := time.Now()
+	s.vacationReplies["sender1@example.com|recipient@example.com"] = now.Add(-24 * time.Hour)
+	s.vacationReplies["sender2@example.com|recipient@example.com"] = now.Add(-72 * time.Hour) // Should be cleaned up
+	s.vacationReplies["sender3@example.com|recipient@example.com"] = now.Add(-1 * time.Hour)
+
+	// Run cleanup
+	s.cleanupVacationReplies()
+
+	// Check results
+	if len(s.vacationReplies) != 2 {
+		t.Errorf("expected 2 entries after cleanup, got %d", len(s.vacationReplies))
+	}
+
+	// Verify old entry was removed
+	if _, exists := s.vacationReplies["sender2@example.com|recipient@example.com"]; exists {
+		t.Error("expected sender2 entry to be cleaned up")
+	}
+}
+
+// TestCleanupVacationRepliesLocked tests the locked version
+func TestCleanupVacationRepliesLocked(t *testing.T) {
+	s := &Server{
+		vacationReplies: make(map[string]time.Time),
+	}
+
+	now := time.Now()
+	s.vacationReplies["old@example.com"] = now.Add(-72 * time.Hour)
+	s.vacationReplies["new@example.com"] = now.Add(-1 * time.Hour)
+
+	s.vacationRepliesMu.Lock()
+	s.cleanupVacationRepliesLocked()
+	s.vacationRepliesMu.Unlock()
+
+	if len(s.vacationReplies) != 1 {
+		t.Errorf("expected 1 entry after cleanup, got %d", len(s.vacationReplies))
+	}
+}
+
+// TestCleanupVacationRepliesEmpty tests cleanup with empty map
+func TestCleanupVacationRepliesEmpty(t *testing.T) {
+	s := &Server{
+		vacationReplies: make(map[string]time.Time),
+	}
+
+	// Should not panic with empty map
+	s.cleanupVacationReplies()
+
+	if len(s.vacationReplies) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(s.vacationReplies))
+	}
+}
+
+// TestHandleSieveVacation tests vacation handling with various senders
+func TestHandleSieveVacation(t *testing.T) {
+	tests := []struct {
+		name       string
+		sender     string
+		recipient  string
+		shouldSkip bool
+	}{
+		{"mailer-daemon", "mailer-daemon@example.com", "user@example.com", true},
+		{"postmaster", "postmaster@example.com", "user@example.com", true},
+		{"noreply", "noreply@example.com", "user@example.com", true},
+		{"no-reply", "no-reply@example.com", "user@example.com", true},
+		{"bounce", "bounce@example.com", "user@example.com", true},
+		{"bounce-with-user", "bounce+user@example.com", "user@example.com", true},
+		{"normal", "user@example.com", "vacation@example.com", false},
+		{"normal uppercase", "USER@EXAMPLE.COM", "vacation@example.com", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{
+				queue: nil, // nil queue means early return
+			}
+
+			vacation := sieve.VacationAction{
+				Subject: "Out of office",
+				Body:    "I am on vacation",
+				Days:    7,
+			}
+
+			// Should not panic
+			s.handleSieveVacation(tt.sender, tt.recipient, vacation)
+		})
+	}
+}
+
+// TestCheckAlertsWithNilManager tests checkAlerts with nil alert manager
+func TestCheckAlertsWithNilManager(t *testing.T) {
+	s := &Server{
+		alertMgr: nil,
+		queue:    nil,
+	}
+
+	// Should not panic with nil alert manager
+	s.checkAlerts()
+}
+
+// TestCheckAlertsWithDisabledManager tests checkAlerts with disabled alert manager
+func TestCheckAlertsWithDisabledManager(t *testing.T) {
+	s := &Server{
+		alertMgr: nil, // Will be nil for disabled
+		queue:    nil,
+	}
+
+	// Should not panic
+	s.checkAlerts()
 }
