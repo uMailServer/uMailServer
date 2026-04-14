@@ -86,7 +86,7 @@ func TestServer_handlePut_InvalidVCard(t *testing.T) {
 		ID:   "test-ab",
 		Name: "Test Addressbook",
 	}
-	srv.storage.CreateAddressbook("test", ab)
+	_ = srv.storage.CreateAddressbook("test", ab)
 
 	body := []byte("not a vcard")
 	req := httptest.NewRequest("PUT", "/dav/addressbooks/test-ab/contact1.vcf", bytes.NewReader(body))
@@ -298,7 +298,7 @@ func TestServer_handleMove_InvalidDestinationPath(t *testing.T) {
 		ID:   "test-ab",
 		Name: "Test Addressbook",
 	}
-	srv.storage.CreateAddressbook("test", ab)
+	_ = srv.storage.CreateAddressbook("test", ab)
 
 	// Create a contact first
 	contact := &Contact{
@@ -307,7 +307,7 @@ func TestServer_handleMove_InvalidDestinationPath(t *testing.T) {
 		Created:  time.Now(),
 	}
 	vcard := "BEGIN:VCARD\r\nUID:contact1\r\nFN:Test User\r\nEND:VCARD"
-	srv.storage.SaveContact("test", "test-ab", contact, vcard)
+	_ = srv.storage.SaveContact("test", "test-ab", contact, vcard)
 
 	req := httptest.NewRequest("MOVE", "/dav/addressbooks/test-ab/contact1.vcf", nil)
 	req.Header.Set("Destination", "/invalid/path")
@@ -335,7 +335,7 @@ func TestServer_handleMove_SourceNotFound(t *testing.T) {
 		ID:   "test-ab",
 		Name: "Test Addressbook",
 	}
-	srv.storage.CreateAddressbook("test", ab)
+	_ = srv.storage.CreateAddressbook("test", ab)
 
 	req := httptest.NewRequest("MOVE", "/dav/addressbooks/test-ab/contact1.vcf", nil)
 	req.Header.Set("Destination", "http://example.com/dav/addressbooks/test-ab/contact2.vcf")
@@ -397,7 +397,7 @@ func TestServer_handleCopy_InvalidDestinationPath(t *testing.T) {
 		ID:   "test-ab",
 		Name: "Test Addressbook",
 	}
-	srv.storage.CreateAddressbook("test", ab)
+	_ = srv.storage.CreateAddressbook("test", ab)
 
 	// Create a contact first
 	contact := &Contact{
@@ -406,7 +406,7 @@ func TestServer_handleCopy_InvalidDestinationPath(t *testing.T) {
 		Created:  time.Now(),
 	}
 	vcard := "BEGIN:VCARD\r\nUID:contact1\r\nFN:Test User\r\nEND:VCARD"
-	srv.storage.SaveContact("test", "test-ab", contact, vcard)
+	_ = srv.storage.SaveContact("test", "test-ab", contact, vcard)
 
 	req := httptest.NewRequest("COPY", "/dav/addressbooks/test-ab/contact1.vcf", nil)
 	req.Header.Set("Destination", "/invalid/path")
@@ -434,7 +434,7 @@ func TestServer_handleCopy_SourceNotFound(t *testing.T) {
 		ID:   "test-ab",
 		Name: "Test Addressbook",
 	}
-	srv.storage.CreateAddressbook("test", ab)
+	_ = srv.storage.CreateAddressbook("test", ab)
 
 	req := httptest.NewRequest("COPY", "/dav/addressbooks/test-ab/contact1.vcf", nil)
 	req.Header.Set("Destination", "http://example.com/dav/addressbooks/test-ab/contact2.vcf")

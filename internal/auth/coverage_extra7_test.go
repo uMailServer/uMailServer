@@ -159,11 +159,7 @@ func TestExtractBase64Content_Multiline(t *testing.T) {
 	// Test with content that spans multiple lines (leading whitespace style)
 	msg := []byte("Content-Type: application/pkcs7-mime\r\n\r\nSGVs  bG8gV29y  bGQh")
 
-	content := extractBase64Content(msg)
-	// The function trims and concatenates lines
-	if content == "" {
-		// Empty is ok - function has specific parsing logic
-	}
+	_ = extractBase64Content(msg)
 }
 
 func TestExtractBase64Content_NotFound(t *testing.T) {

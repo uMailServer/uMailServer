@@ -297,11 +297,11 @@ func TestGetEvent(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
-	storage.CreateCalendar("user1@example.com", cal)
+	_ = storage.CreateCalendar("user1@example.com", cal)
 
 	icsData := "BEGIN:VCALENDAR\nUID:test-event\nEND:VCALENDAR"
 	event := &CalendarEvent{UID: "test-event"}
-	storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
+	_ = storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
 
 	tests := []struct {
 		name       string
@@ -360,7 +360,7 @@ func TestGetEvents(t *testing.T) {
 
 	// Create calendar
 	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
-	storage.CreateCalendar("user1@example.com", cal)
+	_ = storage.CreateCalendar("user1@example.com", cal)
 
 	// Initially should return empty
 	events, err := storage.GetEvents("user1@example.com", "test-cal")
@@ -378,7 +378,7 @@ UID:event-` + string(rune('a'+i)) + `
 SUMMARY:Event ` + string(rune('A'+i)) + `
 END:VCALENDAR`
 		event := &CalendarEvent{UID: "event-" + string(rune('a'+i))}
-		storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
+		_ = storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
 	}
 
 	// Now should return all events
@@ -397,11 +397,11 @@ func TestDeleteEvent(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
-	storage.CreateCalendar("user1@example.com", cal)
+	_ = storage.CreateCalendar("user1@example.com", cal)
 
 	icsData := "BEGIN:VCALENDAR\nUID:test-event\nEND:VCALENDAR"
 	event := &CalendarEvent{UID: "test-event"}
-	storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
+	_ = storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
 
 	// Delete the event
 	if err := storage.DeleteEvent("user1@example.com", "test-cal", "test-event"); err != nil {
@@ -426,7 +426,7 @@ func TestGetETag(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
-	storage.CreateCalendar("user1@example.com", cal)
+	_ = storage.CreateCalendar("user1@example.com", cal)
 
 	// Get ETag for non-existent event (should generate UUID)
 	etag := storage.GetETag("user1@example.com", "test-cal", "nonexistent")
@@ -437,7 +437,7 @@ func TestGetETag(t *testing.T) {
 	// Create event
 	icsData := "BEGIN:VCALENDAR\nUID:test-event\nEND:VCALENDAR"
 	event := &CalendarEvent{UID: "test-event"}
-	storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
+	_ = storage.SaveEvent("user1@example.com", "test-cal", event, icsData)
 
 	// Get ETag for existing event
 	etag = storage.GetETag("user1@example.com", "test-cal", "test-event")
@@ -463,7 +463,7 @@ func TestGetCalendarETag(t *testing.T) {
 
 	// Create calendar
 	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
-	storage.CreateCalendar("user1@example.com", cal)
+	_ = storage.CreateCalendar("user1@example.com", cal)
 
 	// Get ETag for existing calendar
 	etag = storage.GetCalendarETag("user1@example.com", "test-cal")

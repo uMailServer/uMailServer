@@ -27,15 +27,17 @@ type Manager struct {
 	allowPrivateIP bool // For testing; if true, allows localhost/private IPs
 	cbManager      *circuitbreaker.Manager
 	mu             sync.RWMutex
+	sem            chan struct{} // Semaphore to limit concurrent webhook deliveries
 }
 
 // Webhook represents a webhook configuration
 type Webhook struct {
-	ID        string    `json:"id"`
-	URL       string    `json:"url"`
-	Events    []string  `json:"events"`
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         string    `json:"id"`
+	URL        string    `json:"url"`
+	Events     []string  `json:"events"`
+	Active     bool      `json:"active"`
+	CreatedAt  time.Time `json:"created_at"`
+	ResolvedIP string    `json:"-"` // Cached resolved IP for DNS rebinding protection
 }
 
 // Event represents a webhook event
@@ -65,6 +67,7 @@ func NewManager(database *db.DB, secret string) *Manager {
 		hooks:          make([]*Webhook, 0),
 		allowPrivateIP: false, // Default: block private IPs for security
 		cbManager:      circuitbreaker.NewManager(),
+		sem:            make(chan struct{}, 50), // Limit concurrent webhook deliveries
 	}
 }
 
@@ -88,7 +91,7 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 	copy(hooks, m.hooks)
 	m.mu.RUnlock()
 
-	// Send asynchronously
+	// Send asynchronously with semaphore to limit concurrent deliveries
 	for _, hook := range hooks {
 		if !hook.Active {
 			continue
@@ -96,7 +99,17 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 		if !m.eventMatches(hook.Events, eventType) {
 			continue
 		}
-		go m.send(hook, event)
+		// Acquire semaphore to limit concurrent webhook deliveries
+		select {
+		case m.sem <- struct{}{}:
+			go func(h *Webhook, e Event) {
+				defer func() { <-m.sem }() // Release semaphore when done
+				m.send(h, e)
+			}(hook, event)
+		default:
+			// Semaphore full, skip this webhook to prevent resource exhaustion
+			fmt.Printf("webhook: delivery skipped for %s (max concurrent deliveries reached)\n", hook.URL)
+		}
 	}
 }
 
@@ -109,11 +122,14 @@ func (m *Manager) send(hook *Webhook, event Event) {
 		}
 	}()
 
-	// Validate URL to prevent SSRF
-	if !m.isValidWebhookURL(hook.URL) {
+	// Validate URL and resolve DNS (DNS rebinding protection)
+	valid, resolvedIP := m.isValidWebhookURL(hook.URL)
+	if !valid {
 		fmt.Printf("webhook: invalid URL (SSRF protection): %s\n", hook.URL)
 		return
 	}
+	// Cache resolved IP for this delivery
+	hook.ResolvedIP = resolvedIP
 
 	// Get circuit breaker for this webhook URL
 	cb := m.cbManager.Get(hook.URL)
@@ -191,46 +207,66 @@ func (m *Manager) send(hook *Webhook, event Event) {
 }
 
 // isValidWebhookURL checks if the URL is safe (not localhost or private IP)
-func (m *Manager) isValidWebhookURL(rawURL string) bool {
+// Performs DNS resolution at validation time and caches the resolved IP
+// to prevent DNS rebinding attacks.
+func (m *Manager) isValidWebhookURL(rawURL string) (bool, string) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return false
+		return false, ""
 	}
 
 	// Only allow http and https schemes
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
+		return false, ""
 	}
 
 	// Get the hostname
 	hostname := u.Hostname()
 	if hostname == "" {
-		return false
+		return false, ""
 	}
 
-	// If private IPs are allowed (testing mode), skip checks
+	// If private IPs are allowed (testing mode), skip security checks
 	m.mu.RLock()
 	allowPrivate := m.allowPrivateIP
 	m.mu.RUnlock()
 	if allowPrivate {
-		return true
+		return true, ""
 	}
 
 	// Block localhost variants
 	if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1" {
-		return false
+		return false, ""
 	}
 
-	// Block private IP ranges
+	// Block private IP ranges (direct IP in URL)
 	ip := net.ParseIP(hostname)
 	if ip != nil {
-		// Check for private IP ranges
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-			return false
+			return false, ""
 		}
+		// Public IP - use it directly
+		return true, hostname
 	}
 
-	return true
+	// DNS rebinding protection: Resolve hostname at validation time
+	// This prevents attackers from changing DNS records after validation
+	ips, err := net.LookupIP(hostname)
+	if err != nil || len(ips) == 0 {
+		return false, ""
+	}
+
+	// Use first resolved IP (typically A record)
+	resolvedIP := ips[0].String()
+
+	// Validate resolved IP is not private (prevent DNS rebinding to internal IPs)
+	resolved := net.ParseIP(resolvedIP)
+	if resolved == nil || resolved.IsLoopback() || resolved.IsPrivate() ||
+		resolved.IsLinkLocalUnicast() || resolved.IsLinkLocalMulticast() {
+		return false, ""
+	}
+
+	return true, resolvedIP
 }
 
 // sign creates HMAC signature

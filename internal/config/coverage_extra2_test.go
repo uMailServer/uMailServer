@@ -197,7 +197,7 @@ func TestParseSizeFloatError(t *testing.T) {
 func TestLoadSectionFromEnvCantSet(t *testing.T) {
 	// Create a struct with an unexported field
 	type myStruct struct {
-		hostname string
+		_ string
 	}
 	s := myStruct{}
 	v := reflect.ValueOf(&s).Elem()

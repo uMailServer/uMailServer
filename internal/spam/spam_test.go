@@ -363,7 +363,7 @@ func TestFeatureExtractor_addSpecialFeatures(t *testing.T) {
 func TestNewClassifier(t *testing.T) {
 	classifier := NewClassifier(nil)
 	if classifier == nil {
-		t.Error("NewClassifier() returned nil")
+		t.Fatal("NewClassifier() returned nil")
 	}
 	if classifier.tokenizer == nil {
 		t.Error("NewClassifier() tokenizer is nil")
@@ -373,7 +373,7 @@ func TestNewClassifier(t *testing.T) {
 func TestNewFeatureExtractor(t *testing.T) {
 	fe := NewFeatureExtractor()
 	if fe == nil {
-		t.Error("NewFeatureExtractor() returned nil")
+		t.Fatal("NewFeatureExtractor() returned nil")
 	}
 	if fe.tokenizer == nil {
 		t.Error("NewFeatureExtractor() tokenizer is nil")

@@ -42,9 +42,9 @@ func TestHandleCreateFilter_WithConditions(t *testing.T) {
 
 	filterReq := map[string]interface{}{
 		"name":       "Test Filter",
-		"enabled":    true,
+		"matchAll":   true,
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -68,7 +68,7 @@ func TestHandleDeleteFilter_Success(t *testing.T) {
 	filterReq := map[string]interface{}{
 		"name":       "Filter to Delete",
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -79,7 +79,7 @@ func TestHandleDeleteFilter_Success(t *testing.T) {
 
 	// Parse response to get filter ID
 	var createResp map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &createResp)
+	_ = json.Unmarshal(rec.Body.Bytes(), &createResp)
 	filterID := ""
 	if id, ok := createResp["id"].(string); ok {
 		filterID = id
@@ -111,7 +111,7 @@ func TestHandleFilterReorder_Success(t *testing.T) {
 		filterReq := map[string]interface{}{
 			"name":       "Filter " + string(rune('A'+i)),
 			"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-			"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+			"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 		}
 		jsonBody, _ := json.Marshal(filterReq)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -178,7 +178,7 @@ func TestHandleCreateFilter_InvalidConditions(t *testing.T) {
 	filterReq := map[string]interface{}{
 		"name":       "Test Filter",
 		"conditions": "invalid", // Should be array
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -223,7 +223,7 @@ func TestHandleUpdateFilter_InvalidConditions(t *testing.T) {
 	filterReq := map[string]interface{}{
 		"name":       "Update Test",
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -233,7 +233,7 @@ func TestHandleUpdateFilter_InvalidConditions(t *testing.T) {
 	server.ServeHTTP(rec, req)
 
 	var createResp map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &createResp)
+	_ = json.Unmarshal(rec.Body.Bytes(), &createResp)
 	filterID := ""
 	if id, ok := createResp["id"].(string); ok {
 		filterID = id
@@ -244,7 +244,7 @@ func TestHandleUpdateFilter_InvalidConditions(t *testing.T) {
 		updateReq := map[string]interface{}{
 			"name":       "Updated Filter",
 			"conditions": "invalid",
-			"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+			"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 		}
 		jsonBody, _ = json.Marshal(updateReq)
 		req = httptest.NewRequest(http.MethodPut, "/api/v1/filters/"+filterID, bytes.NewReader(jsonBody))
@@ -269,7 +269,7 @@ func TestHandleFilterReorder_WithOrder(t *testing.T) {
 		filterReq := map[string]interface{}{
 			"name":       "Filter " + string(rune('A'+i)),
 			"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-			"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+			"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 		}
 		jsonBody, _ := json.Marshal(filterReq)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -279,7 +279,7 @@ func TestHandleFilterReorder_WithOrder(t *testing.T) {
 		server.ServeHTTP(rec, req)
 
 		var createResp map[string]interface{}
-		json.Unmarshal(rec.Body.Bytes(), &createResp)
+		_ = json.Unmarshal(rec.Body.Bytes(), &createResp)
 		if id, ok := createResp["id"].(string); ok {
 			filterIDs = append(filterIDs, id)
 		}
@@ -311,7 +311,7 @@ func TestHandleDeleteFilter_WithDatabaseError(t *testing.T) {
 	filterReq := map[string]interface{}{
 		"name":       "Delete Test",
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -321,7 +321,7 @@ func TestHandleDeleteFilter_WithDatabaseError(t *testing.T) {
 	server.ServeHTTP(rec, req)
 
 	var createResp map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &createResp)
+	_ = json.Unmarshal(rec.Body.Bytes(), &createResp)
 	filterID := ""
 	if id, ok := createResp["id"].(string); ok {
 		filterID = id
@@ -411,7 +411,7 @@ func TestHandleLogin_TOTPEnabledNoCode(t *testing.T) {
 		TOTPEnabled:  true,
 		TOTPSecret:   "JBSWY3DPEHPK3PXP",
 	}
-	database.CreateAccount(account)
+	_ = database.CreateAccount(account)
 
 	loginReq := map[string]string{
 		"email":    "totptest@example.com",
@@ -1276,8 +1276,9 @@ func TestHandleCreateFilter_NoAuth(t *testing.T) {
 
 	filterReq := map[string]interface{}{
 		"name":       "Test Filter",
+		"matchAll":   true,
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -1482,8 +1483,9 @@ func TestHandleCreateFilter_WithSaveError(t *testing.T) {
 
 	filterReq := map[string]interface{}{
 		"name":       "Test Filter",
+		"matchAll":   true,
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -1493,7 +1495,7 @@ func TestHandleCreateFilter_WithSaveError(t *testing.T) {
 	server.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("Expected 500, got %d", rec.Code)
+		t.Errorf("Expected 500, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1505,8 +1507,9 @@ func TestHandleUpdateFilter_WithSaveError(t *testing.T) {
 	// First create a filter
 	filterReq := map[string]interface{}{
 		"name":       "Test Filter",
+		"matchAll":   true,
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -1517,7 +1520,7 @@ func TestHandleUpdateFilter_WithSaveError(t *testing.T) {
 
 	// Parse response to get filter ID
 	var createResp map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &createResp)
+	_ = json.Unmarshal(rec.Body.Bytes(), &createResp)
 	filterID := ""
 	if id, ok := createResp["id"].(string); ok {
 		filterID = id
@@ -1552,7 +1555,7 @@ func TestHandleFilterToggle_WithSaveError(t *testing.T) {
 	filterReq := map[string]interface{}{
 		"name":       "Toggle Test Filter",
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -1562,7 +1565,7 @@ func TestHandleFilterToggle_WithSaveError(t *testing.T) {
 	server.ServeHTTP(rec, req)
 
 	var createResp map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &createResp)
+	_ = json.Unmarshal(rec.Body.Bytes(), &createResp)
 	filterID := ""
 	if id, ok := createResp["id"].(string); ok {
 		filterID = id
@@ -2061,7 +2064,7 @@ func TestHandleCreateFilter_NameTooLong(t *testing.T) {
 	filterReq := map[string]interface{}{
 		"name":       longName,
 		"conditions": []map[string]string{{"field": "from", "operator": "contains", "value": "test"}},
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
@@ -2088,7 +2091,7 @@ func TestHandleCreateFilter_TooManyConditions(t *testing.T) {
 	filterReq := map[string]interface{}{
 		"name":       "Test Filter",
 		"conditions": conditions,
-		"actions":    []map[string]string{{"action": "move", "target": "Junk"}},
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
 	}
 	jsonBody, _ := json.Marshal(filterReq)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))

@@ -83,12 +83,12 @@ func TestCORSMiddleware(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Create a test server with CORS
-	server := &Server{}
+	// Test 1: No configured origins - no CORS headers should be set (secure default)
+	server := &Server{config: Config{CorsOrigins: []string{}}}
 	wrapped := server.corsMiddleware(handler)
 
-	// Test preflight request
 	req := httptest.NewRequest(http.MethodOptions, "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, req)
 
@@ -96,8 +96,31 @@ func TestCORSMiddleware(t *testing.T) {
 		t.Errorf("Expected status 200 for OPTIONS, got %d", rec.Code)
 	}
 
-	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("Expected CORS header Access-Control-Allow-Origin: *")
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("Expected no CORS header when no origins configured (secure default)")
+	}
+
+	// Test 2: Configured origin matches - CORS header should be set
+	server = &Server{config: Config{CorsOrigins: []string{"https://example.com", "https://app.example.com"}}}
+	wrapped = server.corsMiddleware(handler)
+
+	req = httptest.NewRequest(http.MethodOptions, "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rec = httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
+		t.Error("Expected CORS header to match configured origin")
+	}
+
+	// Test 3: Unconfigured origin - no CORS header
+	req = httptest.NewRequest(http.MethodOptions, "/test", nil)
+	req.Header.Set("Origin", "https://evil.com")
+	rec = httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("Expected no CORS header for unconfigured origin")
 	}
 }
 
@@ -616,22 +639,33 @@ func TestCORSMiddlewareHeaders(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	server := &Server{}
+	server := &Server{config: Config{CorsOrigins: []string{"https://example.com"}}}
 	wrapped := server.corsMiddleware(handler)
 
-	// Test actual request (not preflight)
+	// Test actual request (not preflight) with matching origin
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, req)
 
-	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("Expected CORS header Access-Control-Allow-Origin: *")
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
+		t.Error("Expected CORS header Access-Control-Allow-Origin to match configured origin")
 	}
 	if rec.Header().Get("Access-Control-Allow-Methods") == "" {
 		t.Error("Expected CORS header Access-Control-Allow-Methods")
 	}
 	if rec.Header().Get("Access-Control-Allow-Headers") == "" {
 		t.Error("Expected CORS header Access-Control-Allow-Headers")
+	}
+
+	// Test request without matching origin - no CORS headers
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Origin", "https://unauthorized.com")
+	rec = httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("Expected no CORS header for unauthorized origin")
 	}
 }
 
@@ -1529,7 +1563,7 @@ func TestStop(t *testing.T) {
 	server := NewServer(database, nil, Config{})
 
 	// Test Stop doesn't panic even if server not started
-	server.Stop()
+	_ = server.Stop()
 }
 
 // Test Start
@@ -1560,7 +1594,7 @@ func TestStart(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Stop the server
-	server.Stop()
+	_ = server.Stop()
 
 	// Drain the channel
 	select {

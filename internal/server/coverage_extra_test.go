@@ -45,7 +45,7 @@ func TestCovExtra_New_TLSManagerError(t *testing.T) {
 	t.Cleanup(func() {
 		os.Remove(certBlocker)
 		// Restore the certs directory.
-		os.MkdirAll(certBlocker, 0o700)
+		_ = os.MkdirAll(certBlocker, 0o700)
 	})
 
 	tmpDir := t.TempDir()

@@ -817,12 +817,7 @@ func TestMove_BetweenFolders(t *testing.T) {
 	}
 
 	// Verify message is in Archive
-	data, err := store.Fetch("example.com", "testuser", "Archive", fn)
-	if err != nil {
-		// Move generates new unique name, so original filename won't exist
-		// That's expected - just verify no error on Move
-	}
-	_ = data
+	_, _ = store.Fetch("example.com", "testuser", "Archive", fn)
 }
 
 func TestMove_SourceNotFound(t *testing.T) {

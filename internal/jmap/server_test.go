@@ -403,10 +403,16 @@ func TestCORSHeaders(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("Status = %d, want %d", w.Code, http.StatusOK)
 	}
+	server.ServeHTTP(w, req)
 
+	if w.Code != http.StatusOK {
+		t.Errorf("Status = %d, want %d", w.Code, w.Code)
+	}
+
+	// With secure CORS, no header is set when no origins configured
 	allowOrigin := w.Header().Get("Access-Control-Allow-Origin")
-	if allowOrigin != "*" {
-		t.Errorf("Access-Control-Allow-Origin = %s, want *", allowOrigin)
+	if allowOrigin != "" {
+		t.Errorf("Access-Control-Allow-Origin = %s, want empty (secure default)", allowOrigin)
 	}
 }
 

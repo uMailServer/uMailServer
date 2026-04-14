@@ -206,7 +206,7 @@ func TestHandleCreateValidThenList(t *testing.T) {
 	}
 
 	var result map[string]interface{}
-	json.Unmarshal(rr2.Body.Bytes(), &result)
+	_ = json.Unmarshal(rr2.Body.Bytes(), &result)
 	webhooks, ok := result["webhooks"].([]interface{})
 	if !ok || len(webhooks) != 1 {
 		t.Fatalf("Expected 1 webhook in list, got %v", result)

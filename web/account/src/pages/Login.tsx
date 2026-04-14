@@ -7,7 +7,8 @@ async function loginApi(email: string, password: string) {
   const response = await fetch(`${API_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password })
+    body: JSON.stringify({ email, password }),
+    credentials: 'include', // Include HttpOnly cookie in request
   })
 
   if (!response.ok) {
@@ -16,8 +17,8 @@ async function loginApi(email: string, password: string) {
 
   const data = await response.json()
   if (data.token) {
-    localStorage.setItem('token', data.token)
-    localStorage.setItem('user', JSON.stringify(data.user || { email }))
+    // Token is now stored in HttpOnly cookie by the server
+    // No need to store in localStorage (more secure against XSS)
   }
   return data
 }

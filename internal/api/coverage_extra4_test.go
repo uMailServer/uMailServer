@@ -148,7 +148,7 @@ func TestGetEmailsFromStorage_WithMessages(t *testing.T) {
 	h.msgStore = msgStore
 
 	// Create mailbox and add a message
-	mailDB.CreateMailbox("user@example.com", "INBOX")
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
 
 	msgID, err := msgStore.StoreMessage("user@example.com", []byte("From: sender\r\nSubject: Test\r\n\r\nBody"))
 	if err != nil {
@@ -156,7 +156,7 @@ func TestGetEmailsFromStorage_WithMessages(t *testing.T) {
 	}
 
 	uid, _ := mailDB.GetNextUID("user@example.com", "INBOX")
-	mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
+	_ = mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
 		MessageID:    msgID,
 		UID:          uid,
 		Subject:      "Test",
@@ -212,7 +212,7 @@ func TestGetEmailFromStorage_NotFound(t *testing.T) {
 	h.mailDB = mailDB
 	h.msgStore = msgStore
 
-	mailDB.CreateMailbox("user@example.com", "INBOX")
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
 
 	email, err := h.getEmailFromStorage("user@example.com", "INBOX", "non-existent-id")
 	if err == nil {
@@ -241,7 +241,7 @@ func TestGetEmailFromStorage_WithMessage(t *testing.T) {
 	h.msgStore = msgStore
 
 	// Create mailbox and add a message
-	mailDB.CreateMailbox("user@example.com", "INBOX")
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
 
 	msgID, err := msgStore.StoreMessage("user@example.com", []byte("From: sender\r\nSubject: FindMe\r\n\r\nBody"))
 	if err != nil {
@@ -249,7 +249,7 @@ func TestGetEmailFromStorage_WithMessage(t *testing.T) {
 	}
 
 	uid, _ := mailDB.GetNextUID("user@example.com", "INBOX")
-	mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
+	_ = mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
 		MessageID:    msgID,
 		UID:          uid,
 		Subject:      "FindMe",
@@ -302,13 +302,13 @@ func TestHandleMailDelete_Success(t *testing.T) {
 	server.SetMsgStore(msgStore)
 
 	domain := &db.DomainData{Name: "mailtest.com", MaxAccounts: 10, IsActive: true}
-	database.CreateDomain(domain)
+	_ = database.CreateDomain(domain)
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
 	account := &db.AccountData{
 		Email: "user@mailtest.com", LocalPart: "user", Domain: "mailtest.com",
 		PasswordHash: string(hash), IsActive: true, IsAdmin: true,
 	}
-	database.CreateAccount(account)
+	_ = database.CreateAccount(account)
 
 	token := helperLogin(t, server, "user@mailtest.com", "password123")
 
@@ -350,13 +350,13 @@ func TestHandleMailDelete_MissingID(t *testing.T) {
 	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
 
 	domain := &db.DomainData{Name: "mailtest.com", MaxAccounts: 10, IsActive: true}
-	database.CreateDomain(domain)
+	_ = database.CreateDomain(domain)
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
 	account := &db.AccountData{
 		Email: "user@mailtest.com", LocalPart: "user", Domain: "mailtest.com",
 		PasswordHash: string(hash), IsActive: true, IsAdmin: true,
 	}
-	database.CreateAccount(account)
+	_ = database.CreateAccount(account)
 
 	token := helperLogin(t, server, "user@mailtest.com", "password123")
 
@@ -500,13 +500,13 @@ func TestMailSend_WithBCC(t *testing.T) {
 	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
 
 	domain := &db.DomainData{Name: "mailtest.com", MaxAccounts: 10, IsActive: true}
-	database.CreateDomain(domain)
+	_ = database.CreateDomain(domain)
 	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
 	account := &db.AccountData{
 		Email: "user@mailtest.com", LocalPart: "user", Domain: "mailtest.com",
 		PasswordHash: string(hash), IsActive: true, IsAdmin: true,
 	}
-	database.CreateAccount(account)
+	_ = database.CreateAccount(account)
 
 	token := helperLogin(t, server, "user@mailtest.com", "password123")
 

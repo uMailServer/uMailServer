@@ -235,7 +235,7 @@ func TestMailSend_TooManyRecipients(t *testing.T) {
 	}
 
 	var result map[string]string
-	json.NewDecoder(rec.Body).Decode(&result)
+	_ = json.NewDecoder(rec.Body).Decode(&result)
 	if result["error"] != "Too many recipients (max 100)" {
 		t.Errorf("Expected specific error, got %q", result["error"])
 	}

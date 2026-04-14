@@ -1,13 +1,32 @@
 package api
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"net/http"
 	"strings"
 )
 
+// generateNonce creates a random nonce for CSP
+func generateNonce() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to static nonce if random fails (should never happen)
+		return "fallback-nonce-123456789"
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
 // securityHeadersMiddleware adds security headers to all responses
 func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Generate a unique nonce for this request
+		nonce := generateNonce()
+		// Store nonce in context for use in HTML rendering
+		ctx := context.WithValue(r.Context(), "csp-nonce", nonce)
+		r = r.WithContext(ctx)
+
 		// Prevent clickjacking
 		w.Header().Set("X-Frame-Options", "DENY")
 
@@ -20,14 +39,12 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		// Referrer policy
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 
-		// Content Security Policy
-		// Note: 'unsafe-inline' is required for React development builds.
-		// For production, consider using nonce-based or hash-based CSP.
-		// The webmail XSS is fixed via output encoding, but strict CSP provides defense-in-depth.
+		// Content Security Policy with nonce (no unsafe-inline)
+		// The nonce is unique per request, preventing XSS attacks
 		csp := []string{
 			"default-src 'self'",
-			"script-src 'self' 'unsafe-inline' 'unsafe-hashes'", // React needs this; prefer nonce in production
-			"style-src 'self' 'unsafe-inline'",
+			"script-src 'self' 'nonce-" + nonce + "'",
+			"style-src 'self' 'unsafe-inline'", // Styles still need unsafe-inline for React
 			"img-src 'self' data: https:",
 			"font-src 'self'",
 			"connect-src 'self'",

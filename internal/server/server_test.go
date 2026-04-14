@@ -102,7 +102,7 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server == nil {
 		t.Fatal("Expected server instance, got nil")
@@ -176,7 +176,7 @@ func TestServerGetters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Test GetDatabase
 	if db := server.GetDatabase(); db == nil {
@@ -511,7 +511,7 @@ func TestServerConfigFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Verify config is set
 	if server.config != cfg {
@@ -734,7 +734,7 @@ func TestServerWithTLSConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server.tlsManager == nil {
 		t.Error("expected TLS manager to be initialized")
@@ -768,7 +768,7 @@ func TestServerWithACME(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server.tlsManager == nil {
 		t.Error("expected TLS manager to be initialized")
@@ -822,7 +822,7 @@ func TestServerConfigAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Verify config is set
 	if server.config != cfg {
@@ -857,7 +857,7 @@ func TestServerDeliverMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Test delivery
 	err = server.deliverMessage("sender@example.com", []string{"recipient@example.com"}, []byte("Subject: Test\r\n\r\nBody"))
@@ -884,7 +884,7 @@ func TestServerDeliverLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Test local delivery
 	err = server.deliverLocal("recipient", "example.com", "sender@example.com", []byte("Subject: Test\r\n\r\nBody"))
@@ -911,7 +911,7 @@ func TestServerAuthenticate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Test authentication
 	authenticated, err := server.authenticate("testuser", "testpass")
@@ -941,7 +941,7 @@ func TestServerRelayMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Test relay
 	err = server.relayMessage("sender@example.com", "recipient@external.com", []byte("Subject: Test\r\n\r\nBody"))
@@ -976,7 +976,7 @@ func TestDeliverLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Create test message file
 	msgData := []byte("Subject: Test\r\nFrom: sender@test.example.com\r\nTo: recipient@test.example.com\r\n\r\nTest body")
@@ -1054,7 +1054,7 @@ func TestAuthenticateSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	hashedPassword := "$2a$10$BXVavbSB/53WBHDuJlzIHeCsgSTgzrOqtbdPmrkPa68dA3jYmKux2"
 	account := &db.AccountData{
@@ -1101,7 +1101,7 @@ func TestAuthenticateInvalidPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	hashedPassword := "$2a$10$BXVavbSB/53WBHDuJlzIHeCsgSTgzrOqtbdPmrkPa68dA3jYmKux2"
 	account := &db.AccountData{
@@ -1147,7 +1147,7 @@ func TestDeliverLocalQuotaExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	account := &db.AccountData{
 		Email:        "fulluser@test.example.com",
@@ -1192,7 +1192,7 @@ func TestDeliverLocalNonExistentUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	msgData := []byte("Subject: Test\r\n\r\nBody")
 	err = server.deliverLocal("nonexistent", "test.example.com", "sender@example.com", msgData)
@@ -1223,7 +1223,7 @@ func TestDeliverLocalInactiveUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	account := &db.AccountData{
 		Email:        "inactive@test.example.com",
@@ -1266,7 +1266,7 @@ func TestRelayMessageWithoutQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	server.queue = nil
 
@@ -1299,7 +1299,7 @@ func TestServerWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Start server in background
 	go func() {
@@ -1474,7 +1474,7 @@ func TestNewWithEmptyDatabasePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() with empty database path failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server.database == nil {
 		t.Error("expected database to be initialized with fallback path")
@@ -1502,7 +1502,7 @@ func TestNewWithDebugLogLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() with debug log level failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 }
 
 // TestNewWithAllServicesConfig tests New with all service configs populated
@@ -1561,7 +1561,7 @@ func TestNewWithAllServicesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() with all services config failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	if server.tlsManager == nil {
 		t.Error("expected TLS manager to be initialized")
@@ -1595,7 +1595,7 @@ func TestNewWithFatalLogLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() with fatal log level failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 }
 
 // TestNewWithTraceLogLevel tests New with trace log level
@@ -1619,7 +1619,7 @@ func TestNewWithTraceLogLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() with trace log level failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 }
 
 // TestServerWaitWithoutStart tests Wait without starting
@@ -1643,7 +1643,7 @@ func TestServerWaitWithoutStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Send signal immediately
 	go func() {

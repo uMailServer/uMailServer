@@ -27,14 +27,14 @@ func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 
-// mockReader implements io.Reader for testing ReadLine
-type mockReader struct {
+// mockConnReader implements io.Reader for testing ReadLine
+type mockConnReader struct {
 	lines   []string
 	pos     int
 	readErr error
 }
 
-func (mr *mockReader) Read(b []byte) (n int, err error) {
+func (mr *mockConnReader) Read(b []byte) (n int, err error) {
 	if mr.readErr != nil {
 		return 0, mr.readErr
 	}
@@ -187,9 +187,9 @@ func TestManageSieve_cmdListScripts_Success(t *testing.T) {
 	srv := NewManageSieveServer(mgr, nil)
 
 	// Store some scripts first
-	mgr.StoreScript("testuser", "script1", "content1")
-	mgr.StoreScript("testuser", "script2", "content2")
-	mgr.SetActiveScriptByName("testuser", "script1")
+	_ = mgr.StoreScript("testuser", "script1", "content1")
+	_ = mgr.StoreScript("testuser", "script2", "content2")
+	_ = mgr.SetActiveScriptByName("testuser", "script1")
 
 	conn := &mockConn{
 		readBuf:  bytes.NewBuffer([]byte{}),

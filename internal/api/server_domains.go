@@ -2,7 +2,6 @@ package api
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"strings"
@@ -78,7 +77,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 		MaxAccounts int    `json:"max_accounts"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -150,7 +149,7 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 		IsActive    bool `json:"is_active"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

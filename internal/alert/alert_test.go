@@ -556,7 +556,7 @@ func TestManager_GetStats(t *testing.T) {
 	cfg.MinInterval = 0
 	mgr := NewManager(cfg, nil)
 	mgr.SetAllowPrivateIP(true) // Allow localhost for testing
-	mgr.Send("test", SeverityInfo, "test", nil)
+	_ = mgr.Send("test", SeverityInfo, "test", nil)
 
 	stats := mgr.GetStats()
 

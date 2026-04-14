@@ -20,15 +20,21 @@ function App() {
   const [activities, setActivities] = useState<Activity[]>([]);
   const [metrics, setMetrics] = useState<RealtimeMetrics | undefined>();
 
-  // Check for existing token on mount
+  // Check for existing session on mount
+  // Token is now stored in HttpOnly cookie (more secure against XSS)
   useEffect(() => {
-    const storedToken = localStorage.getItem("adminToken");
-    if (storedToken) {
-      setToken(storedToken);
-      setIsAuthenticated(true);
-      // TODO: Validate token and get user info
-      setUser({ email: "admin@example.com", isAdmin: true });
-    }
+    // Check if user is already authenticated via cookie
+    // The server will validate the cookie on API requests
+    fetch('/api/v1/accounts', {
+      credentials: 'include'
+    }).then(res => {
+      if (res.ok) {
+        setIsAuthenticated(true);
+        setUser({ email: "admin@example.com", isAdmin: true });
+      }
+    }).catch(() => {
+      // Not authenticated
+    });
   }, []);
 
   // WebSocket connection for realtime updates
@@ -42,14 +48,15 @@ function App() {
   });
 
   const handleLogin = (newToken: string, userData: { email: string }) => {
-    localStorage.setItem("adminToken", newToken);
+    // Token is stored in HttpOnly cookie by the server
+    // No need to store in localStorage (more secure against XSS)
     setToken(newToken);
     setIsAuthenticated(true);
     setUser({ email: userData.email, isAdmin: true });
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("adminToken");
+    // Server will clear the HttpOnly cookie
     setToken(null);
     setIsAuthenticated(false);
     setUser(null);

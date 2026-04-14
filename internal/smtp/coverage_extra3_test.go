@@ -192,7 +192,7 @@ func TestHandleCommand_STARTTLSDispatch(t *testing.T) {
 		s.HandleCommand("STARTTLS")
 	}()
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp, "502") && !strings.HasPrefix(resp, "503") && !strings.HasPrefix(resp, "220") {
 		t.Errorf("Expected 502/503/220 for STARTTLS, got: %q", resp)
@@ -219,7 +219,7 @@ func TestHandleAuthLOGIN_AuthHandlerError(t *testing.T) {
 		done <- s.HandleCommand("AUTH LOGIN")
 	}()
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp, "334") {
 		t.Fatalf("Expected 334 prompt, got: %q", resp)
@@ -227,7 +227,7 @@ func TestHandleAuthLOGIN_AuthHandlerError(t *testing.T) {
 
 	clientConn.Write([]byte(base64.StdEncoding.EncodeToString([]byte("testuser")) + "\r\n"))
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp2, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp2, "334") {
 		t.Fatalf("Expected 334 password prompt, got: %q", resp2)
@@ -235,7 +235,7 @@ func TestHandleAuthLOGIN_AuthHandlerError(t *testing.T) {
 
 	clientConn.Write([]byte(base64.StdEncoding.EncodeToString([]byte("testpass")) + "\r\n"))
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp3, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp3, "535") {
 		t.Errorf("Expected 535 auth failure when handler returns error, got: %q", resp3)
@@ -265,7 +265,7 @@ func TestHandleAuthPLAIN_AuthHandlerReturnsError(t *testing.T) {
 		done <- s.HandleCommand("AUTH PLAIN " + encoded)
 	}()
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp, "535") {
 		t.Errorf("Expected 535 for auth handler error, got: %q", resp)
@@ -291,7 +291,7 @@ func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 		done <- s.HandleCommand("AUTH LOGIN")
 	}()
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp, "334") {
 		t.Fatalf("Expected 334 prompt, got: %q", resp)
@@ -299,7 +299,7 @@ func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 
 	clientConn.Write([]byte(base64.StdEncoding.EncodeToString([]byte("testuser")) + "\r\n"))
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp2, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp2, "334") {
 		t.Fatalf("Expected 334 password prompt, got: %q", resp2)
@@ -307,7 +307,7 @@ func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 
 	clientConn.Write([]byte(base64.StdEncoding.EncodeToString([]byte("testpass")) + "\r\n"))
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp3, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp3, "235") {
 		t.Errorf("Expected 235 auth success with nil handler, got: %q", resp3)
@@ -363,7 +363,7 @@ func TestHandleDATA_DotAtStartOfLine(t *testing.T) {
 		done <- session.handleDATA()
 	}()
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	reader := bufio.NewReader(clientConn)
 	reader.ReadString('\n') // 354
 
@@ -371,7 +371,7 @@ func TestHandleDATA_DotAtStartOfLine(t *testing.T) {
 
 	<-done
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
 	if !strings.HasPrefix(resp, "250") {
 		t.Errorf("Expected 250 OK, got: %s", resp)
@@ -411,7 +411,7 @@ func TestHandleBDAT_LastWithPipelineHeaders(t *testing.T) {
 		t.Fatalf("handleBDAT returned error: %v", err)
 	}
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 512)
 	n, _ := clientConn.Read(buf)
 	response := string(buf[:n])
@@ -455,7 +455,7 @@ func TestHandleBDAT_MultipleChunksThenLastWithPipeline(t *testing.T) {
 	}
 
 	// Drain 250 response
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 256)
 	clientConn.Read(buf)
 
@@ -470,7 +470,7 @@ func TestHandleBDAT_MultipleChunksThenLastWithPipeline(t *testing.T) {
 		t.Fatalf("handleBDAT chunk2 error: %v", err)
 	}
 
-	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf2 := make([]byte, 512)
 	n, _ := clientConn.Read(buf2)
 	response := string(buf2[:n])

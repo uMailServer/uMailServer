@@ -729,7 +729,7 @@ func TestSignRSAWithNilKey(t *testing.T) {
 			t.Error("Expected panic when signing with nil private key")
 		}
 	}()
-	signRSA(nil, []byte("test data"))
+	_, _ = signRSA(nil, []byte("test data"))
 }
 
 // --- DKIM buildHeader tests ---

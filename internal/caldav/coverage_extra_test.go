@@ -53,13 +53,13 @@ func TestHandleMove_NoOverwrite_Coverage(t *testing.T) {
 	})
 
 	// Create calendar and event
-	server.storage.CreateCalendar("user@example.com", &Calendar{
+	_ = server.storage.CreateCalendar("user@example.com", &Calendar{
 		ID:       "test-cal",
 		Name:     "Test Calendar",
 		Timezone: "UTC",
 	})
 
-	server.storage.SaveEvent("user@example.com", "test-cal", &CalendarEvent{
+	_ = server.storage.SaveEvent("user@example.com", "test-cal", &CalendarEvent{
 		UID:     "event1",
 		Summary: "Test Event",
 	}, "BEGIN:VCALENDAR\nEND:VCALENDAR")
@@ -102,13 +102,13 @@ func TestHandleCopy_InvalidDestination_Coverage(t *testing.T) {
 	})
 
 	// Create calendar and event
-	server.storage.CreateCalendar("user@example.com", &Calendar{
+	_ = server.storage.CreateCalendar("user@example.com", &Calendar{
 		ID:       "test-cal",
 		Name:     "Test Calendar",
 		Timezone: "UTC",
 	})
 
-	server.storage.SaveEvent("user@example.com", "test-cal", &CalendarEvent{
+	_ = server.storage.SaveEvent("user@example.com", "test-cal", &CalendarEvent{
 		UID:     "event1",
 		Summary: "Test Event",
 	}, "BEGIN:VCALENDAR\nEND:VCALENDAR")

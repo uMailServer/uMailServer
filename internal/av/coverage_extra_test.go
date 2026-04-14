@@ -92,7 +92,7 @@ func startPartialChunkServer(t *testing.T, closeAfterData bool) (addr string, cl
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				c.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 				reader := bufio.NewReader(c)
 				line, _ := reader.ReadString('\x00')
 				_ = strings.TrimRight(line, "\x00")
@@ -214,7 +214,7 @@ func TestScanWriteTerminationError(t *testing.T) {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				c.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 				reader := bufio.NewReader(c)
 				line, _ := reader.ReadString('\x00')
 				_ = strings.TrimRight(line, "\x00")

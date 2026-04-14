@@ -73,9 +73,7 @@ func TestOpenDatabaseMultipleTimes(t *testing.T) {
 
 func TestDatabaseStruct(t *testing.T) {
 	database := &Database{}
-	if database == nil {
-		t.Fatal("Failed to create Database instance")
-	}
+	_ = database
 }
 
 func TestDatabaseStructWithPath(t *testing.T) {

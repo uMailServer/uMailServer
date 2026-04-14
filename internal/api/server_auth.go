@@ -2,7 +2,6 @@ package api
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -271,7 +270,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		TOTPCode string `json:"totp_code"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -374,6 +373,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Set JWT as HttpOnly cookie for web clients
+	isSecure := r.TLS != nil
+	http.SetCookie(w, &http.Cookie{
+		Name:     "jwt",
+		Value:    tokenString,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   isSecure,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(s.config.TokenExpiry.Seconds()),
+	})
+
+	// Also return token in JSON for API clients (mobile, desktop)
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"token":     tokenString,
 		"expiresIn": int(s.config.TokenExpiry.Seconds()),
@@ -389,26 +401,42 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.auditLogger.LogLoginSuccess(account.Email, ip)
 }
 
-// handleLogout revokes the current token (adds it to blacklist)
+// handleLogout revokes the current token (adds it to blacklist) and clears the cookie
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	// Get token from Authorization header
-	authHeader := r.Header.Get("Authorization")
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-		s.sendError(w, http.StatusUnauthorized, "invalid authorization header")
-		return
+	// Get token from cookie first, then Authorization header
+	var tokenStr string
+	if cookie, err := r.Cookie("jwt"); err == nil && cookie.Value != "" {
+		tokenStr = cookie.Value
+	} else {
+		// Fall back to Authorization header
+		authHeader := r.Header.Get("Authorization")
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+			tokenStr = parts[1]
+		}
 	}
 
-	tokenStr := parts[1]
+	// Revoke the token by adding it to blacklist (if we have a token)
+	if tokenStr != "" {
+		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
+		s.RevokeToken(tokenHash)
+	}
 
-	// Revoke the token by adding it to blacklist
-	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
-	s.RevokeToken(tokenHash)
+	// Clear the cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "jwt",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
 
 	// Audit logout
 	user := r.Context().Value("user")

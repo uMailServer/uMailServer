@@ -14,7 +14,7 @@ func TestDBForEach(t *testing.T) {
 
 	// ForEach on empty bucket
 	count := 0
-	database.ForEach(BucketDomains, func(key string, value []byte) error {
+	_ = database.ForEach(BucketDomains, func(key string, value []byte) error {
 		count++
 		return nil
 	})
@@ -23,11 +23,11 @@ func TestDBForEach(t *testing.T) {
 	}
 
 	// Create domain and iterate
-	database.CreateDomain(&DomainData{Name: "example.com", MaxAccounts: 10})
-	database.CreateDomain(&DomainData{Name: "test.org", MaxAccounts: 5})
+	_ = database.CreateDomain(&DomainData{Name: "example.com", MaxAccounts: 10})
+	_ = database.CreateDomain(&DomainData{Name: "test.org", MaxAccounts: 5})
 
 	domainCount := 0
-	database.ForEach(BucketDomains, func(key string, value []byte) error {
+	_ = database.ForEach(BucketDomains, func(key string, value []byte) error {
 		domainCount++
 		return nil
 	})
@@ -52,11 +52,11 @@ func TestDBForEachPrefix(t *testing.T) {
 	defer database.Close()
 
 	// Create accounts with same domain
-	database.CreateAccount(&AccountData{Email: "user1@example.com", Domain: "example.com", PasswordHash: "hash"})
-	database.CreateAccount(&AccountData{Email: "admin@test.org", Domain: "test.org", PasswordHash: "hash"})
+	_ = database.CreateAccount(&AccountData{Email: "user1@example.com", Domain: "example.com", PasswordHash: "hash"})
+	_ = database.CreateAccount(&AccountData{Email: "admin@test.org", Domain: "test.org", PasswordHash: "hash"})
 
 	count := 0
-	database.ForEachPrefix(BucketAccounts, "example.com/", func(key string, value []byte) error {
+	_ = database.ForEachPrefix(BucketAccounts, "example.com/", func(key string, value []byte) error {
 		count++
 		return nil
 	})
@@ -66,7 +66,7 @@ func TestDBForEachPrefix(t *testing.T) {
 
 	// Empty prefix
 	emptyCount := 0
-	database.ForEachPrefix(BucketAccounts, "nonexistent.com/", func(key string, value []byte) error {
+	_ = database.ForEachPrefix(BucketAccounts, "nonexistent.com/", func(key string, value []byte) error {
 		emptyCount++
 		return nil
 	})

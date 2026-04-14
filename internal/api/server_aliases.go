@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -75,7 +74,7 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 		IsActive bool   `json:"is_active"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -163,7 +162,7 @@ func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request, alias strin
 		IsActive *bool  `json:"is_active"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

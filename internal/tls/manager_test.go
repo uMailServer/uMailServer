@@ -246,7 +246,7 @@ func TestRenewCertificatesNoAutocert(t *testing.T) {
 	manager, _ := NewManager(config, logger)
 	defer manager.Close()
 
-	err := manager.RenewCertificates(nil)
+	err := manager.RenewCertificates(context.TODO())
 
 	if err == nil {
 		t.Error("Expected error when autocert is not configured")

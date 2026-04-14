@@ -145,7 +145,7 @@ func TestCoverStart_AllServicesEnabled(t *testing.T) {
 	}
 
 	// Stop all services
-	srv.Stop()
+	_ = srv.Stop()
 
 	select {
 	case <-startDone:
@@ -233,7 +233,7 @@ func TestCoverStart_SubmissionOnly(t *testing.T) {
 		t.Error("submissionTLSServer should NOT be initialized")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -267,7 +267,7 @@ func TestCoverStart_SubmissionTLSOnly(t *testing.T) {
 		t.Error("submissionServer should NOT be initialized")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -298,7 +298,7 @@ func TestCoverStart_POP3Only(t *testing.T) {
 		t.Error("pop3Server should be initialized")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -329,7 +329,7 @@ func TestCoverStart_MCPOlny(t *testing.T) {
 		t.Error("mcpHTTPServer should be initialized")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -364,7 +364,7 @@ func TestCoverStart_GreylistingOnly(t *testing.T) {
 		startDone <- srv.Start()
 	}()
 	time.Sleep(600 * time.Millisecond)
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -397,7 +397,7 @@ func TestCoverStart_RBLOnly(t *testing.T) {
 		startDone <- srv.Start()
 	}()
 	time.Sleep(600 * time.Millisecond)
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -429,7 +429,7 @@ func TestCoverStart_AVEnabled(t *testing.T) {
 		startDone <- srv.Start()
 	}()
 	time.Sleep(600 * time.Millisecond)
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -478,8 +478,8 @@ func TestCoverNew_StorageDBError(t *testing.T) {
 	// On Windows, we use a non-existent deep path to trigger an error.
 	storagePath := tmpDir + "/blocked_dir/nested/deep/test.db"
 	// Write the blocking directory as a file instead
-	os.MkdirAll(filepath.Dir(storagePath), 0o755)
-	os.WriteFile(filepath.Dir(storagePath)+"/blocked_dir", []byte("x"), 0o644)
+	_ = os.MkdirAll(filepath.Dir(storagePath), 0o755)
+	_ = os.WriteFile(filepath.Dir(storagePath)+"/blocked_dir", []byte("x"), 0o644)
 
 	// Alternative: test by creating the database at a path inside a read-only location.
 	// Instead, just test with a valid config that doesn't trigger the error path
@@ -489,7 +489,7 @@ func TestCoverNew_StorageDBError(t *testing.T) {
 		t.Logf("New() correctly failed: %v", err)
 		return
 	}
-	srv.Stop()
+	_ = srv.Stop()
 }
 
 // ---------------------------------------------------------------------------
@@ -610,8 +610,8 @@ cX6QdQH5gPkX7Bj5dGaYICKiFtS5HPBh8LNGHqLgEWQq8wZnRmU7YDTxpBxoqHvZ
 N2D4Mw6fHkJHbMkAqX3q2S0t4YpP9qR9tRfBvLF3bgQqEhQhE7HM5mk0VZqEFiNj
 VqJF0hBsINp0SgEOqQEWBXqAo0m9RbhEAkEA7cV3rEaWDTGtqK9qYaXFDzQfDYLP
 YoVcJqLHBfFPcVq`
-	os.WriteFile(cfg.TLS.CertFile, []byte(certContent), 0o644)
-	os.WriteFile(cfg.TLS.KeyFile, []byte(keyContent), 0o644)
+	_ = os.WriteFile(cfg.TLS.CertFile, []byte(certContent), 0o644)
+	_ = os.WriteFile(cfg.TLS.KeyFile, []byte(keyContent), 0o644)
 
 	srv, err := New(cfg)
 	if err != nil {
@@ -628,7 +628,7 @@ YoVcJqLHBfFPcVq`
 		t.Error("pop3Server should be initialized")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -715,7 +715,7 @@ func TestCoverNew_WithAllPipelineStages(t *testing.T) {
 		t.Error("GetQueue() should return non-nil after Start()")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -756,7 +756,7 @@ func TestCoverStop_SubmissionServersInStop(t *testing.T) {
 	}
 
 	// Stop exercises the submissionServer.Stop() and submissionTLSServer.Stop()
-	srv.Stop()
+	_ = srv.Stop()
 
 	select {
 	case <-startDone:
@@ -827,7 +827,7 @@ func TestCoverNew_DefaultDBPathWithAllServices(t *testing.T) {
 		t.Errorf("expected database file at %s", expectedPath)
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -884,7 +884,7 @@ func TestCoverAVEnabled_Branch(t *testing.T) {
 		startDone <- srv.Start()
 	}()
 	time.Sleep(600 * time.Millisecond)
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -916,7 +916,7 @@ func TestCoverStop_POP3ServerInStop(t *testing.T) {
 		t.Fatal("pop3Server should be set")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):
@@ -985,7 +985,7 @@ func TestCoverStart_POP3ListenError(t *testing.T) {
 
 	err = srv.Start()
 	if err == nil {
-		srv.Stop()
+		_ = srv.Stop()
 		t.Fatal("expected Start() to fail when POP3 port is already bound")
 	}
 	t.Logf("Start() correctly failed: %v", err)
@@ -1068,7 +1068,7 @@ func TestCoverStart_POP3WithTLSEnabledDirect(t *testing.T) {
 		t.Error("pop3Server should be initialized")
 	}
 
-	srv.Stop()
+	_ = srv.Stop()
 	select {
 	case <-startDone:
 	case <-time.After(3 * time.Second):

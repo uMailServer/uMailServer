@@ -72,18 +72,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"path", r.URL.Path,
 	)
 
-	// CORS headers
-	corsOrigin := "*"
-	if len(s.config.CorsOrigins) > 0 {
-		origin := r.Header.Get("Origin")
-		for _, allowed := range s.config.CorsOrigins {
-			if allowed == "*" || allowed == origin {
-				corsOrigin = allowed
-				break
-			}
+	// CORS headers - secure by default (no wildcard)
+	corsOrigin := ""
+	origin := r.Header.Get("Origin")
+	for _, allowed := range s.config.CorsOrigins {
+		if allowed == origin {
+			corsOrigin = allowed
+			break
 		}
 	}
-	w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
+	if corsOrigin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
+	}
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 

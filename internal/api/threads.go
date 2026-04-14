@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -352,11 +351,4 @@ func (s *Server) markThreadAsRead(user, mailbox, threadID string) error {
 func (s *Server) deleteThread(user, mailbox, threadID string) error {
 	// This is a placeholder - in a real implementation, we would delete from the database
 	return nil
-}
-
-// decodeJSON decodes JSON from request body (helper function)
-func decodeJSON(r *http.Request, v interface{}) error {
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	return decoder.Decode(v)
 }

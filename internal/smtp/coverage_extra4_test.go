@@ -64,7 +64,7 @@ func TestCoverListenAndServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create listener: %v", err)
 	}
-	go server.Serve(ln)
+	go func() { _ = server.Serve(ln) }()
 	time.Sleep(100 * time.Millisecond)
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -100,7 +100,7 @@ func TestCoverListenAndServeTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create TLS listener: %v", err)
 	}
-	go server.Serve(ln)
+	go func() { _ = server.Serve(ln) }()
 	time.Sleep(100 * time.Millisecond)
 	tlsConn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{
 		InsecureSkipVerify: true,
@@ -510,7 +510,8 @@ func TestCoverServe_AcceptErrorAfterStop(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- server.Serve(ln)
+		_ = server.Serve(ln)
+		done <- nil
 	}()
 	time.Sleep(50 * time.Millisecond)
 	server.Stop()

@@ -77,7 +77,7 @@ func TestLogger_RotateTriggersCleanup(t *testing.T) {
 
 	// Write enough events to trigger rotation
 	for i := 0; i < 50; i++ {
-		logger.Log(Event{
+		_ = logger.Log(Event{
 			Type:    LoginSuccess,
 			User:    "test@example.com",
 			IP:      "192.168.1.1",
@@ -103,7 +103,7 @@ func TestLogger_CleanupWithOldFiles(t *testing.T) {
 
 	// Force cleanup to run (it checks max age internally)
 	// We can't easily test this without mocking time, but we can ensure it doesn't panic
-	logger.Log(Event{
+	_ = logger.Log(Event{
 		Type:    LoginSuccess,
 		User:    "test@example.com",
 		IP:      "192.168.1.1",

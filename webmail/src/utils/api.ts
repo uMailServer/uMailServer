@@ -112,7 +112,9 @@ class API {
   private token: string | null
 
   constructor() {
-    this.token = localStorage.getItem('token')
+    // Token is now stored in HttpOnly cookie by the server
+    // No need to read from localStorage (more secure against XSS)
+    this.token = null
   }
 
   setToken(token: string | null): void {
@@ -127,6 +129,9 @@ class API {
       ...options.headers
     }
 
+    // Token is sent automatically via HttpOnly cookie
+    // No need to set Authorization header for web clients
+    // For API clients that still use Bearer token, we keep the header support
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`
     }
@@ -134,13 +139,13 @@ class API {
     try {
       const response = await fetch(url, {
         ...options,
-        headers
+        headers,
+        credentials: 'include' // Send HttpOnly cookies with requests
       })
 
       if (!response.ok) {
         if (response.status === 401) {
-          localStorage.removeItem('token')
-          localStorage.removeItem('user')
+          // Token is managed by HttpOnly cookie, server will clear it on logout
           window.location.href = '/login'
           return null as T
         }

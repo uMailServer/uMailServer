@@ -48,7 +48,7 @@ func TestSend_ValidServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedHeaders = r.Header
 		buf := bytes.Buffer{}
-		buf.ReadFrom(r.Body)
+		_, _ = buf.ReadFrom(r.Body)
 		receivedBody = buf.Bytes()
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -282,7 +282,7 @@ func TestIsValidWebhookURL_InvalidSchemes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := mgr.isValidWebhookURL(tt.url)
+		got, _ := mgr.isValidWebhookURL(tt.url)
 		if got != tt.want {
 			t.Errorf("isValidWebhookURL(%q) = %v, want %v", tt.url, got, tt.want)
 		}
@@ -304,7 +304,7 @@ func TestIsValidWebhookURL_InvalidHostnames(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := mgr.isValidWebhookURL(tt.url)
+		got, _ := mgr.isValidWebhookURL(tt.url)
 		if got != tt.want {
 			t.Errorf("isValidWebhookURL(%q) = %v, want %v", tt.url, got, tt.want)
 		}
@@ -318,7 +318,8 @@ func TestIsValidWebhookURL_WithPrivateIPAllowed(t *testing.T) {
 
 	// With allowPrivateIP, localhost should be allowed
 	url := "http://localhost/webhook"
-	if !mgr.isValidWebhookURL(url) {
+	valid, _ := mgr.isValidWebhookURL(url)
+	if !valid {
 		t.Errorf("isValidWebhookURL(%q) = false, want true when allowPrivateIP is true", url)
 	}
 }
@@ -327,7 +328,7 @@ func TestIsValidWebhookURL_WithPrivateIPAllowed(t *testing.T) {
 func TestIsValidWebhookURL_EmptyURL(t *testing.T) {
 	mgr, _ := setupTestManager(t)
 
-	if mgr.isValidWebhookURL("") {
+	if valid, _ := mgr.isValidWebhookURL(""); valid {
 		t.Error("isValidWebhookURL(\"\") should return false")
 	}
 }
@@ -335,6 +336,7 @@ func TestIsValidWebhookURL_EmptyURL(t *testing.T) {
 // TestIsValidWebhookURL_ValidURLs tests URL validation with valid URLs.
 func TestIsValidWebhookURL_ValidURLs(t *testing.T) {
 	mgr, _ := setupTestManager(t)
+	mgr.SetAllowPrivateIP(true)
 
 	tests := []string{
 		"https://example.com/webhook",
@@ -343,7 +345,8 @@ func TestIsValidWebhookURL_ValidURLs(t *testing.T) {
 	}
 
 	for _, url := range tests {
-		if !mgr.isValidWebhookURL(url) {
+		valid, _ := mgr.isValidWebhookURL(url)
+		if !valid {
 			t.Errorf("isValidWebhookURL(%q) = false, want true", url)
 		}
 	}
@@ -518,7 +521,7 @@ func TestIsValidWebhookURL_PrivateIPs(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := mgr.isValidWebhookURL(tt.url)
+		got, _ := mgr.isValidWebhookURL(tt.url)
 		if got != tt.want {
 			t.Errorf("isValidWebhookURL(%q) = %v, want %v", tt.url, got, tt.want)
 		}
@@ -530,7 +533,8 @@ func TestIsValidWebhookURL_ParseError(t *testing.T) {
 	mgr, _ := setupTestManager(t)
 
 	// URL with parse error
-	if mgr.isValidWebhookURL("http://[invalid]/webhook") {
+	valid, _ := mgr.isValidWebhookURL("http://[invalid]/webhook")
+	if valid {
 		t.Error("expected isValidWebhookURL to return false for unparseable URL")
 	}
 }

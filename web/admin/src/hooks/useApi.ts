@@ -13,26 +13,19 @@ interface UseApiOptions {
 
 const API_BASE = "/api/v1";
 
-function getToken(): string | null {
-  return localStorage.getItem("adminToken");
-}
-
+// Token is now stored in HttpOnly cookie by the server
+// No need to read from localStorage (more secure against XSS)
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getToken();
-  if (!token) {
-    throw new Error("Not authenticated");
-  }
-
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
       ...options.headers,
     },
+    credentials: "include", // Send HttpOnly cookies with requests
   });
 
   if (!response.ok) {

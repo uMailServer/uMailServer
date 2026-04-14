@@ -45,7 +45,7 @@ func TestMCPServer(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(rr.Body.Bytes(), &resp)
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 
 		if resp["result"] == nil {
 			t.Error("Expected result, got nil")
@@ -69,7 +69,7 @@ func TestMCPServer(t *testing.T) {
 		}
 
 		var resp map[string]interface{}
-		json.Unmarshal(rr.Body.Bytes(), &resp)
+		_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 
 		result, ok := resp["result"].(map[string]interface{})
 		if !ok {
@@ -460,7 +460,7 @@ func TestToolListAccountsNoAccounts(t *testing.T) {
 
 	// Should contain "No accounts found"
 	var resp map[string]interface{}
-	json.Unmarshal(rr.Body.Bytes(), &resp)
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
 	if resp["result"] == nil {
 		t.Error("Expected result")
 	}

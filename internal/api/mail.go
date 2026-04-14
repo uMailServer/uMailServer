@@ -374,7 +374,7 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SendMailRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		h.sendError(w, http.StatusBadRequest, "Invalid request")
 		return
 	}

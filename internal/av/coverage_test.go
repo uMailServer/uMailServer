@@ -108,7 +108,7 @@ func startClosingClamAV(t *testing.T) (addr string, cleanup func()) {
 				defer c.Close()
 				reader := bufio.NewReader(c)
 				// Read the command then close immediately
-				reader.ReadString('\x00')
+				_, _ = reader.ReadString('\x00')
 			}(conn)
 		}
 	}()
@@ -172,7 +172,7 @@ func startSlowClamAV(t *testing.T) (addr string, cleanup func()) {
 			go func(c net.Conn) {
 				defer c.Close()
 				reader := bufio.NewReader(c)
-				reader.ReadString('\x00')
+				_, _ = reader.ReadString('\x00')
 				// Block until test cleanup runs
 				<-ctx.Done()
 			}(conn)
@@ -253,7 +253,7 @@ func startReadCloseClamAV(t *testing.T) (addr string, cleanup func()) {
 			}
 			go func(c net.Conn) {
 				defer c.Close()
-				c.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 				reader := bufio.NewReader(c)
 				line, _ := reader.ReadString('\x00')
 				cmd := strings.TrimRight(line, "\x00")

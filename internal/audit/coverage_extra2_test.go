@@ -54,7 +54,7 @@ func TestRotatingWriter_Cleanup(t *testing.T) {
 		backupPath := logPath + ".20240101-00000" + string(rune('0'+i))
 		os.WriteFile(backupPath, []byte("old log"), 0o644)
 		// Set old mod time
-		os.Chtimes(backupPath, time.Now().Add(-48*time.Hour), time.Now().Add(-48*time.Hour))
+		_ = os.Chtimes(backupPath, time.Now().Add(-48*time.Hour), time.Now().Add(-48*time.Hour))
 	}
 
 	// Trigger cleanup - removes oldest when maxBackups is set

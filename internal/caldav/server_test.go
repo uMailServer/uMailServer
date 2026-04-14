@@ -172,7 +172,7 @@ func TestHandlePropfind_WithCalendars(t *testing.T) {
 		ID:   "test-cal",
 		Name: "Test Calendar",
 	}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	req := httptest.NewRequest("PROPFIND", "/dav/", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -219,7 +219,7 @@ func TestHandlePut(t *testing.T) {
 
 	// Create calendar first
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 VERSION:2.0
@@ -263,7 +263,7 @@ func TestHandlePut_InvalidData(t *testing.T) {
 
 	// Create calendar first
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	invalidData := "This is not iCalendar data"
 
@@ -286,7 +286,7 @@ func TestHandleGet(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 UID:test-event-123
@@ -341,7 +341,7 @@ func TestHandleDelete(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 UID:test-event-123
@@ -375,7 +375,7 @@ func TestHandleReport(t *testing.T) {
 
 	// Create calendar and events
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	for i := 0; i < 3; i++ {
 		icsData := `BEGIN:VCALENDAR
@@ -455,7 +455,7 @@ func TestHandleProppatch(t *testing.T) {
 
 	// Create calendar
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	req := httptest.NewRequest("PROPPATCH", "/dav/calendars/test-cal", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -493,7 +493,7 @@ func TestHandleMove(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 UID:test-event-123
@@ -551,7 +551,7 @@ func TestHandleCopy(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 UID:test-event-123
@@ -955,7 +955,7 @@ func TestHandleMove_InvalidDestinationPath(t *testing.T) {
 
 	// Create calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	req := httptest.NewRequest("MOVE", "/dav/calendars/test-cal/event", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1180,7 +1180,7 @@ func TestHandleReport_InvalidQuery(t *testing.T) {
 
 	// Create calendar
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	invalidBody := "This is not valid XML"
 
@@ -1203,7 +1203,7 @@ func TestHandlePut_InvalidCalendarData(t *testing.T) {
 
 	// Create calendar first
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	// Send PUT with invalid calendar data (missing BEGIN:VCALENDAR)
 	invalidICS := "SUMMARY:Test Event\nDTSTART:20240101T120000Z"
@@ -1245,7 +1245,7 @@ func TestHandleMkCalendar_AlreadyExists(t *testing.T) {
 
 	// Create calendar first
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	// Try to create same calendar again - storage overwrites existing
 	body := `<?xml version="1.0" encoding="UTF-8"?>
@@ -1298,7 +1298,7 @@ func TestHandleReport_EmptyCalendar(t *testing.T) {
 
 	// Create calendar but no events
 	cal := &Calendar{ID: "empty-cal", Name: "Empty Calendar"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	reportBody := `<?xml version="1.0" encoding="utf-8"?>
 <calendar-query xmlns="urn:ietf:params:xml:ns:caldav">
@@ -1330,7 +1330,7 @@ func TestHandleReport_EmptyBody(t *testing.T) {
 
 	// Create calendar
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	// Send empty body
 	req := httptest.NewRequest("REPORT", "/dav/calendars/user@example.com/test-cal", strings.NewReader(""))
@@ -1353,7 +1353,7 @@ func TestHandlePropfind_Depth0(t *testing.T) {
 
 	// Create calendar
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	req := httptest.NewRequest("PROPFIND", "/dav/calendars/user@example.com/test-cal", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1375,7 +1375,7 @@ func TestHandlePropfind_DepthInfinity(t *testing.T) {
 
 	// Create calendar with event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 UID:test-event
@@ -1503,7 +1503,7 @@ func TestHandleMove_DestinationCalendarNotFound(t *testing.T) {
 
 	// Create source calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 UID:test-event
@@ -1534,7 +1534,7 @@ func TestHandleCopy_DestinationCalendarNotFound(t *testing.T) {
 
 	// Create source calendar and event
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
-	server.storage.CreateCalendar("user@example.com", cal)
+	_ = server.storage.CreateCalendar("user@example.com", cal)
 
 	icsData := `BEGIN:VCALENDAR
 UID:test-event

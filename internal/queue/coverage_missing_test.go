@@ -423,9 +423,8 @@ func TestDeliver_MultipleMXServers(t *testing.T) {
 			// First call: reject immediately, second call: accept
 			if callCount == 1 {
 				conn.Close()
-			} else {
-				// Don't handle second connection - let it timeout
 			}
+			// Don't handle second connection - let it timeout
 		}
 	}()
 

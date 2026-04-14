@@ -734,7 +734,7 @@ func TestCoverDeliverLocal_QuotaExceeded(t *testing.T) {
 		Name:     "example.com",
 		IsActive: true,
 	}
-	srv.database.CreateDomain(domain)
+	_ = srv.database.CreateDomain(domain)
 
 	account := &db.AccountData{
 		Domain:       "example.com",
@@ -745,7 +745,7 @@ func TestCoverDeliverLocal_QuotaExceeded(t *testing.T) {
 		QuotaLimit:   100, // Small quota
 		QuotaUsed:    150, // Already exceeded
 	}
-	srv.database.CreateAccount(account)
+	_ = srv.database.CreateAccount(account)
 
 	// Start server to initialize components
 	startDone := make(chan error, 1)
@@ -822,7 +822,7 @@ func TestCoverDeliverLocal_ForwardNoKeep(t *testing.T) {
 		Name:     "example.com",
 		IsActive: true,
 	}
-	srv.database.CreateDomain(domain)
+	_ = srv.database.CreateDomain(domain)
 
 	account := &db.AccountData{
 		Domain:          "example.com",
@@ -833,7 +833,7 @@ func TestCoverDeliverLocal_ForwardNoKeep(t *testing.T) {
 		ForwardTo:       "forward@other.com",
 		ForwardKeepCopy: false, // Don't keep local copy
 	}
-	srv.database.CreateAccount(account)
+	_ = srv.database.CreateAccount(account)
 
 	// Start server to initialize components
 	startDone := make(chan error, 1)

@@ -595,21 +595,25 @@ func (s *Server) activeRequests() int {
 	return 0
 }
 
+// decodeJSON decodes JSON from request body with DisallowUnknownFields
+// to reject requests with unknown fields
+func decodeJSON(r *http.Request, v interface{}) error {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(v)
+}
+
 // Middleware
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		allowed := ""
-		if len(s.config.CorsOrigins) > 0 {
-			for _, o := range s.config.CorsOrigins {
-				if o == origin || o == "*" {
-					allowed = o
-					break
-				}
+		for _, o := range s.config.CorsOrigins {
+			if o == origin {
+				allowed = o
+				break
 			}
-		} else {
-			allowed = "*"
 		}
 		if allowed != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allowed)
@@ -634,20 +638,30 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Get token from Authorization header
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			s.sendError(w, http.StatusUnauthorized, "missing authorization header")
-			return
+		// Get token from HttpOnly cookie first (preferred for web clients)
+		var tokenStr string
+		if cookie, err := r.Cookie("jwt"); err == nil && cookie.Value != "" {
+			tokenStr = cookie.Value
+		} else {
+			// Fall back to Authorization header (for API clients)
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				s.sendError(w, http.StatusUnauthorized, "missing authorization")
+				return
+			}
+
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+				s.sendError(w, http.StatusUnauthorized, "invalid authorization header format")
+				return
+			}
+			tokenStr = parts[1]
 		}
 
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			s.sendError(w, http.StatusUnauthorized, "invalid authorization header format")
+		if tokenStr == "" {
+			s.sendError(w, http.StatusUnauthorized, "missing token")
 			return
 		}
-
-		tokenStr := parts[1]
 
 		// Validate token
 		token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {

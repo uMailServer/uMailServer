@@ -232,11 +232,7 @@ func TestBuildAutoconfig_WithProvider(t *testing.T) {
 	handler.provider = &mockProvider{host: "mail.example.com"}
 
 	config := handler.buildAutoconfig("example.com")
-	if config == nil {
-		t.Fatal("buildAutoconfig() returned nil")
-	}
-
-	if len(config.Providers) != 1 {
+	if config == nil || len(config.Providers) != 1 {
 		t.Errorf("Providers length = %d, want 1", len(config.Providers))
 	}
 }

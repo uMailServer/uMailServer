@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -88,7 +87,7 @@ func (s *Server) handleSetVacation(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request body
 	var req VacationConfig
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

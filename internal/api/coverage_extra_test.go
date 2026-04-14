@@ -651,7 +651,7 @@ func TestHandleStats_WithData(t *testing.T) {
 		t.Errorf("Expected 200, got %d", rec.Code)
 	}
 	var result map[string]interface{}
-	json.NewDecoder(rec.Body).Decode(&result)
+	_ = json.NewDecoder(rec.Body).Decode(&result)
 	if result["domains"] != 1.0 {
 		t.Errorf("Expected domains=1, got %v", result["domains"])
 	}
@@ -666,6 +666,7 @@ func TestFullRouter_OptionsPreflight(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
+	// Test OPTIONS request without matching origin (secure default - no CORS headers)
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/domains", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
@@ -673,8 +674,20 @@ func TestFullRouter_OptionsPreflight(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected 200 for OPTIONS, got %d", rec.Code)
 	}
-	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("Expected CORS header")
+	// No CORS header should be set when no origins configured (secure default)
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("Should not have CORS header when no origins configured")
+	}
+
+	// Test with configured matching origin
+	server.config.CorsOrigins = []string{"https://example.com"}
+	req = httptest.NewRequest(http.MethodOptions, "/api/v1/domains", nil)
+	req.Header.Set("Origin", "https://example.com")
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
+		t.Error("Expected matching CORS header when origin configured")
 	}
 }
 
@@ -1723,7 +1736,7 @@ func TestCorsMiddleware_WildcardOrigin(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	// Test with wildcard CORS origin
+	// Test that wildcard CORS origin is NOT allowed (secure by default)
 	server.config.CorsOrigins = []string{"*"}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/domains", nil)
@@ -1731,9 +1744,27 @@ func TestCorsMiddleware_WildcardOrigin(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
-	// Should have CORS headers
-	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-		t.Error("Wildcard CORS origin not set")
+	// Wildcard "*" should NOT be allowed - no CORS header should be set
+	if rec.Header().Get("Access-Control-Allow-Origin") == "*" {
+		t.Error("Wildcard CORS origin should not be allowed for security")
+	}
+}
+
+func TestCorsMiddleware_NoConfiguredOrigins(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	// Test with no CORS origins configured - secure default
+	server.config.CorsOrigins = []string{}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/domains", nil)
+	req.Header.Set("Origin", "https://any-origin.com")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	// No CORS header should be set when no origins configured
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Error("CORS origin should not be set when no origins configured")
 	}
 }
 

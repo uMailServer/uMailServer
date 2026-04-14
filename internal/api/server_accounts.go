@@ -2,7 +2,6 @@ package api
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -134,7 +133,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		IsAdmin  bool   `json:"is_admin"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -249,7 +248,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		VacationSettings string `json:"vacation_settings"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

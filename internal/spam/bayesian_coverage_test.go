@@ -102,7 +102,7 @@ func TestClassifier_TrainHam(t *testing.T) {
 	}
 
 	// Verify tokens are in the bucket directly
-	db.View(func(tx *bbolt.Tx) error {
+	_ = db.View(func(tx *bbolt.Tx) error {
 		hamBucket := tx.Bucket([]byte(HamBucket))
 		if hamBucket == nil {
 			t.Fatal("expected HamBucket to exist")
@@ -132,8 +132,8 @@ func TestClassifier_GetTokenFrequency(t *testing.T) {
 	}
 
 	tokenizer := NewTokenizer()
-	classifier.TrainHam(tokenizer.Tokenize("hello world test email"))
-	classifier.TrainHam(tokenizer.Tokenize("hello world another email"))
+	_ = classifier.TrainHam(tokenizer.Tokenize("hello world test email"))
+	_ = classifier.TrainHam(tokenizer.Tokenize("hello world another email"))
 
 	hamCount, spamCount, err := classifier.GetTokenFrequency("hello")
 	if err != nil {
@@ -227,8 +227,8 @@ func TestClassifier_Train_DuplicateTokens(t *testing.T) {
 	}
 
 	tokenizer := NewTokenizer()
-	classifier.TrainHam(tokenizer.Tokenize("hello world"))
-	classifier.TrainHam(tokenizer.Tokenize("hello world"))
+	_ = classifier.TrainHam(tokenizer.Tokenize("hello world"))
+	_ = classifier.TrainHam(tokenizer.Tokenize("hello world"))
 
 	hamCount, _, err := classifier.GetTokenFrequency("hello")
 	if err != nil {
@@ -469,13 +469,15 @@ func TestClassifier_Classify_HighSpamScore(t *testing.T) {
 	defer db.Close()
 
 	classifier := NewClassifier(db)
-	classifier.Initialize()
+	if err := classifier.Initialize(); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
 
 	tokenizer := NewTokenizer()
 	for i := 0; i < 10; i++ {
-		classifier.TrainSpam(tokenizer.Tokenize("URGENT click here prize winner claim now"))
+		_ = classifier.TrainSpam(tokenizer.Tokenize("URGENT click here prize winner claim now"))
 	}
-	classifier.TrainHam(tokenizer.Tokenize("hello meeting tomorrow"))
+	_ = classifier.TrainHam(tokenizer.Tokenize("hello meeting tomorrow"))
 
 	result, err := classifier.Classify([]string{"urgent", "click", "prize", "winner"})
 	if err != nil {
@@ -495,7 +497,9 @@ func TestClassifier_Classify_HighHamScore(t *testing.T) {
 	defer db.Close()
 
 	classifier := NewClassifier(db)
-	classifier.Initialize()
+	if err := classifier.Initialize(); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
 
 	tokenizer := NewTokenizer()
 	for i := 0; i < 10; i++ {
@@ -521,7 +525,9 @@ func TestCountAllTokens(t *testing.T) {
 	defer db.Close()
 
 	classifier := NewClassifier(db)
-	classifier.Initialize()
+	if err := classifier.Initialize(); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
 
 	tokenizer := NewTokenizer()
 	classifier.TrainHam(tokenizer.Tokenize("one two three four five"))

@@ -188,8 +188,8 @@ func (e *SMIMEEncryptor) EncryptMessage(msg []byte, from, to string) ([]byte, er
 		return nil, fmt.Errorf("failed to generate session key: %w", err)
 	}
 
-	// Encrypt the session key with RSA
-	encryptedKey, err := rsa.EncryptPKCS1v15(rand.Reader, publicKey, sessionKey)
+	// Encrypt the session key with RSA using OAEP (more secure than PKCS1v15)
+	encryptedKey, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, publicKey, sessionKey, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt session key: %w", err)
 	}
@@ -271,8 +271,8 @@ func (d *SMIMEDecryptor) DecryptMessage(msg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("signing key is not RSA private key")
 	}
 
-	// Decrypt the session key
-	sessionKey, err := rsa.DecryptPKCS1v15(rand.Reader, privateKey, encryptedKey)
+	// Decrypt the session key using OAEP
+	sessionKey, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedKey, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt session key: %w", err)
 	}

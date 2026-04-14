@@ -217,8 +217,8 @@ func TestManager_StoreScript_Invalid(t *testing.T) {
 func TestManager_StoreScript_Update(t *testing.T) {
 	m := NewManager()
 
-	m.StoreScript("user1", "testscript", "keep;")
-	m.StoreScript("user1", "testscript", "discard;")
+	_ = m.StoreScript("user1", "testscript", "keep;")
+	_ = m.StoreScript("user1", "testscript", "discard;")
 
 	stored := m.scripts["user1"]["testscript"]
 	if stored.Source != "discard;" {
@@ -239,7 +239,7 @@ func TestManager_GetScript_UserNotFound(t *testing.T) {
 
 func TestManager_SetActiveScriptByName(t *testing.T) {
 	m := NewManager()
-	m.StoreScript("user1", "script1", "keep;")
+	_ = m.StoreScript("user1", "script1", "keep;")
 	m.StoreScript("user1", "script2", "keep;")
 
 	err := m.SetActiveScriptByName("user1", "script1")
@@ -265,7 +265,7 @@ func TestManager_SetActiveScriptByName_UserNotFound(t *testing.T) {
 
 func TestManager_SetActiveScriptByName_ScriptNotFound(t *testing.T) {
 	m := NewManager()
-	m.StoreScript("user1", "script1", "keep;")
+	_ = m.StoreScript("user1", "script1", "keep;")
 
 	err := m.SetActiveScriptByName("user1", "nonexistent")
 	if err == nil {
@@ -276,7 +276,7 @@ func TestManager_SetActiveScriptByName_ScriptNotFound(t *testing.T) {
 func TestManager_GetActiveScript(t *testing.T) {
 	m := NewManager()
 	m.StoreScript("user1", "myscript", "keep;")
-	m.SetActiveScriptByName("user1", "myscript")
+	_ = m.SetActiveScriptByName("user1", "myscript")
 
 	script, ok := m.GetActiveScript("user1")
 	if !ok {
@@ -289,7 +289,7 @@ func TestManager_GetActiveScript(t *testing.T) {
 
 func TestManager_GetActiveScript_NoActive(t *testing.T) {
 	m := NewManager()
-	m.StoreScript("user1", "script1", "keep;")
+	_ = m.StoreScript("user1", "script1", "keep;")
 
 	script, ok := m.GetActiveScript("user1")
 	if ok {
@@ -315,7 +315,7 @@ func TestManager_GetActiveScript_UserNotFound(t *testing.T) {
 func TestManager_HasActiveScript(t *testing.T) {
 	m := NewManager()
 	m.StoreScript("user1", "myscript", "keep;")
-	m.SetActiveScriptByName("user1", "myscript")
+	_ = m.SetActiveScriptByName("user1", "myscript")
 
 	if !m.HasActiveScript("user1") {
 		t.Error("Expected HasActiveScript to return true")

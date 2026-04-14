@@ -35,7 +35,7 @@ func TestWebhookManager(t *testing.T) {
 		}
 
 		var webhook Webhook
-		json.Unmarshal(rr.Body.Bytes(), &webhook)
+		_ = json.Unmarshal(rr.Body.Bytes(), &webhook)
 
 		if webhook.URL != req.URL {
 			t.Errorf("Expected URL %s, got %s", req.URL, webhook.URL)
@@ -56,7 +56,7 @@ func TestWebhookManager(t *testing.T) {
 		}
 
 		var result map[string]interface{}
-		json.Unmarshal(rr.Body.Bytes(), &result)
+		_ = json.Unmarshal(rr.Body.Bytes(), &result)
 
 		if _, ok := result["webhooks"]; !ok {
 			t.Error("Expected webhooks in response")

@@ -168,7 +168,7 @@ func TestLogger_Rotation(t *testing.T) {
 
 	// Write enough events to trigger rotation
 	for i := 0; i < 100; i++ {
-		logger.Log(Event{
+		_ = logger.Log(Event{
 			Type:    LoginSuccess,
 			User:    "test@example.com",
 			IP:      "192.168.1.1",

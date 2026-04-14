@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"go.etcd.io/bbolt"
+	boltErr "go.etcd.io/bbolt/errors"
 )
 
 func setupTestDB(t *testing.T) *bbolt.DB {
@@ -155,7 +156,7 @@ func TestMigrator_MigrateWithError(t *testing.T) {
 		Version:     "001",
 		Description: "Failing migration",
 		Up: func(tx *bbolt.Tx) error {
-			return bbolt.ErrDatabaseNotOpen
+			return boltErr.ErrDatabaseNotOpen
 		},
 	})
 

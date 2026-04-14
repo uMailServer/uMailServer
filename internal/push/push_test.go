@@ -140,7 +140,7 @@ func TestGetUserSubscriptions(t *testing.T) {
 			P256dh:   "test-key",
 			Auth:     "test-auth",
 		}
-		service.Subscribe("user@example.com", sub)
+		_ = service.Subscribe("user@example.com", sub)
 	}
 
 	// Now should return 3 subscriptions
@@ -160,7 +160,7 @@ func TestUnsubscribe(t *testing.T) {
 		P256dh:   "test-key",
 		Auth:     "test-auth",
 	}
-	service.Subscribe("user@example.com", sub)
+	_ = service.Subscribe("user@example.com", sub)
 
 	// Verify subscription exists
 	subs := service.GetUserSubscriptions("user@example.com")
@@ -201,7 +201,7 @@ func TestUnsubscribe_WrongUser(t *testing.T) {
 		P256dh:   "test-key",
 		Auth:     "test-auth",
 	}
-	service.Subscribe("user@example.com", sub)
+	_ = service.Subscribe("user@example.com", sub)
 
 	// Try to unsubscribe with different user
 	err := service.Unsubscribe("other@example.com", "test-sub-id")
@@ -224,7 +224,7 @@ func TestUpdateDeviceInfo(t *testing.T) {
 			OS:         "Android",
 		},
 	}
-	service.Subscribe("user@example.com", sub)
+	_ = service.Subscribe("user@example.com", sub)
 
 	newInfo := DeviceInfo{
 		DeviceType: "desktop",
@@ -321,7 +321,7 @@ func TestGetStats(t *testing.T) {
 	}
 
 	for _, sub := range subs {
-		service.Subscribe("user@example.com", sub)
+		_ = service.Subscribe("user@example.com", sub)
 	}
 
 	stats := service.GetStats()
@@ -471,7 +471,7 @@ func TestSendNewMailNotification(t *testing.T) {
 		P256dh:   "test-p256dh",
 		Auth:     "test-auth",
 	}
-	service.Subscribe("user@example.com", sub)
+	_ = service.Subscribe("user@example.com", sub)
 
 	// This will fail due to invalid endpoint, but tests the code path
 	err := service.SendNewMailNotification("user@example.com", "sender@test.com", "Test Subject", "Test preview")
@@ -733,7 +733,7 @@ func TestUnsubscribe_DeleteFileError(t *testing.T) {
 		P256dh:   "test-key",
 		Auth:     "test-auth",
 	}
-	service.Subscribe("user@example.com", sub)
+	_ = service.Subscribe("user@example.com", sub)
 
 	// Verify subscription exists
 	subs := service.GetUserSubscriptions("user@example.com")

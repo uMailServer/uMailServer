@@ -173,7 +173,7 @@ func TestCardDAVHandlePropfindWithAddressbooks(t *testing.T) {
 		ID:   "test-ab",
 		Name: "Test Addressbook",
 	}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	req := httptest.NewRequest("PROPFIND", "/dav/", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -265,7 +265,7 @@ UID:test-contact-123
 FN:John Doe
 END:VCARD`
 	contact := &Contact{UID: "test-contact-123"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
 
 	req := httptest.NewRequest("GET", "/dav/addressbooks/test-ab/test-contact-123.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -317,7 +317,7 @@ UID:test-contact-123
 FN:John Doe
 END:VCARD`
 	contact := &Contact{UID: "test-contact-123"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
 
 	req := httptest.NewRequest("DELETE", "/dav/addressbooks/test-ab/test-contact-123.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -338,7 +338,7 @@ func TestCardDAVHandleReport(t *testing.T) {
 
 	// Create addressbook and contacts
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	for i := 0; i < 3; i++ {
 		vcardData := `BEGIN:VCARD
@@ -346,7 +346,7 @@ UID:contact-` + string(rune('a'+i)) + `
 FN:Contact ` + string(rune('A'+i)) + `
 END:VCARD`
 		contact := &Contact{UID: "contact-" + string(rune('a'+i))}
-		server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
+		_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
 	}
 
 	reportBody := `<?xml version="1.0" encoding="utf-8"?>
@@ -397,7 +397,7 @@ func TestCardDAVHandleProppatch(t *testing.T) {
 
 	// Create addressbook
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	proppatchBody := `<?xml version="1.0"?>
 <propertyupdate xmlns="DAV:">
@@ -427,14 +427,14 @@ func TestCardDAVHandleMove(t *testing.T) {
 
 	// Create addressbook and contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcardData := `BEGIN:VCARD
 UID:test-contact-123
 FN:John Doe
 END:VCARD`
 	contact := &Contact{UID: "test-contact-123"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
 
 	req := httptest.NewRequest("MOVE", "/dav/addressbooks/test-ab/test-contact-123.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -473,14 +473,14 @@ func TestCardDAVHandleCopy(t *testing.T) {
 
 	// Create addressbook and contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcardData := `BEGIN:VCARD
 UID:test-contact-123
 FN:John Doe
 END:VCARD`
 	contact := &Contact{UID: "test-contact-123"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
 
 	req := httptest.NewRequest("COPY", "/dav/addressbooks/test-ab/test-contact-123.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -763,7 +763,7 @@ func TestCardDAVHandleDelete_NotFound(t *testing.T) {
 
 	// Create addressbook but not contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	req := httptest.NewRequest("DELETE", "/dav/addressbooks/test-ab/nonexistent.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -843,7 +843,7 @@ func TestCardDAVHandleProppatch_NoBody(t *testing.T) {
 
 	// Create addressbook
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	// Send PROPPATCH without body
 	req := httptest.NewRequest("PROPPATCH", "/dav/addressbooks/test-ab/", nil)
@@ -867,14 +867,14 @@ func TestCardDAVHandleCopy_Overwrite(t *testing.T) {
 
 	// Create addressbook and contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcardData := `BEGIN:VCARD
 UID:test-contact
 FN:John Doe
 END:VCARD`
 	contact := &Contact{UID: "test-contact"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
 
 	// Copy to same location (overwrite)
 	req := httptest.NewRequest("COPY", "/dav/addressbooks/test-ab/test-contact.vcf", nil)
@@ -969,7 +969,7 @@ func TestCardDAVHandlePut_UpdateExisting(t *testing.T) {
 
 	// Create addressbook and contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcardData := `BEGIN:VCARD
 UID:test-contact
@@ -977,7 +977,7 @@ FN:John Doe
 EMAIL:john@example.com
 END:VCARD`
 	contact := &Contact{UID: "test-contact"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcardData)
 
 	// Update contact
 	updatedVCard := `BEGIN:VCARD
@@ -1062,7 +1062,7 @@ func TestCardDAVHandleMove_SourceNotFound(t *testing.T) {
 
 	// Create addressbook but not the contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	req := httptest.NewRequest("MOVE", "/dav/addressbooks/test-ab/nonexistent.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1084,7 +1084,7 @@ func TestCardDAVHandleCopy_SourceNotFound(t *testing.T) {
 
 	// Create addressbook but not the contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	req := httptest.NewRequest("COPY", "/dav/addressbooks/test-ab/nonexistent.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1106,7 +1106,7 @@ func TestCardDAVHandlePut_InvalidVCard_NoBegin(t *testing.T) {
 
 	// Create addressbook
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	// Send invalid vCard - missing BEGIN
 	vcard := `UID:test-contact
@@ -1132,7 +1132,7 @@ func TestCardDAVHandlePut_InvalidVCard_NoUID(t *testing.T) {
 
 	// Create addressbook
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	// Send vCard without explicit UID - server may accept it or use path-based UID
 	vcard := `BEGIN:VCARD
@@ -1159,7 +1159,7 @@ func TestCardDAVHandleGet_NotFoundAtStorage(t *testing.T) {
 
 	// Create addressbook but not the contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	req := httptest.NewRequest("GET", "/dav/addressbooks/test-ab/nonexistent.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1225,7 +1225,7 @@ func TestCardDAVHandlePropfind_Depth0(t *testing.T) {
 
 	// Create addressbook
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	req := httptest.NewRequest("PROPFIND", "/dav/addressbooks/", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1247,14 +1247,14 @@ func TestCardDAVHandlePropfind_DepthInfinity(t *testing.T) {
 
 	// Create addressbook with contacts
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcard := `BEGIN:VCARD
 UID:test-contact
 FN:John Doe
 END:VCARD`
 	contact := &Contact{UID: "test-contact"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
 
 	req := httptest.NewRequest("PROPFIND", "/dav/addressbooks/", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1276,7 +1276,7 @@ func TestCardDAVHandleProppatch_WithBody(t *testing.T) {
 
 	// Create addressbook
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <D:propertyupdate xmlns:D="DAV:">
@@ -1324,7 +1324,7 @@ func TestCardDAVHandleMkCol_WithContact(t *testing.T) {
 
 	// Create addressbook first
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	// Add a contact via PUT
 	vcard := `BEGIN:VCARD
@@ -1352,7 +1352,7 @@ func TestCardDAVHandleProppatch_RemoveProperty(t *testing.T) {
 
 	// Create addressbook with description
 	ab := &Addressbook{ID: "test-ab", Name: "Test", Description: "Original Description"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <D:propertyupdate xmlns:D="DAV:">
@@ -1384,7 +1384,7 @@ func TestCardDAVHandleReport_MultipleContacts(t *testing.T) {
 
 	// Create addressbook with multiple contacts
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	for i := 0; i < 3; i++ {
 		vcard := fmt.Sprintf(`BEGIN:VCARD
@@ -1392,7 +1392,7 @@ UID:contact-%d
 FN:Contact %d
 END:VCARD`, i, i)
 		contact := &Contact{UID: fmt.Sprintf("contact-%d", i)}
-		server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
+		_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
 	}
 
 	reportBody := `<?xml version="1.0" encoding="utf-8"?>
@@ -1452,14 +1452,14 @@ func TestCardDAVHandlePropfind_Depth1OnAddressbook(t *testing.T) {
 
 	// Create addressbook with contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcard := `BEGIN:VCARD
 UID:test-contact
 FN:Test Contact
 END:VCARD`
 	contact := &Contact{UID: "test-contact"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
 
 	req := httptest.NewRequest("PROPFIND", "/dav/addressbooks/test-ab", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1487,14 +1487,14 @@ func TestCardDAVHandleDelete_ThenGet(t *testing.T) {
 
 	// Create addressbook and contact
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcard := `BEGIN:VCARD
 UID:test-contact
 FN:Test Contact
 END:VCARD`
 	contact := &Contact{UID: "test-contact"}
-	server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
+	_ = server.storage.SaveContact("user@example.com", "test-ab", contact, vcard)
 
 	// Delete the contact
 	req := httptest.NewRequest("DELETE", "/dav/addressbooks/test-ab/test-contact.vcf", nil)
@@ -1579,7 +1579,7 @@ func TestCardDAVHandlePut_NoContentType(t *testing.T) {
 
 	// Create addressbook
 	ab := &Addressbook{ID: "test-ab", Name: "Test"}
-	server.storage.CreateAddressbook("user@example.com", ab)
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	vcard := `BEGIN:VCARD
 UID:test-contact
