@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 // DMARCResult represents the result of DMARC evaluation
@@ -73,6 +76,76 @@ type DMARCRecord struct {
 type DMARCEvaluator struct {
 	resolver DNSResolver
 	clock    func() time.Time
+	cache    *dmarcCache
+}
+
+// dmarcCacheEntry represents a cached DMARC record
+type dmarcCacheEntry struct {
+	record    *DMARCRecord
+	expiresAt time.Time
+}
+
+// dmarcCache caches DMARC lookup results
+type dmarcCache struct {
+	entries map[string]*dmarcCacheEntry
+	mu      sync.RWMutex
+	ttl     time.Duration
+	maxSize int
+}
+
+// newDMARCCache creates a new DMARC cache
+func newDMARCCache() *dmarcCache {
+	return &dmarcCache{
+		entries: make(map[string]*dmarcCacheEntry),
+		ttl:     5 * time.Minute,
+		maxSize: 10000,
+	}
+}
+
+// get retrieves a cached record
+func (c *dmarcCache) get(domain string) (*DMARCRecord, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	entry, ok := c.entries[domain]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+	return entry.record, true
+}
+
+// set stores a record in the cache
+func (c *dmarcCache) set(domain string, record *DMARCRecord) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Evict oldest if at capacity
+	if len(c.entries) >= c.maxSize {
+		c.evictOldest()
+	}
+
+	c.entries[domain] = &dmarcCacheEntry{
+		record:    record,
+		expiresAt: time.Now().Add(c.ttl),
+	}
+}
+
+// evictOldest removes expired entries, then random entries if still full
+func (c *dmarcCache) evictOldest() {
+	now := time.Now()
+	for domain, entry := range c.entries {
+		if now.After(entry.expiresAt) {
+			delete(c.entries, domain)
+		}
+	}
+
+	// If still at capacity, remove random entry
+	if len(c.entries) >= c.maxSize {
+		for domain := range c.entries {
+			delete(c.entries, domain)
+			break
+		}
+	}
 }
 
 // DMARCEvaluation holds the results of DMARC evaluation
@@ -90,11 +163,20 @@ func NewDMARCEvaluator(resolver DNSResolver) *DMARCEvaluator {
 	return &DMARCEvaluator{
 		resolver: resolver,
 		clock:    time.Now,
+		cache:    newDMARCCache(),
 	}
 }
 
 // Evaluate evaluates DMARC for the given message
 func (e *DMARCEvaluator) Evaluate(ctx context.Context, fromDomain string, spfResult SPFResult, spfDomain string, dkimResult DKIMResult, dkimDomain string) (*DMARCEvaluation, error) {
+	// Check cache first
+	if record, ok := e.cache.get(fromDomain); ok {
+		metrics.Get().DMARCCacheHit()
+		return e.evaluateWithRecord(fromDomain, spfResult, spfDomain, dkimResult, dkimDomain, record)
+	}
+
+	metrics.Get().DMARCCacheMiss()
+
 	// Look up DMARC record
 	record, err := e.lookupDMARC(ctx, fromDomain)
 	if err != nil {
@@ -105,7 +187,26 @@ func (e *DMARCEvaluator) Evaluate(ctx context.Context, fromDomain string, spfRes
 				Explanation: "DNS lookup failed",
 			}, nil
 		}
-		// No DMARC record found
+		// No DMARC record found - cache negative result
+		e.cache.set(fromDomain, nil)
+		return &DMARCEvaluation{
+			Result:      DMARCNone,
+			Policy:      DMARCPolicyNone,
+			Domain:      fromDomain,
+			Explanation: "No DMARC record found",
+		}, nil
+	}
+
+	// Cache the record
+	e.cache.set(fromDomain, record)
+
+	return e.evaluateWithRecord(fromDomain, spfResult, spfDomain, dkimResult, dkimDomain, record)
+}
+
+// evaluateWithRecord evaluates DMARC using a cached or looked-up record
+func (e *DMARCEvaluator) evaluateWithRecord(fromDomain string, spfResult SPFResult, spfDomain string, dkimResult DKIMResult, dkimDomain string, record *DMARCRecord) (*DMARCEvaluation, error) {
+	// Handle negative cache entry (nil record means no DMARC record found)
+	if record == nil {
 		return &DMARCEvaluation{
 			Result:      DMARCNone,
 			Policy:      DMARCPolicyNone,

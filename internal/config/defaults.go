@@ -168,6 +168,15 @@ func DefaultConfig() *Config {
 			Bind:    "127.0.0.1",
 			Path:    "/metrics",
 		},
+		Tracing: TracingConfig{
+			Enabled:      false,
+			ServiceName:  "umailserver",
+			Exporter:     "noop",
+			OTLPEndpoint: "localhost:4317",
+			Environment:  "production",
+			Attributes:   map[string]string{},
+			SampleRate:   1.0,
+		},
 		Database: DatabaseConfig{
 			Path: "/var/lib/umailserver/db",
 		},

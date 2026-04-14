@@ -31,6 +31,7 @@ import (
 	"github.com/umailserver/umailserver/internal/smtp"
 	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/tls"
+	"github.com/umailserver/umailserver/internal/tracing"
 	"github.com/umailserver/umailserver/internal/webhook"
 )
 
@@ -57,6 +58,7 @@ type Server struct {
 	mcpHTTPServer     *http.Server
 	healthMonitor     *health.Monitor
 	rateLimiter       *ratelimit.RateLimiter
+	tracingProvider   *tracing.Provider
 	manageSieveServer *sieve.ManageSieveServer
 	caldavServer      *caldav.Server
 	caldavHTTPServer  *http.Server
@@ -122,11 +124,26 @@ func New(cfg *config.Config) (*Server, error) {
 
 	logger := slog.New(logHandler)
 
+	// Initialize distributed tracing
+	tracingProvider, err := tracing.NewProvider(tracing.Config{
+		Enabled:      cfg.Tracing.Enabled,
+		ServiceName:  cfg.Tracing.ServiceName,
+		Exporter:     cfg.Tracing.Exporter,
+		OTLPEndpoint: cfg.Tracing.OTLPEndpoint,
+		Environment:  cfg.Tracing.Environment,
+		Attributes:   cfg.Tracing.Attributes,
+		SampleRate:   cfg.Tracing.SampleRate,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize tracing: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &Server{
 		config:          cfg,
 		logger:          logger,
+		tracingProvider: tracingProvider,
 		ctx:             ctx,
 		cancel:          cancel,
 		sieveManager:    sieve.NewManager(),

@@ -18,6 +18,10 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/umailserver/umailserver/internal/metrics"
 )
 
 // DKIMResult represents the result of DKIM verification
@@ -107,12 +111,87 @@ func NewDKIMSignerEd25519(resolver DNSResolver, privateKey ed25519.PrivateKey, d
 // DKIMVerifier handles DKIM verification
 type DKIMVerifier struct {
 	resolver DNSResolver
+	cache    *dkimCache
+}
+
+// dkimCacheEntry represents a cached DKIM public key
+type dkimCacheEntry struct {
+	key        *rsa.PublicKey
+	ed25519Key ed25519.PublicKey
+	expiresAt  time.Time
+}
+
+// dkimCache caches DKIM public key lookups
+type dkimCache struct {
+	entries map[string]*dkimCacheEntry
+	mu      sync.RWMutex
+	ttl     time.Duration
+	maxSize int
+}
+
+// newDKIMCache creates a new DKIM cache
+func newDKIMCache() *dkimCache {
+	return &dkimCache{
+		entries: make(map[string]*dkimCacheEntry),
+		ttl:     5 * time.Minute,
+		maxSize: 10000,
+	}
+}
+
+// get retrieves a cached key
+func (c *dkimCache) get(selector, domain string) (*rsa.PublicKey, ed25519.PublicKey, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	key := selector + "._domainkey." + domain
+	entry, ok := c.entries[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil, nil, false
+	}
+	return entry.key, entry.ed25519Key, true
+}
+
+// set stores a key in the cache
+func (c *dkimCache) set(selector, domain string, rsaKey *rsa.PublicKey, ed25519Key ed25519.PublicKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Evict oldest if at capacity
+	if len(c.entries) >= c.maxSize {
+		c.evictOldest()
+	}
+
+	key := selector + "._domainkey." + domain
+	c.entries[key] = &dkimCacheEntry{
+		key:        rsaKey,
+		ed25519Key: ed25519Key,
+		expiresAt:  time.Now().Add(c.ttl),
+	}
+}
+
+// evictOldest removes expired entries, then random entries if still full
+func (c *dkimCache) evictOldest() {
+	now := time.Now()
+	for key, entry := range c.entries {
+		if now.After(entry.expiresAt) {
+			delete(c.entries, key)
+		}
+	}
+
+	// If still at capacity, remove random entry
+	if len(c.entries) >= c.maxSize {
+		for key := range c.entries {
+			delete(c.entries, key)
+			break
+		}
+	}
 }
 
 // NewDKIMVerifier creates a new DKIM verifier
 func NewDKIMVerifier(resolver DNSResolver) *DKIMVerifier {
 	return &DKIMVerifier{
 		resolver: resolver,
+		cache:    newDKIMCache(),
 	}
 }
 
@@ -668,6 +747,20 @@ func verifyEd25519Signature(publicKey ed25519.PublicKey, data []byte, signatureB
 
 // fetchPublicKey fetches the DKIM public key from DNS
 func (v *DKIMVerifier) fetchPublicKey(domain, selector string) (any, string, error) {
+	// Check cache first
+	if rsaKey, ed25519Key, ok := v.cache.get(selector, domain); ok {
+		if rsaKey != nil {
+			metrics.Get().DKIMCacheHit()
+			return rsaKey, "rsa", nil
+		}
+		if ed25519Key != nil {
+			metrics.Get().DKIMCacheHit()
+			return ed25519Key, "ed25519", nil
+		}
+	}
+
+	metrics.Get().DKIMCacheMiss()
+
 	// DNS query: selector._domainkey.domain
 	query := fmt.Sprintf("%s._domainkey.%s", selector, domain)
 
@@ -680,6 +773,13 @@ func (v *DKIMVerifier) fetchPublicKey(domain, selector string) (any, string, err
 	for _, record := range txtRecords {
 		pubKey, keyType, err := parseDKIMPublicKey(record)
 		if err == nil && pubKey != nil {
+			// Cache the key
+			switch keyType {
+			case "rsa":
+				v.cache.set(selector, domain, pubKey.(*rsa.PublicKey), nil)
+			case "ed25519":
+				v.cache.set(selector, domain, nil, pubKey.(ed25519.PublicKey))
+			}
 			return pubKey, keyType, nil
 		}
 	}

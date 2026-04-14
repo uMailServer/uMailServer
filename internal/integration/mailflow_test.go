@@ -1,15 +1,23 @@
 package integration
 
 import (
+	"bufio"
 	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/imap"
+	"github.com/umailserver/umailserver/internal/smtp"
 	"github.com/umailserver/umailserver/internal/store"
+	"github.com/umailserver/umailserver/internal/webhook"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -560,5 +568,810 @@ func TestAuthenticationFlow(t *testing.T) {
 		if account.IsActive {
 			t.Error("account should be inactive")
 		}
+	})
+}
+
+// TestSMTPAuthentication tests SMTP AUTH LOGIN and PLAIN mechanisms
+func TestSMTPAuthentication(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	// Skip on Windows due to port binding issues
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping SMTP server test on Windows")
+	}
+
+	dataDir := t.TempDir()
+
+	// Create database
+	dbPath := filepath.Join(dataDir, "test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	// Create domain and account
+	domain := &db.DomainData{Name: "smtp.test", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("testpass123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@smtp.test",
+		LocalPart:    "user",
+		Domain:       "smtp.test",
+		PasswordHash: string(hash),
+		IsActive:     true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	// Create SMTP server
+	smtpConfig := &smtp.Config{
+		Hostname:       "smtp.test",
+		MaxMessageSize: 10 * 1024 * 1024,
+		MaxRecipients:  100,
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		RequireAuth:    true,
+		IsSubmission:   true,
+	}
+	smtpServer := smtp.NewServer(smtpConfig, nil)
+
+	// Set auth handler
+	smtpServer.SetAuthHandler(func(username, password string) (bool, error) {
+		parts := strings.Split(username, "@")
+		if len(parts) != 2 {
+			return false, nil
+		}
+		acc, err := database.GetAccount(parts[1], parts[0])
+		if err != nil {
+			return false, err
+		}
+		if !acc.IsActive {
+			return false, nil
+		}
+		err = bcrypt.CompareHashAndPassword([]byte(acc.PasswordHash), []byte(password))
+		return err == nil, nil
+	})
+
+	// Find free port and start server
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	go smtpServer.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", port))
+	time.Sleep(100 * time.Millisecond) // Wait for server to start
+
+	defer smtpServer.Stop()
+
+	t.Run("auth_login_success", func(t *testing.T) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("failed to connect: %v", err)
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		// Read greeting
+		line, _ := reader.ReadString('\n')
+		if !strings.HasPrefix(line, "220") {
+			t.Fatalf("expected 220 greeting, got: %s", line)
+		}
+
+		// EHLO
+		fmt.Fprintf(writer, "EHLO test.client\r\n")
+		writer.Flush()
+
+		// Read EHLO response
+		for {
+			line, _ = reader.ReadString('\n')
+			if strings.HasPrefix(line, "250 ") {
+				break
+			}
+		}
+
+		// AUTH LOGIN
+		fmt.Fprintf(writer, "AUTH LOGIN\r\n")
+		writer.Flush()
+		line, _ = reader.ReadString('\n')
+		if !strings.HasPrefix(line, "334") {
+			t.Fatalf("expected 334, got: %s", line)
+		}
+
+		// Send username (base64 "user@smtp.test")
+		fmt.Fprintf(writer, "dXNlckBzbXRwLnRlc3Q=\r\n")
+		writer.Flush()
+		line, _ = reader.ReadString('\n')
+		if !strings.HasPrefix(line, "334") {
+			t.Fatalf("expected 334, got: %s", line)
+		}
+
+		// Send password (base64 "testpass123")
+		fmt.Fprintf(writer, "dGVzdHBhc3MxMjM=\r\n")
+		writer.Flush()
+		line, _ = reader.ReadString('\n')
+		if !strings.HasPrefix(line, "235") {
+			t.Fatalf("expected 235 auth success, got: %s", line)
+		}
+
+		// QUIT
+		fmt.Fprintf(writer, "QUIT\r\n")
+		writer.Flush()
+	})
+
+	t.Run("auth_login_failure_wrong_password", func(t *testing.T) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("failed to connect: %v", err)
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		reader.ReadString('\n') // greeting
+
+		fmt.Fprintf(writer, "EHLO test.client\r\n")
+		writer.Flush()
+		for {
+			line, _ := reader.ReadString('\n')
+			if strings.HasPrefix(line, "250 ") {
+				break
+			}
+		}
+
+		fmt.Fprintf(writer, "AUTH LOGIN\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+
+		fmt.Fprintf(writer, "dXNlckBzbXRwLnRlc3Q=\r\n") // user@smtp.test
+		writer.Flush()
+		reader.ReadString('\n')
+
+		fmt.Fprintf(writer, "d3JvbmdwYXNzd29yZA==\r\n") // wrongpassword
+		writer.Flush()
+		line, _ := reader.ReadString('\n')
+		if !strings.HasPrefix(line, "535") {
+			t.Fatalf("expected 535 auth failure, got: %s", line)
+		}
+	})
+
+	t.Run("mail_without_auth_fails", func(t *testing.T) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("failed to connect: %v", err)
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		reader.ReadString('\n') // greeting
+
+		fmt.Fprintf(writer, "EHLO test.client\r\n")
+		writer.Flush()
+		for {
+			line, _ := reader.ReadString('\n')
+			if strings.HasPrefix(line, "250 ") {
+				break
+			}
+		}
+
+		// Try MAIL FROM without auth
+		fmt.Fprintf(writer, "MAIL FROM:<user@smtp.test>\r\n")
+		writer.Flush()
+		line, _ := reader.ReadString('\n')
+		if !strings.HasPrefix(line, "530") && !strings.HasPrefix(line, "550") && !strings.HasPrefix(line, "503") {
+			t.Fatalf("expected error for MAIL without auth, got: %s", line)
+		}
+	})
+}
+
+// TestIMAPAuthentication tests IMAP LOGIN and mailbox operations
+func TestIMAPAuthentication(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	// Skip on Windows due to port binding issues
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping IMAP server test on Windows")
+	}
+
+	dataDir := t.TempDir()
+
+	// Create database
+	dbPath := filepath.Join(dataDir, "test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	// Create domain and account
+	domain := &db.DomainData{Name: "imap.test", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("imappass123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@imap.test",
+		LocalPart:    "user",
+		Domain:       "imap.test",
+		PasswordHash: string(hash),
+		IsActive:     true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	// Create mailstore
+	mailstorePath := filepath.Join(dataDir, "imap.db")
+	mailstore, err := imap.NewBboltMailstore(mailstorePath)
+	if err != nil {
+		t.Fatalf("failed to create mailstore: %v", err)
+	}
+	defer mailstore.Close()
+
+	// Ensure default mailboxes
+	mailstore.EnsureDefaultMailboxes("user@imap.test")
+
+	// Find free port and create server with explicit address
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	imapConfig := &imap.Config{
+		Addr:      fmt.Sprintf("127.0.0.1:%d", port),
+		TLSConfig: nil,
+		Logger:    nil,
+	}
+	imapServer := imap.NewServer(imapConfig, mailstore)
+
+	// Set auth handler
+	imapServer.SetAuthFunc(func(username, password string) (bool, error) {
+		parts := strings.Split(username, "@")
+		if len(parts) != 2 {
+			return false, nil
+		}
+		acc, err := database.GetAccount(parts[1], parts[0])
+		if err != nil {
+			return false, err
+		}
+		if !acc.IsActive {
+			return false, nil
+		}
+		err = bcrypt.CompareHashAndPassword([]byte(acc.PasswordHash), []byte(password))
+		return err == nil, nil
+	})
+
+	// Start server
+	go imapServer.Start()
+	time.Sleep(100 * time.Millisecond)
+
+	defer imapServer.Stop()
+
+	t.Run("imap_login_success", func(t *testing.T) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("failed to connect: %v", err)
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		// Read greeting
+		line, _ := reader.ReadString('\n')
+		if !strings.HasPrefix(line, "* OK") {
+			t.Fatalf("expected * OK greeting, got: %s", line)
+		}
+
+		// Login
+		fmt.Fprintf(writer, "A1 LOGIN \"user@imap.test\" \"imappass123\"\r\n")
+		writer.Flush()
+		line, _ = reader.ReadString('\n')
+		if !strings.Contains(line, "A1 OK") {
+			t.Fatalf("expected A1 OK, got: %s", line)
+		}
+
+		// Logout
+		fmt.Fprintf(writer, "A2 LOGOUT\r\n")
+		writer.Flush()
+	})
+
+	t.Run("imap_login_failure", func(t *testing.T) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("failed to connect: %v", err)
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		reader.ReadString('\n') // greeting
+
+		fmt.Fprintf(writer, "A1 LOGIN \"user@imap.test\" \"wrongpassword\"\r\n")
+		writer.Flush()
+		line, _ := reader.ReadString('\n')
+		if !strings.Contains(line, "A1 NO") {
+			t.Fatalf("expected A1 NO, got: %s", line)
+		}
+	})
+
+	t.Run("imap_list_mailboxes", func(t *testing.T) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("failed to connect: %v", err)
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		reader.ReadString('\n') // greeting
+
+		// Login
+		fmt.Fprintf(writer, "A1 LOGIN \"user@imap.test\" \"imappass123\"\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+
+		// List mailboxes
+		fmt.Fprintf(writer, "A2 LIST \"\" \"*\"\r\n")
+		writer.Flush()
+
+		var foundInbox bool
+		for {
+			line, _ := reader.ReadString('\n')
+			if strings.Contains(line, "INBOX") {
+				foundInbox = true
+			}
+			if strings.HasPrefix(line, "A2 OK") {
+				break
+			}
+		}
+
+		if !foundInbox {
+			t.Error("INBOX not found in mailbox list")
+		}
+
+		fmt.Fprintf(writer, "A3 LOGOUT\r\n")
+		writer.Flush()
+	})
+
+	t.Run("imap_select_inbox", func(t *testing.T) {
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatalf("failed to connect: %v", err)
+		}
+		defer conn.Close()
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		reader.ReadString('\n') // greeting
+
+		// Login
+		fmt.Fprintf(writer, "A1 LOGIN \"user@imap.test\" \"imappass123\"\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+
+		// Select INBOX
+		fmt.Fprintf(writer, "A2 SELECT INBOX\r\n")
+		writer.Flush()
+
+		var success bool
+		for {
+			line, _ := reader.ReadString('\n')
+			if strings.HasPrefix(line, "A2 OK") {
+				success = true
+				break
+			}
+			if strings.HasPrefix(line, "A2 NO") {
+				t.Fatalf("SELECT failed: %s", line)
+			}
+		}
+
+		if !success {
+			t.Error("SELECT INBOX failed")
+		}
+
+		fmt.Fprintf(writer, "A3 LOGOUT\r\n")
+		writer.Flush()
+	})
+}
+
+// TestWebhookDelivery tests webhook event triggering and delivery
+func TestWebhookDelivery(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	dataDir := t.TempDir()
+
+	// Create database
+	dbPath := filepath.Join(dataDir, "test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	// Create webhook manager
+	webhookMgr := webhook.NewManager(database, "test-secret")
+	webhookMgr.SetAllowPrivateIP(true) // Allow localhost for testing
+
+	t.Run("webhook_event_delivery", func(t *testing.T) {
+		// Create test server to receive webhook
+		var receivedEvent string
+		var receivedData string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedEvent = r.Header.Get("X-Webhook-Event")
+			// Read body
+			buf := make([]byte, 1024)
+			n, _ := r.Body.Read(buf)
+			receivedData = string(buf[:n])
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		// Register webhook via HTTP handler
+		body := fmt.Sprintf(`{"url": "%s", "events": ["mail.received"]}`, server.URL)
+		req := httptest.NewRequest("POST", "/webhooks", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		webhookMgr.HTTPHandler(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// Trigger event
+		webhookMgr.Trigger("mail.received", map[string]string{
+			"from": "sender@example.com",
+			"to":   "recipient@test.com",
+		})
+
+		// Wait for delivery
+		time.Sleep(300 * time.Millisecond)
+
+		if receivedEvent != "mail.received" {
+			t.Errorf("expected event 'mail.received', got '%s'", receivedEvent)
+		}
+		if !strings.Contains(receivedData, "sender@example.com") {
+			t.Error("webhook data doesn't contain sender")
+		}
+	})
+
+	t.Run("webhook_event_filtering", func(t *testing.T) {
+		receivedEvents := make(map[string]bool)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			event := r.Header.Get("X-Webhook-Event")
+			receivedEvents[event] = true
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		// Register webhook that only subscribes to mail.sent
+		body := fmt.Sprintf(`{"url": "%s", "events": ["mail.sent"]}`, server.URL)
+		req := httptest.NewRequest("POST", "/webhooks", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		webhookMgr.HTTPHandler(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d", w.Code)
+		}
+
+		// Trigger multiple events
+		webhookMgr.Trigger("mail.received", nil)
+		webhookMgr.Trigger("mail.sent", nil)
+		webhookMgr.Trigger("delivery.failed", nil)
+
+		time.Sleep(300 * time.Millisecond)
+
+		if receivedEvents["mail.received"] {
+			t.Error("should not have received mail.received event")
+		}
+		if !receivedEvents["mail.sent"] {
+			t.Error("should have received mail.sent event")
+		}
+		if receivedEvents["delivery.failed"] {
+			t.Error("should not have received delivery.failed event")
+		}
+	})
+
+	t.Run("webhook_signature_with_secret", func(t *testing.T) {
+		var receivedSig string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedSig = r.Header.Get("X-Webhook-Signature")
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		body := fmt.Sprintf(`{"url": "%s", "events": ["*"]}`, server.URL)
+		req := httptest.NewRequest("POST", "/webhooks", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		webhookMgr.HTTPHandler(w, req)
+
+		webhookMgr.Trigger("test.event", map[string]string{"key": "value"})
+
+		time.Sleep(300 * time.Millisecond)
+
+		if receivedSig == "" {
+			t.Error("expected X-Webhook-Signature header when secret is configured")
+		}
+	})
+
+	t.Run("webhook_list_endpoint", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/webhooks", nil)
+		w := httptest.NewRecorder()
+		webhookMgr.HTTPHandler(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		if !strings.Contains(w.Body.String(), "webhooks") {
+			t.Error("response should contain 'webhooks' key")
+		}
+	})
+}
+
+// TestFullMailFlow tests the complete mail flow from SMTP submission to IMAP retrieval
+func TestFullMailFlow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	// Skip on Windows due to port binding issues
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping full mail flow test on Windows")
+	}
+
+	dataDir := t.TempDir()
+	msgDir := filepath.Join(dataDir, "messages")
+	if err := os.MkdirAll(msgDir, 0o755); err != nil {
+		t.Fatalf("failed to create messages dir: %v", err)
+	}
+
+	// Create database
+	dbPath := filepath.Join(dataDir, "test.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer database.Close()
+
+	// Create domain and account
+	domain := &db.DomainData{Name: "fullflow.test", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("flowpass123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@fullflow.test",
+		LocalPart:    "user",
+		Domain:       "fullflow.test",
+		PasswordHash: string(hash),
+		IsActive:     true,
+		QuotaLimit:   100 * 1024 * 1024,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("failed to create account: %v", err)
+	}
+
+	// Create maildir store
+	maildirStore := store.NewMaildirStore(msgDir)
+
+	// Create IMAP mailstore
+	mailstorePath := filepath.Join(dataDir, "imap.db")
+	mailstore, err := imap.NewBboltMailstore(mailstorePath)
+	if err != nil {
+		t.Fatalf("failed to create mailstore: %v", err)
+	}
+	defer mailstore.Close()
+
+	mailstore.EnsureDefaultMailboxes("user@fullflow.test")
+
+	// Create IMAP server with explicit port
+	ln2, _ := net.Listen("tcp", "127.0.0.1:0")
+	imapPort := ln2.Addr().(*net.TCPAddr).Port
+	ln2.Close()
+
+	imapConfig := &imap.Config{
+		Addr:      fmt.Sprintf("127.0.0.1:%d", imapPort),
+		TLSConfig: nil,
+		Logger:    nil,
+	}
+	imapServer := imap.NewServer(imapConfig, mailstore)
+	imapServer.SetAuthFunc(func(username, password string) (bool, error) {
+		parts := strings.Split(username, "@")
+		if len(parts) != 2 {
+			return false, nil
+		}
+		acc, err := database.GetAccount(parts[1], parts[0])
+		if err != nil {
+			return false, err
+		}
+		if !acc.IsActive {
+			return false, nil
+		}
+		err = bcrypt.CompareHashAndPassword([]byte(acc.PasswordHash), []byte(password))
+		return err == nil, nil
+	})
+
+	go imapServer.Start()
+	time.Sleep(100 * time.Millisecond)
+	defer imapServer.Stop()
+
+	// Create SMTP server
+	smtpConfig := &smtp.Config{
+		Hostname:       "fullflow.test",
+		MaxMessageSize: 10 * 1024 * 1024,
+		MaxRecipients:  100,
+		ReadTimeout:    30 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		RequireAuth:    true,
+		IsSubmission:   true,
+	}
+	smtpServer := smtp.NewServer(smtpConfig, nil)
+
+	// Set up delivery that goes to both queue and maildir
+	smtpServer.SetAuthHandler(func(username, password string) (bool, error) {
+		parts := strings.Split(username, "@")
+		if len(parts) != 2 {
+			return false, nil
+		}
+		acc, err := database.GetAccount(parts[1], parts[0])
+		if err != nil {
+			return false, err
+		}
+		if !acc.IsActive {
+			return false, nil
+		}
+		err = bcrypt.CompareHashAndPassword([]byte(acc.PasswordHash), []byte(password))
+		return err == nil, nil
+	})
+
+	smtpServer.SetDeliveryHandler(func(from string, to []string, data []byte) error {
+		// Deliver to maildir for local recipients
+		for _, recipient := range to {
+			if strings.HasSuffix(recipient, "@fullflow.test") {
+				localPart := strings.Split(recipient, "@")[0]
+				_, err := maildirStore.Deliver("fullflow.test", localPart, "INBOX", data)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+
+	// Find port and start SMTP server
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	smtpPort := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	go smtpServer.ListenAndServe(fmt.Sprintf("127.0.0.1:%d", smtpPort))
+	time.Sleep(100 * time.Millisecond)
+	defer smtpServer.Stop()
+
+	t.Run("submit_via_smtp_retrieve_via_imap", func(t *testing.T) {
+		// Step 1: Submit email via SMTP
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", smtpPort))
+		if err != nil {
+			t.Fatalf("failed to connect to SMTP: %v", err)
+		}
+
+		reader := bufio.NewReader(conn)
+		writer := bufio.NewWriter(conn)
+
+		reader.ReadString('\n') // greeting
+
+		fmt.Fprintf(writer, "EHLO test.client\r\n")
+		writer.Flush()
+		for {
+			line, _ := reader.ReadString('\n')
+			if strings.HasPrefix(line, "250 ") {
+				break
+			}
+		}
+
+		// Authenticate
+		fmt.Fprintf(writer, "AUTH LOGIN\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+		fmt.Fprintf(writer, "dXNlckBmdWxsZmxvdy50ZXN0\r\n") // user@fullflow.test
+		writer.Flush()
+		reader.ReadString('\n')
+		fmt.Fprintf(writer, "Zmxvd3Bhc3MxMjM=\r\n") // flowpass123
+		writer.Flush()
+		reader.ReadString('\n')
+
+		// Send message
+		fmt.Fprintf(writer, "MAIL FROM:<user@fullflow.test>\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+
+		fmt.Fprintf(writer, "RCPT TO:<user@fullflow.test>\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+
+		fmt.Fprintf(writer, "DATA\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+
+		subject := "Integration Test Email " + time.Now().Format(time.RFC3339)
+		fmt.Fprintf(writer, "From: user@fullflow.test\r\n")
+		fmt.Fprintf(writer, "To: user@fullflow.test\r\n")
+		fmt.Fprintf(writer, "Subject: %s\r\n", subject)
+		fmt.Fprintf(writer, "\r\n")
+		fmt.Fprintf(writer, "This is a test message from the full flow integration test.\r\n")
+		fmt.Fprintf(writer, ".\r\n")
+		writer.Flush()
+		reader.ReadString('\n')
+
+		fmt.Fprintf(writer, "QUIT\r\n")
+		writer.Flush()
+		conn.Close()
+
+		// Step 2: Wait for delivery
+		time.Sleep(200 * time.Millisecond)
+
+		// Step 3: Retrieve via IMAP
+		imapConn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", imapPort))
+		if err != nil {
+			t.Fatalf("failed to connect to IMAP: %v", err)
+		}
+		defer imapConn.Close()
+
+		imapReader := bufio.NewReader(imapConn)
+		imapWriter := bufio.NewWriter(imapConn)
+
+		imapReader.ReadString('\n') // greeting
+
+		// Login
+		fmt.Fprintf(imapWriter, "A1 LOGIN \"user@fullflow.test\" \"flowpass123\"\r\n")
+		imapWriter.Flush()
+		imapReader.ReadString('\n')
+
+		// Select INBOX
+		fmt.Fprintf(imapWriter, "A2 SELECT INBOX\r\n")
+		imapWriter.Flush()
+
+		var msgCount int
+		for {
+			line, _ := imapReader.ReadString('\n')
+			if strings.Contains(line, "EXISTS") {
+				// Parse message count
+				fmt.Sscanf(line, "* %d EXISTS", &msgCount)
+			}
+			if strings.HasPrefix(line, "A2 OK") {
+				break
+			}
+		}
+
+		if msgCount == 0 {
+			t.Error("no messages found in INBOX after SMTP delivery")
+		}
+
+		// Logout
+		fmt.Fprintf(imapWriter, "A3 LOGOUT\r\n")
+		imapWriter.Flush()
 	})
 }

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Distributed Tracing**
+  - OpenTelemetry integration with OTLP/stdout/noop exporters
+  - Span context propagation across SMTP/IMAP/HTTP boundaries
+  - Configurable sampling rate (0.0 to 1.0)
+  - Jaeger/Tempo compatibility
+
+- **Cache Metrics**
+  - SPF cache hit/miss counters
+  - DKIM public key cache with metrics
+  - DMARC policy cache with metrics
+  - Configurable TTL (default: 5 minutes)
+  - LRU eviction with max size limits
+
+- **Documentation**
+  - Complete OpenAPI 3.0.3 specification
+  - Distributed tracing setup guide
+  - Performance tuning guide for production
+
 ### Changed
 
 - **Architecture refactor**: Split oversized monolith files into focused per-subsystem files

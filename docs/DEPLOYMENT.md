@@ -307,6 +307,87 @@ alert:
 
 Import dashboard ID `1860` for uMailServer metrics.
 
+## Distributed Tracing
+
+uMailServer supports OpenTelemetry distributed tracing for monitoring request flow across SMTP, IMAP, and HTTP components.
+
+### Configuration
+
+Enable tracing in your config:
+
+```yaml
+tracing:
+  enabled: true
+  service_name: "umailserver"
+  exporter: "otlp"              # Options: noop, stdout, otlp
+  otlp_endpoint: "localhost:4317"  # OTLP collector endpoint
+  environment: "production"
+  sample_rate: 0.1              # Trace 10% of requests
+  attributes:
+    deployment: "primary"
+    region: "us-east-1"
+```
+
+### Jaeger Integration
+
+1. **Start Jaeger**:
+```bash
+docker run -d --name jaeger \
+  -e COLLECTOR_OTLP_ENABLED=true \
+  -p 16686:16686 \
+  -p 4317:4317 \
+  jaegertracing/all-in-one:latest
+```
+
+2. **Configure uMailServer**:
+```yaml
+tracing:
+  enabled: true
+  exporter: "otlp"
+  otlp_endpoint: "localhost:4317"
+  sample_rate: 1.0
+```
+
+3. **View traces**: Open http://localhost:16686
+
+### OpenTelemetry Collector
+
+For production, use OpenTelemetry Collector:
+
+```yaml
+# collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [jaeger]
+```
+
+### Performance Impact
+
+Tracing overhead is minimal:
+- Noop exporter: ~0% overhead
+- Stdout exporter: ~1% overhead  
+- OTLP exporter: ~5% overhead (async batching)
+
+Use sampling in high-traffic environments:
+```yaml
+tracing:
+  sample_rate: 0.01  # Trace 1% of requests
+```
+
 ## Backup & Recovery
 
 ### Automated Backups

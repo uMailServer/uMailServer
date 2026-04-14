@@ -20,6 +20,10 @@ type SimpleMetrics struct {
 	apiRequests      uint64
 	spfCacheHits     uint64
 	spfCacheMisses   uint64
+	dkimCacheHits    uint64
+	dkimCacheMisses  uint64
+	dmarcCacheHits   uint64
+	dmarcCacheMisses uint64
 }
 
 var (
@@ -85,6 +89,24 @@ func (m *SimpleMetrics) SPFCacheMiss() {
 	atomic.AddUint64(&m.spfCacheMisses, 1)
 }
 
+// DKIM cache metrics
+func (m *SimpleMetrics) DKIMCacheHit() {
+	atomic.AddUint64(&m.dkimCacheHits, 1)
+}
+
+func (m *SimpleMetrics) DKIMCacheMiss() {
+	atomic.AddUint64(&m.dkimCacheMisses, 1)
+}
+
+// DMARC cache metrics
+func (m *SimpleMetrics) DMARCCacheHit() {
+	atomic.AddUint64(&m.dmarcCacheHits, 1)
+}
+
+func (m *SimpleMetrics) DMARCCacheMiss() {
+	atomic.AddUint64(&m.dmarcCacheMisses, 1)
+}
+
 // GetStats returns current statistics
 func (m *SimpleMetrics) GetStats() map[string]interface{} {
 	return map[string]interface{}{
@@ -110,6 +132,14 @@ func (m *SimpleMetrics) GetStats() map[string]interface{} {
 		"spf_cache": map[string]uint64{
 			"hits":   atomic.LoadUint64(&m.spfCacheHits),
 			"misses": atomic.LoadUint64(&m.spfCacheMisses),
+		},
+		"dkim_cache": map[string]uint64{
+			"hits":   atomic.LoadUint64(&m.dkimCacheHits),
+			"misses": atomic.LoadUint64(&m.dkimCacheMisses),
+		},
+		"dmarc_cache": map[string]uint64{
+			"hits":   atomic.LoadUint64(&m.dmarcCacheHits),
+			"misses": atomic.LoadUint64(&m.dmarcCacheMisses),
 		},
 	}
 }

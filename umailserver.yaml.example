@@ -102,10 +102,24 @@ logging:
   max_backups: 10             # Number of old log files to keep
   max_age_days: 30            # Max age of old log files in days
 
-# Metrics
+# Metrics (Prometheus-compatible)
 metrics:
   enabled: true
+  bind: "127.0.0.1"
+  port: 8080
   path: /metrics
+
+# Distributed Tracing (OpenTelemetry)
+tracing:
+  enabled: false               # Enable OpenTelemetry tracing
+  service_name: "umailserver"  # Service name shown in traces
+  exporter: "noop"            # Exporter: "noop", "stdout", or "otlp"
+  otlp_endpoint: "localhost:4317"  # OTLP collector endpoint (for otlp exporter)
+  environment: "production"   # Environment tag: "production", "staging", "development"
+  sample_rate: 1.0            # Sampling rate 0.0-1.0 (1.0 = trace all requests)
+  attributes:                 # Additional resource attributes
+    deployment: "primary"
+    region: "us-east-1"
 
 # Domains
 domains:

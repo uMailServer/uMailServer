@@ -298,6 +298,18 @@ monitoring:
     port: 8080
     path: /health
 
+  # Distributed tracing (OpenTelemetry)
+  tracing:
+    enabled: false
+    service_name: "umailserver"
+    exporter: "noop"              # Options: noop, stdout, otlp
+    otlp_endpoint: ""             # OTLP collector endpoint (e.g., "localhost:4317")
+    environment: "production"     # Environment tag
+    sample_rate: 1.0              # 0.0 to 1.0 (1.0 = trace all)
+    attributes:                   # Additional resource attributes
+      deployment: "primary"
+      region: "us-east-1"
+
   # Structured logging
   logging:
     format: json                    # json, text

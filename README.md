@@ -313,13 +313,18 @@ make docker
 ## Documentation
 
 Local documentation in `docs/`:
-- [Architecture](docs/ARCHITECTURE.md)
-- [Configuration Reference](docs/configuration.md)
-- [DNS Setup Guide](docs/dns-setup.md)
-- [Migration Guide](docs/migration.md)
-- [Quick Start](docs/quickstart.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [API Reference](docs/api-reference.md)
+- [Architecture](docs/ARCHITECTURE.md) - System design and component architecture
+- [Configuration Reference](docs/configuration.md) - Complete configuration reference
+- [API Specification](docs/API_SPECIFICATION.md) - OpenAPI 3.0.3 specification
+- [Distributed Tracing](docs/DISTRIBUTED_TRACING.md) - OpenTelemetry tracing setup
+- [Performance Tuning](docs/PERFORMANCE_TUNING.md) - Production optimization guide
+- [DNS Setup Guide](docs/dns-setup.md) - DNS configuration guide
+- [Deployment Guide](docs/DEPLOYMENT.md) - Production deployment guide
+- [Security Hardening](docs/SECURITY_HARDENING.md) - Security best practices
+- [Troubleshooting Guide](docs/troubleshooting.md) - Common issues and solutions
+- [Migration Guide](docs/migration.md) - Migrating from other servers
+- [Quick Start](docs/quickstart.md) - Getting started quickly
+- [API Reference](docs/api-reference.md) - API documentation
 
 Online documentation at [docs.umailserver.com](https://docs.umailserver.com)
 

@@ -150,6 +150,15 @@ func (s *Server) Stop() error {
 		_ = s.storageDB.Close()
 	}
 
+	// Stop tracing provider
+	if s.tracingProvider != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.tracingProvider.Stop(shutdownCtx); err != nil {
+			s.logger.Error("Failed to stop tracing provider", "error", err)
+		}
+		shutdownCancel()
+	}
+
 	s.logger.Info("uMailServer stopped")
 	return nil
 }

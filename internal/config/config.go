@@ -30,6 +30,7 @@ type Config struct {
 	Domains     []DomainConfig    `yaml:"domains"`
 	Logging     LoggingConfig     `yaml:"logging"`
 	Metrics     MetricsConfig     `yaml:"metrics"`
+	Tracing     TracingConfig     `yaml:"tracing"`
 	Database    DatabaseConfig    `yaml:"database"`
 	Storage     StorageConfig     `yaml:"storage"`
 	CalDAV      CalDAVConfig      `yaml:"caldav"`
@@ -272,6 +273,17 @@ type MetricsConfig struct {
 	Port    int    `yaml:"port"`
 	Bind    string `yaml:"bind"`
 	Path    string `yaml:"path"`
+}
+
+// TracingConfig holds OpenTelemetry tracing settings
+type TracingConfig struct {
+	Enabled      bool              `yaml:"enabled"`       // Enable distributed tracing
+	ServiceName  string            `yaml:"service_name"`  // Service name for traces (default: umailserver)
+	Exporter     string            `yaml:"exporter"`      // Exporter type: "otlp", "stdout", or "noop"
+	OTLPEndpoint string            `yaml:"otlp_endpoint"` // OTLP collector endpoint (e.g., "localhost:4317")
+	Environment  string            `yaml:"environment"`   // Deployment environment: "production", "staging", "development"
+	Attributes   map[string]string `yaml:"attributes"`    // Additional resource attributes
+	SampleRate   float64           `yaml:"sample_rate"`   // Sampling rate 0.0-1.0 (1.0 = all traces)
 }
 
 // DatabaseConfig holds database settings
