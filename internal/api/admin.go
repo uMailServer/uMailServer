@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -224,6 +225,7 @@ func (s *AdminServer) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	contentType := getContentType(filePath)
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
+	io.Copy(w, data)
 }
 
 // getContentType returns MIME type for static files
