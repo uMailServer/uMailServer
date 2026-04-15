@@ -442,6 +442,92 @@ func TestMarkAsRead_MessageNotFound(t *testing.T) {
 	h.markAsRead("user@example.com", "INBOX", "non-existent-id")
 }
 
+func TestMarkAsRead_Success(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox and add a message (unread)
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+	msgID, _ := msgStore.StoreMessage("user@example.com", []byte("From: sender\r\nSubject: Test\r\n\r\nBody"))
+	uid, _ := mailDB.GetNextUID("user@example.com", "INBOX")
+	_ = mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
+		MessageID:    msgID,
+		UID:          uid,
+		Subject:      "Test",
+		From:         "sender",
+		To:           "user@example.com",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		InternalDate: time.Now(),
+		Size:         100,
+		Flags:        []string{}, // No \Seen flag - unread
+	})
+
+	// markAsRead should add \Seen flag
+	h.markAsRead("user@example.com", "INBOX", msgID)
+
+	// Verify the flag was added
+	meta, _ := mailDB.GetMessageMetadata("user@example.com", "INBOX", uid)
+	if !hasFlag(meta.Flags, "\\Seen") {
+		t.Error("Expected \\Seen flag to be added")
+	}
+}
+
+func TestMarkAsRead_AlreadyRead(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox and add a message (already read)
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+	msgID, _ := msgStore.StoreMessage("user@example.com", []byte("From: sender\r\nSubject: Test\r\n\r\nBody"))
+	uid, _ := mailDB.GetNextUID("user@example.com", "INBOX")
+	_ = mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
+		MessageID:    msgID,
+		UID:          uid,
+		Subject:      "Test",
+		From:         "sender",
+		To:           "user@example.com",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		InternalDate: time.Now(),
+		Size:         100,
+		Flags:        []string{"\\Seen"}, // Already has \Seen flag
+	})
+
+	// markAsRead should not change anything (no update needed)
+	h.markAsRead("user@example.com", "INBOX", msgID)
+
+	// Verify the flag was not changed
+	meta, _ := mailDB.GetMessageMetadata("user@example.com", "INBOX", uid)
+	if len(meta.Flags) != 1 || meta.Flags[0] != "\\Seen" {
+		t.Errorf("Expected exactly \\Seen flag, got %v", meta.Flags)
+	}
+}
+
 // --- InitDemoEmails ---
 
 func TestInitDemoEmails_IsNoOp(t *testing.T) {
