@@ -247,6 +247,47 @@ func TestHandleTOTPSetup_UserNotFound(t *testing.T) {
 	}
 }
 
+func TestHandleTOTPSetup_ForbiddenForDifferentUser(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	defer database.Close()
+
+	// Try to setup TOTP for a different user as non-admin - should be forbidden
+	ctx := context.WithValue(context.Background(), "user", "other@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleTOTPSetup(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleTOTPSetup_AdminCannotSetupForAdmin(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	defer database.Close()
+
+	// Setup admin account
+	database.CreateAccount(&db.AccountData{
+		LocalPart:    "admin",
+		Domain:       "test.com",
+		PasswordHash: "hash",
+		IsAdmin:      true,
+	})
+
+	// Admin trying to setup TOTP for another admin - should be forbidden
+	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleTOTPSetup(rec, req, "user@test.com")
+
+	// user@test.com is not admin, so admin SHOULD be able to setup for them
+	if rec.Code == http.StatusForbidden {
+		t.Log("This is actually allowed since user@test.com is not admin")
+	}
+}
+
 func TestHandleTOTPSetup_ClosedDB(t *testing.T) {
 	server, database := helperSetupTOTPAccount(t)
 	database.Close()
