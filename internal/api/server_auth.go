@@ -44,7 +44,7 @@ func (s *Server) isTOTPLockedOut(email string) bool {
 	}
 
 	attempt := s.totpAttempts[email]
-	if attempt.count >= maxTOTPFailures && time.Since(attempt.lastSeen) < totpLockoutDuration {
+	if attempt != nil && attempt.count >= maxTOTPFailures && time.Since(attempt.lastSeen) < totpLockoutDuration {
 		return true
 	}
 	return false

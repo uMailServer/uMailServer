@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/tracing"
 )
 
 // ErrSessionQuit is returned when the session handles a QUIT command
@@ -50,6 +51,9 @@ type Server struct {
 	lockoutDuration  time.Duration
 	authFailures     map[string][]time.Time // IP -> failure timestamps
 	authFailuresMu   sync.Mutex
+
+	// Tracing provider for OpenTelemetry
+	tracingProvider *tracing.Provider
 }
 
 // ConnectionRateLimiter checks if a connection is allowed
@@ -193,6 +197,11 @@ func (s *Server) SetUserSecretHandler(handler func(username string) (string, err
 // SetLoginResultHandler sets the handler for login result events (success/failure)
 func (s *Server) SetLoginResultHandler(handler func(username string, success bool, ip string)) {
 	s.onLoginResult = handler
+}
+
+// SetTracingProvider sets the OpenTelemetry tracing provider
+func (s *Server) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
 }
 
 // ListenAndServe starts listening on the specified address

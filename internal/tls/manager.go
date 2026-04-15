@@ -32,15 +32,19 @@ type Manager struct {
 
 // Config holds TLS manager configuration
 type Config struct {
-	Enabled      bool
-	AutoTLS      bool
-	CertFile     string
-	KeyFile      string
-	Email        string
-	Domains      []string
-	ACMEEndpoint string
-	UseStaging   bool
-	MinVersion   uint16 // TLS version (e.g., tls.VersionTLS12, tls.VersionTLS13). Default: TLS 1.2
+	Enabled           bool
+	AutoTLS           bool
+	CertFile          string
+	KeyFile           string
+	Email             string
+	Domains           []string
+	ACMEEndpoint      string
+	UseStaging        bool
+	MinVersion        uint16 // TLS version (e.g., tls.VersionTLS12, tls.VersionTLS13). Default: TLS 1.2
+	ClientAuth        bool   // Enable client certificate authentication
+	RequireClientCert bool   // Require client certificate (mTLS)
+	ClientCAFile      string // CA file for client certificate verification
+	ClientAuthMode    tls.ClientAuthType
 }
 
 // NewManager creates a new TLS certificate manager
@@ -162,10 +166,40 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 
 // GetTLSConfig returns a TLS configuration
 func (m *Manager) GetTLSConfig() *tls.Config {
+	return m.GetTLSConfigWithClientAuth(false)
+}
+
+// GetTLSConfigWithClientAuth returns a TLS configuration with optional client certificate auth
+func (m *Manager) GetTLSConfigWithClientAuth(requireClientCert bool) *tls.Config {
 	// Use configured min version or default to TLS 1.2
 	minVersion := m.config.MinVersion
 	if minVersion < tls.VersionTLS12 {
 		minVersion = tls.VersionTLS12
+	}
+
+	// Determine client auth mode
+	clientAuth := tls.NoClientCert
+	if m.config.ClientAuth || requireClientCert {
+		if m.config.RequireClientCert || requireClientCert {
+			clientAuth = tls.RequireAndVerifyClientCert
+		} else {
+			clientAuth = tls.VerifyClientCertIfGiven
+		}
+	}
+	// Allow override from config
+	if m.config.ClientAuthMode != 0 {
+		clientAuth = m.config.ClientAuthMode
+	}
+
+	var clientCAs *x509.CertPool
+	if m.config.ClientCAFile != "" {
+		clientCAs = x509.NewCertPool()
+		caData, err := os.ReadFile(m.config.ClientCAFile)
+		if err == nil {
+			clientCAs.AppendCertsFromPEM(caData)
+		} else {
+			m.logger.Warn("Failed to load client CA file", "file", m.config.ClientCAFile, "error", err)
+		}
 	}
 
 	// #nosec G402 -- MinVersion is runtime-validated to be >= TLS 1.2 above
@@ -181,7 +215,28 @@ func (m *Manager) GetTLSConfig() *tls.Config {
 			tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
 		},
 		PreferServerCipherSuites: true,
+		ClientAuth:               clientAuth,
+		ClientCAs:                clientCAs,
 	}
+}
+
+// VerifyClientCert verifies a client certificate and returns the identity
+func (m *Manager) VerifyClientCert(cert *x509.Certificate) (string, error) {
+	if cert == nil {
+		return "", fmt.Errorf("no certificate provided")
+	}
+
+	// Extract email from certificate subject
+	if len(cert.EmailAddresses) > 0 {
+		return cert.EmailAddresses[0], nil
+	}
+
+	// Use common name if no email
+	if cert.Subject.CommonName != "" {
+		return cert.Subject.CommonName, nil
+	}
+
+	return "", fmt.Errorf("no identity found in certificate")
 }
 
 // GenerateSelfSigned generates a self-signed certificate for testing

@@ -22,6 +22,7 @@ func (s *Server) startAPI() {
 	}
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
 	s.apiServer.SetSearchService(s.searchSvc)
+	s.apiServer.SetTracingProvider(s.tracingProvider)
 	if s.queue != nil {
 		s.apiServer.SetQueueManager(s.queue)
 	}

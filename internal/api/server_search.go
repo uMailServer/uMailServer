@@ -81,11 +81,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"query":   query,
-		"folder":  folder,
-		"results": results,
-		"total":   len(results),
-		"limit":   limit,
-		"offset":  offset,
+		"query":  query,
+		"folder": folder,
+		"emails": results,
+		"total":  len(results),
+		"limit":  limit,
+		"offset": offset,
 	})
 }

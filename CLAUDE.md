@@ -86,6 +86,7 @@ The `Server` struct and its methods are split across many files in `internal/ser
 | 4190 | ManageSieve | Sieve script management |
 | 443 | HTTPS | Webmail + Admin Panel + REST API (single server) |
 | 8443 | HTTPS | Admin Panel only (localhost-only bind by default) |
+| 8080 | HTTP | Prometheus metrics endpoint |
 | 3000 | HTTP | MCP Server (JSON-RPC) |
 
 ### Internal Package Map
@@ -134,7 +135,7 @@ The `Server` struct and its methods are split across many files in `internal/ser
 - **Handler injection:** SMTP/IMAP/POP3 servers use `SetAuthHandler`, `SetDeliveryHandler`, `SetAuthFunc` etc. to inject dependencies from the orchestrator.
 - **Config types:** `config.Config` is the root YAML-mapped struct with nested configs for each subsystem. Custom `Size` and `Duration` types handle byte/time parsing.
 - **Database:** bbolt (key-value) for all persistence. `db.DB` manages domains/accounts/aliases. `storage.Database` wraps a separate bbolt instance for search indexing. `imap.BboltMailstore` wraps another for IMAP mailbox metadata.
-- **Frontend:** `webmail/` (React 19 + Tailwind v4 + @radix-ui primitives), `web/admin` (React 19 + Tailwind v4 + shadcn + Recharts), `web/account` (React 19 + Tailwind v3 + Zustand + TanStack Query). Each built to `dist/` and embedded via `//go:embed`. `embed.go` exports `WebmailFS`, `AdminFS`, `AccountFS`.
+- **Frontend:** `webmail/` (React 19 + Tailwind v4 + @radix-ui primitives), `web/admin` (React 19 + Tailwind v4 + shadcn + Recharts), and `web/account` (React 19 + Tailwind v3 + Zustand + TanStack Query). Each built to `dist/` and embedded via `//go:embed`. `embed.go` exports `WebmailFS`, `AdminFS`, `AccountFS`.
 
 ### Data Flow (Inbound Email)
 

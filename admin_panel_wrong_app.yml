@@ -1,0 +1,16 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img [ref=e7]
+      - heading "NothingDNS" [level=1] [ref=e10]
+      - paragraph [ref=e11]: Enter your access token to continue
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - text: Access Token
+        - generic [ref=e14]:
+          - textbox "Access Token" [active] [ref=e15]:
+            - /placeholder: Enter auth token
+          - button "Show token" [ref=e16] [cursor=pointer]:
+            - img [ref=e17]
+      - button "Sign In" [ref=e20]
+  - region "Notifications alt+T"

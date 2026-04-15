@@ -32,6 +32,7 @@ func (s *Server) startSMTP() {
 	// smtpServer.SetUserSecretHandler(s.getUserSecret)
 	smtpServer.SetLoginResultHandler(s.loginResult)
 	smtpServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+	smtpServer.SetTracingProvider(s.tracingProvider)
 
 	// Wire up the message processing pipeline
 	pipeline := smtp.NewPipeline(smtp.NewPipelineLogger(s.logger))
@@ -147,6 +148,7 @@ func (s *Server) startSMTP() {
 		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
 		// submissionServer.SetUserSecretHandler(s.getUserSecret)
 		submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+		submissionServer.SetTracingProvider(s.tracingProvider)
 
 		go func() {
 			if err := submissionServer.ListenAndServe(submissionAddr); err != nil {
@@ -179,6 +181,7 @@ func (s *Server) startSMTP() {
 		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
 		// submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
 		submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+		submissionTLSServer.SetTracingProvider(s.tracingProvider)
 
 		tlsConfig := s.tlsManager.GetTLSConfig()
 		go func() {

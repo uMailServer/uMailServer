@@ -23,6 +23,7 @@ import (
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/search"
 	"github.com/umailserver/umailserver/internal/storage"
+	"github.com/umailserver/umailserver/internal/tracing"
 	"github.com/umailserver/umailserver/internal/websocket"
 )
 
@@ -44,6 +45,9 @@ type Server struct {
 	queueMgr   *queue.Manager
 	httpServer *http.Server
 	healthMon  HealthMonitor
+
+	// Tracing provider for OpenTelemetry
+	tracingProvider *tracing.Provider
 
 	// Interface abstractions for testability
 	vacationMgr  VacationManager
@@ -512,6 +516,11 @@ func (s *Server) SetSearchService(svc *search.Service) {
 // SetRateLimitManager injects the rate limit manager into the API server
 func (s *Server) SetRateLimitManager(mgr RateLimitManager) {
 	s.rateLimitMgr = mgr
+}
+
+// SetTracingProvider sets the OpenTelemetry tracing provider
+func (s *Server) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
 }
 
 // Start starts the API server

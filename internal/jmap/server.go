@@ -386,12 +386,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // processMethodCall processes a single JMAP method call
 func (s *Server) processMethodCall(user string, call MethodCall) Response {
 	switch call.Name {
+	// Mailbox methods
 	case "Mailbox/get":
 		return s.handleMailboxGet(user, call)
 	case "Mailbox/query":
 		return s.handleMailboxQuery(user, call)
 	case "Mailbox/set":
 		return s.handleMailboxSet(user, call)
+	case "Mailbox/changes":
+		return s.handleMailboxChanges(user, call)
+	case "Mailbox/queryChanges":
+		return s.handleMailboxQueryChanges(user, call)
+
+	// Email methods
 	case "Email/get":
 		return s.handleEmailGet(user, call)
 	case "Email/query":
@@ -400,20 +407,39 @@ func (s *Server) processMethodCall(user string, call MethodCall) Response {
 		return s.handleEmailSet(user, call)
 	case "Email/import":
 		return s.handleEmailImport(user, call)
+	case "Email/queryChanges":
+		return s.handleEmailQueryChanges(user, call)
+
+	// Thread methods
 	case "Thread/get":
 		return s.handleThreadGet(user, call)
+	case "Thread/query":
+		return s.handleThreadQuery(user, call)
+	case "Thread/changes":
+		return s.handleThreadChanges(user, call)
+	case "Thread/queryChanges":
+		return s.handleThreadQueryChanges(user, call)
+
+	// Search methods
 	case "SearchSnippet/get":
 		return s.handleSearchSnippetGet(user, call)
+
+	// Identity methods
 	case "Identity/get":
 		return s.handleIdentityGet(user, call)
 	case "Identity/set":
 		return s.handleIdentitySet(user, call)
+	case "Identity/changes":
+		return s.handleIdentityChanges(user, call)
+	case "Identity/query":
+		return s.handleIdentityQuery(user, call)
+	case "Identity/queryChanges":
+		return s.handleIdentityQueryChanges(user, call)
+
 	default:
 		return Response{
 			Name: "error",
-			Args: map[string]interface{}{
-				"type": "unknownMethod",
-			},
+			Args: map[string]interface{}{"type": "unknownMethod"},
 		}
 	}
 }

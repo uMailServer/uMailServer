@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -30,7 +31,7 @@ import (
 	"github.com/umailserver/umailserver/internal/sieve"
 	"github.com/umailserver/umailserver/internal/smtp"
 	"github.com/umailserver/umailserver/internal/storage"
-	"github.com/umailserver/umailserver/internal/tls"
+	umailTLS "github.com/umailserver/umailserver/internal/tls"
 	"github.com/umailserver/umailserver/internal/tracing"
 	"github.com/umailserver/umailserver/internal/webhook"
 )
@@ -46,7 +47,7 @@ type Server struct {
 	imapServer        *imap.Server
 	apiServer         *api.Server
 	adminServer       *api.AdminServer
-	tlsManager        *tls.Manager
+	tlsManager        *umailTLS.Manager
 	webhookMgr        *webhook.Manager
 	alertMgr          *alert.Manager
 	pushSvc           *push.Service
@@ -180,16 +181,38 @@ func New(cfg *config.Config) (*Server, error) {
 	s.msgStore = msgStore
 
 	// Initialize TLS manager
-	tlsConfig := tls.Config{
-		AutoTLS:    cfg.TLS.ACME.Enabled,
-		Email:      cfg.TLS.ACME.Email,
-		Domains:    []string{cfg.Server.Hostname},
-		UseStaging: cfg.TLS.ACME.Provider == "letsencrypt-staging",
-		CertFile:   cfg.TLS.CertFile,
-		KeyFile:    cfg.TLS.KeyFile,
+	tlsConfig := umailTLS.Config{
+		AutoTLS:           cfg.TLS.ACME.Enabled,
+		Email:             cfg.TLS.ACME.Email,
+		Domains:           []string{cfg.Server.Hostname},
+		UseStaging:        cfg.TLS.ACME.Provider == "letsencrypt-staging",
+		CertFile:          cfg.TLS.CertFile,
+		KeyFile:           cfg.TLS.KeyFile,
+		ClientAuth:        cfg.TLS.ClientAuth.Enabled,
+		RequireClientCert: cfg.TLS.ClientAuth.RequireCert,
+		ClientCAFile:      cfg.TLS.ClientAuth.CAFile,
+	}
+	// Map verify mode string to tls.ClientAuthType
+	switch cfg.TLS.ClientAuth.VerifyMode {
+	case "verify_if_given":
+		tlsConfig.ClientAuthMode = tls.VerifyClientCertIfGiven
+	case "require_and_verify":
+		tlsConfig.ClientAuthMode = tls.RequireAndVerifyClientCert
+	case "request":
+		tlsConfig.ClientAuthMode = tls.RequestClientCert
+	case "require_any":
+		tlsConfig.ClientAuthMode = tls.RequireAnyClientCert
+	default:
+		if cfg.TLS.ClientAuth.Enabled {
+			if cfg.TLS.ClientAuth.RequireCert {
+				tlsConfig.ClientAuthMode = tls.RequireAndVerifyClientCert
+			} else {
+				tlsConfig.ClientAuthMode = tls.VerifyClientCertIfGiven
+			}
+		}
 	}
 
-	tlsManager, err := tls.NewManager(tlsConfig, logger)
+	tlsManager, err := umailTLS.NewManager(tlsConfig, logger)
 	if err != nil {
 		_ = msgStore.Close()
 		_ = database.Close()

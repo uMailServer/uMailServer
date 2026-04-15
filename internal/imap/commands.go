@@ -2,6 +2,7 @@ package imap
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -12,6 +13,9 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/storage"
+	"github.com/umailserver/umailserver/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // handleCommand parses and handles an IMAP command
@@ -396,9 +400,25 @@ func clientIP(conn net.Conn) string {
 }
 
 func (s *Session) authenticateUser(username, password, okMsg, failMsg string) error {
+	ctx := context.Background()
+
+	// Create tracing span if we have a tracing provider
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "imap.authenticate", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("user", username),
+			attribute.String("ip", clientIP(s.conn)),
+		)
+		defer span.End()
+	}
+
 	ip := clientIP(s.conn)
 	if s.server.isAuthLockedOut(ip) {
 		s.WriteResponse(s.tag, "NO Too many failed authentication attempts")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "auth locked out")
+		}
 		return nil
 	}
 
@@ -418,6 +438,10 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 	if !authenticated {
 		s.server.recordAuthFailure(ip)
 		s.WriteResponse(s.tag, "NO "+failMsg)
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "authentication failed")
+			tracing.SetBoolAttribute(span, "auth.success", false)
+		}
 		return nil
 	}
 
@@ -429,6 +453,11 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 	if s.server.mailstore != nil {
 		// Best-effort: create INBOX if the mailstore supports it
 		_ = s.server.mailstore.CreateMailbox(s.user, "INBOX")
+	}
+
+	if span != nil {
+		tracing.SetBoolAttribute(span, "auth.success", true)
+		tracing.SetStatus(span, tracing.StatusOk, "")
 	}
 
 	s.WriteResponse(s.tag, "OK "+okMsg)
@@ -459,8 +488,23 @@ func (s *Session) handleLogin(args []string) error {
 
 // SELECT command
 func (s *Session) handleSelect(args []string) error {
+	ctx := context.Background()
+
+	// Create tracing span
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "imap.select", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("user", s.user),
+		)
+		defer span.End()
+	}
+
 	if len(args) < 1 {
 		s.WriteResponse(s.tag, "BAD Missing mailbox name")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "missing mailbox name")
+		}
 		return nil
 	}
 
@@ -469,12 +513,23 @@ func (s *Session) handleSelect(args []string) error {
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "mailstore not available")
+		}
 		return nil
+	}
+
+	if span != nil {
+		tracing.SetStringAttribute(span, "mailbox.name", mailboxName)
 	}
 
 	mailbox, err := s.server.mailstore.SelectMailbox(s.user, mailboxName)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		if span != nil {
+			tracing.RecordError(span, err)
+			tracing.SetStatus(span, tracing.StatusError, "select mailbox failed")
+		}
 		return nil
 	}
 
@@ -495,6 +550,12 @@ func (s *Session) handleSelect(args []string) error {
 	// PERMANENTFLAGS
 	s.WriteData("FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)")
 	s.WriteData("OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Flags permitted")
+
+	if span != nil {
+		tracing.SetIntAttribute(span, "mailbox.exists", mailbox.Exists)
+		tracing.SetIntAttribute(span, "mailbox.recent", mailbox.Recent)
+		tracing.SetStatus(span, tracing.StatusOk, "")
+	}
 
 	s.WriteResponse(s.tag, "OK [READ-WRITE] SELECT completed")
 	return nil
@@ -732,12 +793,31 @@ func (s *Session) handleStatus(args []string) error {
 
 // APPEND command
 func (s *Session) handleAppend(args []string, line string) error {
+	ctx := context.Background()
+
+	// Create tracing span
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "imap.append", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("user", s.user),
+		)
+		defer span.End()
+	}
+
 	if len(args) < 2 {
 		s.WriteResponse(s.tag, "BAD Missing mailbox or message data")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "missing mailbox or message data")
+		}
 		return nil
 	}
 
 	mailboxName := strings.Trim(args[0], "\"'")
+
+	if span != nil {
+		tracing.SetStringAttribute(span, "append.mailbox", mailboxName)
+	}
 
 	// Parse flags if present
 	flags := []string{}
@@ -765,6 +845,9 @@ func (s *Session) handleAppend(args []string, line string) error {
 			size, err := strconv.Atoi(sizeStr)
 			if err != nil {
 				s.WriteResponse(s.tag, "BAD Invalid literal size")
+				if span != nil {
+					tracing.SetStatus(span, tracing.StatusError, "invalid literal size")
+				}
 				return nil
 			}
 
@@ -772,7 +855,15 @@ func (s *Session) handleAppend(args []string, line string) error {
 			const maxAppendSize = 50 * 1024 * 1024
 			if size > maxAppendSize {
 				s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
+				if span != nil {
+					tracing.SetStatus(span, tracing.StatusError, "message too large")
+				}
 				return nil
+			}
+
+			if span != nil {
+				tracing.SetIntAttribute(span, "append.size", size)
+				tracing.SetIntAttribute(span, "append.flag_count", len(flags))
 			}
 
 			// Request the literal
@@ -783,6 +874,10 @@ func (s *Session) handleAppend(args []string, line string) error {
 			_, err = io.ReadFull(s.reader, data)
 			if err != nil {
 				s.WriteResponse(s.tag, "NO Failed to read message data")
+				if span != nil {
+					tracing.RecordError(span, err)
+					tracing.SetStatus(span, tracing.StatusError, "read message data failed")
+				}
 				return err
 			}
 
@@ -791,10 +886,18 @@ func (s *Session) handleAppend(args []string, line string) error {
 				err := s.server.mailstore.AppendMessage(s.user, mailboxName, flags, date, data)
 				if err != nil {
 					s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+					if span != nil {
+						tracing.RecordError(span, err)
+						tracing.SetStatus(span, tracing.StatusError, "append failed")
+					}
 					return nil
 				}
 			}
 		}
+	}
+
+	if span != nil {
+		tracing.SetStatus(span, tracing.StatusOk, "")
 	}
 
 	s.WriteResponse(s.tag, "OK APPEND completed")
@@ -994,8 +1097,24 @@ func (s *Session) handleClose() error {
 
 // EXPUNGE command
 func (s *Session) handleExpunge() error {
+	ctx := context.Background()
+
+	// Create tracing span
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "imap.expunge", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("user", s.user),
+			attribute.String("mailbox", s.selected.Name),
+		)
+		defer span.End()
+	}
+
 	if s.server.mailstore == nil || s.selected == nil {
 		s.WriteResponse(s.tag, "NO No mailbox selected")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "no mailbox selected")
+		}
 		return nil
 	}
 
@@ -1005,12 +1124,24 @@ func (s *Session) handleExpunge() error {
 	deletedSeqs, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, criteria)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		if span != nil {
+			tracing.RecordError(span, err)
+			tracing.SetStatus(span, tracing.StatusError, "search deleted messages failed")
+		}
 		return nil
+	}
+
+	if span != nil {
+		tracing.SetIntAttribute(span, "expunge.deleted_count", len(deletedSeqs))
 	}
 
 	err = s.server.mailstore.Expunge(s.user, s.selected.Name)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		if span != nil {
+			tracing.RecordError(span, err)
+			tracing.SetStatus(span, tracing.StatusError, "expunge failed")
+		}
 		return nil
 	}
 
@@ -1030,24 +1161,57 @@ func (s *Session) handleExpunge() error {
 		s.WriteData(fmt.Sprintf("%d EXPUNGE", deletedSeqs[i]))
 	}
 
+	if span != nil {
+		tracing.SetStatus(span, tracing.StatusOk, "")
+	}
+
 	s.WriteResponse(s.tag, "OK EXPUNGE completed")
 	return nil
 }
 
 // SEARCH command
 func (s *Session) handleSearch(args []string, line string) error {
+	ctx := context.Background()
+
+	// Create tracing span
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "imap.search", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("user", s.user),
+			attribute.String("mailbox", s.selected.Name),
+		)
+		defer span.End()
+	}
+
 	if s.server.mailstore == nil || s.selected == nil {
 		s.WriteResponse(s.tag, "NO No mailbox selected")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "no mailbox selected")
+		}
 		return nil
 	}
 
 	// Parse search criteria
 	criteria := parseSearchCriteria(args)
 
+	if span != nil {
+		tracing.SetIntAttribute(span, "search.criteria_count", len(args))
+	}
+
 	uids, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, criteria)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		if span != nil {
+			tracing.RecordError(span, err)
+			tracing.SetStatus(span, tracing.StatusError, "search failed")
+		}
 		return nil
+	}
+
+	if span != nil {
+		tracing.SetIntAttribute(span, "search.result_count", len(uids))
+		tracing.SetStatus(span, tracing.StatusOk, "")
 	}
 
 	// Convert UIDs to sequence numbers and output
@@ -1374,28 +1538,64 @@ func (s *Session) handleUIDThread(args []string, line string) error {
 
 // FETCH command
 func (s *Session) handleFetch(args []string, line string) error {
+	ctx := context.Background()
+
+	// Create tracing span
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "imap.fetch", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("user", s.user),
+			attribute.String("mailbox", s.selected.Name),
+		)
+		defer span.End()
+	}
+
 	if len(args) < 2 {
 		s.WriteResponse(s.tag, "BAD Missing sequence or fetch items")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "missing sequence or fetch items")
+		}
 		return nil
 	}
 
 	if s.server.mailstore == nil || s.selected == nil {
 		s.WriteResponse(s.tag, "NO No mailbox selected")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "no mailbox selected")
+		}
 		return nil
 	}
 
 	seqSet := args[0]
 	fetchItems := parseFetchItems(args[1:])
 
+	if span != nil {
+		tracing.SetStringAttribute(span, "fetch.seqset", seqSet)
+		tracing.SetIntAttribute(span, "fetch.item_count", len(fetchItems))
+	}
+
 	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, fetchItems)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		if span != nil {
+			tracing.RecordError(span, err)
+			tracing.SetStatus(span, tracing.StatusError, "fetch failed")
+		}
 		return nil
+	}
+
+	if span != nil {
+		tracing.SetIntAttribute(span, "fetch.message_count", len(messages))
 	}
 
 	for _, msg := range messages {
 		fetchResponse := formatFetchResponse(msg, fetchItems)
 		s.WriteData(fmt.Sprintf("%d FETCH (%s)", msg.SeqNum, fetchResponse))
+	}
+
+	if span != nil {
+		tracing.SetStatus(span, tracing.StatusOk, "")
 	}
 
 	s.WriteResponse(s.tag, "OK FETCH completed")
@@ -1404,13 +1604,32 @@ func (s *Session) handleFetch(args []string, line string) error {
 
 // STORE command
 func (s *Session) handleStore(args []string) error {
+	ctx := context.Background()
+
+	// Create tracing span
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "imap.store", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("user", s.user),
+			attribute.String("mailbox", s.selected.Name),
+		)
+		defer span.End()
+	}
+
 	if len(args) < 3 {
 		s.WriteResponse(s.tag, "BAD Missing sequence, operation, or flags")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "missing sequence, operation, or flags")
+		}
 		return nil
 	}
 
 	if s.server.mailstore == nil || s.selected == nil {
 		s.WriteResponse(s.tag, "NO No mailbox selected")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "no mailbox selected")
+		}
 		return nil
 	}
 
@@ -1420,6 +1639,12 @@ func (s *Session) handleStore(args []string) error {
 
 	// Parse flags
 	flags := parseFlags(flagsStr)
+
+	if span != nil {
+		tracing.SetStringAttribute(span, "store.seqset", seqSet)
+		tracing.SetStringAttribute(span, "store.operation", operation)
+		tracing.SetIntAttribute(span, "store.flag_count", len(flags))
+	}
 
 	var op FlagOperation
 	switch operation {
@@ -1431,12 +1656,19 @@ func (s *Session) handleStore(args []string) error {
 		op = FlagRemove
 	default:
 		s.WriteResponse(s.tag, "BAD Invalid STORE operation")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "invalid operation")
+		}
 		return nil
 	}
 
 	err := s.server.mailstore.StoreFlags(s.user, s.selected.Name, seqSet, flags, op)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		if span != nil {
+			tracing.RecordError(span, err)
+			tracing.SetStatus(span, tracing.StatusError, "store failed")
+		}
 		return nil
 	}
 
@@ -1448,6 +1680,10 @@ func (s *Session) handleStore(args []string) error {
 				s.WriteData(fmt.Sprintf("%d FETCH (FLAGS (%s))", msg.SeqNum, strings.Join(msg.Flags, " ")))
 			}
 		}
+	}
+
+	if span != nil {
+		tracing.SetStatus(span, tracing.StatusOk, "")
 	}
 
 	s.WriteResponse(s.tag, "OK STORE completed")

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/tracing"
 )
 
 // Server represents an IMAP server
@@ -50,6 +51,9 @@ type Server struct {
 
 	// Connection limits
 	maxConnections int
+
+	// Tracing provider for OpenTelemetry
+	tracingProvider *tracing.Provider
 }
 
 // Mailstore interface for mailbox operations
@@ -110,6 +114,11 @@ func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 // This is used to keep the search index in sync with mailbox state.
 func (s *Server) SetOnExpunge(fn func(user, mailbox string, uid uint32)) {
 	s.onExpunge = fn
+}
+
+// SetTracingProvider sets the OpenTelemetry tracing provider
+func (s *Server) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
 }
 
 // SetAuthLimits configures brute-force protection for IMAP AUTH

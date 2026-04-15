@@ -3,6 +3,7 @@ package smtp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // SessionState represents the current state of an SMTP session
@@ -321,11 +325,28 @@ func (s *Session) handleRCPT(arg string) error {
 
 // handleDATA handles the DATA command
 func (s *Session) handleDATA() error {
+	ctx := context.Background()
+
+	// Create tracing span if provider is available
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "smtp.data", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("mail.from", s.mailFrom),
+			attribute.Int("mail.recipients", len(s.rcptTo)),
+			attribute.Bool("session.tls", s.isTLS),
+		)
+		defer span.End()
+	}
+
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	// Must have RCPT TO first
 	if s.state != StateRcptTo {
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "bad sequence of commands")
+		}
 		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
@@ -707,32 +728,60 @@ func (s *Session) handleQUIT() error {
 
 // handleAUTH handles the AUTH command
 func (s *Session) handleAUTH(arg string) error {
+	ctx := context.Background()
+
+	// Create tracing span if provider is available
+	var span trace.Span
+	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "smtp.auth", tracing.SpanKindServer,
+			attribute.String("session.id", s.id),
+			attribute.String("session.ip", getIPFromAddr(s.conn.RemoteAddr().String())),
+		)
+		defer span.End()
+	}
+
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	// Require TLS for authentication. Port 25 never allows insecure auth;
 	// submission only allows it when explicitly configured.
 	if !s.isTLS && (!s.server.config.IsSubmission || !s.server.config.AllowInsecure) {
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "encryption required")
+		}
 		return s.WriteResponse(538, "5.7.10 Encryption required for requested authentication mechanism")
 	}
 
 	// Must have greeted first
 	if s.state == StateNew {
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "bad sequence")
+		}
 		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
 	// Already authenticated
 	if s.isAuth {
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "already authenticated")
+		}
 		return s.WriteResponse(503, "5.5.1 Already authenticated")
 	}
 
 	// Brute-force lockout check
 	if s.server.isAuthLockedOut(getIPFromAddr(s.conn.RemoteAddr().String())) {
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "auth locked out")
+		}
 		return s.WriteResponse(535, "5.7.8 Too many failed authentication attempts")
 	}
 
 	parts := strings.SplitN(arg, " ", 2)
 	mechanism := strings.ToUpper(parts[0])
+
+	if span != nil {
+		tracing.SetStringAttribute(span, "auth.mechanism", mechanism)
+	}
 
 	switch mechanism {
 	case "PLAIN":
@@ -741,8 +790,14 @@ func (s *Session) handleAUTH(arg string) error {
 		return s.handleAuthLOGIN(parts)
 	case "CRAM-MD5":
 		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "CRAM-MD5 disabled")
+		}
 		return s.WriteResponse(504, "CRAM-MD5 authentication mechanism is disabled")
 	default:
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "unrecognized mechanism")
+		}
 		return s.WriteResponse(504, "Unrecognized authentication type")
 	}
 }

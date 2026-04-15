@@ -49,10 +49,19 @@ type ServerConfig struct {
 
 // TLSConfig holds TLS and certificate settings
 type TLSConfig struct {
-	ACME       ACMEConfig `yaml:"acme"`
-	CertFile   string     `yaml:"cert_file"`   // Manual cert path
-	KeyFile    string     `yaml:"key_file"`    // Manual key path
-	MinVersion string     `yaml:"min_version"` // "1.2" or "1.3"
+	ACME       ACMEConfig       `yaml:"acme"`
+	CertFile   string           `yaml:"cert_file"`   // Manual cert path
+	KeyFile    string           `yaml:"key_file"`    // Manual key path
+	MinVersion string           `yaml:"min_version"` // "1.2" or "1.3"
+	ClientAuth ClientAuthConfig `yaml:"client_auth"` // Client certificate auth
+}
+
+// ClientAuthConfig holds TLS client certificate authentication settings
+type ClientAuthConfig struct {
+	Enabled     bool   `yaml:"enabled"`      // Enable client cert auth
+	RequireCert bool   `yaml:"require_cert"` // Require client cert (mTLS)
+	CAFile      string `yaml:"ca_file"`      // CA certificate file for client verification
+	VerifyMode  string `yaml:"verify_mode"`  // "verify_if_given", "require_and_verify"
 }
 
 // ACMEConfig holds Let's Encrypt settings

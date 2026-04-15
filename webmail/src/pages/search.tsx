@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
   Search,
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import API from "@/utils/api"
 
 interface SearchEmail {
   id: string
@@ -26,44 +27,8 @@ interface SearchEmail {
   read: boolean
 }
 
-const mockSearchResults: SearchEmail[] = [
-  {
-    id: "1",
-    from: "John Smith",
-    fromEmail: "john@example.com",
-    subject: "Project Meeting Discussion",
-    preview: "I wanted to remind you about the meeting tomorrow at 2pm...",
-    date: "Apr 4",
-    folder: "Inbox",
-    read: false,
-  },
-  {
-    id: "2",
-    from: "Sarah Johnson",
-    fromEmail: "sarah.johnson@company.com",
-    subject: "Invoice Approval",
-    preview: "Please approve the invoice payment for March...",
-    date: "Apr 3",
-    folder: "Inbox",
-    read: true,
-  },
-  {
-    id: "3",
-    from: "Tech Newsletter",
-    fromEmail: "newsletter@tech.com",
-    subject: "Weekly Tech Digest",
-    preview: "This week's top stories: AI, cloud computing...",
-    date: "Apr 2",
-    folder: "Inbox",
-    read: true,
-  },
-]
-
-const recentSearches = [
-  "project meeting",
-  "invoice",
-  "newsletter",
-]
+const RECENT_SEARCHES_KEY = 'umail_recent_searches'
+const MAX_RECENT_SEARCHES = 5
 
 export function SearchPage() {
   const navigate = useNavigate()
@@ -71,25 +36,89 @@ export function SearchPage() {
   const [query, setQuery] = useState(searchParams.get("q") || "")
   const [loading, setLoading] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
-  const [filters, setFilters] = useState({
-    inbox: true,
-    sent: true,
-    drafts: true,
-    archive: true,
-    trash: false,
-  })
+  const [results, setResults] = useState<SearchEmail[]>([])
+  const [totalResults, setTotalResults] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const [recentSearches, setRecentSearches] = useState<string[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Load recent searches from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(RECENT_SEARCHES_KEY)
+    if (saved) {
+      try {
+        setRecentSearches(JSON.parse(saved))
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }, [])
+
+  // Save a search term to recent searches
+  const saveRecentSearch = useCallback((term: string) => {
+    if (!term.trim()) return
+    setRecentSearches(prev => {
+      const filtered = prev.filter(s => s.toLowerCase() !== term.toLowerCase())
+      const updated = [term, ...filtered].slice(0, MAX_RECENT_SEARCHES)
+      localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated))
+      return updated
+    })
+  }, [])
+
+  // Clear all recent searches
+  const clearRecentSearches = useCallback(() => {
+    setRecentSearches([])
+    localStorage.removeItem(RECENT_SEARCHES_KEY)
+  }, [])
+
+  // Perform actual search
+  const performSearch = useCallback(async (searchQuery: string) => {
+    if (!searchQuery.trim()) return
+
+    setLoading(true)
+    setError(null)
+    setHasSearched(true)
+
+    try {
+      const response = await API.search(searchQuery)
+      if (response.emails) {
+        const mapped = response.emails.map(email => ({
+          id: email.id,
+          from: email.fromName || email.from,
+          fromEmail: email.from,
+          subject: email.subject,
+          preview: email.preview || email.body?.substring(0, 100) || '',
+          date: email.date,
+          folder: email.folder,
+          read: email.read,
+        }))
+        setResults(mapped)
+        setTotalResults(response.total || mapped.length)
+        saveRecentSearch(searchQuery)
+      } else {
+        setResults([])
+        setTotalResults(0)
+      }
+    } catch (err) {
+      console.error('Search error:', err)
+      setError('Search failed. Please try again.')
+      setResults([])
+      setTotalResults(0)
+    } finally {
+      setLoading(false)
+    }
+  }, [saveRecentSearch])
+
+  // Handle search from URL params (initial load)
   useEffect(() => {
     const q = searchParams.get("q")
     if (q && q !== query) {
       setQuery(q)
-      setHasSearched(true)
-      setLoading(true)
-      setTimeout(() => setLoading(false), 500)
+      performSearch(q)
     }
   }, [searchParams])
 
+  // Focus input on mount
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
@@ -97,30 +126,21 @@ export function SearchPage() {
   const handleSearch = (e?: React.FormEvent) => {
     e?.preventDefault()
     if (!query.trim()) return
-    setLoading(true)
-    setHasSearched(true)
-    setTimeout(() => setLoading(false), 1000)
+    performSearch(query)
   }
 
   const handleClear = () => {
     setQuery("")
     setHasSearched(false)
+    setResults([])
+    setError(null)
     inputRef.current?.focus()
   }
 
   const handleRecentSearch = (term: string) => {
     setQuery(term)
-    setHasSearched(true)
-    setLoading(true)
-    setTimeout(() => setLoading(false), 1000)
+    performSearch(term)
   }
-
-  const results = hasSearched ? mockSearchResults.filter(
-    (e) =>
-      e.subject.toLowerCase().includes(query.toLowerCase()) ||
-      e.from.toLowerCase().includes(query.toLowerCase()) ||
-      e.preview.toLowerCase().includes(query.toLowerCase())
-  ) : []
 
   return (
     <div className="space-y-4">
@@ -131,7 +151,7 @@ export function SearchPage() {
             <Input
               ref={inputRef}
               className="pl-9 pr-20"
-              placeholder="Search emails, contacts, or files..."
+              placeholder="Search emails by subject, sender, or content..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -147,55 +167,17 @@ export function SearchPage() {
               </Button>
             )}
           </div>
-          <Button type="submit" disabled={loading}>
+          <Button type="submit" disabled={loading || !query.trim()}>
             {loading ? "Searching..." : "Search"}
           </Button>
         </form>
-
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Filter className="h-4 w-4" />
-            <span>Filters:</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <Checkbox
-                checked={filters.inbox}
-                onCheckedChange={(v) => setFilters({ ...filters, inbox: !!v })}
-              />
-              <span className="text-sm">Inbox</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <Checkbox
-                checked={filters.sent}
-                onCheckedChange={(v) => setFilters({ ...filters, sent: !!v })}
-              />
-              <span className="text-sm">Sent</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <Checkbox
-                checked={filters.drafts}
-                onCheckedChange={(v) => setFilters({ ...filters, drafts: !!v })}
-              />
-              <span className="text-sm">Drafts</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <Checkbox
-                checked={filters.archive}
-                onCheckedChange={(v) => setFilters({ ...filters, archive: !!v })}
-              />
-              <span className="text-sm">Archive</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <Checkbox
-                checked={filters.trash}
-                onCheckedChange={(v) => setFilters({ ...filters, trash: !!v })}
-              />
-              <span className="text-sm">Trash</span>
-            </label>
-          </div>
-        </div>
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-destructive">
+          {error}
+        </div>
+      )}
 
       {loading ? (
         <div className="space-y-4">
@@ -225,10 +207,20 @@ export function SearchPage() {
           {/* Recent Searches */}
           {recentSearches.length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
-                <Clock className="h-4 w-4" />
-                Recent searches
-              </h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  Recent searches
+                </h4>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearRecentSearches}
+                  className="text-xs"
+                >
+                  Clear
+                </Button>
+              </div>
               <div className="space-y-1">
                 {recentSearches.map((term) => (
                   <Button
@@ -263,7 +255,7 @@ export function SearchPage() {
       ) : (
         <div className="space-y-2">
           <div className="text-sm text-muted-foreground px-2">
-            {results.length} result{results.length !== 1 ? "s" : ""} for "<span className="font-medium">{query}</span>"
+            {totalResults} result{totalResults !== 1 ? "s" : ""} for "<span className="font-medium">{query}</span>"
           </div>
           <div className="rounded-lg border bg-card divide-y">
             {results.map((email) => (

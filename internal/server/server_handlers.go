@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,12 +13,24 @@ import (
 
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/storage"
+	"github.com/umailserver/umailserver/internal/tracing"
 	"github.com/umailserver/umailserver/internal/webhook"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // authenticate validates user credentials
 func (s *Server) authenticate(username, password string) (bool, error) {
+	// Create tracing span if tracing is enabled
+	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
+		ctx, span := s.tracingProvider.StartSpanWithKind(context.Background(), "authenticate", tracing.SpanKindServer,
+			attribute.String("auth.username", username),
+		)
+		defer span.End()
+		_ = ctx // Use ctx if needed for future LDAP tracing
+	}
+
 	// Try LDAP authentication first if enabled
 	if s.ldapClient != nil {
 		ldapUser, err := s.ldapClient.Authenticate(username, password)
@@ -86,6 +100,18 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 
 // deliverMessageWithSieve delivers an incoming message with optional Sieve filtering actions
 func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, sieveActions []string) error {
+	// Create tracing span if tracing is enabled
+	var ctx context.Context = context.Background()
+	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
+		var span trace.Span
+		ctx, span = s.tracingProvider.StartSpanWithKind(ctx, "deliverMessage", tracing.SpanKindServer,
+			attribute.String("mail.from", from),
+			attribute.Int("mail.recipients", len(to)),
+			attribute.Int("mail.size", len(data)),
+		)
+		defer span.End()
+	}
+
 	// Parse sieve actions for fileinto and redirect
 	var targetFolder string
 	var redirectAddrs []string
@@ -361,4 +387,46 @@ func generateSecureToken() string {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// authenticateClientCert authenticates a user based on client certificate
+// Returns the email address extracted from the certificate and true if valid
+func (s *Server) authenticateClientCert(cert *x509.Certificate) (string, bool) {
+	if cert == nil {
+		return "", false
+	}
+
+	// Extract email from certificate
+	var email string
+	if len(cert.EmailAddresses) > 0 {
+		email = cert.EmailAddresses[0]
+	} else if cert.Subject.CommonName != "" {
+		// Try to use CommonName as email if it looks like one
+		if strings.Contains(cert.Subject.CommonName, "@") {
+			email = cert.Subject.CommonName
+		}
+	}
+
+	if email == "" {
+		s.logger.Debug("Client certificate has no email address")
+		return "", false
+	}
+
+	// Verify the account exists
+	user, domain := parseEmail(email)
+	account, err := s.database.GetAccount(domain, user)
+	if err != nil {
+		s.logger.Debug("Account not found for client certificate", "email", email)
+		return "", false
+	}
+
+	if !account.IsActive {
+		s.logger.Debug("Account is not active", "email", email)
+		return "", false
+	}
+
+	// Log successful client cert auth
+	s.logger.Info("Client certificate authentication successful", "email", email)
+
+	return email, true
 }

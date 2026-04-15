@@ -1276,6 +1276,358 @@ func getMailboxNameFromID(id string) string {
 	}
 }
 
+// handleMailboxChanges handles Mailbox/changes method (RFC 8620)
+func (s *Server) handleMailboxChanges(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+	sinceState, _ := args["sinceState"].(string)
+	maxChanges, _ := args["maxChanges"].(float64)
+
+	if valid, resp := validateAccountId(accountID, user, "Mailbox/changes", call.ID); !valid {
+		return resp
+	}
+
+	// Default maxChanges
+	if maxChanges == 0 || maxChanges > 256 {
+		maxChanges = 256
+	}
+
+	// Parse sinceState (format: "state-<timestamp>")
+	// In a real implementation, we'd track actual changes
+	// For now, return empty changes
+	_ = sinceState
+
+	return Response{
+		Name: "Mailbox/changes",
+		Args: map[string]interface{}{
+			"accountId":         accountID,
+			"oldState":          sinceState,
+			"newState":          fmt.Sprintf("state-%d", time.Now().Unix()),
+			"hasMoreChanges":    false,
+			"created":           []string{},
+			"updated":           []string{},
+			"destroyed":         []string{},
+			"updatedProperties": nil,
+		},
+		ID: call.ID,
+	}
+}
+
+// handleMailboxQueryChanges handles Mailbox/queryChanges method (RFC 8620)
+func (s *Server) handleMailboxQueryChanges(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+	sinceQueryState, _ := args["sinceQueryState"].(string)
+	maxChanges, _ := args["maxChanges"].(float64)
+
+	if valid, resp := validateAccountId(accountID, user, "Mailbox/queryChanges", call.ID); !valid {
+		return resp
+	}
+
+	if maxChanges == 0 || maxChanges > 256 {
+		maxChanges = 256
+	}
+
+	_ = sinceQueryState
+
+	return Response{
+		Name: "Mailbox/queryChanges",
+		Args: map[string]interface{}{
+			"accountId":      accountID,
+			"oldQueryState":  sinceQueryState,
+			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"hasMoreChanges": false,
+			"added":          []map[string]interface{}{},
+			"removed":        []string{},
+		},
+		ID: call.ID,
+	}
+}
+
+// handleEmailQueryChanges handles Email/queryChanges method (RFC 8620)
+func (s *Server) handleEmailQueryChanges(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+	sinceQueryState, _ := args["sinceQueryState"].(string)
+	maxChanges, _ := args["maxChanges"].(float64)
+
+	if valid, resp := validateAccountId(accountID, user, "Email/queryChanges", call.ID); !valid {
+		return resp
+	}
+
+	if maxChanges == 0 || maxChanges > 256 {
+		maxChanges = 256
+	}
+
+	_ = sinceQueryState
+
+	return Response{
+		Name: "Email/queryChanges",
+		Args: map[string]interface{}{
+			"accountId":      accountID,
+			"oldQueryState":  sinceQueryState,
+			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"hasMoreChanges": false,
+			"added":          []map[string]interface{}{},
+			"removed":        []string{},
+		},
+		ID: call.ID,
+	}
+}
+
+// handleThreadQuery handles Thread/query method (RFC 8620)
+func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+
+	if valid, resp := validateAccountId(accountID, user, "Thread/query", call.ID); !valid {
+		return resp
+	}
+
+	filter := args["filter"]
+	sortList, _ := args["sort"].([]interface{})
+	position, _ := args["position"].(float64)
+	limit, _ := args["limit"].(float64)
+
+	if limit == 0 || limit > 100 {
+		limit = 30
+	}
+
+	filterCondition := parseFilter(filter)
+
+	// Get all messages and group by thread
+	var threadIDs []string
+	threadSet := make(map[string]bool)
+
+	mailboxes, _ := s.db.ListMailboxes(user)
+	for _, mbox := range mailboxes {
+		uids, _ := s.db.GetMessageUIDs(user, mbox)
+		for _, uid := range uids {
+			meta, err := s.db.GetMessageMetadata(user, mbox, uid)
+			if err != nil || meta == nil {
+				continue
+			}
+
+			if !matchesFilter(meta, filterCondition) {
+				continue
+			}
+
+			if meta.ThreadID != "" && !threadSet[meta.ThreadID] {
+				threadSet[meta.ThreadID] = true
+				threadIDs = append(threadIDs, meta.ThreadID)
+			}
+		}
+	}
+
+	// Sort threads (by most recent message in thread)
+	if len(sortList) > 0 {
+		data, _ := json.Marshal(sortList[0])
+		var comp Comparator
+		_ = json.Unmarshal(data, &comp)
+		_ = comp
+		// Sort by thread's most recent message
+		sort.Slice(threadIDs, func(i, j int) bool {
+			return threadIDs[i] < threadIDs[j]
+		})
+	}
+
+	total := len(threadIDs)
+	start := int(position)
+	if start > total {
+		start = total
+	}
+	end := start + int(limit)
+	if end > total {
+		end = total
+	}
+
+	ids := threadIDs[start:end]
+
+	return Response{
+		Name: "Thread/query",
+		Args: map[string]interface{}{
+			"accountId":           accountID,
+			"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
+			"canCalculateChanges": false,
+			"position":            int(position),
+			"total":               total,
+			"ids":                 ids,
+		},
+		ID: call.ID,
+	}
+}
+
+// handleThreadChanges handles Thread/changes method (RFC 8620)
+func (s *Server) handleThreadChanges(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+	sinceState, _ := args["sinceState"].(string)
+	maxChanges, _ := args["maxChanges"].(float64)
+
+	if valid, resp := validateAccountId(accountID, user, "Thread/changes", call.ID); !valid {
+		return resp
+	}
+
+	if maxChanges == 0 || maxChanges > 256 {
+		maxChanges = 256
+	}
+
+	_ = sinceState
+
+	return Response{
+		Name: "Thread/changes",
+		Args: map[string]interface{}{
+			"accountId":      accountID,
+			"oldState":       sinceState,
+			"newState":       fmt.Sprintf("state-%d", time.Now().Unix()),
+			"hasMoreChanges": false,
+			"created":        []string{},
+			"updated":        []string{},
+			"destroyed":      []string{},
+		},
+		ID: call.ID,
+	}
+}
+
+// handleThreadQueryChanges handles Thread/queryChanges method (RFC 8620)
+func (s *Server) handleThreadQueryChanges(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+	sinceQueryState, _ := args["sinceQueryState"].(string)
+	maxChanges, _ := args["maxChanges"].(float64)
+
+	if valid, resp := validateAccountId(accountID, user, "Thread/queryChanges", call.ID); !valid {
+		return resp
+	}
+
+	if maxChanges == 0 || maxChanges > 256 {
+		maxChanges = 256
+	}
+
+	_ = sinceQueryState
+
+	return Response{
+		Name: "Thread/queryChanges",
+		Args: map[string]interface{}{
+			"accountId":      accountID,
+			"oldQueryState":  sinceQueryState,
+			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"hasMoreChanges": false,
+			"added":          []map[string]interface{}{},
+			"removed":        []string{},
+		},
+		ID: call.ID,
+	}
+}
+
+// handleIdentityChanges handles Identity/changes method (RFC 8620)
+func (s *Server) handleIdentityChanges(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+	sinceState, _ := args["sinceState"].(string)
+	maxChanges, _ := args["maxChanges"].(float64)
+
+	if valid, resp := validateAccountId(accountID, user, "Identity/changes", call.ID); !valid {
+		return resp
+	}
+
+	if maxChanges == 0 || maxChanges > 256 {
+		maxChanges = 256
+	}
+
+	_ = sinceState
+
+	// Identities are derived from account settings - rarely change
+	return Response{
+		Name: "Identity/changes",
+		Args: map[string]interface{}{
+			"accountId":      accountID,
+			"oldState":       sinceState,
+			"newState":       fmt.Sprintf("state-%d", time.Now().Unix()),
+			"hasMoreChanges": false,
+			"created":        []string{},
+			"updated":        []string{},
+			"destroyed":      []string{},
+		},
+		ID: call.ID,
+	}
+}
+
+// handleIdentityQuery handles Identity/query method (RFC 8620)
+func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+
+	if valid, resp := validateAccountId(accountID, user, "Identity/query", call.ID); !valid {
+		return resp
+	}
+
+	filter := args["filter"]
+	sort, _ := args["sort"].([]interface{})
+	position, _ := args["position"].(float64)
+	limit, _ := args["limit"].(float64)
+	calculateTotal, _ := args["calculateTotal"].(bool)
+
+	if limit == 0 || limit > 256 {
+		limit = 256
+	}
+
+	_ = filter
+	_ = sort
+
+	// Return default identity
+	ids := []string{"default"}
+
+	total := 1
+	if !calculateTotal {
+		total = 0
+	}
+
+	return Response{
+		Name: "Identity/query",
+		Args: map[string]interface{}{
+			"accountId":           accountID,
+			"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
+			"canCalculateChanges": false,
+			"position":            int(position),
+			"total":               total,
+			"ids":                 ids,
+		},
+		ID: call.ID,
+	}
+}
+
+// handleIdentityQueryChanges handles Identity/queryChanges method (RFC 8620)
+func (s *Server) handleIdentityQueryChanges(user string, call MethodCall) Response {
+	args := call.Args
+	accountID, _ := args["accountId"].(string)
+	sinceQueryState, _ := args["sinceQueryState"].(string)
+	maxChanges, _ := args["maxChanges"].(float64)
+
+	if valid, resp := validateAccountId(accountID, user, "Identity/queryChanges", call.ID); !valid {
+		return resp
+	}
+
+	if maxChanges == 0 || maxChanges > 256 {
+		maxChanges = 256
+	}
+
+	_ = sinceQueryState
+
+	return Response{
+		Name: "Identity/queryChanges",
+		Args: map[string]interface{}{
+			"accountId":      accountID,
+			"oldQueryState":  sinceQueryState,
+			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"hasMoreChanges": false,
+			"added":          []map[string]interface{}{},
+			"removed":        []string{},
+		},
+		ID: call.ID,
+	}
+}
+
 // storageToJMAPEmail converts storage metadata to JMAP Email
 func storageToJMAPEmail(meta *storage.MessageMetadata, properties []string, mailbox string) Email {
 	mailboxID := getMailboxIDFromName(mailbox)
