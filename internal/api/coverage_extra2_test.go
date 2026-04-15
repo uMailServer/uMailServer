@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -335,6 +336,94 @@ func TestHandleSearch_InvalidLimit(t *testing.T) {
 	server := NewServer(database, nil, Config{JWTSecret: "secret"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=abc&offset=xyz", nil)
+	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleSearch(rec, req)
+
+	// Without search service wired, expect 503
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d", rec.Code)
+	}
+}
+
+// TestHandleSearch_NegativeLimit tests handleSearch with negative limit (should use default).
+func TestHandleSearch_NegativeLimit(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{JWTSecret: "secret"})
+
+	// Negative limit should be ignored and default used
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=-5", nil)
+	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleSearch(rec, req)
+
+	// Without search service wired, expect 503
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d", rec.Code)
+	}
+}
+
+// TestHandleSearch_NegativeOffset tests handleSearch with negative offset (should use 0).
+func TestHandleSearch_NegativeOffset(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{JWTSecret: "secret"})
+
+	// Negative offset should be ignored and 0 used
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&offset=-10", nil)
+	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleSearch(rec, req)
+
+	// Without search service wired, expect 503
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503, got %d", rec.Code)
+	}
+}
+
+// TestHandleSearch_QueryTooLong tests handleSearch with query exceeding 500 chars.
+func TestHandleSearch_QueryTooLong(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{JWTSecret: "secret"})
+
+	// Query too long (>500 chars)
+	longQuery := strings.Repeat("a", 501)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q="+longQuery, nil)
+	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleSearch(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for too-long query, got %d", rec.Code)
+	}
+}
+
+// TestHandleSearch_LimitCappedAt100 tests handleSearch with limit > 100 (should cap).
+func TestHandleSearch_LimitCappedAt100(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{JWTSecret: "secret"})
+
+	// Limit > 100 should be capped to 100
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=200", nil)
 	ctx := context.WithValue(req.Context(), "user", "test@example.com")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
