@@ -19,6 +19,7 @@ import (
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/ratelimit"
+	"github.com/umailserver/umailserver/internal/storage"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -3274,6 +3275,85 @@ func TestMailHandler_HandleMailGet_NilStorage(t *testing.T) {
 	// With nil storage, returns 404 not found
 	if w.Code != http.StatusNotFound {
 		t.Errorf("Expected status 404, got %d", w.Code)
+	}
+}
+
+func TestGetEmailsFromStorage_EmptyMailbox(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox but add no messages
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+
+	emails, err := h.getEmailsFromStorage("user@example.com", "INBOX")
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if len(emails) != 0 {
+		t.Errorf("Expected 0 emails, got %d", len(emails))
+	}
+}
+
+func TestGetEmailsFromStorage_NonExistentMailbox(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	// msgStore is nil
+
+	// Non-existent mailbox
+	emails, err := h.getEmailsFromStorage("user@example.com", "NonExistent")
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if len(emails) != 0 {
+		t.Errorf("Expected 0 emails, got %d", len(emails))
+	}
+}
+
+func TestGetEmailFromStorage_EmptyMailbox(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox but no messages
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+
+	email, err := h.getEmailFromStorage("user@example.com", "INBOX", "non-existent-id")
+	if err == nil {
+		t.Error("Expected error for non-existent message")
+	}
+	if email != nil {
+		t.Error("Expected nil email")
 	}
 }
 
