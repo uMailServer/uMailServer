@@ -615,3 +615,99 @@ func TestMailSend_WithBCC(t *testing.T) {
 		t.Errorf("Expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// --- handleMailSend with storage ---
+
+func TestHandleMailSend_WithStorage(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+	server.SetMailDB(mailDB)
+	server.SetMsgStore(msgStore)
+
+	domain := &db.DomainData{Name: "mailtest.com", MaxAccounts: 10, IsActive: true}
+	_ = database.CreateDomain(domain)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email: "user@mailtest.com", LocalPart: "user", Domain: "mailtest.com",
+		PasswordHash: string(hash), IsActive: true, IsAdmin: true,
+	}
+	_ = database.CreateAccount(account)
+
+	token := helperLogin(t, server, "user@mailtest.com", "password123")
+
+	body := map[string]interface{}{
+		"to":      []string{"recipient@example.com"},
+		"subject": "Test with storage",
+		"body":    "Test message",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mail/send", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify message was stored in Sent folder
+	sentBox, _ := mailDB.GetMailbox("user@mailtest.com", "Sent")
+	if sentBox == nil {
+		t.Error("Expected Sent mailbox to be created")
+	}
+}
+
+// --- handleMailList folder mapping ---
+
+func TestHandleMailList_FolderMapping(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	domain := &db.DomainData{Name: "mailtest.com", MaxAccounts: 10, IsActive: true}
+	_ = database.CreateDomain(domain)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email: "user@mailtest.com", LocalPart: "user", Domain: "mailtest.com",
+		PasswordHash: string(hash), IsActive: true, IsAdmin: true,
+	}
+	_ = database.CreateAccount(account)
+
+	token := helperLogin(t, server, "user@mailtest.com", "password123")
+
+	// Test with "spam" folder (maps to internal "Junk")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/inbox?folder=spam", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req = req.WithContext(withUser(req.Context(), "user@mailtest.com"))
+	rec := httptest.NewRecorder()
+
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", rec.Code)
+	}
+}
