@@ -95,9 +95,14 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		}
 	}
 	if settings.EndDate != "" {
-		if end, err := time.Parse("2006-01-02", settings.EndDate); err == nil && now.After(end.Add(24*time.Hour)) {
+		if end, err := time.Parse("2006-01-02", settings.EndDate); err == nil && !now.Before(end.Add(24*time.Hour)) {
 			return
 		}
+	}
+
+	// Guard against nil queue
+	if s.queue == nil {
+		return
 	}
 
 	autoReply := "From: " + recipientEmail + "\r\n" +
