@@ -186,7 +186,13 @@ func getClientIP(r *http.Request, trustedProxies []string) string {
 // getRemoteAddrIP extracts the IP from RemoteAddr without port
 func getRemoteAddrIP(r *http.Request) string {
 	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+	// Handle IPv6 addresses like [::1]:8080
+	if len(ip) > 1 && ip[0] == '[' {
+		if idx := strings.LastIndex(ip, "]"); idx != -1 {
+			ip = ip[1:idx]
+		}
+	} else if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		// Check if this is IPv4 (has no colons in the part before last colon)
 		ip = ip[:idx]
 	}
 	return ip

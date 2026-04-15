@@ -529,10 +529,12 @@ func (s *Server) Start(addr string) error {
 
 	s.serverMu.Lock()
 	s.httpServer = &http.Server{
-		Addr:         addr,
-		Handler:      s,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		Addr:              addr,
+		Handler:           s,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	s.serverMu.Unlock()
 
@@ -626,6 +628,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		}
 		if allowed != "" {
 			w.Header().Set("Access-Control-Allow-Origin", allowed)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")

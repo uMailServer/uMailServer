@@ -206,6 +206,7 @@ func (m *Manager) GetTLSConfigWithClientAuth(requireClientCert bool) *tls.Config
 	return &tls.Config{
 		GetCertificate: m.GetCertificate,
 		MinVersion:     minVersion,
+		MaxVersion:     tls.VersionTLS13,
 		CipherSuites: []uint16{
 			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
