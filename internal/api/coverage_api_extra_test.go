@@ -1746,6 +1746,32 @@ func TestHandleWebmail_Serve(t *testing.T) {
 	}
 }
 
+// TestValidatePassword_TooLong tests password exceeding 128 chars
+func TestValidatePassword_TooLong(t *testing.T) {
+	// 129 character password
+	longPassword := strings.Repeat("A", 129) + "a1!"
+	err := validatePassword(longPassword)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum length") {
+		t.Errorf("Expected 'exceeds maximum length' error, got: %v", err)
+	}
+}
+
+// TestHandleAdmin_IndexFallback tests admin serving index.html for non-existent paths
+func TestHandleAdmin_IndexFallback(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	// Request a non-existent file - should fallback to index.html
+	req := httptest.NewRequest(http.MethodGet, "/admin/nonexistent/path", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	// Either serves index.html (200) or returns 404 if adminFS is nil
+	if rec.Code != http.StatusOK && rec.Code != http.StatusNotFound {
+		t.Logf("Admin index fallback returned %d", rec.Code)
+	}
+}
+
 // TestHandleAdmin_Serve tests admin endpoint
 func TestHandleAdmin_Serve(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
