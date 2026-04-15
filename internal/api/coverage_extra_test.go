@@ -3276,3 +3276,16 @@ func TestMailHandler_HandleMailGet_NilStorage(t *testing.T) {
 		t.Errorf("Expected status 404, got %d", w.Code)
 	}
 }
+
+func TestMailHandler_HandleMailList_MethodNotAllowed(t *testing.T) {
+	h := &MailHandler{}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mail/inbox", nil)
+	w := httptest.NewRecorder()
+
+	h.handleMailList(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
