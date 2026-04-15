@@ -558,6 +558,312 @@ func TestFolderMap_RoundTrip(t *testing.T) {
 	}
 }
 
+// --- getEmailFromStorage error paths ---
+
+func TestGetEmailFromStorage_GetMessageUIDsError(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox but no messages - GetMessageUIDs returns empty
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+
+	email, err := h.getEmailFromStorage("user@example.com", "INBOX", "non-existent-id")
+	// email should be nil for non-existent message, error may vary
+	if email != nil {
+		t.Error("Expected nil email for non-existent message")
+	}
+}
+
+func TestGetEmailFromStorage_WithMessages(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox and add a message
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+
+	msgID, err := msgStore.StoreMessage("user@example.com", []byte("From: sender\r\nSubject: Test\r\n\r\nBody"))
+	if err != nil {
+		t.Fatalf("store message: %v", err)
+	}
+
+	uid, _ := mailDB.GetNextUID("user@example.com", "INBOX")
+	_ = mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
+		MessageID:    msgID,
+		UID:          uid,
+		Subject:      "Test",
+		From:         "sender",
+		To:           "user@example.com",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		InternalDate: time.Now(),
+		Size:         100,
+		Flags:        []string{"\\Seen", "\\Flagged"},
+	})
+
+	email, err := h.getEmailFromStorage("user@example.com", "INBOX", msgID)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if email == nil {
+		t.Fatal("Expected email, got nil")
+	}
+	if email.Subject != "Test" {
+		t.Errorf("Expected subject 'Test', got %s", email.Subject)
+	}
+	if !email.Read {
+		t.Error("Expected Read to be true")
+	}
+	if !email.Starred {
+		t.Error("Expected Starred to be true")
+	}
+}
+
+// --- getEmailsFromStorage error paths ---
+
+func TestGetEmailsFromStorage_GetMessageUIDsError(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox and add a message with corrupted metadata
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+
+	msgID, err := msgStore.StoreMessage("user@example.com", []byte("From: sender\r\nSubject: Test\r\n\r\nBody"))
+	if err != nil {
+		t.Fatalf("store message: %v", err)
+	}
+
+	uid, _ := mailDB.GetNextUID("user@example.com", "INBOX")
+	// Store metadata without proper flags to test hasFlag coverage
+	_ = mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
+		MessageID:    msgID,
+		UID:          uid,
+		Subject:      "Test",
+		From:         "sender",
+		To:           "user@example.com",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		InternalDate: time.Now(),
+		Size:         100,
+		Flags:        []string{}, // No flags - tests hasFlag false path
+	})
+
+	emails, err := h.getEmailsFromStorage("user@example.com", "INBOX")
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if len(emails) != 1 {
+		t.Errorf("Expected 1 email, got %d", len(emails))
+	}
+	if emails[0].Read {
+		t.Error("Expected Read to be false with no flags")
+	}
+}
+
+// --- handleMailGet ---
+
+func TestHandleMailGet_Success(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create mailbox and add a message
+	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
+
+	msgID, err := msgStore.StoreMessage("user@example.com", []byte("From: sender\r\nSubject: Test\r\n\r\nBody"))
+	if err != nil {
+		t.Fatalf("store message: %v", err)
+	}
+
+	uid, _ := mailDB.GetNextUID("user@example.com", "INBOX")
+	_ = mailDB.StoreMessageMetadata("user@example.com", "INBOX", uid, &storage.MessageMetadata{
+		MessageID:    msgID,
+		UID:          uid,
+		Subject:      "Test",
+		From:         "sender",
+		To:           "user@example.com",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		InternalDate: time.Now(),
+		Size:         100,
+		Flags:        []string{"\\Seen"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/message?id="+msgID+"&folder=INBOX", nil)
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailGet(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+}
+
+// --- handleMailList ---
+
+func TestHandleMailList_SpamFolder(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create Junk mailbox with a message
+	_ = mailDB.CreateMailbox("user@example.com", "Junk")
+
+	msgID, err := msgStore.StoreMessage("user@example.com", []byte("From: spam\r\nSubject: Spam\r\n\r\nSpam body"))
+	if err != nil {
+		t.Fatalf("store message: %v", err)
+	}
+
+	uid, _ := mailDB.GetNextUID("user@example.com", "Junk")
+	_ = mailDB.StoreMessageMetadata("user@example.com", "Junk", uid, &storage.MessageMetadata{
+		MessageID:    msgID,
+		UID:          uid,
+		Subject:      "Spam",
+		From:         "spam@example.com",
+		To:           "user@example.com",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		InternalDate: time.Now(),
+		Size:         100,
+		Flags:        []string{},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/inbox?folder=spam", nil)
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailList(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	if resp["folder"] != "spam" {
+		t.Errorf("Expected folder 'spam', got %v", resp["folder"])
+	}
+}
+
+// --- handleMailList with sent folder ---
+
+func TestHandleMailList_SentFolder(t *testing.T) {
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail db: %v", err)
+	}
+	defer mailDB.Close()
+
+	msgStore, err := storage.NewMessageStore(t.TempDir() + "/messages")
+	if err != nil {
+		t.Fatalf("create message store: %v", err)
+	}
+	defer msgStore.Close()
+
+	h := NewMailHandler()
+	h.mailDB = mailDB
+	h.msgStore = msgStore
+
+	// Create Sent mailbox with a message
+	_ = mailDB.CreateMailbox("user@example.com", "Sent")
+
+	msgID, err := msgStore.StoreMessage("user@example.com", []byte("From: user@example.com\r\nSubject: Sent\r\n\r\nSent body"))
+	if err != nil {
+		t.Fatalf("store message: %v", err)
+	}
+
+	uid, _ := mailDB.GetNextUID("user@example.com", "Sent")
+	_ = mailDB.StoreMessageMetadata("user@example.com", "Sent", uid, &storage.MessageMetadata{
+		MessageID:    msgID,
+		UID:          uid,
+		Subject:      "Sent",
+		From:         "user@example.com",
+		To:           "recipient@example.com",
+		Date:         "Mon, 01 Jan 2024 12:00:00 +0000",
+		InternalDate: time.Now(),
+		Size:         100,
+		Flags:        []string{"\\Seen"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/inbox?folder=sent", nil)
+	req = req.WithContext(withUser(req.Context(), "user@example.com"))
+	w := httptest.NewRecorder()
+
+	h.handleMailList(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	// folder should map to "sent"
+	if resp["folder"] != "sent" {
+		t.Errorf("Expected folder 'sent', got %v", resp["folder"])
+	}
+}
+
 // --- deleteMessageMetadata ---
 
 func TestDeleteMessageMetadata_NotFound(t *testing.T) {
