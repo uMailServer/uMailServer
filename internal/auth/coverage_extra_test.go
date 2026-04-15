@@ -1173,3 +1173,273 @@ func TestBuildAMSSignatureDataMultipleValues(t *testing.T) {
 		t.Error("Should contain third received header")
 	}
 }
+
+// TestParseRUAEmail tests ParseRUAEmail function
+func TestParseRUAEmail(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		wantErr  bool
+	}{
+		{"mailto:dmarc@example.com", "dmarc@example.com", false},
+		{"dmarc@example.com", "dmarc@example.com", false},
+		{"mailto:", "", true},
+		{"", "", true},
+	}
+
+	for _, tc := range tests {
+		result, err := ParseRUAEmail(tc.input)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ParseRUAEmail(%q) error = %v, wantErr %v", tc.input, err, tc.wantErr)
+		}
+		if result != tc.expected {
+			t.Errorf("ParseRUAEmail(%q) = %q, want %q", tc.input, result, tc.expected)
+		}
+	}
+}
+
+// --- ARC Seal tests ---
+
+// TestARCSignerSeal tests the Seal function
+func TestARCSignerSeal(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	resolver := newMockDNSResolver()
+	pubKeyDNS := GetPublicKeyForDNS(privateKey)
+	dnsRecord := "v=DKIM1; k=rsa; p=" + pubKeyDNS
+	resolver.txtRecords["arc._domainkey.example.com"] = []string{dnsRecord}
+
+	signer := NewARCSigner(resolver, privateKey, "example.com", "arc")
+
+	headers := map[string][]string{
+		"From": {"sender@example.com"},
+		"To":   {"recipient@example.com"},
+	}
+	body := []byte("Test message\r\n")
+	authResults := "spf=pass"
+
+	newHeaders, err := signer.Seal(headers, body, authResults)
+	if err != nil {
+		t.Fatalf("Seal failed: %v", err)
+	}
+
+	// Should have ARC headers added
+	if _, exists := newHeaders["ARC-Authentication-Results"]; !exists {
+		t.Error("expected ARC-Authentication-Results header")
+	}
+	if _, exists := newHeaders["ARC-Message-Signature"]; !exists {
+		t.Error("expected ARC-Message-Signature header")
+	}
+	if _, exists := newHeaders["ARC-Seal"]; !exists {
+		t.Error("expected ARC-Seal header")
+	}
+
+	// Should preserve original headers
+	if _, exists := newHeaders["From"]; !exists {
+		t.Error("expected original From header to be preserved")
+	}
+}
+
+// TestDetermineNextInstance tests the determineNextInstance function
+func TestDetermineNextInstance(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  map[string][]string
+		expected int
+	}{
+		{
+			name:     "no ARC headers",
+			headers:  map[string][]string{"From": {"test@example.com"}},
+			expected: 1,
+		},
+		{
+			name: "single ARC seal",
+			headers: map[string][]string{
+				"ARC-Seal": {"i=1; cv=none; d=example.com; s=arc; b=sig"},
+			},
+			expected: 2,
+		},
+		{
+			name: "multiple ARC seals",
+			headers: map[string][]string{
+				"ARC-Seal": {
+					"i=1; cv=none; d=example.com; s=arc; b=sig",
+					"i=2; cv=pass; d=example.com; s=arc; b=sig",
+					"i=3; cv=pass; d=example.com; s=arc; b=sig",
+				},
+			},
+			expected: 4,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := determineNextInstance(tc.headers)
+			if result != tc.expected {
+				t.Errorf("determineNextInstance() = %d, want %d", result, tc.expected)
+			}
+		})
+	}
+}
+
+// --- DANE tests ---
+
+// TestNewDANEValidatorWithDNS tests NewDANEValidatorWithDNS constructor
+func TestNewDANEValidatorWithDNS(t *testing.T) {
+	resolver := newMockDNSResolver()
+	validator := NewDANEValidatorWithDNS(resolver, "127.0.0.1:53")
+
+	if validator == nil {
+		t.Fatal("NewDANEValidatorWithDNS returned nil")
+	}
+
+	// Should be able to perform validation operations
+	// (actual validation requires real DNS setup)
+}
+
+// --- TOTP Crypto tests ---
+
+// TestDeriveTOTPKey tests the deriveTOTPKey function
+func TestDeriveTOTPKey(t *testing.T) {
+	// Test with a simple master key
+	key := deriveTOTPKey("test-master-key")
+
+	// Should return 32 bytes
+	if len(key) != 32 {
+		t.Errorf("expected 32 bytes, got %d", len(key))
+	}
+
+	// Should be deterministic
+	key2 := deriveTOTPKey("test-master-key")
+	for i := range key {
+		if key[i] != key2[i] {
+			t.Error("deriveTOTPKey should be deterministic")
+			break
+		}
+	}
+
+	// Different keys should produce different results
+	key3 := deriveTOTPKey("different-key")
+	allSame := true
+	for i := range key {
+		if key[i] != key3[i] {
+			allSame = false
+			break
+		}
+	}
+	if allSame {
+		t.Error("different master keys should produce different derived keys")
+	}
+}
+
+// TestEncryptDecryptTOTPSecret tests EncryptTOTPSecret and DecryptTOTPSecret
+func TestEncryptDecryptTOTPSecret(t *testing.T) {
+	secret := "JBSWY3DPEHPK3PXP"
+	masterKey := "my-master-key-123"
+
+	// Encrypt the secret
+	encrypted, err := EncryptTOTPSecret(secret, masterKey)
+	if err != nil {
+		t.Fatalf("EncryptTOTPSecret failed: %v", err)
+	}
+
+	// Should have enc: prefix
+	if !strings.HasPrefix(encrypted, "enc:") {
+		t.Error("encrypted secret should have 'enc:' prefix")
+	}
+
+	// Decrypt the secret
+	decrypted, err := DecryptTOTPSecret(encrypted, masterKey)
+	if err != nil {
+		t.Fatalf("DecryptTOTPSecret failed: %v", err)
+	}
+
+	// Should match original
+	if decrypted != secret {
+		t.Errorf("decrypted secret mismatch: got %q, want %q", decrypted, secret)
+	}
+}
+
+// TestEncryptTOTPSecret_EmptyCases tests EncryptTOTPSecret edge cases
+func TestEncryptTOTPSecret_EmptyCases(t *testing.T) {
+	// Empty master key should return secret unchanged
+	secret := "JBSWY3DPEHPK3PXP"
+	result, err := EncryptTOTPSecret(secret, "")
+	if err != nil {
+		t.Errorf("EncryptTOTPSecret with empty master key should not error: %v", err)
+	}
+	if result != secret {
+		t.Error("EncryptTOTPSecret with empty master key should return secret unchanged")
+	}
+
+	// Empty secret should return empty
+	result2, err := EncryptTOTPSecret("", "master-key")
+	if err != nil {
+		t.Errorf("EncryptTOTPSecret with empty secret should not error: %v", err)
+	}
+	if result2 != "" {
+		t.Error("EncryptTOTPSecret with empty secret should return empty")
+	}
+}
+
+// TestDecryptTOTPSecret_NotEncrypted tests DecryptTOTPSecret with non-encrypted secret
+func TestDecryptTOTPSecret_NotEncrypted(t *testing.T) {
+	// Secret without enc: prefix should be returned unchanged
+	secret := "JBSWY3DPEHPK3PXP"
+	result, err := DecryptTOTPSecret(secret, "master-key")
+	if err != nil {
+		t.Errorf("DecryptTOTPSecret with non-encrypted secret should not error: %v", err)
+	}
+	if result != secret {
+		t.Error("DecryptTOTPSecret with non-encrypted secret should return secret unchanged")
+	}
+}
+
+// TestDecryptTOTPSecret_NoMasterKey tests DecryptTOTPSecret with empty master key
+func TestDecryptTOTPSecret_NoMasterKey(t *testing.T) {
+	encrypted := "enc:invalidbase64"
+	_, err := DecryptTOTPSecret(encrypted, "")
+	if err == nil {
+		t.Error("DecryptTOTPSecret with empty master key should error for encrypted secret")
+	}
+}
+
+// TestDecryptTOTPSecret_InvalidBase64 tests DecryptTOTPSecret with invalid base64
+func TestDecryptTOTPSecret_InvalidBase64(t *testing.T) {
+	encrypted := "enc:!!!invalid-base64!!!"
+	_, err := DecryptTOTPSecret(encrypted, "master-key")
+	if err == nil {
+		t.Error("DecryptTOTPSecret with invalid base64 should error")
+	}
+}
+
+// TestDecryptTOTPSecret_ShortCiphertext tests DecryptTOTPSecret with too short ciphertext
+func TestDecryptTOTPSecret_ShortCiphertext(t *testing.T) {
+	// Base64 encode something too short to contain a valid nonce
+	encrypted := "enc:" + base64.StdEncoding.EncodeToString([]byte("short"))
+	_, err := DecryptTOTPSecret(encrypted, "master-key")
+	if err == nil {
+		t.Error("DecryptTOTPSecret with short ciphertext should error")
+	}
+}
+
+// TestDecryptTOTPSecret_WrongKey tests DecryptTOTPSecret with wrong master key
+func TestDecryptTOTPSecret_WrongKey(t *testing.T) {
+	secret := "JBSWY3DPEHPK3PXP"
+	masterKey := "correct-key"
+	wrongKey := "wrong-key"
+
+	encrypted, err := EncryptTOTPSecret(secret, masterKey)
+	if err != nil {
+		t.Fatalf("EncryptTOTPSecret failed: %v", err)
+	}
+
+	// Decrypt with wrong key should fail
+	_, err = DecryptTOTPSecret(encrypted, wrongKey)
+	if err == nil {
+		t.Error("DecryptTOTPSecret with wrong master key should error")
+	}
+}
