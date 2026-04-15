@@ -6,7 +6,7 @@ This document tracks the production readiness status of uMailServer.
 
 **Date**: 2026-04-15
 **Version**: 1.0.0
-**Test Coverage**: ~76.8% average across 36 packages
+**Test Coverage**: ~77.1% average across 36 packages
 
 ---
 
