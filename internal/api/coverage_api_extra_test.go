@@ -2131,3 +2131,77 @@ func TestHandleCreateFilter_TooManyActions(t *testing.T) {
 		t.Errorf("Expected 400, got %d", rec.Code)
 	}
 }
+
+// Test condition value validation
+
+func TestHandleCreateFilter_ConditionEmptyValue(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	conditions := []map[string]string{
+		{"field": "subject", "operator": "contains", "value": ""}, // empty value
+	}
+	filterReq := map[string]interface{}{
+		"name":       "Test Filter",
+		"conditions": conditions,
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
+	}
+	jsonBody, _ := json.Marshal(filterReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for empty condition value, got %d", rec.Code)
+	}
+}
+
+func TestHandleCreateFilter_ConditionValueTooLong(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	conditions := []map[string]string{
+		{"field": "subject", "operator": "contains", "value": string(make([]byte, 1001))}, // > 1000 chars
+	}
+	filterReq := map[string]interface{}{
+		"name":       "Test Filter",
+		"conditions": conditions,
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
+	}
+	jsonBody, _ := json.Marshal(filterReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for condition value too long, got %d", rec.Code)
+	}
+}
+
+func TestHandleCreateFilter_HeaderFieldWithoutHeaderName(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	conditions := []map[string]string{
+		{"field": "header", "operator": "contains", "value": "test"}, // header field but no headerName
+	}
+	filterReq := map[string]interface{}{
+		"name":       "Test Filter",
+		"conditions": conditions,
+		"actions":    []map[string]string{{"type": "move", "target": "Junk"}},
+	}
+	jsonBody, _ := json.Marshal(filterReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for header field without headerName, got %d", rec.Code)
+	}
+}
