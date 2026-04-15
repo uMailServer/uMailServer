@@ -410,6 +410,65 @@ func TestHandleLogin_Success(t *testing.T) {
 	}
 }
 
+// TestHandleLogin_PasswordRehash tests handleLogin when password needs rehashing
+// (bcrypt -> argon2id migration path)
+func TestHandleLogin_PasswordRehash(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	// Create server with argon2id preferred hasher
+	server := NewServer(database, nil, Config{
+		JWTSecret:      "test-secret",
+		TokenExpiry:    time.Hour,
+		PasswordHasher: "argon2id",
+	})
+
+	domain := &db.DomainData{Name: "rehash.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	// Create account with bcrypt hash (legacy)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@rehash.com",
+		LocalPart:    "user",
+		Domain:       "rehash.com",
+		PasswordHash: string(hash), // bcrypt hash
+		IsActive:     true,
+		IsAdmin:      false,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	// Get original password hash
+	originalHash := account.PasswordHash
+
+	body := map[string]string{"email": "user@rehash.com", "password": "password123"}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", rec.Code)
+	}
+
+	// Verify password was rehashed to argon2id
+	updatedAccount, _ := database.GetAccount("rehash.com", "user")
+	if strings.HasPrefix(updatedAccount.PasswordHash, "$2") {
+		t.Error("Expected password to be rehashed from bcrypt to argon2id")
+	}
+	if updatedAccount.PasswordHash == originalHash {
+		t.Error("Expected password hash to be updated")
+	}
+}
+
 // --- Test account list across all domains (no domain filter) ---
 
 func TestListAccounts_AllDomains(t *testing.T) {
@@ -1573,6 +1632,23 @@ func TestHandleAdmin_SpecificPath(t *testing.T) {
 // TestRecordLoginFailure_WithMaxAttempts tests login failure recording
 
 // --- Tests for handleHealth function ---
+
+func TestHandleHealth_Draining(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	// Set draining to true
+	server.draining.Store(true)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	// Should return 200 but with draining status
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 for draining health, got %d", rec.Code)
+	}
+}
 
 func TestHandleHealth_NilDatabase(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)

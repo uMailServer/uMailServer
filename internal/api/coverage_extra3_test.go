@@ -3,12 +3,15 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/db"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -209,6 +212,51 @@ func TestHandleRefresh_TokenGenerationError_Cov3(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected 200, got %d", rec.Code)
+	}
+}
+
+// TestHandleRefresh_WithAuthorization tests handleRefresh with Authorization
+// header to cover the token revocation path (lines 469-474).
+func TestHandleRefresh_WithAuthorization(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	// Create a mock old token
+	oldToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":   "user@test.com",
+		"admin": false,
+		"exp":   time.Now().Add(time.Hour).Unix(),
+		"iat":   time.Now().Unix(),
+	})
+	oldToken.Header["kid"] = server.currentKid
+	oldTokenStr, _ := oldToken.SignedString([]byte(server.jwtSecrets[server.currentKid]))
+
+	// Verify the token is NOT revoked before calling handleRefresh
+	oldTokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldTokenStr)))
+	if server.IsTokenRevoked(oldTokenHash) {
+		t.Error("Token should not be revoked before refresh")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+oldTokenStr)
+	ctx := context.WithValue(req.Context(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	server.handleRefresh(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", rec.Code)
+	}
+
+	// Verify the old token WAS revoked after handleRefresh
+	if !server.IsTokenRevoked(oldTokenHash) {
+		t.Error("Expected old token to be revoked after refresh")
 	}
 }
 

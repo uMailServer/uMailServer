@@ -1756,6 +1756,48 @@ func TestValidatePassword_TooLong(t *testing.T) {
 	}
 }
 
+func TestValidatePassword_TooShort(t *testing.T) {
+	err := validatePassword("Ab1!")
+	if err == nil || !strings.Contains(err.Error(), "at least 8 characters") {
+		t.Errorf("Expected 'at least 8 characters' error, got: %v", err)
+	}
+}
+
+func TestValidatePassword_NoUppercase(t *testing.T) {
+	err := validatePassword("abcdefgh1!")
+	if err == nil || !strings.Contains(err.Error(), "uppercase") {
+		t.Errorf("Expected 'uppercase' error, got: %v", err)
+	}
+}
+
+func TestValidatePassword_NoLowercase(t *testing.T) {
+	err := validatePassword("ABCDEFGH1!")
+	if err == nil || !strings.Contains(err.Error(), "lowercase") {
+		t.Errorf("Expected 'lowercase' error, got: %v", err)
+	}
+}
+
+func TestValidatePassword_NoDigit(t *testing.T) {
+	err := validatePassword("ABCDEFGHa!")
+	if err == nil || !strings.Contains(err.Error(), "digit") {
+		t.Errorf("Expected 'digit' error, got: %v", err)
+	}
+}
+
+func TestValidatePassword_NoSpecial(t *testing.T) {
+	err := validatePassword("ABCDEFGH1a")
+	if err == nil || !strings.Contains(err.Error(), "special character") {
+		t.Errorf("Expected 'special character' error, got: %v", err)
+	}
+}
+
+func TestValidatePassword_Valid(t *testing.T) {
+	err := validatePassword("ValidPass1!")
+	if err != nil {
+		t.Errorf("Expected no error for valid password, got: %v", err)
+	}
+}
+
 // TestHandleAdmin_IndexFallback tests admin serving index.html for non-existent paths
 func TestHandleAdmin_IndexFallback(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
@@ -2382,5 +2424,78 @@ func TestValidateDomainName_InvalidChars(t *testing.T) {
 		if err == nil {
 			t.Errorf("Expected error for domain with invalid chars: %s", domain)
 		}
+	}
+}
+
+// --- validateEmailFormat tests ---
+
+func TestValidateEmailFormat_Empty(t *testing.T) {
+	err := validateEmailFormat("")
+	if err == nil {
+		t.Error("Expected error for empty email")
+	}
+}
+
+func TestValidateEmailFormat_PathTraversal(t *testing.T) {
+	err := validateEmailFormat("user@..")
+	if err == nil {
+		t.Error("Expected error for path traversal")
+	}
+}
+
+func TestValidateEmailFormat_InvalidChars(t *testing.T) {
+	err := validateEmailFormat("user" + "/" + "domain.com")
+	if err == nil {
+		t.Error("Expected error for email with /")
+	}
+	err = validateEmailFormat("user@domain" + "\\" + "com")
+	if err == nil {
+		t.Error("Expected error for email with \\")
+	}
+}
+
+func TestValidateEmailFormat_NoAt(t *testing.T) {
+	err := validateEmailFormat("userexample.com")
+	if err == nil {
+		t.Error("Expected error for email without @")
+	}
+}
+
+func TestValidateEmailFormat_MultipleAt(t *testing.T) {
+	err := validateEmailFormat("user@@example.com")
+	if err == nil {
+		t.Error("Expected error for email with multiple @")
+	}
+}
+
+func TestValidateEmailFormat_EmptyLocalPart(t *testing.T) {
+	err := validateEmailFormat("@example.com")
+	if err == nil {
+		t.Error("Expected error for email with empty local part")
+	}
+}
+
+func TestValidateEmailFormat_EmptyDomain(t *testing.T) {
+	err := validateEmailFormat("user@")
+	if err == nil {
+		t.Error("Expected error for email with empty domain")
+	}
+}
+
+func TestValidateEmailFormat_LocalPartTooLong(t *testing.T) {
+	// 65 character local part (max is 64)
+	longLocal := strings.Repeat("a", 65)
+	err := validateEmailFormat(longLocal + "@example.com")
+	if err == nil {
+		t.Error("Expected error for local part exceeding 64 chars")
+	}
+}
+
+func TestValidateEmailFormat_DomainTooLong(t *testing.T) {
+	// 254 character domain (max is 253)
+	longDomain := strings.Repeat("a", 254)
+	err := validateEmailFormat("user@" + longDomain)
+	if err == nil {
+		t.Error("Expected error for domain exceeding 253 chars")
 	}
 }

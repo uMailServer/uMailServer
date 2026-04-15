@@ -35,6 +35,18 @@ func TestRevokeToken_SingleToken(t *testing.T) {
 	}
 }
 
+func TestRevokeToken_NilDatabase(t *testing.T) {
+	// Server with nil database - should use in-memory revocation
+	server := NewServer(nil, nil, Config{JWTSecret: "test-secret"})
+
+	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte("test-token")))
+	server.RevokeToken(tokenHash)
+
+	if !server.IsTokenRevoked(tokenHash) {
+		t.Error("Expected token to be revoked with nil database")
+	}
+}
+
 func TestRevokeToken_MultipleTokens(t *testing.T) {
 	database, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {

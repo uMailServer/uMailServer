@@ -353,6 +353,31 @@ func TestHandleTOTPVerify_WrongMethod(t *testing.T) {
 	}
 }
 
+func TestHandleTOTPVerify_ForbiddenForDifferentUser(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	defer database.Close()
+
+	// Setup TOTP for user@test.com
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleTOTPSetup(rec, req, "user@test.com")
+
+	// Try to verify as different user (not self, not admin) - should be forbidden
+	ctx = context.WithValue(context.Background(), "user", "other@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	body, _ := json.Marshal(map[string]string{"code": "123456"})
+	req = httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	server.handleTOTPVerify(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleTOTPDisable_Success(t *testing.T) {
 	server, database := helperSetupTOTPAccount(t)
 	defer database.Close()
