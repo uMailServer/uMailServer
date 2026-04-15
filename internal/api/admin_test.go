@@ -666,3 +666,126 @@ func TestAdminServer_Start_Integration(t *testing.T) {
 		t.Errorf("unexpected error stopping server: %v", err)
 	}
 }
+
+// TestServer_HandleJWTRotate_MethodNotAllowed tests JWT rotate with wrong method
+func TestServer_HandleJWTRotate_MethodNotAllowed(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test"})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJWTRotate(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, w.Code)
+	}
+}
+
+// TestServer_HandleJWTRotate_Success tests successful JWT rotation
+func TestServer_HandleJWTRotate_Success(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test"})
+
+	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJWTRotate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["status"] != "rotated" {
+		t.Errorf("expected status 'rotated', got %v", resp["status"])
+	}
+	if resp["newKid"] == nil {
+		t.Error("expected newKid in response")
+	}
+	if resp["activeKids"] == nil {
+		t.Error("expected activeKids in response")
+	}
+}
+
+// TestServer_HandleJWTStatus_MethodNotAllowed tests JWT status with wrong method
+func TestServer_HandleJWTStatus_MethodNotAllowed(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test"})
+
+	req := httptest.NewRequest(http.MethodPost, "/test", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJWTStatus(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, w.Code)
+	}
+}
+
+// TestServer_HandleJWTStatus_Success tests successful JWT status retrieval
+func TestServer_HandleJWTStatus_Success(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test"})
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJWTStatus(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp["currentKid"] == nil {
+		t.Error("expected currentKid in response")
+	}
+	if resp["activeKeys"] == nil {
+		t.Error("expected activeKeys in response")
+	}
+}
+
+// TestGenerateSecureJWTSecret tests the JWT secret generation
+func TestGenerateSecureJWTSecret(t *testing.T) {
+	secret := generateSecureJWTSecret()
+
+	// Should be 64 hex characters (32 bytes = 64 hex chars)
+	if len(secret) != 64 {
+		t.Errorf("expected secret length 64, got %d", len(secret))
+	}
+
+	// Should be unique each time
+	secret2 := generateSecureJWTSecret()
+	if secret == secret2 {
+		t.Error("expected different secrets on consecutive calls")
+	}
+}
