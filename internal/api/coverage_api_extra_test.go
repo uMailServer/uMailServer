@@ -1772,6 +1772,34 @@ func TestHandleAdmin_IndexFallback(t *testing.T) {
 	}
 }
 
+// TestMockFilterManager_GetUserFiltersError tests error path
+func TestMockFilterManager_GetUserFiltersError(t *testing.T) {
+	mock := &MockFilterManager{
+		GetUserFiltersError: fmt.Errorf("database error"),
+	}
+	filters, err := mock.GetUserFilters("user@example.com")
+	if err == nil {
+		t.Error("Expected error, got nil")
+	}
+	if filters != nil {
+		t.Error("Expected nil filters on error")
+	}
+}
+
+// TestMockFilterManager_GetFilterError tests error path
+func TestMockFilterManager_GetFilterError(t *testing.T) {
+	mock := &MockFilterManager{
+		GetFilterError: fmt.Errorf("not found"),
+	}
+	filter, err := mock.GetFilter("user@example.com", "filter123")
+	if err == nil {
+		t.Error("Expected error, got nil")
+	}
+	if filter != nil {
+		t.Error("Expected nil filter on error")
+	}
+}
+
 // TestHandleAdmin_Serve tests admin endpoint
 func TestHandleAdmin_Serve(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
