@@ -2346,3 +2346,41 @@ func TestHandleJWTRotate_WithPruning(t *testing.T) {
 		t.Errorf("Expected at most 5 secrets after pruning, got %d", len(server.jwtSecrets))
 	}
 }
+
+// --- validateDomainName tests ---
+
+func TestValidateDomainName_TooLong(t *testing.T) {
+	// 254 character domain (max is 253)
+	longDomain := strings.Repeat("a", 254)
+	err := validateDomainName(longDomain)
+	if err == nil {
+		t.Error("Expected error for too-long domain")
+	}
+}
+
+func TestValidateDomainName_Empty(t *testing.T) {
+	err := validateDomainName("")
+	if err == nil {
+		t.Error("Expected error for empty domain")
+	}
+}
+
+func TestValidateDomainName_PathTraversal(t *testing.T) {
+	err := validateDomainName("..")
+	if err == nil {
+		t.Error("Expected error for path traversal")
+	}
+}
+
+func TestValidateDomainName_InvalidChars(t *testing.T) {
+	testCases := []string{
+		"domain/with slash",
+		"domain" + "\\" + "with backslash",
+	}
+	for _, domain := range testCases {
+		err := validateDomainName(domain)
+		if err == nil {
+			t.Errorf("Expected error for domain with invalid chars: %s", domain)
+		}
+	}
+}
