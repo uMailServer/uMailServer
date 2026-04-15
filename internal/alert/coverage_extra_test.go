@@ -5,6 +5,98 @@ import (
 	"testing"
 )
 
+// --- isValidWebhookURL tests ---
+
+func TestIsValidWebhookURL_InvalidScheme(t *testing.T) {
+	mgr := NewManager(DefaultConfig(), nil)
+	mgr.SetAllowPrivateIP(false)
+
+	tests := []string{
+		"ftp://example.com/webhook",
+		"file:///etc/passwd",
+		"javascript:alert(1)",
+		"mailto:test@example.com",
+	}
+
+	for _, url := range tests {
+		if mgr.isValidWebhookURL(url) {
+			t.Errorf("Expected false for %q, got true", url)
+		}
+	}
+}
+
+func TestIsValidWebhookURL_EmptyHostname(t *testing.T) {
+	mgr := NewManager(DefaultConfig(), nil)
+	mgr.SetAllowPrivateIP(false)
+
+	if mgr.isValidWebhookURL("http://:8080/webhook") {
+		t.Error("Expected false for empty hostname")
+	}
+}
+
+func TestIsValidWebhookURL_PrivateIPs(t *testing.T) {
+	mgr := NewManager(DefaultConfig(), nil)
+	mgr.SetAllowPrivateIP(false)
+
+	privateURLs := []string{
+		"http://127.0.0.1/webhook",
+		"http://localhost/webhook",
+		"http://[::1]/webhook",
+		"http://10.0.0.1/webhook",
+		"http://192.168.1.1/webhook",
+		"http://172.16.0.1/webhook",
+	}
+
+	for _, url := range privateURLs {
+		if mgr.isValidWebhookURL(url) {
+			t.Errorf("Expected false for private IP URL %q, got true", url)
+		}
+	}
+}
+
+func TestIsValidWebhookURL_ValidPublic(t *testing.T) {
+	mgr := NewManager(DefaultConfig(), nil)
+	mgr.SetAllowPrivateIP(false)
+
+	// A valid public URL should pass
+	if !mgr.isValidWebhookURL("https://api.example.com/webhook") {
+		t.Error("Expected true for valid public URL")
+	}
+}
+
+func TestIsValidWebhookURL_AllowPrivateMode(t *testing.T) {
+	mgr := NewManager(DefaultConfig(), nil)
+	mgr.SetAllowPrivateIP(true) // Testing mode
+
+	// Private URLs should be allowed when allowPrivateIP is true
+	if !mgr.isValidWebhookURL("http://127.0.0.1/webhook") {
+		t.Error("Expected true for localhost when allowPrivateIP is true")
+	}
+	if !mgr.isValidWebhookURL("http://192.168.1.1/webhook") {
+		t.Error("Expected true for private IP when allowPrivateIP is true")
+	}
+}
+
+func TestIsValidWebhookURL_LinkLocal(t *testing.T) {
+	mgr := NewManager(DefaultConfig(), nil)
+	mgr.SetAllowPrivateIP(false)
+
+	// Link-local addresses should be blocked
+	if mgr.isValidWebhookURL("http://169.254.169.254/latest/meta-data/") {
+		t.Error("Expected false for link-local address")
+	}
+}
+
+func TestIsValidWebhookURL_WithPort(t *testing.T) {
+	mgr := NewManager(DefaultConfig(), nil)
+	mgr.SetAllowPrivateIP(false)
+
+	// Should still detect private IP even with port
+	if mgr.isValidWebhookURL("http://127.0.0.1:8080/webhook") {
+		t.Error("Expected false for localhost with port")
+	}
+}
+
 // --- SecureString tests ---
 
 func TestSecureString_MarshalJSON(t *testing.T) {
