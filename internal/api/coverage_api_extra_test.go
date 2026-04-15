@@ -2276,3 +2276,73 @@ func TestReorderFilters_WithFilterMgr(t *testing.T) {
 		t.Error("Expected ReorderFilters to be called on filterMgr")
 	}
 }
+
+// --- handleJWTRotate tests ---
+
+func TestHandleJWTRotate_Success(t *testing.T) {
+	server := NewServer(nil, nil, Config{
+		JWTSecret:   "test-secret",
+		TokenExpiry: time.Hour,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/jwt/rotate", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJWTRotate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	if resp["status"] != "rotated" {
+		t.Errorf("Expected status 'rotated', got %v", resp["status"])
+	}
+	if resp["newKid"] == nil || resp["newKid"] == "" {
+		t.Error("Expected non-empty newKid")
+	}
+}
+
+func TestHandleJWTRotate_MethodNotAllowed(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/jwt/rotate", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJWTRotate(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleJWTRotate_WithPruning(t *testing.T) {
+	server := NewServer(nil, nil, Config{
+		JWTSecret:   "test-secret",
+		TokenExpiry: time.Hour,
+	})
+
+	// Pre-populate jwtSecrets to trigger pruning path (max is 5)
+	// We add 5 existing secrets so the new one triggers pruning
+	for i := 1; i <= 5; i++ {
+		kid := fmt.Sprintf("k%d", time.Now().UnixNano()+int64(i*1000000000))
+		server.jwtSecrets[kid] = fmt.Sprintf("secret-%d", i)
+	}
+	server.currentKid = fmt.Sprintf("k%d", time.Now().UnixNano())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/jwt/rotate", nil)
+	w := httptest.NewRecorder()
+
+	server.handleJWTRotate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	// After rotation, should have pruned to maxJWTSecretVersions (5)
+	if len(server.jwtSecrets) > 5 {
+		t.Errorf("Expected at most 5 secrets after pruning, got %d", len(server.jwtSecrets))
+	}
+}
