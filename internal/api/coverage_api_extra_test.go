@@ -2205,3 +2205,20 @@ func TestHandleCreateFilter_HeaderFieldWithoutHeaderName(t *testing.T) {
 		t.Errorf("Expected 400 for header field without headerName, got %d", rec.Code)
 	}
 }
+
+func TestReorderFilters_WithFilterMgr(t *testing.T) {
+	mock := &MockFilterManager{
+		ReorderFiltersError: nil,
+	}
+
+	server := NewServer(nil, nil, Config{})
+	server.filterMgr = mock
+
+	err := server.reorderFilters("user@example.com", []string{"filter-1", "filter-2"})
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if !mock.ReorderFiltersCalled {
+		t.Error("Expected ReorderFilters to be called on filterMgr")
+	}
+}
