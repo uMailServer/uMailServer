@@ -1,10 +1,13 @@
 package api
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // TestIsTOTPLockedOut_NoFailures tests TOTP lockout with no failures
@@ -437,5 +440,102 @@ func TestCheckAccountLoginRateLimit_AfterWindow(t *testing.T) {
 
 	if !server.checkAccountLoginRateLimit("user@example.com") {
 		t.Error("expected attempt to be allowed after window expired")
+	}
+}
+
+// --- handleLogout tests ---
+
+func TestHandleLogout_MethodNotAllowed(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/logout", nil)
+	w := httptest.NewRecorder()
+
+	server.handleLogout(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleLogout_WithCookie(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	domain := &db.DomainData{Name: "mailtest.com", MaxAccounts: 10, IsActive: true}
+	_ = database.CreateDomain(domain)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email: "user@mailtest.com", LocalPart: "user", Domain: "mailtest.com",
+		PasswordHash: string(hash), IsActive: true, IsAdmin: true,
+	}
+	_ = database.CreateAccount(account)
+
+	token := helperLogin(t, server, "user@mailtest.com", "password123")
+
+	// Create request with cookie
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: "jwt", Value: token})
+	w := httptest.NewRecorder()
+
+	server.handleLogout(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	// Check cookie is cleared
+	cookie := w.Result().Cookies()[0]
+	if cookie.Name != "jwt" || cookie.MaxAge != -1 {
+		t.Errorf("Expected jwt cookie to be cleared, got %v", cookie)
+	}
+}
+
+func TestHandleLogout_WithBearerToken(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	domain := &db.DomainData{Name: "mailtest.com", MaxAccounts: 10, IsActive: true}
+	_ = database.CreateDomain(domain)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email: "user@mailtest.com", LocalPart: "user", Domain: "mailtest.com",
+		PasswordHash: string(hash), IsActive: true, IsAdmin: true,
+	}
+	_ = database.CreateAccount(account)
+
+	token := helperLogin(t, server, "user@mailtest.com", "password123")
+
+	// Create request with Authorization header
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+
+	server.handleLogout(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+}
+
+func TestHandleLogout_NoToken(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	w := httptest.NewRecorder()
+
+	server.handleLogout(w, req)
+
+	// Should still succeed with no token
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200 even without token, got %d", w.Code)
 	}
 }
