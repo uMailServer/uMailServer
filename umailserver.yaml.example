@@ -82,6 +82,7 @@ security:
   jwt_secret: "change-me-to-a-32-character-secret-minimum"
   max_login_attempts: 5
   lockout_duration: 15m
+  spf_cache_ttl: 5m           # TTL for cached SPF lookups (default 5m)
   rate_limit:
     smtp_per_minute: 30       # SMTP auth attempts per minute per IP
     smtp_per_hour: 500        # SMTP connections per hour per IP
@@ -161,3 +162,20 @@ jmap:
   bind: "127.0.0.1"
   port: 8083                 # JMAP HTTP server port
   cors_origins: []           # Allowed CORS origins (empty = allow all)
+
+# LDAP / Active Directory authentication
+ldap:
+  enabled: false                          # Set to true to enable LDAP auth
+  url: "ldaps://ldap.example.com:636"     # ldap:// or ldaps://
+  bind_dn: "cn=service,dc=example,dc=com" # Service account for searches
+  bind_password: ""                       # Service account password
+  base_dn: "ou=users,dc=example,dc=com"   # User search base
+  user_filter: "(uid=%s)"                 # %s is replaced with the username
+  email_attribute: "mail"
+  name_attribute: "cn"
+  group_attribute: "memberOf"
+  admin_groups: []                        # Group DNs that grant admin access
+  start_tls: false                        # Use StartTLS on port 389
+  skip_verify: false                      # Skip TLS verification (dev only)
+  timeout: 30s
+  max_connections: 10                     # Pooled LDAP connections (default 10)

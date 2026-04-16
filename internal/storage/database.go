@@ -109,7 +109,8 @@ func (db *Database) CreateMailbox(user, mailbox string) error {
 		return nil
 	}
 
-	return db.bolt.Update(func(tx *bbolt.Tx) error {
+	created := false
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(mailboxKey(user, mailbox)))
 		if err != nil {
 			return err
@@ -125,11 +126,16 @@ func (db *Database) CreateMailbox(user, mailbox string) error {
 			if err := b.Put([]byte("uidnext"), itob(1)); err != nil {
 				return err
 			}
+			created = true
 		}
 		// Also create the messages bucket
 		_, err = tx.CreateBucketIfNotExists([]byte(messagesBucket(user, mailbox)))
 		return err
 	})
+	if err == nil && created {
+		_ = db.RecordChange(user, ChangeTypeMailbox, ChangeKindCreated, mailbox, "")
+	}
+	return err
 }
 
 // DeleteMailbox deletes a mailbox
@@ -137,7 +143,11 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 	if db.bolt == nil {
 		return nil
 	}
-	return db.bolt.Update(func(tx *bbolt.Tx) error {
+	existed := false
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
+		if tx.Bucket([]byte(mailboxKey(user, mailbox))) != nil {
+			existed = true
+		}
 		if err := tx.DeleteBucket([]byte(mailboxKey(user, mailbox))); err != nil && err != bolterrors.ErrBucketNotFound {
 			return err
 		}
@@ -146,6 +156,10 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 		}
 		return nil
 	})
+	if err == nil && existed {
+		_ = db.RecordChange(user, ChangeTypeMailbox, ChangeKindDestroyed, mailbox, "")
+	}
+	return err
 }
 
 // RenameMailbox renames a mailbox
@@ -160,7 +174,7 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 	newKey := mailboxKey(user, newName)
 	newMsgs := messagesBucket(user, newName)
 
-	return db.bolt.Update(func(tx *bbolt.Tx) error {
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
 		oldB := tx.Bucket([]byte(oldKey))
 		if oldB == nil {
 			// If source mailbox doesn't exist, just create the new one
@@ -212,6 +226,11 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 		_ = tx.DeleteBucket([]byte(oldMsgs)) // bucket may not exist in partial state
 		return nil
 	})
+	if err == nil {
+		_ = db.RecordChange(user, ChangeTypeMailbox, ChangeKindDestroyed, oldName, "")
+		_ = db.RecordChange(user, ChangeTypeMailbox, ChangeKindCreated, newName, "")
+	}
+	return err
 }
 
 // ListMailboxes lists all mailboxes for a user
@@ -393,13 +412,32 @@ func (db *Database) StoreMessageMetadata(user, mailbox string, uid uint32, meta 
 		return err
 	}
 
-	return db.bolt.Update(func(tx *bbolt.Tx) error {
+	preexisting := false
+	err = db.bolt.Update(func(tx *bbolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(messagesBucket(user, mailbox)))
 		if err != nil {
 			return err
 		}
+		if b.Get(itob(uid)) != nil {
+			preexisting = true
+		}
 		return b.Put(itob(uid), data)
 	})
+	if err == nil && meta != nil && meta.MessageID != "" {
+		kind := ChangeKindCreated
+		if preexisting {
+			kind = ChangeKindUpdated
+		}
+		_ = db.RecordChange(user, ChangeTypeEmail, kind, meta.MessageID, mailbox)
+		if meta.ThreadID != "" {
+			tk := ChangeKindUpdated
+			if !preexisting && meta.IsThreadRoot {
+				tk = ChangeKindCreated
+			}
+			_ = db.RecordChange(user, ChangeTypeThread, tk, meta.ThreadID, "")
+		}
+	}
+	return err
 }
 
 // UpdateMessageMetadata updates message metadata
@@ -413,13 +451,29 @@ func (db *Database) DeleteMessage(user, mailbox string, uid uint32) error {
 		return nil
 	}
 
-	return db.bolt.Update(func(tx *bbolt.Tx) error {
+	var deletedID, deletedThread string
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(messagesBucket(user, mailbox)))
 		if b == nil {
 			return nil
 		}
+		raw := b.Get(itob(uid))
+		if raw != nil {
+			var meta MessageMetadata
+			if err := json.Unmarshal(raw, &meta); err == nil {
+				deletedID = meta.MessageID
+				deletedThread = meta.ThreadID
+			}
+		}
 		return b.Delete(itob(uid))
 	})
+	if err == nil && deletedID != "" {
+		_ = db.RecordChange(user, ChangeTypeEmail, ChangeKindDestroyed, deletedID, mailbox)
+		if deletedThread != "" {
+			_ = db.RecordChange(user, ChangeTypeThread, ChangeKindUpdated, deletedThread, "")
+		}
+	}
+	return err
 }
 
 // HasFlag checks if a flag is present in the list (exported)

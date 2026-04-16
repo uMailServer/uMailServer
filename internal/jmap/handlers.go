@@ -1278,38 +1278,100 @@ func getMailboxNameFromID(id string) string {
 
 // handleMailboxChanges handles Mailbox/changes method (RFC 8620)
 func (s *Server) handleMailboxChanges(user string, call MethodCall) Response {
+	return s.handleChanges(user, call, "Mailbox/changes", storage.ChangeTypeMailbox, true)
+}
+
+// handleEmailChanges handles Email/changes method (RFC 8621)
+func (s *Server) handleEmailChanges(user string, call MethodCall) Response {
+	return s.handleChanges(user, call, "Email/changes", storage.ChangeTypeEmail, false)
+}
+
+// handleChanges is the shared implementation backing the */changes methods.
+// It reads entries from the per-user change journal and folds them into
+// JMAP's created/updated/destroyed sets, deduplicating per ID.
+func (s *Server) handleChanges(user string, call MethodCall, methodName string, ct storage.ChangeType, includeUpdatedProps bool) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 	sinceState, _ := args["sinceState"].(string)
 	maxChanges, _ := args["maxChanges"].(float64)
 
-	if valid, resp := validateAccountId(accountID, user, "Mailbox/changes", call.ID); !valid {
+	if valid, resp := validateAccountId(accountID, user, methodName, call.ID); !valid {
 		return resp
 	}
 
-	// Default maxChanges
 	if maxChanges == 0 || maxChanges > 256 {
 		maxChanges = 256
 	}
 
-	// Parse sinceState (format: "state-<timestamp>")
-	// In a real implementation, we'd track actual changes
-	// For now, return empty changes
-	_ = sinceState
+	since := storage.ParseChangeState(sinceState)
+	entries, hasMore, lastSeq, err := s.db.GetChangesSince(user, ct, since, int(maxChanges))
+	if err != nil {
+		return Response{
+			Name: methodName,
+			Args: map[string]interface{}{
+				"type":        "serverFail",
+				"description": err.Error(),
+			},
+			ID: call.ID,
+		}
+	}
+
+	// Reduce to one entry per ID; destruction wins over updates, and creates
+	// followed by destruction collapse to nothing (per JMAP semantics).
+	type fold struct{ created, updated, destroyed bool }
+	state := make(map[string]*fold)
+	order := []string{}
+	for _, e := range entries {
+		f, ok := state[e.ID]
+		if !ok {
+			f = &fold{}
+			state[e.ID] = f
+			order = append(order, e.ID)
+		}
+		switch e.Kind {
+		case storage.ChangeKindCreated:
+			f.created = true
+		case storage.ChangeKindUpdated:
+			f.updated = true
+		case storage.ChangeKindDestroyed:
+			f.destroyed = true
+		}
+	}
+
+	created := make([]string, 0)
+	updated := make([]string, 0)
+	destroyed := make([]string, 0)
+	for _, id := range order {
+		f := state[id]
+		switch {
+		case f.created && f.destroyed:
+			// no-op
+		case f.destroyed:
+			destroyed = append(destroyed, id)
+		case f.created:
+			created = append(created, id)
+		case f.updated:
+			updated = append(updated, id)
+		}
+	}
+
+	out := map[string]interface{}{
+		"accountId":      accountID,
+		"oldState":       sinceState,
+		"newState":       fmt.Sprintf("%d", lastSeq),
+		"hasMoreChanges": hasMore,
+		"created":        created,
+		"updated":        updated,
+		"destroyed":      destroyed,
+	}
+	if includeUpdatedProps {
+		out["updatedProperties"] = nil
+	}
 
 	return Response{
-		Name: "Mailbox/changes",
-		Args: map[string]interface{}{
-			"accountId":         accountID,
-			"oldState":          sinceState,
-			"newState":          fmt.Sprintf("state-%d", time.Now().Unix()),
-			"hasMoreChanges":    false,
-			"created":           []string{},
-			"updated":           []string{},
-			"destroyed":         []string{},
-			"updatedProperties": nil,
-		},
-		ID: call.ID,
+		Name: methodName,
+		Args: out,
+		ID:   call.ID,
 	}
 }
 
@@ -1459,34 +1521,7 @@ func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
 
 // handleThreadChanges handles Thread/changes method (RFC 8620)
 func (s *Server) handleThreadChanges(user string, call MethodCall) Response {
-	args := call.Args
-	accountID, _ := args["accountId"].(string)
-	sinceState, _ := args["sinceState"].(string)
-	maxChanges, _ := args["maxChanges"].(float64)
-
-	if valid, resp := validateAccountId(accountID, user, "Thread/changes", call.ID); !valid {
-		return resp
-	}
-
-	if maxChanges == 0 || maxChanges > 256 {
-		maxChanges = 256
-	}
-
-	_ = sinceState
-
-	return Response{
-		Name: "Thread/changes",
-		Args: map[string]interface{}{
-			"accountId":      accountID,
-			"oldState":       sinceState,
-			"newState":       fmt.Sprintf("state-%d", time.Now().Unix()),
-			"hasMoreChanges": false,
-			"created":        []string{},
-			"updated":        []string{},
-			"destroyed":      []string{},
-		},
-		ID: call.ID,
-	}
+	return s.handleChanges(user, call, "Thread/changes", storage.ChangeTypeThread, false)
 }
 
 // handleThreadQueryChanges handles Thread/queryChanges method (RFC 8620)

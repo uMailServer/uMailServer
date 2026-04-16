@@ -90,9 +90,13 @@ func NewInterpreter(script *Script) *Interpreter {
 // regexCache caches compiled regex patterns with timeout protection
 var regexCache = struct {
 	sync.RWMutex
-	patterns map[string]*regexp.Regexp
+	patterns    map[string]*regexp.Regexp
+	accessOrder []string // LRU tracking
+	maxSize     int
 }{
-	patterns: make(map[string]*regexp.Regexp),
+	patterns:    make(map[string]*regexp.Regexp),
+	accessOrder: make([]string, 0, 1000),
+	maxSize:     1000,
 }
 
 // safeRegexMatch matches a pattern against value with ReDoS protection
@@ -115,7 +119,20 @@ func safeRegexMatch(pattern, value string, timeout time.Duration) (bool, error) 
 			regexCache.Unlock()
 			return false, fmt.Errorf("invalid regex pattern: %w", err)
 		}
+
+		// LRU eviction if at capacity
+		if len(regexCache.patterns) >= regexCache.maxSize {
+			// Remove oldest 25% (250 entries)
+			removeCount := regexCache.maxSize / 4
+			for i := 0; i < removeCount && len(regexCache.accessOrder) > 0; i++ {
+				oldest := regexCache.accessOrder[0]
+				regexCache.accessOrder = regexCache.accessOrder[1:]
+				delete(regexCache.patterns, oldest)
+			}
+		}
+
 		regexCache.patterns[pattern] = re
+		regexCache.accessOrder = append(regexCache.accessOrder, pattern)
 		regexCache.Unlock()
 	}
 
@@ -139,31 +156,33 @@ func safeRegexMatch(pattern, value string, timeout time.Duration) (bool, error) 
 
 // isSuspiciousPattern checks for patterns that could cause ReDoS
 func isSuspiciousPattern(pattern string) bool {
-	// Check for nested quantifiers like (a+)+ or (a*)* that can cause exponential backtracking
-	// Simple heuristics: look for patterns like (X+)+ or (X*)+ where X is a group
+	// Check for adjacent quantifiers like ++, **, *+, +* that cause exponential backtracking
+	for i := 0; i < len(pattern)-1; i++ {
+		c := pattern[i]
+		n := pattern[i+1]
+		if (c == '+' || c == '*') && (n == '+' || n == '*') {
+			return true
+		}
+	}
+
+	// Check for literal substring patterns that indicate nested quantifiers
 	suspicious := []string{
-		"(+)", // (a+)+ form
-		"(*)", // (a*)+ or (a*)* form
-		"(+*", // mixed
-		"(*+",
-		"++)", // reversed form
-		"*+)",
-		"++)",
-		"+*)",
-		"*(+",
+		"(+) ", "(+) ", "(+) ",
+		"(*)",        // (a*)+ or (a*)* form
+		"(+*", "(*+", // mixed quantifiers
+		"++)", "*+)", "+*)", "*(+", // other nested quantifier patterns
 	}
-
-	// Also check for multiple adjacent quantifiers like .*.* without anchors
-	// This is less dangerous but could still cause issues with long inputs
-	if strings.Count(pattern, ".*") > 3 || strings.Count(pattern, ".+") > 3 {
-		return true
-	}
-
 	for _, s := range suspicious {
 		if strings.Contains(pattern, s) {
 			return true
 		}
 	}
+
+	// Also check for multiple adjacent quantifiers like .*.* without anchors
+	if strings.Count(pattern, ".*") > 3 || strings.Count(pattern, ".+") > 3 {
+		return true
+	}
+
 	return false
 }
 

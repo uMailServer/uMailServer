@@ -24,6 +24,7 @@ func (s *Server) startCardDAV() {
 		ok, err := s.authenticate(user, pass)
 		return ok, err
 	})
+	carddavServer.SetTracingProvider(s.tracingProvider)
 
 	s.carddavServer = carddavServer
 

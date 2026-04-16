@@ -34,10 +34,6 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 		s.sendError(w, http.StatusForbidden, "forbidden: cannot setup TOTP for this user")
 		return
 	}
-	if err != nil {
-		s.sendError(w, http.StatusNotFound, "account not found")
-		return
-	}
 
 	secret, err := auth.GenerateTOTPSecret()
 	if err != nil {

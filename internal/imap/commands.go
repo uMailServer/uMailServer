@@ -281,7 +281,7 @@ func (s *Session) handleAuthenticate(args []string) error {
 		return nil
 	}
 
-	if !s.tlsActive {
+	if !s.tlsActive && !s.server.allowPlainAuth {
 		s.WriteResponse(s.tag, "NO TLS required for authentication")
 		return nil
 	}
@@ -471,7 +471,7 @@ func (s *Session) handleLogin(args []string) error {
 		return nil
 	}
 
-	if !s.tlsActive {
+	if !s.tlsActive && !s.server.allowPlainAuth {
 		s.WriteResponse(s.tag, "NO LOGIN requires TLS - use STARTTLS first")
 		return nil
 	}

@@ -65,6 +65,7 @@ type spfCache struct {
 	mu          sync.RWMutex
 	maxSize     int
 	nextCleanup time.Time
+	ttl         time.Duration
 }
 
 type cacheEntry struct {
@@ -75,6 +76,9 @@ type cacheEntry struct {
 // defaultSPFMaxCacheSize is the maximum number of domains to cache
 const defaultSPFMaxCacheSize = 10000
 
+// defaultSPFCacheTTL is the default TTL for cached SPF records
+const defaultSPFCacheTTL = 5 * time.Minute
+
 // NewSPFChecker creates a new SPF checker
 func NewSPFChecker(resolver DNSResolver) *SPFChecker {
 	return &SPFChecker{
@@ -83,8 +87,20 @@ func NewSPFChecker(resolver DNSResolver) *SPFChecker {
 			records:     make(map[string]*cacheEntry),
 			maxSize:     defaultSPFMaxCacheSize,
 			nextCleanup: time.Now().Add(1 * time.Minute),
+			ttl:         defaultSPFCacheTTL,
 		},
 	}
+}
+
+// SetCacheTTL sets the TTL for cached SPF records. Values <= 0 are ignored
+// and the default (5 minutes) is retained.
+func (c *SPFChecker) SetCacheTTL(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	c.cache.mu.Lock()
+	c.cache.ttl = d
+	c.cache.mu.Unlock()
 }
 
 // CheckSPF evaluates SPF for the given sender IP and domain
@@ -106,8 +122,14 @@ func (c *SPFChecker) CheckSPF(ctx context.Context, ip net.IP, domain string, sen
 		return SPFNone, "No SPF record found"
 	}
 
-	// Cache the record
-	c.cache.set(domain, record, 5*time.Minute)
+	// Cache the record using the configured TTL
+	c.cache.mu.RLock()
+	ttl := c.cache.ttl
+	c.cache.mu.RUnlock()
+	if ttl <= 0 {
+		ttl = defaultSPFCacheTTL
+	}
+	c.cache.set(domain, record, ttl)
 
 	return c.evaluate(ctx, ip, domain, sender, record, 0, 0)
 }

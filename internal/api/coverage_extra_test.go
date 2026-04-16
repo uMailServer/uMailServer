@@ -509,6 +509,106 @@ func TestListAccounts_AllDomains(t *testing.T) {
 	}
 }
 
+// TestListAccounts_NonAdminUser tests listAccounts when non-admin user accesses
+func TestListAccounts_NonAdminUser(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	// Create domain and account
+	domain := &db.DomainData{Name: "test.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+	account := &db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	server := NewServer(database, nil, Config{})
+
+	// Set non-admin user context
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	server.listAccounts(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", rec.Code)
+	}
+}
+
+// TestListAccounts_NonAdminUser_AccountNotFound tests non-admin with deleted account
+func TestListAccounts_NonAdminUser_AccountNotFound(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	// Don't defer close - we want to simulate missing account
+
+	// Create domain but NOT the account
+	domain := &db.DomainData{Name: "test.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	server := NewServer(database, nil, Config{})
+
+	// Set non-admin user context with non-existent account
+	ctx := context.WithValue(context.Background(), "user", "ghost@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	server.listAccounts(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected 404, got %d", rec.Code)
+	}
+
+	database.Close()
+}
+
+// TestListAccounts_DomainListError tests error when listing domains fails
+func TestListAccounts_DomainListError(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	// Create domain first
+	domain := &db.DomainData{Name: "test.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	// Close database to cause error on ListDomains
+	database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	// Admin context (no user filter)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
+	rec := httptest.NewRecorder()
+
+	server.listAccounts(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("Expected 500, got %d", rec.Code)
+	}
+}
+
 // --- Full router integration tests ---
 // Note: The router() function returns corsMiddleware(authMiddleware(api))
 // where api is the sub-mux with protected routes only. The main mux with

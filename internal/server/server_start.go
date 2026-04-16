@@ -25,6 +25,7 @@ func (s *Server) Start() error {
 	// Initialize queue manager
 	queueDir := filepath.Join(s.config.Server.DataDir, "queue")
 	s.queue = queue.NewManager(s.database, nil, queueDir, s.logger)
+	s.queue.SetTracingProvider(s.tracingProvider)
 	s.queue.Start(s.ctx)
 	s.logger.Info("Queue manager started")
 

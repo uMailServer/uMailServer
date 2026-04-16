@@ -12,14 +12,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/umailserver/umailserver/internal/tracing"
 )
 
 // Server represents a CardDAV server
 type Server struct {
-	logger   *slog.Logger
-	authFunc func(username, password string) (bool, error)
-	dataDir  string
-	storage  *Storage
+	logger          *slog.Logger
+	authFunc        func(username, password string) (bool, error)
+	dataDir         string
+	storage         *Storage
+	tracingProvider *tracing.Provider
+}
+
+// SetTracingProvider attaches an OpenTelemetry tracing provider so each
+// CardDAV request emits a carddav.<METHOD> span. Nil disables tracing.
+func (s *Server) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
 }
 
 // NewServer creates a new CardDAV server
@@ -39,8 +48,14 @@ func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 	s.authFunc = fn
 }
 
-// ServeHTTP implements the http.Handler interface
+// ServeHTTP implements the http.Handler interface, wrapping the actual
+// dispatch in a tracing span when a provider is configured.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	tracing.HTTPMiddleware(s.tracingProvider, "carddav", http.HandlerFunc(s.handle)).ServeHTTP(w, r)
+}
+
+// handle does the auth+dispatch work; ServeHTTP wraps it in a tracing span.
+func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	// Authenticate request
 	username, password, ok := r.BasicAuth()
 	if !ok {

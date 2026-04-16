@@ -654,3 +654,70 @@ func TestAccountToJSON_WithoutVacation(t *testing.T) {
 		t.Error("expected no vacation_settings when empty")
 	}
 }
+
+func TestHandleTOTPVerify_DecryptError(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	defer database.Close()
+
+	// Get account and set an invalid encrypted TOTP secret (starts with "enc:" but is not valid base64)
+	account, _ := database.GetAccount("test.com", "user")
+	account.TOTPSecret = "enc:!!!invalid-base64!!!"
+	account.TOTPEnabled = true
+	database.UpdateAccount(account)
+
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	body, _ := json.Marshal(map[string]string{"code": "123456"})
+	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.handleTOTPVerify(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for decrypt error, got %d", rec.Code)
+	}
+}
+
+func TestHandleTOTPVerify_UpdateAccountError(t *testing.T) {
+	server, database := helperSetupTOTPAccount(t)
+	// Don't defer close - we want to close it to cause an error
+
+	// First setup TOTP properly
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleTOTPSetup(rec, req, "user@test.com")
+
+	// Now close database to cause UpdateAccount to fail
+	database.Close()
+
+	// Get the TOTP secret that was set
+	account, _ := database.GetAccount("test.com", "user")
+	if account == nil {
+		// Re-create account for test
+		hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+		account = &db.AccountData{
+			Email:        "user@test.com",
+			LocalPart:    "user",
+			Domain:       "test.com",
+			PasswordHash: string(hash),
+			IsActive:     true,
+			TOTPEnabled:  false,
+		}
+		database.CreateAccount(account)
+	}
+
+	body, _ := json.Marshal(map[string]string{"code": "123456"})
+	req = httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+
+	server.handleTOTPVerify(rec, req, "user@test.com")
+
+	// Should fail with server error when database is closed
+	if rec.Code != http.StatusInternalServerError && rec.Code != http.StatusNotFound {
+		t.Errorf("expected 500 or 404 for db error, got %d", rec.Code)
+	}
+}

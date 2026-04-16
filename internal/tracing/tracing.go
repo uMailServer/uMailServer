@@ -239,6 +239,13 @@ func SetBoolAttribute(span trace.Span, key string, value bool) {
 	}
 }
 
+// SetFloatAttribute sets a float64 attribute on a span
+func SetFloatAttribute(span trace.Span, key string, value float64) {
+	if span.IsRecording() {
+		span.SetAttributes(attribute.Float64(key, value))
+	}
+}
+
 // RecordError records an error on a span
 func RecordError(span trace.Span, err error, opts ...trace.EventOption) {
 	if span.IsRecording() && err != nil {

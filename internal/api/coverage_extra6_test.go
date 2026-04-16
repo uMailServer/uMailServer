@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/db"
 )
 
 // --- Tests for zero-downtime deployment draining ---
@@ -102,5 +104,27 @@ func TestDrainWait_WithTimeout(t *testing.T) {
 	// We just verify it doesn't hang
 	if elapsed > 500*time.Millisecond {
 		t.Error("DrainWait took too long")
+	}
+}
+
+func TestHandleReady_DatabaseError(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+
+	server := NewServer(database, nil, Config{})
+	server.draining.Store(false)
+
+	// Close database to cause ListDomains to fail
+	database.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleReady(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503 for database error, got %d", rec.Code)
 	}
 }

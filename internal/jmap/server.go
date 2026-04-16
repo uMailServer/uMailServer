@@ -2,6 +2,7 @@
 package jmap
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/storage"
+	"github.com/umailserver/umailserver/internal/tracing"
 )
 
 // idCounter is used to ensure unique IDs even when called rapidly
@@ -24,12 +26,19 @@ var idCounter uint64
 
 // Server represents a JMAP server
 type Server struct {
-	logger    *slog.Logger
-	config    Config
-	db        *storage.Database
-	msgStore  *storage.MessageStore
-	sessions  map[string]*Session
-	sessionMu sync.RWMutex
+	logger          *slog.Logger
+	config          Config
+	db              *storage.Database
+	msgStore        *storage.MessageStore
+	sessions        map[string]*Session
+	sessionMu       sync.RWMutex
+	tracingProvider *tracing.Provider
+}
+
+// SetTracingProvider attaches an OpenTelemetry tracing provider so each
+// JMAP method call emits a child span. Nil disables tracing without overhead.
+func (s *Server) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
 }
 
 // Config holds JMAP server configuration
@@ -385,6 +394,29 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 // processMethodCall processes a single JMAP method call
 func (s *Server) processMethodCall(user string, call MethodCall) Response {
+	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
+		_, span := s.tracingProvider.StartSpanWithKind(context.Background(), "jmap."+call.Name, tracing.SpanKindServer)
+		defer span.End()
+		tracing.SetStringAttribute(span, "jmap.method", call.Name)
+		tracing.SetStringAttribute(span, "jmap.user", user)
+		if call.ID != "" {
+			tracing.SetStringAttribute(span, "jmap.call_id", call.ID)
+		}
+		resp := s.dispatchMethodCall(user, call)
+		if errType, ok := resp.Args["type"].(string); ok && errType != "" {
+			tracing.SetStringAttribute(span, "jmap.error", errType)
+			tracing.SetStatus(span, tracing.StatusError, errType)
+		} else {
+			tracing.SetStatus(span, tracing.StatusOk, "")
+		}
+		return resp
+	}
+	return s.dispatchMethodCall(user, call)
+}
+
+// dispatchMethodCall is the core method dispatch shared by traced and untraced
+// processing.
+func (s *Server) dispatchMethodCall(user string, call MethodCall) Response {
 	switch call.Name {
 	// Mailbox methods
 	case "Mailbox/get":
@@ -407,6 +439,8 @@ func (s *Server) processMethodCall(user string, call MethodCall) Response {
 		return s.handleEmailSet(user, call)
 	case "Email/import":
 		return s.handleEmailImport(user, call)
+	case "Email/changes":
+		return s.handleEmailChanges(user, call)
 	case "Email/queryChanges":
 		return s.handleEmailQueryChanges(user, call)
 

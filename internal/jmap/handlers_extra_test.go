@@ -523,3 +523,36 @@ func TestGenerateSearchSnippet(t *testing.T) {
 		t.Errorf("Expected empty snippet preview for empty query, got %q", result.Preview)
 	}
 }
+
+// TestValidateAccountId_MatchingAccount tests validateAccountId when accountId matches user
+func TestValidateAccountId_MatchingAccount(t *testing.T) {
+	valid, _ := validateAccountId("user@example.com", "user@example.com", "Test/method", "call-1")
+	if !valid {
+		t.Error("Expected valid=true when accountId matches user")
+	}
+}
+
+// TestValidateAccountId_MismatchedAccount tests validateAccountId when accountId doesn't match user
+func TestValidateAccountId_MismatchedAccount(t *testing.T) {
+	valid, resp := validateAccountId("other@example.com", "user@example.com", "Test/method", "call-1")
+	if valid {
+		t.Error("Expected valid=false when accountId doesn't match user")
+	}
+	if resp.Name != "Test/method" {
+		t.Errorf("Response.Name = %s, want Test/method", resp.Name)
+	}
+	if resp.ID != "call-1" {
+		t.Errorf("Response.ID = %s, want call-1", resp.ID)
+	}
+	if resp.Args["type"] != "accountNotFound" {
+		t.Errorf("type = %v, want accountNotFound", resp.Args["type"])
+	}
+}
+
+// TestValidateAccountId_EmptyAccountId tests validateAccountId when accountId is empty (allows any user)
+func TestValidateAccountId_EmptyAccountId(t *testing.T) {
+	valid, _ := validateAccountId("", "user@example.com", "Test/method", "call-2")
+	if !valid {
+		t.Error("Expected valid=true when accountId is empty")
+	}
+}

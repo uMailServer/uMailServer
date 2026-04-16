@@ -620,3 +620,27 @@ func TestListAliases_Empty(t *testing.T) {
 		t.Errorf("expected 0 aliases, got %d", len(result))
 	}
 }
+
+// TestListAliases_DBError tests listAliases when database returns error
+func TestListAliases_DBError(t *testing.T) {
+	server, database, cleanup := setupAliasTestServer(t)
+	defer cleanup()
+
+	// Create a domain first
+	domain := &db.DomainData{Name: "example.com", IsActive: true, CreatedAt: time.Now()}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	// Close database to trigger error
+	database.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/aliases", nil)
+	w := httptest.NewRecorder()
+
+	server.handleAliases(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, w.Code)
+	}
+}

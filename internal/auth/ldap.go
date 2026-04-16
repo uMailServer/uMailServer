@@ -27,11 +27,13 @@ type LDAPConfig struct {
 	StartTLS       bool          `yaml:"start_tls"`              // Use StartTLS on port 389
 	SkipVerify     bool          `yaml:"skip_verify"`            // Skip TLS certificate verification (dev only)
 	Timeout        time.Duration `yaml:"timeout"`                // Connection timeout
+	MaxConnections int           `yaml:"max_connections"`        // Max pooled LDAP connections (default 10)
 }
 
 // LDAPClient handles LDAP authentication
 type LDAPClient struct {
 	config LDAPConfig
+	pool   *ldapPool
 }
 
 // LDAPUser represents an authenticated LDAP user
@@ -77,6 +79,9 @@ func NewLDAPClient(config LDAPConfig) (*LDAPClient, error) {
 	client := &LDAPClient{
 		config: config,
 	}
+	client.pool = newLDAPPool(func() (pooledLDAPConn, error) {
+		return client.connect()
+	}, config.MaxConnections)
 
 	// Test connection
 	if err := client.TestConnection(); err != nil {
@@ -86,22 +91,35 @@ func NewLDAPClient(config LDAPConfig) (*LDAPClient, error) {
 	return client, nil
 }
 
-// TestConnection verifies LDAP connectivity
+// Close drains the connection pool. Safe to call multiple times.
+func (c *LDAPClient) Close() {
+	if c == nil || c.pool == nil {
+		return
+	}
+	c.pool.close()
+}
+
+// TestConnection verifies LDAP connectivity. On success the conn is returned
+// to the pool warm so the first real auth doesn't pay the dial cost.
 func (c *LDAPClient) TestConnection() error {
-	conn, err := c.connect()
+	pc, err := c.pool.acquire()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	conn, ok := pc.(*ldap.Conn)
+	if !ok {
+		c.pool.discard(pc)
+		return fmt.Errorf("ldap pool returned unexpected connection type")
+	}
 
-	// If bind DN is configured, try to bind
 	if c.config.BindDN != "" {
-		err = conn.Bind(c.config.BindDN, c.config.BindPassword)
-		if err != nil {
+		if err := conn.Bind(c.config.BindDN, c.config.BindPassword); err != nil {
+			c.pool.discard(conn)
 			return fmt.Errorf("ldap bind failed: %w", err)
 		}
 	}
 
+	c.pool.release(conn)
 	return nil
 }
 
@@ -192,18 +210,22 @@ func (c *LDAPClient) Authenticate(username, password string) (*LDAPUser, error) 
 		return nil, fmt.Errorf("ldap authentication is disabled")
 	}
 
-	// Connect
-	conn, err := c.connect()
+	pc, err := c.pool.acquire()
 	if err != nil {
 		slog.Error("ldap connection failed", "error", err)
 		return nil, err
 	}
-	defer conn.Close()
+	conn, ok := pc.(*ldap.Conn)
+	if !ok {
+		c.pool.discard(pc)
+		return nil, fmt.Errorf("ldap pool returned unexpected connection type")
+	}
 
 	// Bind with service account if configured
 	if c.config.BindDN != "" {
 		err = conn.Bind(c.config.BindDN, c.config.BindPassword)
 		if err != nil {
+			c.pool.discard(conn)
 			slog.Error("ldap service bind failed", "error", err)
 			return nil, fmt.Errorf("ldap service bind failed")
 		}
@@ -230,15 +252,18 @@ func (c *LDAPClient) Authenticate(username, password string) (*LDAPUser, error) 
 
 	sr, err := conn.Search(searchRequest)
 	if err != nil {
+		c.pool.discard(conn)
 		slog.Error("ldap search failed", "error", err, "filter", filter)
 		return nil, fmt.Errorf("user search failed")
 	}
 
 	if len(sr.Entries) == 0 {
+		c.pool.release(conn)
 		return nil, fmt.Errorf("user not found")
 	}
 
 	if len(sr.Entries) > 1 {
+		c.pool.release(conn)
 		slog.Warn("ldap search returned multiple users", "username", username)
 		return nil, fmt.Errorf("multiple users found")
 	}
@@ -248,6 +273,8 @@ func (c *LDAPClient) Authenticate(username, password string) (*LDAPUser, error) 
 	// Attempt user bind to verify password
 	err = conn.Bind(userDN, password)
 	if err != nil {
+		// Conn left in unknown bind state; discard rather than poison the pool.
+		c.pool.discard(conn)
 		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
 			return nil, fmt.Errorf("invalid credentials")
 		}
@@ -255,14 +282,16 @@ func (c *LDAPClient) Authenticate(username, password string) (*LDAPUser, error) 
 		return nil, fmt.Errorf("authentication failed")
 	}
 
-	// Re-bind as service account for group lookup
+	// Re-bind as service account for group lookup and to leave conn reusable.
 	if c.config.BindDN != "" {
 		err = conn.Bind(c.config.BindDN, c.config.BindPassword)
 		if err != nil {
+			c.pool.discard(conn)
 			slog.Error("ldap re-bind failed", "error", err)
 			return nil, fmt.Errorf("group lookup failed")
 		}
 	}
+	c.pool.release(conn)
 
 	// Extract user info
 	entry := sr.Entries[0]
@@ -302,15 +331,20 @@ func (c *LDAPClient) GetUser(username string) (*LDAPUser, error) {
 		return nil, fmt.Errorf("ldap authentication is disabled")
 	}
 
-	conn, err := c.connect()
+	pc, err := c.pool.acquire()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	conn, ok := pc.(*ldap.Conn)
+	if !ok {
+		c.pool.discard(pc)
+		return nil, fmt.Errorf("ldap pool returned unexpected connection type")
+	}
 
 	if c.config.BindDN != "" {
 		err = conn.Bind(c.config.BindDN, c.config.BindPassword)
 		if err != nil {
+			c.pool.discard(conn)
 			return nil, fmt.Errorf("ldap bind failed: %w", err)
 		}
 	}
@@ -335,8 +369,10 @@ func (c *LDAPClient) GetUser(username string) (*LDAPUser, error) {
 
 	sr, err := conn.Search(searchRequest)
 	if err != nil {
+		c.pool.discard(conn)
 		return nil, err
 	}
+	c.pool.release(conn)
 
 	if len(sr.Entries) == 0 {
 		return nil, fmt.Errorf("user not found")

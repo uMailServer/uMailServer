@@ -11,6 +11,7 @@ import (
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/ratelimit"
 	"github.com/umailserver/umailserver/internal/spam"
+	"github.com/umailserver/umailserver/internal/tracing"
 )
 
 // MessageContext holds the context for a message being processed
@@ -121,8 +122,15 @@ type PipelineStage interface {
 
 // Pipeline manages message processing stages
 type Pipeline struct {
-	stages []PipelineStage
-	logger Logger
+	stages          []PipelineStage
+	logger          Logger
+	tracingProvider *tracing.Provider
+}
+
+// SetTracingProvider attaches an OpenTelemetry tracing provider so each stage
+// emits a child span. A nil provider disables tracing without overhead.
+func (p *Pipeline) SetTracingProvider(provider *tracing.Provider) {
+	p.tracingProvider = provider
 }
 
 // Logger interface for pipeline logging
@@ -157,6 +165,7 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 		"remote_ip", ctx.RemoteIP,
 	)
 
+	traceCtx := context.Background()
 	for _, stage := range p.stages {
 		ctx.Stage = stage.Name()
 		p.logger.Debug("Running pipeline stage",
@@ -164,7 +173,7 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 			"from", ctx.From,
 		)
 
-		result := stage.Process(ctx)
+		result := p.runStage(traceCtx, stage, ctx)
 
 		if result == ResultReject {
 			p.logger.Info("Message rejected by pipeline",
@@ -195,6 +204,65 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 	}
 
 	return ResultAccept, nil
+}
+
+// runStage executes a single pipeline stage, wrapping it in a tracing span
+// when a provider is configured. The span name is "smtp.pipeline.<stage>" and
+// carries the stage name as an attribute, the textual result as the status,
+// and stage-specific outputs (SPF/DKIM/DMARC/ARC verdicts, spam score) pulled
+// from the message context after the stage runs.
+func (p *Pipeline) runStage(traceCtx context.Context, stage PipelineStage, msgCtx *MessageContext) PipelineResult {
+	if p.tracingProvider == nil || !p.tracingProvider.IsEnabled() {
+		return stage.Process(msgCtx)
+	}
+	_, span := p.tracingProvider.StartSpanWithKind(
+		traceCtx,
+		"smtp.pipeline."+stage.Name(),
+		tracing.SpanKindInternal,
+	)
+	defer span.End()
+	tracing.SetStringAttribute(span, "smtp.stage", stage.Name())
+
+	result := stage.Process(msgCtx)
+
+	switch result {
+	case ResultReject:
+		tracing.SetStringAttribute(span, "smtp.result", "reject")
+		tracing.SetStringAttribute(span, "smtp.rejection_message", msgCtx.RejectionMessage)
+		tracing.SetStatus(span, tracing.StatusError, "rejected by "+stage.Name())
+	case ResultQuarantine:
+		tracing.SetStringAttribute(span, "smtp.result", "quarantine")
+		tracing.SetStatus(span, tracing.StatusOk, "")
+	default:
+		tracing.SetStringAttribute(span, "smtp.result", "accept")
+		tracing.SetStatus(span, tracing.StatusOk, "")
+	}
+
+	// Enrich with stage-specific outputs that the stage may have populated.
+	// These are cheap reads — empty strings/zero scores are skipped.
+	if r := msgCtx.SPFResult.Result; r != "" {
+		tracing.SetStringAttribute(span, "smtp.spf.result", r)
+	}
+	if d := msgCtx.SPFResult.Domain; d != "" {
+		tracing.SetStringAttribute(span, "smtp.spf.domain", d)
+	}
+	if d := msgCtx.DKIMResult.Domain; d != "" {
+		tracing.SetStringAttribute(span, "smtp.dkim.domain", d)
+		tracing.SetBoolAttribute(span, "smtp.dkim.valid", msgCtx.DKIMResult.Valid)
+	}
+	if r := msgCtx.DMARCResult.Result; r != "" {
+		tracing.SetStringAttribute(span, "smtp.dmarc.result", r)
+		if pol := msgCtx.DMARCResult.Policy; pol != "" {
+			tracing.SetStringAttribute(span, "smtp.dmarc.policy", pol)
+		}
+	}
+	if r := msgCtx.ARCResult.Result; r != "" {
+		tracing.SetStringAttribute(span, "smtp.arc.result", r)
+	}
+	if msgCtx.SpamScore != 0 {
+		tracing.SetFloatAttribute(span, "smtp.spam.score", msgCtx.SpamScore)
+	}
+	return result
 }
 
 // Default pipeline stages
@@ -378,7 +446,7 @@ func NewGreylistStage() *GreylistStage {
 	return &GreylistStage{
 		greylist:    make(map[string]*greylistEntry),
 		lastCleanup: time.Now(),
-		maxEntries:  100000, // Maximum entries before emergency cleanup
+		maxEntries:  50000, // Maximum entries before emergency cleanup
 	}
 }
 

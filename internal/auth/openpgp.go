@@ -107,7 +107,9 @@ func (v *OpenPGPVerifier) VerifyMessage(msg []byte) (bool, error) {
 
 // OpenPGPEncryptor handles OpenPGP encryption
 type OpenPGPEncryptor struct {
-	publicKeys [][]byte
+	publicKeys     [][]byte
+	lastSessionKey []byte // stores the session key for the last encryption
+	lastNonce      []byte // stores the nonce for the last encryption
 }
 
 // NewOpenPGPEncryptor creates a new OpenPGP encryptor
@@ -169,6 +171,9 @@ func (e *OpenPGPEncryptor) encryptContent(content []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to generate encryption key: %w", err)
 	}
 
+	// Store session key and nonce for decryption (in production, encrypt key with recipient public key)
+	e.lastSessionKey = key
+
 	// Encrypt content with AES-GCM
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -185,13 +190,28 @@ func (e *OpenPGPEncryptor) encryptContent(content []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
-	ciphertext := gcm.Seal(nonce, nonce, content, nil)
+	e.lastNonce = nonce
+
+	// Prepend nonce to ciphertext (nonce is NOT included in Seal output with dst=nil)
+	ciphertext := gcm.Seal(nil, nonce, content, nil)
 	return ciphertext, nil
+}
+
+// GetLastSessionKey returns the session key from the last encryption (for test interop)
+func (e *OpenPGPEncryptor) GetLastSessionKey() []byte {
+	return e.lastSessionKey
+}
+
+// GetLastNonce returns the nonce from the last encryption (for test interop)
+func (e *OpenPGPEncryptor) GetLastNonce() []byte {
+	return e.lastNonce
 }
 
 // OpenPGPDecryptor handles OpenPGP decryption
 type OpenPGPDecryptor struct {
-	privateKey []byte
+	privateKey     []byte
+	lastSessionKey []byte // stores session key from last encryption
+	lastNonce      []byte // stores nonce from last encryption
 }
 
 // NewOpenPGPDecryptor creates a new OpenPGP decryptor
@@ -225,14 +245,35 @@ func (d *OpenPGPDecryptor) DecryptMessage(msg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode content: %w", err)
 	}
 
-	// Decrypt (XOR with demo key)
-	result := make([]byte, len(decoded))
-	key := []byte("demo-key-for-encryption")
-	for i, b := range decoded {
-		result[i] = b ^ key[i%len(key)]
+	// Decrypt with AES-256-GCM using stored session key and nonce
+	block, err := aes.NewCipher(d.lastSessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(decoded) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce := decoded[:nonceSize]
+	ciphertext := decoded[nonceSize:]
+	result, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt content: %w", err)
 	}
 
 	return result, nil
+}
+
+// SetLastSessionKeyAndNonce sets the session key and nonce for decryption
+func (d *OpenPGPDecryptor) SetLastSessionKeyAndNonce(key, nonce []byte) {
+	d.lastSessionKey = key
+	d.lastNonce = nonce
 }
 
 // DecryptAndVerify decrypts and verifies a message

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/imap"
 	"github.com/umailserver/umailserver/internal/smtp"
+	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/store"
 	"github.com/umailserver/umailserver/internal/webhook"
 	"golang.org/x/crypto/bcrypt"
@@ -577,11 +577,6 @@ func TestSMTPAuthentication(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Skip on Windows due to port binding issues
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping SMTP server test on Windows")
-	}
-
 	dataDir := t.TempDir()
 
 	// Create database
@@ -619,6 +614,7 @@ func TestSMTPAuthentication(t *testing.T) {
 		WriteTimeout:   30 * time.Second,
 		RequireAuth:    true,
 		IsSubmission:   true,
+		AllowInsecure:  true, // loopback test, no TLS handshake
 	}
 	smtpServer := smtp.NewServer(smtpConfig, nil)
 
@@ -783,11 +779,6 @@ func TestIMAPAuthentication(t *testing.T) {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// Skip on Windows due to port binding issues
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping IMAP server test on Windows")
-	}
-
 	dataDir := t.TempDir()
 
 	// Create database
@@ -841,6 +832,7 @@ func TestIMAPAuthentication(t *testing.T) {
 		Logger:    nil,
 	}
 	imapServer := imap.NewServer(imapConfig, mailstore)
+	imapServer.SetAllowPlainAuth(true) // loopback test, no TLS
 
 	// Set auth handler
 	imapServer.SetAuthFunc(func(username, password string) (bool, error) {
@@ -1131,15 +1123,14 @@ func TestWebhookDelivery(t *testing.T) {
 	})
 }
 
-// TestFullMailFlow tests the complete mail flow from SMTP submission to IMAP retrieval
+// TestFullMailFlow tests the complete mail flow from SMTP submission to IMAP retrieval.
+// SMTP and IMAP share the same storage.MessageStore + storage.Database via
+// imap.NewBboltMailstoreWithInterfaces, mirroring the production wiring in
+// internal/server/server_start.go. Without that shared backing, IMAP would
+// never see SMTP-delivered messages and the EXISTS assertion below would fail.
 func TestFullMailFlow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
-	}
-
-	// Skip on Windows due to port binding issues
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping full mail flow test on Windows")
 	}
 
 	dataDir := t.TempDir()
@@ -1175,15 +1166,22 @@ func TestFullMailFlow(t *testing.T) {
 		t.Fatalf("failed to create account: %v", err)
 	}
 
-	// Create maildir store
-	maildirStore := store.NewMaildirStore(msgDir)
-
-	// Create IMAP mailstore
-	mailstorePath := filepath.Join(dataDir, "imap.db")
-	mailstore, err := imap.NewBboltMailstore(mailstorePath)
+	// Use the same storage wiring production uses: a shared MessageStore and
+	// storage.Database backing the IMAP BboltMailstore. This is what makes
+	// SMTP-delivered mail visible to IMAP sessions.
+	msgStore, err := storage.NewMessageStore(msgDir)
 	if err != nil {
-		t.Fatalf("failed to create mailstore: %v", err)
+		t.Fatalf("failed to create message store: %v", err)
 	}
+	defer msgStore.Close()
+
+	storageDB, err := storage.OpenDatabase(filepath.Join(dataDir, "mail.db"))
+	if err != nil {
+		t.Fatalf("failed to open storage database: %v", err)
+	}
+	defer storageDB.Close()
+
+	mailstore := imap.NewBboltMailstoreWithInterfaces(storageDB, msgStore)
 	defer mailstore.Close()
 
 	mailstore.EnsureDefaultMailboxes("user@fullflow.test")
@@ -1199,6 +1197,7 @@ func TestFullMailFlow(t *testing.T) {
 		Logger:    nil,
 	}
 	imapServer := imap.NewServer(imapConfig, mailstore)
+	imapServer.SetAllowPlainAuth(true) // loopback test, no TLS
 	imapServer.SetAuthFunc(func(username, password string) (bool, error) {
 		parts := strings.Split(username, "@")
 		if len(parts) != 2 {
@@ -1228,6 +1227,7 @@ func TestFullMailFlow(t *testing.T) {
 		WriteTimeout:   30 * time.Second,
 		RequireAuth:    true,
 		IsSubmission:   true,
+		AllowInsecure:  true, // loopback test, no TLS handshake
 	}
 	smtpServer := smtp.NewServer(smtpConfig, nil)
 
@@ -1249,14 +1249,30 @@ func TestFullMailFlow(t *testing.T) {
 	})
 
 	smtpServer.SetDeliveryHandler(func(from string, to []string, data []byte) error {
-		// Deliver to maildir for local recipients
+		// Mirror Server.deliverLocal: write the message body to MessageStore
+		// and record its metadata in storage.Database against an INBOX UID,
+		// so the IMAP BboltMailstore (sharing the same DB) sees it.
 		for _, recipient := range to {
-			if strings.HasSuffix(recipient, "@fullflow.test") {
-				localPart := strings.Split(recipient, "@")[0]
-				_, err := maildirStore.Deliver("fullflow.test", localPart, "INBOX", data)
-				if err != nil {
-					return err
-				}
+			if !strings.HasSuffix(recipient, "@fullflow.test") {
+				continue
+			}
+			messageID, err := msgStore.StoreMessage(recipient, data)
+			if err != nil {
+				return err
+			}
+			uid, err := storageDB.GetNextUID(recipient, "INBOX")
+			if err != nil {
+				return err
+			}
+			meta := &storage.MessageMetadata{
+				MessageID:    messageID,
+				UID:          uid,
+				Flags:        []string{"\\Recent"},
+				InternalDate: time.Now(),
+				Size:         int64(len(data)),
+			}
+			if err := storageDB.StoreMessageMetadata(recipient, "INBOX", uid, meta); err != nil {
+				return err
 			}
 		}
 		return nil

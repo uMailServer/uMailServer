@@ -24,6 +24,7 @@ func (s *Server) startCalDAV() {
 		ok, err := s.authenticate(user, pass)
 		return ok, err
 	})
+	caldavServer.SetTracingProvider(s.tracingProvider)
 
 	s.caldavServer = caldavServer
 

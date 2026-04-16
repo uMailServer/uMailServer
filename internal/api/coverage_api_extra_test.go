@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/db"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // --- handleGetFilters Coverage Tests ---
@@ -1842,6 +1843,70 @@ func TestMockFilterManager_GetFilterError(t *testing.T) {
 	}
 }
 
+// TestMockFilterManager_GetUserFiltersSuccess tests successful retrieval
+func TestMockFilterManager_GetUserFiltersSuccess(t *testing.T) {
+	mock := &MockFilterManager{
+		GetUserFiltersResult: []*EmailFilter{
+			{ID: "filter1", Name: "Test Filter", Enabled: true},
+		},
+	}
+	filters, err := mock.GetUserFilters("user@example.com")
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if len(filters) != 1 {
+		t.Errorf("Expected 1 filter, got %d", len(filters))
+	}
+	if filters[0].ID != "filter1" {
+		t.Errorf("Expected filter ID 'filter1', got %s", filters[0].ID)
+	}
+}
+
+// TestMockFilterManager_GetFilterSuccess tests successful filter retrieval
+func TestMockFilterManager_GetFilterSuccess(t *testing.T) {
+	mock := &MockFilterManager{
+		GetFilterResult: &EmailFilter{ID: "filter123", Name: "My Filter", Enabled: true},
+	}
+	filter, err := mock.GetFilter("user@example.com", "filter123")
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if filter == nil {
+		t.Fatal("Expected filter, got nil")
+	}
+	if filter.ID != "filter123" {
+		t.Errorf("Expected filter ID 'filter123', got %s", filter.ID)
+	}
+}
+
+// TestMockVacationManager_ListActiveSuccess tests ListActive success path
+func TestMockVacationManager_ListActiveSuccess(t *testing.T) {
+	mock := &MockVacationManager{
+		ListActiveResult: []string{"user1@example.com", "user2@example.com"},
+	}
+	result, err := mock.ListActive()
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	if len(result) != 2 {
+		t.Errorf("Expected 2 users, got %d", len(result))
+	}
+}
+
+// TestMockVacationManager_ListActiveError tests ListActive error path
+func TestMockVacationManager_ListActiveError(t *testing.T) {
+	mock := &MockVacationManager{
+		ListActiveError: fmt.Errorf("database error"),
+	}
+	result, err := mock.ListActive()
+	if err == nil {
+		t.Error("Expected error, got nil")
+	}
+	if result != nil {
+		t.Error("Expected nil result on error")
+	}
+}
+
 // TestHandleAdmin_Serve tests admin endpoint
 func TestHandleAdmin_Serve(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
@@ -2025,16 +2090,9 @@ func TestHealth_QueueMgrError(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	// Create a mock queue manager (we just need it to be non-nil)
-	// The mock error will be used instead of calling GetStats
+	// Set queueMgrStatsError to trigger the error path
+	// Note: queueMgr can be nil since queueMgrStatsError is checked first
 	server.queueMgrStatsError = fmt.Errorf("mock queue stats error")
-
-	// We need to set a non-nil queueMgr for the error path to be triggered
-	// In real scenario, this would be set during server initialization
-	// For this test, we'll skip if queueMgr is nil
-	if server.queueMgr == nil {
-		t.Skip("queueMgr is nil, skipping test")
-	}
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -2497,5 +2555,200 @@ func TestValidateEmailFormat_DomainTooLong(t *testing.T) {
 	err := validateEmailFormat("user@" + longDomain)
 	if err == nil {
 		t.Error("Expected error for domain exceeding 253 chars")
+	}
+}
+
+// TestHandleLogin_TOTPEnabled_InvalidStep tests login where TOTP step is reused (replay attack)
+func TestHandleLogin_TOTPEnabled_InvalidStep(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	domain := &db.DomainData{Name: "tste.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:            "user@tste.com",
+		LocalPart:        "user",
+		Domain:           "tste.com",
+		PasswordHash:     string(hash),
+		IsActive:         true,
+		TOTPEnabled:      true,
+		TOTPSecret:       "JBSWY3DPEHPK3PXP",
+		TOTPLastUsedStep: 12345678, // Set a high step to simulate reuse
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	body := map[string]string{
+		"email":     "user@tste.com",
+		"password":  "password123",
+		"totp_code": "123456",
+	}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for TOTP replay, got %d", rec.Code)
+	}
+}
+
+// TestHandleLogin_TOTPEnabled_LockedOut tests login when TOTP is locked out due to failures
+func TestHandleLogin_TOTPEnabled_LockedOut(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	domain := &db.DomainData{Name: "lck.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@lck.com",
+		LocalPart:    "user",
+		Domain:       "lck.com",
+		PasswordHash: string(hash),
+		IsActive:     true,
+		TOTPEnabled:  true,
+		TOTPSecret:   "JBSWY3DPEHPK3PXP",
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	// Lock out the account by recording maxTOTPFailures (5) failed attempts
+	email := "user@lck.com"
+	server.totpMu.Lock()
+	server.totpAttempts = map[string]*totpAttempt{
+		email: {count: 5, lastSeen: time.Now()},
+	}
+	server.totpMu.Unlock()
+
+	body := map[string]string{
+		"email":     "user@lck.com",
+		"password":  "password123",
+		"totp_code": "123456",
+	}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected 429 for TOTP locked out, got %d", rec.Code)
+	}
+}
+
+// TestHandleLogin_AccountRateLimited tests login when account is rate limited
+func TestHandleLogin_AccountRateLimited(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	domain := &db.DomainData{Name: "ratelimit.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@ratelimit.com",
+		LocalPart:    "user",
+		Domain:       "ratelimit.com",
+		PasswordHash: string(hash),
+		IsActive:     true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	// Simulate account rate limiting by setting 3 failed attempts (threshold is 5)
+	server.accountLoginAttempts = map[string]*loginAttempt{
+		"user@ratelimit.com": {count: 5, lastSeen: time.Now()},
+	}
+
+	body := map[string]string{
+		"email":    "user@ratelimit.com",
+		"password": "password123",
+	}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected 429 for account rate limited, got %d", rec.Code)
+	}
+}
+
+// TestHandleLogin_IPRateLimited tests login when IP is rate limited
+func TestHandleLogin_IPRateLimited(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret", TokenExpiry: time.Hour})
+
+	domain := &db.DomainData{Name: "iptest.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.DefaultCost)
+	account := &db.AccountData{
+		Email:        "user@iptest.com",
+		LocalPart:    "user",
+		Domain:       "iptest.com",
+		PasswordHash: string(hash),
+		IsActive:     true,
+	}
+	if err := database.CreateAccount(account); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	// Simulate IP rate limiting
+	server.loginAttempts = map[string]*loginAttempt{
+		"192.168.1.100": {count: 20, lastSeen: time.Now()},
+	}
+
+	body := map[string]string{
+		"email":    "user@iptest.com",
+		"password": "password123",
+	}
+	jsonBody, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	// Set RemoteAddr to trigger IP rate limit
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected 429 for IP rate limited, got %d", rec.Code)
 	}
 }

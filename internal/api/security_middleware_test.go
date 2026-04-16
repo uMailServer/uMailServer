@@ -303,6 +303,27 @@ func TestIPWhitelistMiddleware_Denied(t *testing.T) {
 	}
 }
 
+// Test getRemoteAddrIP with IPv6
+func TestGetRemoteAddrIP_IPv6(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.RemoteAddr = "[::1]:8080"
+
+	ip := getRemoteAddrIP(req)
+	if ip != "::1" {
+		t.Errorf("Expected ::1, got %s", ip)
+	}
+}
+
+func TestGetRemoteAddrIP_IPv6Full(t *testing.T) {
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.RemoteAddr = "[2001:db8::1]:8080"
+
+	ip := getRemoteAddrIP(req)
+	if ip != "2001:db8::1" {
+		t.Errorf("Expected 2001:db8::1, got %s", ip)
+	}
+}
+
 // Test getClientIP
 func TestGetClientIP_XForwardedFor(t *testing.T) {
 	req := httptest.NewRequest("GET", "/test", nil)

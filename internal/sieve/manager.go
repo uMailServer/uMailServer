@@ -19,17 +19,21 @@ type Manager struct {
 	activeScripts map[string]string                   // userID -> activeScriptName
 	scriptsMu     sync.RWMutex
 
-	// Vacation cache: prevents spamming the same sender
-	vacationCache   map[string]time.Time
-	vacationCacheMu sync.Mutex
+	// Vacation cache: prevents spamming the same sender (LRU with max 10000 entries)
+	vacationCache    map[string]time.Time
+	vacationCacheMu  sync.Mutex
+	vacationMaxSize  int
+	vacationAccessor []string // LRU tracking
 }
 
 // NewManager creates a new Sieve manager
 func NewManager() *Manager {
 	return &Manager{
-		scripts:       make(map[string]map[string]*StoredScript),
-		activeScripts: make(map[string]string),
-		vacationCache: make(map[string]time.Time),
+		scripts:          make(map[string]map[string]*StoredScript),
+		activeScripts:    make(map[string]string),
+		vacationCache:    make(map[string]time.Time),
+		vacationMaxSize:  10000,
+		vacationAccessor: make([]string, 0, 10000),
 	}
 }
 
@@ -216,7 +220,19 @@ func (m *Manager) ShouldSendVacation(sender string, days int) bool {
 func (m *Manager) RecordVacationSent(sender string) {
 	m.vacationCacheMu.Lock()
 	defer m.vacationCacheMu.Unlock()
+
+	// LRU eviction: remove oldest 25% if at capacity
+	if len(m.vacationCache) >= m.vacationMaxSize {
+		removeCount := m.vacationMaxSize / 4
+		for i := 0; i < removeCount && len(m.vacationAccessor) > 0; i++ {
+			oldest := m.vacationAccessor[0]
+			m.vacationAccessor = m.vacationAccessor[1:]
+			delete(m.vacationCache, oldest)
+		}
+	}
+
 	m.vacationCache[sender] = time.Now()
+	m.vacationAccessor = append(m.vacationAccessor, sender)
 }
 
 // GetVacationInterval returns the minimum interval for vacation replies

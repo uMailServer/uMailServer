@@ -130,6 +130,49 @@ func TestNewSPFChecker(t *testing.T) {
 	if checker.cache == nil {
 		t.Error("Cache not initialized")
 	}
+	if checker.cache.ttl != defaultSPFCacheTTL {
+		t.Errorf("default cache TTL = %v, want %v", checker.cache.ttl, defaultSPFCacheTTL)
+	}
+}
+
+func TestSPFCheckerSetCacheTTL(t *testing.T) {
+	checker := NewSPFChecker(newMockDNSResolver())
+
+	// Custom TTL is applied
+	checker.SetCacheTTL(30 * time.Minute)
+	if checker.cache.ttl != 30*time.Minute {
+		t.Errorf("after SetCacheTTL: ttl = %v, want %v", checker.cache.ttl, 30*time.Minute)
+	}
+
+	// Zero/negative TTLs are ignored to keep the existing value
+	checker.SetCacheTTL(0)
+	if checker.cache.ttl != 30*time.Minute {
+		t.Errorf("zero TTL should be ignored: ttl = %v", checker.cache.ttl)
+	}
+	checker.SetCacheTTL(-1 * time.Second)
+	if checker.cache.ttl != 30*time.Minute {
+		t.Errorf("negative TTL should be ignored: ttl = %v", checker.cache.ttl)
+	}
+
+	// Verify the TTL is actually used when populating the cache
+	resolver := newMockDNSResolver()
+	resolver.txtRecords["example.com"] = []string{"v=spf1 +all"}
+	checker = NewSPFChecker(resolver)
+	checker.SetCacheTTL(2 * time.Hour)
+
+	_, _ = checker.CheckSPF(context.Background(), net.ParseIP("192.0.2.1"), "example.com", "sender@example.com")
+
+	checker.cache.mu.RLock()
+	entry, ok := checker.cache.records["example.com"]
+	checker.cache.mu.RUnlock()
+	if !ok {
+		t.Fatal("expected example.com to be cached")
+	}
+	expected := time.Now().Add(2 * time.Hour)
+	delta := entry.expiresAt.Sub(expected)
+	if delta < -5*time.Second || delta > 5*time.Second {
+		t.Errorf("cache entry expiresAt %v not within 5s of expected %v", entry.expiresAt, expected)
+	}
 }
 
 func TestSPFCheckNoRecord(t *testing.T) {

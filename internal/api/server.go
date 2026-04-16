@@ -334,7 +334,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.router == nil {
 		s.initRouter()
 	}
-	s.router.ServeHTTP(w, r)
+	s.traceRequest(s.router).ServeHTTP(w, r)
 }
 
 // initRouter sets up the HTTP routes (called once on first request)

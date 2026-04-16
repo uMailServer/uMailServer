@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,15 +27,23 @@ func (s *Server) handleJWTRotate(w http.ResponseWriter, r *http.Request) {
 	s.jwtSecrets[newKid] = newSecret
 	s.currentKid = newKid
 	if len(s.jwtSecrets) > maxJWTSecretVersions {
-		// Prune oldest secrets (lowest numeric kid, since kid is k<timestamp>)
+		// Prune oldest secrets (lowest timestamp in kid = k<timestamp>)
 		for len(s.jwtSecrets) > maxJWTSecretVersions {
 			var oldest string
+			var oldestTs int64 = -1
 			for kid := range s.jwtSecrets {
 				if kid == s.currentKid {
 					continue
 				}
-				if oldest == "" || kid < oldest {
+				// Parse timestamp from kid format: k<timestamp>
+				tsStr := strings.TrimPrefix(kid, "k")
+				ts, err := strconv.ParseInt(tsStr, 10, 64)
+				if err != nil {
+					continue
+				}
+				if oldestTs == -1 || ts < oldestTs {
 					oldest = kid
+					oldestTs = ts
 				}
 			}
 			if oldest != "" {

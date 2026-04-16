@@ -72,6 +72,25 @@ func TestRevokeToken_MultipleTokens(t *testing.T) {
 	}
 }
 
+func TestRevokeToken_DatabaseErrorFallback(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
+
+	// Close database to simulate error
+	database.Close()
+
+	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte("test-token")))
+	server.RevokeToken(tokenHash)
+
+	// Should fall back to in-memory on DB error
+	if !server.IsTokenRevoked(tokenHash) {
+		t.Error("Expected token to be revoked via in-memory fallback")
+	}
+}
+
 func TestIsTokenRevoked_NonExistent(t *testing.T) {
 	database, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {

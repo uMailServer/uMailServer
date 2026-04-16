@@ -184,6 +184,7 @@ type SecurityConfig struct {
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`
 	JWTSecret        string          `yaml:"jwt_secret"`
 	AuditLog         AuditLogConfig  `yaml:"audit_log"`
+	SPFCacheTTL      Duration        `yaml:"spf_cache_ttl"` // TTL for cached SPF lookups (default 5m)
 }
 
 // AuditLogConfig holds audit logging settings

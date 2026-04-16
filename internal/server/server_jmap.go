@@ -23,6 +23,7 @@ func (s *Server) startJMAP() {
 	}
 
 	jmapServer := jmap.NewServer(s.storageDB, s.msgStore, s.logger, jmapConfig)
+	jmapServer.SetTracingProvider(s.tracingProvider)
 
 	s.jmapServer = jmapServer
 

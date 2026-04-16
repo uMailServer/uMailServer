@@ -29,6 +29,9 @@ import (
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/store"
+	"github.com/umailserver/umailserver/internal/tracing"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // WebhookTrigger is the interface for triggering webhook events
@@ -79,6 +82,16 @@ type Manager struct {
 	// dialSMTP, if set, is used instead of net.DialTimeout for testing.
 	// It returns a net.Conn and is used by deliverToMX.
 	dialSMTP func(addr string) (net.Conn, error)
+
+	// tracingProvider, if set, emits queue.deliver and queue.deliver.mx spans.
+	tracingProvider *tracing.Provider
+}
+
+// SetTracingProvider attaches an OpenTelemetry tracing provider so each
+// delivery attempt and per-MX submission emits a span. A nil provider disables
+// tracing without overhead.
+func (m *Manager) SetTracingProvider(provider *tracing.Provider) {
+	m.tracingProvider = provider
 }
 
 // mxPool represents a connection pool for a single MX host
@@ -420,6 +433,11 @@ func (m *Manager) processPendingEntries() {
 
 // deliver attempts to deliver a message
 func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
+	if m.tracingProvider != nil && m.tracingProvider.IsEnabled() {
+		var span = m.startDeliverSpan(ctx, entry)
+		defer span.End()
+	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			m.logger.Error("panic in delivery", "error", r, "to", entry.To)
@@ -457,7 +475,7 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 	var lastErr string
 
 	for _, mx := range mxRecords {
-		if err := m.deliverToMX(ctx, entry.From, entry.To[0], message, mx); err != nil {
+		if err := m.deliverToMXTraced(ctx, entry.From, entry.To[0], message, mx); err != nil {
 			lastErr = err.Error()
 			continue
 		}
@@ -471,6 +489,39 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 	} else {
 		m.handleDeliveryFailure(entry, lastErr)
 	}
+}
+
+// startDeliverSpan starts a queue.deliver span carrying envelope attributes.
+// Caller is responsible for ending the returned span.
+func (m *Manager) startDeliverSpan(ctx context.Context, entry *db.QueueEntry) trace.Span {
+	_, span := m.tracingProvider.StartSpanWithKind(ctx, "queue.deliver", tracing.SpanKindInternal)
+	tracing.SetStringAttribute(span, "queue.from", entry.From)
+	if len(entry.To) > 0 {
+		tracing.SetStringAttribute(span, "queue.to", entry.To[0])
+	}
+	tracing.SetStringAttribute(span, "queue.id", entry.ID)
+	tracing.SetIntAttribute(span, "queue.retry_count", entry.RetryCount)
+	return span
+}
+
+// deliverToMXTraced wraps deliverToMX in a tracing span when enabled.
+func (m *Manager) deliverToMXTraced(ctx context.Context, from, to string, message []byte, mx string) error {
+	if m.tracingProvider == nil || !m.tracingProvider.IsEnabled() {
+		return m.deliverToMX(ctx, from, to, message, mx)
+	}
+	spanCtx, span := m.tracingProvider.StartSpanWithKind(ctx, "queue.deliver.mx", tracing.SpanKindClient)
+	defer span.End()
+	tracing.SetStringAttribute(span, "queue.mx", mx)
+	tracing.SetStringAttribute(span, "queue.from", from)
+	tracing.SetStringAttribute(span, "queue.to", to)
+	err := m.deliverToMX(spanCtx, from, to, message, mx)
+	if err != nil {
+		tracing.RecordError(span, err)
+		tracing.SetStatus(span, tracing.StatusError, err.Error())
+	} else {
+		tracing.SetStatus(span, tracing.StatusOk, "")
+	}
+	return err
 }
 
 // getMXPool gets or creates a connection pool for the given MX host

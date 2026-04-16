@@ -42,13 +42,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check queue manager
-	if s.queueMgr != nil {
-		// Check for mock error injection (used in tests)
-		if s.queueMgrStatsError != nil {
-			status = http.StatusServiceUnavailable
-			result["status"] = "unhealthy"
-			result["queue"] = "unavailable"
-		} else if _, err := s.queueMgr.GetStats(); err != nil {
+	// Note: queueMgrStatsError can be set even when queueMgr is nil (for test injection)
+	if s.queueMgrStatsError != nil {
+		status = http.StatusServiceUnavailable
+		result["status"] = "unhealthy"
+		result["queue"] = "unavailable"
+	} else if s.queueMgr != nil {
+		if _, err := s.queueMgr.GetStats(); err != nil {
 			status = http.StatusServiceUnavailable
 			result["status"] = "unhealthy"
 			result["queue"] = "unavailable"

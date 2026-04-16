@@ -3,6 +3,8 @@ package auth
 import (
 	"bytes"
 	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -194,11 +196,23 @@ func (e *SMIMEEncryptor) EncryptMessage(msg []byte, from, to string) ([]byte, er
 		return nil, fmt.Errorf("failed to encrypt session key: %w", err)
 	}
 
-	// Simple XOR encryption for demo (in production, use AES)
-	encryptedContent := make([]byte, len(msg))
-	for i, b := range msg {
-		encryptedContent[i] = b ^ sessionKey[i%len(sessionKey)]
+	// Encrypt content with AES-256-GCM
+	block, err := aes.NewCipher(sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+	// Seal appends ciphertext+tag to dst, so nonce is NOT included in output
+	// We prepend the nonce for storage/transmission
+	ciphertext := gcm.Seal(nil, nonce, msg, nil)
+	encryptedContent := append(nonce, ciphertext...)
 
 	// Build the S/MIME message
 	headers := fmt.Sprintf(
@@ -277,10 +291,23 @@ func (d *SMIMEDecryptor) DecryptMessage(msg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decrypt session key: %w", err)
 	}
 
-	// Decrypt the content (XOR with session key)
-	decryptedContent := make([]byte, len(encryptedContent))
-	for i, b := range encryptedContent {
-		decryptedContent[i] = b ^ sessionKey[i%len(sessionKey)]
+	// Decrypt content with AES-256-GCM
+	block, err := aes.NewCipher(sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(encryptedContent) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce, ciphertext := encryptedContent[:nonceSize], encryptedContent[nonceSize:]
+	decryptedContent, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt content: %w", err)
 	}
 
 	return decryptedContent, nil

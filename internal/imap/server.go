@@ -54,6 +54,11 @@ type Server struct {
 
 	// Tracing provider for OpenTelemetry
 	tracingProvider *tracing.Provider
+
+	// allowPlainAuth permits LOGIN/AUTHENTICATE without TLS. Off by default.
+	// Intended for loopback integration tests where TLS handshake setup adds
+	// no security but considerable boilerplate. Production must leave this false.
+	allowPlainAuth bool
 }
 
 // Mailstore interface for mailbox operations
@@ -145,6 +150,13 @@ func (s *Server) SetIdleTimeout(d time.Duration) {
 // SetMaxConnections sets the maximum number of concurrent IMAP connections.
 func (s *Server) SetMaxConnections(n int) {
 	s.maxConnections = n
+}
+
+// SetAllowPlainAuth permits LOGIN/AUTHENTICATE without an active TLS layer.
+// Off by default. Intended only for loopback integration tests; production
+// callers must never enable this.
+func (s *Server) SetAllowPlainAuth(allow bool) {
+	s.allowPlainAuth = allow
 }
 
 // isAuthLockedOut returns true if the given IP is temporarily locked out

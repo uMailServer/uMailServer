@@ -36,12 +36,16 @@ func (s *Server) startSMTP() {
 
 	// Wire up the message processing pipeline
 	pipeline := smtp.NewPipeline(smtp.NewPipelineLogger(s.logger))
+	pipeline.SetTracingProvider(s.tracingProvider)
 
 	// Create DNS resolver for auth checks
 	resolver := smtp.NewNetDNSResolver()
 
 	// Auth pipeline stages (SPF, DKIM, DMARC, ARC)
 	spfChecker := auth.NewSPFChecker(resolver)
+	if ttl := s.config.Security.SPFCacheTTL.ToDuration(); ttl > 0 {
+		spfChecker.SetCacheTTL(ttl)
+	}
 	dkimVerifier := auth.NewDKIMVerifier(resolver)
 	dmarcEvaluator := auth.NewDMARCEvaluator(resolver)
 	arcValidator := auth.NewARCValidator(resolver)
