@@ -516,46 +516,92 @@ func canonicalizeBodySimple(body []byte) []byte {
 	return body
 }
 
-// canonicalizeBodyRelaxed implements relaxed body canonicalization
-// - Ignores all whitespace at line endings
-// - Replaces multiple whitespace within a line with single space
-// - Empty body is replaced with CRLF
+// canonicalizeBodyRelaxed implements RFC 6376 §3.4.4 relaxed body
+// canonicalization:
+//   - Reduce all sequences of WSP (SP/TAB) within a line to a single SP.
+//   - Strip trailing WSP from each line.
+//   - Strip trailing empty lines (i.e. collapse multiple trailing CRLF runs
+//     down to exactly one CRLF when the body is non-empty).
+//   - Empty body becomes a single CRLF.
+//
+// This implementation walks `body` byte-by-byte without splitting into a
+// `[]string`; it does not allocate per-line and never converts the body to a
+// string. For a 50 MB message this avoids the previous O(N) string-slice
+// allocation and the regex replacement cost on every signed delivery.
 func canonicalizeBodyRelaxed(body []byte) []byte {
 	if len(body) == 0 {
 		return []byte("\r\n")
 	}
 
-	var result strings.Builder
-	lines := strings.Split(string(body), "\n")
+	// Output is bounded above by len(body)+2 — collapse/trim only shrinks.
+	out := make([]byte, 0, len(body)+2)
 
-	for i, line := range lines {
-		// Remove CR if present
-		line = strings.TrimSuffix(line, "\r")
-
-		// Replace multiple whitespace with single space
-		line = whitespaceRegex.ReplaceAllString(line, " ")
-
-		// Trim trailing whitespace
-		line = strings.TrimRight(line, " \t")
-
-		result.WriteString(line)
-		if i < len(lines)-1 {
-			result.WriteString("\r\n")
+	i := 0
+	isFirst := true
+	for {
+		// Carve off the next line up to the nearest '\n' (or EOF).
+		end := i
+		for end < len(body) && body[end] != '\n' {
+			end++
 		}
+		line := body[i:end]
+		// Drop the trailing CR of a CRLF terminator if present.
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+
+		// Insert the line separator BEFORE every line except the first so
+		// the trailing-CRLF post-processing below still works for input that
+		// did or didn't end with a newline.
+		if !isFirst {
+			out = append(out, '\r', '\n')
+		}
+		isFirst = false
+
+		// Canonicalize the line: collapse WSP runs to a single SP and drop
+		// trailing WSP. A leading WSP run is preserved as a single SP per
+		// RFC (we emit the SP when the next non-WSP byte arrives).
+		inWS := false
+		for _, b := range line {
+			if b == ' ' || b == '\t' {
+				inWS = true
+				continue
+			}
+			if inWS {
+				out = append(out, ' ')
+				inWS = false
+			}
+			out = append(out, b)
+		}
+		// `inWS` true at end-of-line ⇒ trailing WSP; naturally discarded.
+
+		if end >= len(body) {
+			break
+		}
+		i = end + 1
 	}
 
-	// Ensure trailing CRLF
-	s := result.String()
-	if !strings.HasSuffix(s, "\r\n") {
-		s += "\r\n"
+	// Ensure exactly one trailing CRLF (matches the original post-processing
+	// loop). The body is non-empty here so we always end with at most one.
+	if !endsWithCRLF(out) {
+		out = append(out, '\r', '\n')
 	}
-
-	// Remove all but one trailing CRLF
-	for strings.HasSuffix(s, "\r\n\r\n") {
-		s = s[:len(s)-2]
+	for hasDoubleCRLFSuffix(out) {
+		out = out[:len(out)-2]
 	}
+	return out
+}
 
-	return []byte(s)
+// endsWithCRLF reports whether the byte slice ends with CRLF.
+func endsWithCRLF(b []byte) bool {
+	return len(b) >= 2 && b[len(b)-2] == '\r' && b[len(b)-1] == '\n'
+}
+
+// hasDoubleCRLFSuffix reports whether the byte slice ends with "\r\n\r\n".
+func hasDoubleCRLFSuffix(b []byte) bool {
+	return len(b) >= 4 &&
+		b[len(b)-4] == '\r' && b[len(b)-3] == '\n' &&
+		b[len(b)-2] == '\r' && b[len(b)-1] == '\n'
 }
 
 // canonicalizeHeaders canonicalizes headers for signing/verification
@@ -872,6 +918,9 @@ func parseRSAPublicKey(data []byte) (*rsa.PublicKey, error) {
 
 // GenerateDKIMKeyPair generates a new RSA key pair for DKIM
 func GenerateDKIMKeyPair(bits int) (*rsa.PrivateKey, []byte, error) {
+	if bits < 2048 {
+		return nil, nil, fmt.Errorf("DKIM key size must be at least 2048 bits, got %d", bits)
+	}
 	privateKey, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to generate key: %w", err)

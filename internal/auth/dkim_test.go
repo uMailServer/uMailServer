@@ -471,7 +471,7 @@ func TestDKIMSignatureDefaults(t *testing.T) {
 }
 
 func TestGenerateDKIMKeyPair(t *testing.T) {
-	privateKey, pubKeyBytes, err := GenerateDKIMKeyPair(1024)
+	privateKey, pubKeyBytes, err := GenerateDKIMKeyPair(2048)
 	if err != nil {
 		t.Fatalf("GenerateDKIMKeyPair failed: %v", err)
 	}

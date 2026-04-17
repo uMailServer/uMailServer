@@ -253,6 +253,11 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
+	if req.QuotaLimit < 0 {
+		s.sendError(w, http.StatusBadRequest, "quota_limit must be non-negative")
+		return
+	}
+
 	// Non-admin cannot grant admin privileges
 	if !isAdmin && req.IsAdmin {
 		s.sendError(w, http.StatusForbidden, "only admins can grant admin privileges")

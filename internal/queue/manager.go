@@ -299,6 +299,7 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 		select {
 		case m.deliveryChan <- entry:
 		default:
+			m.logger.Warn("delivery channel full, entry will be retried by sweeper", "id", entry.ID, "to", entry.To)
 		}
 	}
 
