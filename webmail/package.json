@@ -29,6 +29,7 @@
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.0",
     "date-fns": "^4.0.0",
+    "dompurify": "^3.4.0",
     "isomorphic-dompurify": "^3.7.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
