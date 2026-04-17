@@ -76,8 +76,19 @@ type Service struct {
 	mu            sync.RWMutex
 }
 
-// NewService creates a new push notification service
+// NewService creates a new push notification service. VAPID keys are loaded
+// from `<dataDir>/vapid.json` if present, otherwise generated and persisted.
+// Subject defaults to "mailto:admin@umailserver.local".
 func NewService(dataDir string, logger *slog.Logger) (*Service, error) {
+	return NewServiceWithConfig(dataDir, Config{}, logger)
+}
+
+// NewServiceWithConfig creates a push service with operator-supplied
+// overrides. When override.VAPIDPublicKey AND override.VAPIDPrivateKey are
+// both set, they short-circuit the on-disk file (and skip generation). When
+// override.Subject is non-empty it overrides the default / persisted subject.
+// All other fields fall back to the on-disk config or generated defaults.
+func NewServiceWithConfig(dataDir string, override Config, logger *slog.Logger) (*Service, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -89,12 +100,27 @@ func NewService(dataDir string, logger *slog.Logger) (*Service, error) {
 		userSubs:      make(map[string][]string),
 	}
 
-	// Load or generate VAPID keys
-	config, err := service.loadOrGenerateConfig()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load VAPID config: %w", err)
+	if override.VAPIDPublicKey != "" && override.VAPIDPrivateKey != "" {
+		service.config = Config{
+			VAPIDPublicKey:  override.VAPIDPublicKey,
+			VAPIDPrivateKey: override.VAPIDPrivateKey,
+			Subject:         override.Subject,
+		}
+		if service.config.Subject == "" {
+			service.config.Subject = "mailto:admin@umailserver.local"
+		}
+		logger.Info("Push VAPID keys loaded from configuration override")
+	} else {
+		// Load or generate VAPID keys from disk
+		cfg, err := service.loadOrGenerateConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load VAPID config: %w", err)
+		}
+		service.config = *cfg
+		if override.Subject != "" {
+			service.config.Subject = override.Subject
+		}
 	}
-	service.config = *config
 
 	// Load existing subscriptions
 	if err := service.loadSubscriptions(); err != nil {

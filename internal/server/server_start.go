@@ -70,6 +70,7 @@ func (s *Server) Start() error {
 	s.startCardDAV()
 	s.startJMAP()
 	s.startAPI()
+	s.startMetrics()
 
 	return nil
 }

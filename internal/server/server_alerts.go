@@ -2,7 +2,59 @@ package server
 
 import (
 	"time"
+
+	"github.com/umailserver/umailserver/internal/alert"
+	"github.com/umailserver/umailserver/internal/config"
 )
+
+// buildAlertConfig converts the YAML-facing config.AlertConfig into the
+// internal alert.Config consumed by the alert manager. It applies defaults
+// for fields the user left zero so behaviour matches alert.DefaultConfig().
+func buildAlertConfig(c config.AlertConfig) alert.Config {
+	defaults := alert.DefaultConfig()
+	out := alert.Config{
+		Enabled:         c.Enabled,
+		WebhookURL:      c.WebhookURL,
+		WebhookHeaders:  c.WebhookHeaders,
+		WebhookTemplate: c.WebhookTemplate,
+		SMTPServer:      c.SMTPServer,
+		SMTPPort:        c.SMTPPort,
+		SMTPUsername:    c.SMTPUsername,
+		SMTPPassword:    alert.SecureString(c.SMTPPassword),
+		FromAddress:     c.FromAddress,
+		ToAddresses:     c.ToAddresses,
+		UseTLS:          c.UseTLS,
+		MinInterval:     time.Duration(c.MinInterval),
+		MaxAlerts:       c.MaxAlerts,
+		DiskThreshold:   c.DiskThreshold,
+		MemoryThreshold: c.MemoryThreshold,
+		ErrorThreshold:  c.ErrorThreshold,
+		TLSWarningDays:  c.TLSWarningDays,
+		QueueThreshold:  c.QueueThreshold,
+	}
+	if out.MinInterval == 0 {
+		out.MinInterval = defaults.MinInterval
+	}
+	if out.MaxAlerts == 0 {
+		out.MaxAlerts = defaults.MaxAlerts
+	}
+	if out.DiskThreshold == 0 {
+		out.DiskThreshold = defaults.DiskThreshold
+	}
+	if out.MemoryThreshold == 0 {
+		out.MemoryThreshold = defaults.MemoryThreshold
+	}
+	if out.ErrorThreshold == 0 {
+		out.ErrorThreshold = defaults.ErrorThreshold
+	}
+	if out.TLSWarningDays == 0 {
+		out.TLSWarningDays = defaults.TLSWarningDays
+	}
+	if out.QueueThreshold == 0 {
+		out.QueueThreshold = defaults.QueueThreshold
+	}
+	return out
+}
 
 // startAlertChecker runs periodic health checks for alerting (TLS expiry, queue backlog)
 func (s *Server) startAlertChecker() {

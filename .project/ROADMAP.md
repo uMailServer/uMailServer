@@ -74,9 +74,9 @@ Implemented per RFC 8620: Mailbox/Email/Thread/Identity `get`, `query`, `set`, `
 
 ### 2.4 Distributed Tracing Spans ✅ DONE
 
-**File:** `internal/tracing/tracing.go`, `internal/tracing/http.go`, `internal/smtp/pipeline.go`, `internal/queue/manager.go`, `internal/api/tracing.go`, `internal/jmap/server.go`, `internal/caldav/server.go`, `internal/carddav/server.go`
+**File:** `internal/tracing/tracing.go`, `internal/tracing/http.go`, `internal/smtp/pipeline.go`, `internal/queue/manager.go`, `internal/api/tracing.go`, `internal/jmap/server.go`, `internal/caldav/server.go`, `internal/carddav/server.go`, `internal/webhook/manager.go`
 
-OTel provider wired to SMTP sessions, IMAP commands (authenticate/select/append/expunge/search/fetch/store), per-stage SMTP pipeline (`smtp.pipeline.<stage>` child spans with enriched `smtp.spf.*`, `smtp.dkim.*`, `smtp.dmarc.*`, `smtp.arc.result`, `smtp.spam.score` attributes), outbound queue delivery (`queue.deliver` + per-MX `queue.deliver.mx`), JMAP method dispatch (`jmap.<Method/name>` spans), and a shared `tracing.HTTPMiddleware` powers `http.<METHOD>` / `caldav.<METHOD>` / `carddav.<METHOD>` server-kind spans with W3C trace context extraction, status_code recording, and 4xx/5xx → error status. All sites short-circuit when the provider is nil or disabled.
+OTel provider wired to SMTP command-level (AUTH/DATA in `session.go`), IMAP commands (authenticate/select/append/expunge/search/fetch/store), POP3 commands (`pop3.<COMMAND>` server-kind with auth.success on PASS), ManageSieve commands (`managesieve.<COMMAND>` with auth.success on AUTHENTICATE), MCP method dispatch (`mcp.<method>` with `mcp.tool` attribute on `tools/call`), per-stage SMTP pipeline (`smtp.pipeline.<stage>` child spans with enriched `smtp.spf.*`, `smtp.dkim.*`, `smtp.dmarc.*`, `smtp.arc.result`, `smtp.spam.score` attributes), outbound queue delivery (`queue.deliver` + per-MX `queue.deliver.mx`), JMAP method dispatch (`jmap.<Method/name>` spans), webhook delivery (`webhook.deliver` client-kind spans with id/url/event/attempts/success), and a shared `tracing.HTTPMiddleware` powers `http.<METHOD>` / `caldav.<METHOD>` / `carddav.<METHOD>` server-kind spans with W3C trace context extraction, status_code recording, and 4xx/5xx → error status. All sites short-circuit when the provider is nil or disabled.
 
 ---
 
@@ -123,7 +123,7 @@ Added `security.spf_cache_ttl` (Duration, defaults to 5m). `SPFChecker.SetCacheT
 
 **File:** `internal/mcp/server.go`
 
-JSON-RPC server implements `initialize`, `tools/list`, `tools/call`, and `resources/list`. 16 tools wired: `get_server_stats`, `list_domains`, `add_domain`, `delete_domain`, `list_accounts`, `add_account`, `delete_account`, `get_account_info`, `get_queue_status`, `retry_queue_item`, `flush_queue`, `check_dns`, `check_tls`, `get_system_status`, `reload_config`. Auth-token gating, CORS, and per-IP rate limiting are included.
+JSON-RPC server implements `initialize`, `tools/list`, `tools/call`, and `resources/list`. 15 tools wired: `get_server_stats`, `list_domains`, `add_domain`, `delete_domain`, `list_accounts`, `add_account`, `delete_account`, `get_account_info`, `get_queue_status`, `retry_queue_item`, `flush_queue`, `check_dns`, `check_tls`, `get_system_status`, `reload_config`. Auth-token gating, CORS, per-IP rate limiting, and per-method tracing spans (`mcp.<method>` with `mcp.tool` attribute on `tools/call`) are included.
 
 ---
 

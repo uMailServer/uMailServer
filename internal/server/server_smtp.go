@@ -30,7 +30,7 @@ func (s *Server) startSMTP() {
 	smtpServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken (CVE-2022-37454, etc.)
 	// smtpServer.SetUserSecretHandler(s.getUserSecret)
-	smtpServer.SetLoginResultHandler(s.loginResult)
+	smtpServer.SetLoginResultHandler(s.protoLoginHandler("smtp"))
 	smtpServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	smtpServer.SetTracingProvider(s.tracingProvider)
 

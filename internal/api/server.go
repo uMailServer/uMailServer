@@ -311,6 +311,18 @@ func NewServerWithInterfaces(
 		adminFS = NewEmbedFSAdapter(umailserver.AdminFS)
 	}
 
+	// Initialize audit logger so SMTP/IMAP/POP3 hooks can route protocol-level
+	// auth events into the same sink as HTTP/admin events.
+	auditLogger, err := audit.NewLogger(
+		config.AuditLog.Path,
+		config.AuditLog.MaxSizeMB,
+		config.AuditLog.MaxBackups,
+		config.AuditLog.MaxAgeDays,
+	)
+	if err != nil {
+		logger.Warn("failed to initialize audit logger", "error", err)
+	}
+
 	return &Server{
 		db:             database,
 		logger:         logger,
@@ -322,6 +334,7 @@ func NewServerWithInterfaces(
 		pushSvc:        pushSvc,
 		webmailFS:      webmailFS,
 		adminFS:        adminFS,
+		auditLogger:    auditLogger,
 		tokenBlacklist: make(map[string]time.Time),
 		jwtSecrets:     jwtSecrets,
 		currentKid:     currentKid,
@@ -521,6 +534,12 @@ func (s *Server) SetRateLimitManager(mgr RateLimitManager) {
 // SetTracingProvider sets the OpenTelemetry tracing provider
 func (s *Server) SetTracingProvider(provider *tracing.Provider) {
 	s.tracingProvider = provider
+}
+
+// AuditLogger exposes the underlying audit logger so other subsystems
+// (SMTP/IMAP/POP3) can record protocol-level auth events into the same sink.
+func (s *Server) AuditLogger() *audit.Logger {
+	return s.auditLogger
 }
 
 // Start starts the API server

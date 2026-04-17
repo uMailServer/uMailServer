@@ -191,5 +191,19 @@ func DefaultConfig() *Config {
 			ReportEmail: "",
 			Interval:    "24h",
 		},
+		Alert: AlertConfig{
+			Enabled:         false,
+			MinInterval:     Duration(5 * time.Minute),
+			MaxAlerts:       100,
+			DiskThreshold:   85.0,
+			MemoryThreshold: 90.0,
+			ErrorThreshold:  5.0,
+			TLSWarningDays:  7,
+			QueueThreshold:  1000,
+		},
+		Push: PushConfig{
+			Enabled: true,
+			Subject: "mailto:admin@umailserver.local",
+		},
 	}
 }

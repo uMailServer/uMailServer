@@ -22,6 +22,11 @@ type Index struct {
 	docCount int
 }
 
+// queryFieldPattern matches `field:value` pairs in user queries (e.g.
+// `from:john`). Compiled once at package init so every search call reuses
+// the same Regexp — recompiling per-query is a measurable hot path.
+var queryFieldPattern = regexp.MustCompile(`(\w+):(\S+)`)
+
 // NewIndex creates a new search index
 func NewIndex() *Index {
 	return &Index{
@@ -199,11 +204,8 @@ type QueryTerm struct {
 func parseQuery(query string) []QueryTerm {
 	var terms []QueryTerm
 
-	// Pattern for field:value pairs
-	fieldPattern := regexp.MustCompile(`(\w+):(\S+)`)
-
-	// Find all field:value pairs
-	matches := fieldPattern.FindAllStringSubmatch(query, -1)
+	// Find all field:value pairs (regex compiled once at package level)
+	matches := queryFieldPattern.FindAllStringSubmatch(query, -1)
 	for _, match := range matches {
 		if len(match) == 3 {
 			field := strings.ToLower(match[1])
@@ -217,7 +219,7 @@ func parseQuery(query string) []QueryTerm {
 	}
 
 	// Remove field:value pairs from query to get remaining terms
-	remaining := fieldPattern.ReplaceAllString(query, "")
+	remaining := queryFieldPattern.ReplaceAllString(query, "")
 	remaining = strings.TrimSpace(remaining)
 
 	// Tokenize remaining text

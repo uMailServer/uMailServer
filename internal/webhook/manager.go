@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,18 +17,26 @@ import (
 
 	"github.com/umailserver/umailserver/internal/circuitbreaker"
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/tracing"
 )
 
 // Manager handles webhook delivery
 type Manager struct {
-	db             *db.DB
-	client         *http.Client
-	secret         string
-	hooks          []*Webhook
-	allowPrivateIP bool // For testing; if true, allows localhost/private IPs
-	cbManager      *circuitbreaker.Manager
-	mu             sync.RWMutex
-	sem            chan struct{} // Semaphore to limit concurrent webhook deliveries
+	db              *db.DB
+	client          *http.Client
+	secret          string
+	hooks           []*Webhook
+	allowPrivateIP  bool // For testing; if true, allows localhost/private IPs
+	cbManager       *circuitbreaker.Manager
+	mu              sync.RWMutex
+	sem             chan struct{} // Semaphore to limit concurrent webhook deliveries
+	tracingProvider *tracing.Provider
+}
+
+// SetTracingProvider attaches an OpenTelemetry tracing provider so each
+// outbound webhook delivery emits a webhook.deliver span. Nil disables tracing.
+func (m *Manager) SetTracingProvider(provider *tracing.Provider) {
+	m.tracingProvider = provider
 }
 
 // Webhook represents a webhook configuration
@@ -115,6 +124,39 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 
 // send delivers webhook with retry logic and circuit breaker
 func (m *Manager) send(hook *Webhook, event Event) {
+	if m.tracingProvider != nil && m.tracingProvider.IsEnabled() {
+		_, span := m.tracingProvider.StartSpanWithKind(context.Background(), "webhook.deliver", tracing.SpanKindClient)
+		defer span.End()
+		tracing.SetStringAttribute(span, "webhook.id", hook.ID)
+		tracing.SetStringAttribute(span, "webhook.url", hook.URL)
+		tracing.SetStringAttribute(span, "webhook.event", event.Type)
+		// Defer attribute capture to track final outcome.
+		var (
+			finalAttempts int
+			finalErr      error
+			finalSuccess  bool
+		)
+		defer func() {
+			tracing.SetIntAttribute(span, "webhook.attempts", finalAttempts)
+			tracing.SetBoolAttribute(span, "webhook.success", finalSuccess)
+			if finalErr != nil {
+				tracing.RecordError(span, finalErr)
+				tracing.SetStatus(span, tracing.StatusError, finalErr.Error())
+			} else if finalSuccess {
+				tracing.SetStatus(span, tracing.StatusOk, "")
+			}
+		}()
+		m.sendInner(hook, event, &finalAttempts, &finalErr, &finalSuccess)
+		return
+	}
+	var attempts int
+	var err error
+	var success bool
+	m.sendInner(hook, event, &attempts, &err, &success)
+}
+
+// sendInner does the actual delivery work; send wraps it with tracing.
+func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr *error, success *bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			// Log via fmt since logger may not be available
@@ -126,6 +168,7 @@ func (m *Manager) send(hook *Webhook, event Event) {
 	valid, resolvedIP := m.isValidWebhookURL(hook.URL)
 	if !valid {
 		fmt.Printf("webhook: invalid URL (SSRF protection): %s\n", hook.URL)
+		*finalErr = fmt.Errorf("invalid webhook URL")
 		return
 	}
 	// Cache resolved IP for this delivery
@@ -137,20 +180,23 @@ func (m *Manager) send(hook *Webhook, event Event) {
 	// Check if circuit allows the request
 	if !cb.Allow() {
 		fmt.Printf("webhook: circuit breaker open for %s\n", hook.URL)
+		*finalErr = fmt.Errorf("circuit breaker open")
 		return
 	}
 
 	payload, err := json.Marshal(event)
 	if err != nil {
 		cb.RecordFailure()
+		*finalErr = err
 		return
 	}
 
 	// Retry logic: 3 attempts with exponential backoff
 	var lastErr error
-	success := false
+	delivered := false
 
 	for attempt := 0; attempt < 3; attempt++ {
+		*attempts = attempt + 1
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s
 			time.Sleep(time.Duration(attempt) * time.Second)
@@ -184,7 +230,7 @@ func (m *Manager) send(hook *Webhook, event Event) {
 		// Success: 2xx status code
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			_ = resp.Body.Close()
-			success = true
+			delivered = true
 			break
 		}
 
@@ -198,11 +244,13 @@ func (m *Manager) send(hook *Webhook, event Event) {
 	}
 
 	// Record success or failure for circuit breaker
-	if success {
+	if delivered {
 		cb.RecordSuccess()
+		*success = true
 	} else {
 		cb.RecordFailure()
-		fmt.Printf("webhook: delivery failed after 3 attempts: %s, error: %v\n", hook.URL, lastErr)
+		fmt.Printf("webhook: delivery failed after %d attempts: %s, error: %v\n", *attempts, hook.URL, lastErr)
+		*finalErr = lastErr
 	}
 }
 

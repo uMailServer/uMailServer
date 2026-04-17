@@ -24,6 +24,7 @@ func (s *Server) startIMAP(mailstore *imap.BboltMailstore) error {
 	imapServer.SetIdleTimeout(time.Duration(s.config.IMAP.IdleTimeout))
 	imapServer.SetMaxConnections(s.config.IMAP.MaxConnections)
 	imapServer.SetTracingProvider(s.tracingProvider)
+	imapServer.SetLoginResultHandler(s.protoLoginHandler("imap"))
 	if s.searchSvc != nil {
 		imapServer.SetOnExpunge(func(user, mailbox string, uid uint32) {
 			s.searchSvc.RemoveMessage(user, mailbox, uid)

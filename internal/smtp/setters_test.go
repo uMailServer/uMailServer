@@ -41,7 +41,7 @@ func TestAuthDMARCStage_SetReporter_Nil(t *testing.T) {
 func TestServer_SetLoginResultHandler(t *testing.T) {
 	server := &Server{}
 
-	handler := func(username string, success bool, ip string) {}
+	handler := func(username string, success bool, ip, reason string) {}
 	server.SetLoginResultHandler(handler)
 
 	if server.onLoginResult == nil {

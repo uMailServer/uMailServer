@@ -419,6 +419,9 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 		if span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "auth locked out")
 		}
+		if s.server.onLoginResult != nil {
+			s.server.onLoginResult(username, false, ip, "lockout")
+		}
 		return nil
 	}
 
@@ -442,12 +445,18 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 			tracing.SetStatus(span, tracing.StatusError, "authentication failed")
 			tracing.SetBoolAttribute(span, "auth.success", false)
 		}
+		if s.server.onLoginResult != nil {
+			s.server.onLoginResult(username, false, ip, "invalid_credentials")
+		}
 		return nil
 	}
 
 	s.server.clearAuthFailures(ip)
 	s.user = username
 	s.state = StateAuthenticated
+	if s.server.onLoginResult != nil {
+		s.server.onLoginResult(username, true, ip, "")
+	}
 
 	// Auto-create default mailboxes after first successful authentication
 	if s.server.mailstore != nil {

@@ -65,16 +65,17 @@ Phase 1 critical security fixes are complete (S/MIME and OpenPGP use proper AES-
 | Sieve Filtering | ✅ | RFC 5228 |
 | ManageSieve | ✅ | Port 4190 |
 | Vacation Auto-responder | ✅ | Wired to SieveStage |
-| Webhook Events | ✅ | mail.received, delivery, auth |
-| Push Notifications | ✅ | Wired via SendNewMailNotification |
-| Alert Manager | ✅ | TLS expiry + queue backlog checks |
+| Webhook Events | ✅ | mail.received, delivery, auth (per-protocol service tag in payload) |
+| Audit Log | ✅ | HTTP/admin + SMTP/IMAP/POP3 auth events (success, failure, lockout) with rotation |
+| Push Notifications | ✅ | Wired via SendNewMailNotification; VAPID + subject configurable from `push:` YAML section, on-disk auto-generation as fallback |
+| Alert Manager | ✅ | TLS expiry + queue backlog checks; configurable via `alert:` YAML section (webhook + SMTP delivery) |
 | Autoconfig/Autodiscover | ✅ | Thunderbird/Outlook |
 | CalDAV | ✅ | RFC 4791 — PROPFIND/REPORT/PUT/GET/DELETE/MKCALENDAR/MKCOL/PROPPATCH/MOVE/COPY |
 | CardDAV | ✅ | RFC 6352 — full vCard CRUD + addressbook-query |
 | JMAP | ✅ | RFC 8620 — Mailbox/Email/Thread/Identity get/query/set/changes/queryChanges, Email/import; per-user change journal backs incremental sync |
 | S/MIME | ✅ | AES-256-GCM content + RSA OAEP session key (RFC 8551) |
 | OpenPGP | ✅ | AES-256-GCM symmetric (RFC 3156) |
-| Full-text Search | 🟡 | TF-IDF API ready, webmail UI not yet wired |
+| Full-text Search | ✅ | TF-IDF API + webmail UI wired (`webmail/src/pages/search.tsx` → `GET /api/v1/search`) |
 
 ### 1.2 Critical Path Analysis ✅ Working
 
@@ -181,8 +182,8 @@ Phase 1 critical security fixes are complete (S/MIME and OpenPGP use proper AES-
 
 ### 4.1 Known Performance Issues
 
-1. **Body canonicalization allocations** — dkim.go uses `strings.Split` + `regexp.ReplaceAllString` per message
-2. **Per-message regex compilation** — `regexp.MustCompile` in hot paths (should be package-level)
+1. ~~**Body canonicalization allocations** — dkim.go uses `strings.Split` + `regexp.ReplaceAllString` per message~~ ✅ FIXED — `canonicalizeBodyRelaxed` rewritten as a single-pass byte scan; benchmarks show ~19× faster on a 64KB body (1.83ms → 97µs) and **1 allocation** (was 6580). See `internal/auth/dkim_canonicalize_bench_test.go`.
+2. ~~**Per-message regex compilation** — `regexp.MustCompile` in hot paths (should be package-level)~~ ✅ FIXED — `internal/search/index.go` `queryFieldPattern` hoisted to package scope; the auth package's regexes were already package-level.
 
 ### 4.2 Resource Management ✅ Good
 
@@ -242,19 +243,24 @@ Phase 1 critical security fixes are complete (S/MIME and OpenPGP use proper AES-
 
 ### 6.2 Monitoring ✅ Good
 
-- [x] Prometheus metrics at `/metrics`
+- [x] Prometheus text-format metrics on the dedicated `metrics` server (`cfg.Metrics.Bind:Port` + `cfg.Metrics.Path`, default `127.0.0.1:8080/metrics`); JSON dashboard view stays available on the API server's authenticated `/metrics`
+- [x] `/healthz` baseline OK probe on the metrics server (cheap scraper liveness check)
 - [x] Health checks: `/health`, `/health/live`, `/health/ready`
 - [x] Queue stats in metrics
-- [ ] Cache hit rates (SPF/DKIM/DMARC) — partial
+- [x] Cache hit rates (SPF/DKIM/DMARC) exposed as `umailserver_<cache>_cache_{hits,misses}_total` counters
 
 ### 6.3 Tracing ✅ Wired
 
 - [x] OpenTelemetry initialized
-- [x] Spans created in SMTP sessions (`internal/smtp/session.go`)
-- [x] Spans created in IMAP commands (`internal/imap/commands.go`)
-- [x] Spans created in HTTP API handlers (`internal/server/server_handlers.go`)
+- [x] SMTP command-level spans for AUTH/DATA in `internal/smtp/session.go` (no top-level session span — pipeline stages capture per-message work)
+- [x] IMAP per-command spans in `internal/imap/commands.go` (authenticate/select/append/expunge/search/fetch/store)
+- [x] POP3 per-command spans (`pop3.<COMMAND>` server-kind, with auth.success on PASS) — `internal/pop3/server.go`
+- [x] ManageSieve per-command spans (`managesieve.<COMMAND>`, with auth.success on AUTHENTICATE) — `internal/sieve/managesieve.go`
+- [x] MCP per-method spans (`mcp.<method>`, with `mcp.tool` attribute on `tools/call`) — `internal/mcp/server.go`
+- [x] HTTP API spans via shared `tracing.HTTPMiddleware` covering `/api`, CalDAV, CardDAV, JMAP
 - [x] W3C TraceContext propagation via composite propagator
 - [x] Per-pipeline-stage SMTP spans (`smtp.pipeline.<stage>`) and queue-delivery spans (`queue.deliver`, `queue.deliver.mx`) wired
+- [x] Webhook delivery spans (`webhook.deliver` client-kind)
 
 ---
 
@@ -314,16 +320,16 @@ Phase 1 critical security fixes are complete (S/MIME and OpenPGP use proper AES-
 5. ~~CardDAV HTTP handlers~~ ✅ DONE (RFC 6352)
 6. ~~JMAP missing RFC 8620 methods~~ ✅ DONE (changes/queryChanges/import wired; per-user change journal in `storage.Database` powers `Mailbox/changes`, `Email/changes`, `Thread/changes`)
 7. ~~Greylist/vacation/sieve regex caches unbounded~~ ✅ FIXED (LRU bounds)
-8. ~~Distributed tracing has no spans~~ ✅ FIXED (SMTP session/auth/data, IMAP commands, per-stage SMTP pipeline with auth verdicts + spam score, queue delivery + per-MX submissions, JMAP per-method dispatch, shared HTTPMiddleware covering HTTP API + CalDAV + CardDAV with W3C context propagation)
+8. ~~Distributed tracing has no spans~~ ✅ FIXED (SMTP session/auth/data, IMAP commands, per-stage SMTP pipeline with auth verdicts + spam score, queue delivery + per-MX submissions, JMAP per-method dispatch, webhook delivery, shared HTTPMiddleware covering HTTP API + CalDAV + CardDAV with W3C context propagation)
 9. ~~SPF cache TTL not configurable~~ ✅ FIXED (`security.spf_cache_ttl`)
 10. ~~JWT pruning lexicographic bug~~ ✅ FIXED
 11. ~~LDAP no connection pooling~~ ✅ FIXED (`internal/auth/ldap_pool.go`, default 10)
 
 ### 💡 Recommendations (Improve over time)
 
-- Wire full-text search API into the webmail UI (Phase 4.1)
-- Add SMTP→IMAP end-to-end integration test (Phase 5.1)
-- Add k6/boom load tests (Phase 5.2)
+- (full-text search webmail UI: ✅ already wired)
+- (SMTP→IMAP end-to-end integration test: ✅ done in `TestFullMailFlow`)
+- (k6 load tests: ✅ done in `load-tests/k6/`)
 
 ### Go/No-Go Recommendation
 
@@ -335,7 +341,7 @@ uMailServer v0.1.0 is a well-engineered single-binary email server with RFC-comp
 
 **Caveats:**
 1. Horizontal scaling is not supported (bbolt single-node) — plan accordingly for growth
-2. Webmail still uses basic folder search; the TF-IDF API is unused by the UI
+2. (resolved — full-text search wired through `webmail/src/pages/search.tsx`)
 
 ---
 
@@ -348,6 +354,6 @@ uMailServer v0.1.0 is a well-engineered single-binary email server with RFC-comp
 | "CalDAV" | Full WebDAV/CalDAV verbs implemented | ✅ Correct |
 | "CardDAV" | Full WebDAV/CardDAV verbs implemented | ✅ Correct |
 | "JMAP" | RFC 8620 surface complete; per-user change journal in `storage.Database` powers incremental sync | ✅ Correct |
-| "TF-IDF based email search" | API ready, webmail UI not yet wired | 🟡 Partial |
+| "TF-IDF based email search" | API + webmail UI both wired | ✅ Correct |
 | "WebPush notification support" | Wired, working | ✅ Correct |
 | "Distributed tracing" | SMTP/IMAP/HTTP spans + W3C propagation | ✅ Correct |

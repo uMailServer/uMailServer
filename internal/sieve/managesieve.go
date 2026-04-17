@@ -2,6 +2,7 @@
 package sieve
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -10,6 +11,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	otrace "go.opentelemetry.io/otel/trace"
 )
 
 // ManageSieveListenAddr is the default ManageSieve server address
@@ -29,6 +34,10 @@ type ManageSieveServer struct {
 	mu          sync.Mutex
 	running     bool
 	authHandler func(user, pass string) bool // Auth validation function
+
+	// tracingProvider wraps every command in a `managesieve.<COMMAND>`
+	// server-kind span when set.
+	tracingProvider *tracing.Provider
 }
 
 // NewManageSieveServer creates a new ManageSieve server
@@ -43,6 +52,12 @@ func NewManageSieveServer(manager *Manager, tlsCfg *tls.Config) *ManageSieveServ
 // SetAuthHandler sets the authentication handler for ManageSieve
 func (s *ManageSieveServer) SetAuthHandler(handler func(user, pass string) bool) {
 	s.authHandler = handler
+}
+
+// SetTracingProvider wires an OpenTelemetry provider so every command is
+// wrapped in a `managesieve.<COMMAND>` span.
+func (s *ManageSieveServer) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
 }
 
 // Listen starts the ManageSieve server
@@ -198,6 +213,25 @@ func (s *ManageSieveServer) processCommandSession(session *manageSieveSession, l
 	cmd := strings.ToUpper(parts[0])
 	args := parts[1:]
 
+	span := s.startCommandSpan(cmd, session)
+	defer span.End()
+	if session.user != "" {
+		tracing.SetStringAttribute(span, "user", session.user)
+	}
+
+	err := s.dispatchCommand(session, cmd, args)
+	if err != nil && err != io.EOF {
+		tracing.SetStatus(span, tracing.StatusError, err.Error())
+	}
+	if cmd == "AUTHENTICATE" {
+		tracing.SetBoolAttribute(span, "auth.success", err == nil && session.user != "")
+	}
+	return err
+}
+
+// dispatchCommand runs the actual command handler. Split out from
+// processCommandSession so the tracing wrapper has a single error site.
+func (s *ManageSieveServer) dispatchCommand(session *manageSieveSession, cmd string, args []string) error {
 	switch cmd {
 	case "AUTHENTICATE":
 		return s.cmdAuthenticate(session, args)
@@ -223,6 +257,27 @@ func (s *ManageSieveServer) processCommandSession(session *manageSieveSession, l
 	default:
 		return fmt.Errorf("unknown command: %s", cmd)
 	}
+}
+
+// startCommandSpan begins a `managesieve.<COMMAND>` server-kind span. Returns
+// a no-op span (safe to call End on) when the provider is nil or disabled.
+func (s *ManageSieveServer) startCommandSpan(cmd string, session *manageSieveSession) otrace.Span {
+	if s.tracingProvider == nil || !s.tracingProvider.IsEnabled() {
+		return otrace.SpanFromContext(context.Background())
+	}
+	ip := ""
+	if session.conn != nil {
+		if host, _, err := net.SplitHostPort(session.conn.RemoteAddr().String()); err == nil {
+			ip = host
+		}
+	}
+	_, span := s.tracingProvider.StartSpanWithKind(context.Background(),
+		"managesieve."+cmd,
+		tracing.SpanKindServer,
+		attribute.String("managesieve.command", cmd),
+		attribute.String("ip", ip),
+	)
+	return span
 }
 
 func parseManageSieveLine(line string) []string {

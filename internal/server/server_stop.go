@@ -110,6 +110,9 @@ func (s *Server) Stop() error {
 		}
 	}
 
+	// Stop Prometheus metrics server
+	s.stopMetrics(context.Background())
+
 	// Stop admin server
 	if s.adminServer != nil {
 		if err := s.adminServer.Stop(); err != nil {

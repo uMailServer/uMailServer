@@ -26,6 +26,8 @@ func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	pop3Server.SetReadTimeout(10 * time.Minute)
 	pop3Server.SetWriteTimeout(10 * time.Minute)
 	pop3Server.SetMaxConnections(s.config.POP3.MaxConnections)
+	pop3Server.SetLoginResultHandler(s.protoLoginHandler("pop3"))
+	pop3Server.SetTracingProvider(s.tracingProvider)
 
 	if s.tlsManager.IsEnabled() {
 		pop3Server.SetTLSConfig(&pop3.TLSConfig{

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,6 +38,8 @@ type Config struct {
 	CardDAV     CardDAVConfig     `yaml:"carddav"`
 	JMAP        JMAPConfig        `yaml:"jmap"`
 	DMARC       DMARCConfig       `yaml:"dmarc"`
+	Alert       AlertConfig       `yaml:"alert"`
+	Push        PushConfig        `yaml:"push"`
 }
 
 // ServerConfig holds general server settings
@@ -327,6 +330,57 @@ type JMAPConfig struct {
 	Bind        string   `yaml:"bind"` // address to listen on
 	Port        int      `yaml:"port"`
 	CorsOrigins []string `yaml:"cors_origins"`
+}
+
+// AlertConfig holds alert manager configuration. Mirrors alert.Config but uses
+// plain types so this package stays free of an alert dependency. The server
+// converts this struct into alert.Config when wiring the manager.
+type AlertConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// Webhook delivery
+	WebhookURL      string            `yaml:"webhook_url,omitempty" json:"webhook_url,omitempty"`
+	WebhookHeaders  map[string]string `yaml:"webhook_headers,omitempty" json:"webhook_headers,omitempty"`
+	WebhookTemplate string            `yaml:"webhook_template,omitempty" json:"webhook_template,omitempty"`
+
+	// SMTP email delivery
+	SMTPServer   string   `yaml:"smtp_server,omitempty" json:"smtp_server,omitempty"`
+	SMTPPort     int      `yaml:"smtp_port,omitempty" json:"smtp_port,omitempty"`
+	SMTPUsername string   `yaml:"smtp_username,omitempty" json:"smtp_username,omitempty"`
+	SMTPPassword string   `yaml:"smtp_password,omitempty" json:"-"`
+	FromAddress  string   `yaml:"from_address,omitempty" json:"from_address,omitempty"`
+	ToAddresses  []string `yaml:"to_addresses,omitempty" json:"to_addresses,omitempty"`
+	UseTLS       bool     `yaml:"use_tls,omitempty" json:"use_tls,omitempty"`
+
+	// Rate limiting
+	MinInterval Duration `yaml:"min_interval" json:"min_interval"`
+	MaxAlerts   int      `yaml:"max_alerts" json:"max_alerts"`
+
+	// Thresholds
+	DiskThreshold   float64 `yaml:"disk_threshold" json:"disk_threshold"`
+	MemoryThreshold float64 `yaml:"memory_threshold" json:"memory_threshold"`
+	ErrorThreshold  float64 `yaml:"error_threshold" json:"error_threshold"`
+	TLSWarningDays  int     `yaml:"tls_warning_days" json:"tls_warning_days"`
+	QueueThreshold  int     `yaml:"queue_threshold" json:"queue_threshold"`
+
+	// AllowPrivateIP permits webhook URLs pointing to private/loopback IPs
+	// (off by default to prevent SSRF; set true only for testing or trusted internal collectors).
+	AllowPrivateIP bool `yaml:"allow_private_ip,omitempty" json:"allow_private_ip,omitempty"`
+}
+
+// PushConfig holds Web Push notification settings (VAPID).
+//
+// VAPID keys are auto-generated on first start and persisted to
+// `<data_dir>/push/vapid.json`. Operators that need keys to survive a
+// `data_dir` wipe (or that want to share keys across replicas) can paste the
+// generated values back into this section. When `vapid_public_key` and
+// `vapid_private_key` are both set, they take precedence over the on-disk
+// file.
+type PushConfig struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	Subject         string `yaml:"subject" json:"subject"` // mailto: or https:// URL identifying the operator
+	VAPIDPublicKey  string `yaml:"vapid_public_key,omitempty" json:"vapid_public_key,omitempty"`
+	VAPIDPrivateKey string `yaml:"vapid_private_key,omitempty" json:"-"`
 }
 
 // DMARCConfig holds DMARC reporting settings
@@ -682,6 +736,69 @@ func (c *Config) Validate() error {
 	// Validate metrics path
 	if c.Metrics.Enabled && c.Metrics.Path == "" {
 		return fmt.Errorf("metrics.path is required when metrics is enabled")
+	}
+
+	// Validate alert configuration
+	if c.Alert.Enabled {
+		if c.Alert.WebhookURL == "" && c.Alert.SMTPServer == "" {
+			return fmt.Errorf("alert.webhook_url or alert.smtp_server is required when alert.enabled is true")
+		}
+		if c.Alert.WebhookURL != "" {
+			if _, err := url.Parse(c.Alert.WebhookURL); err != nil {
+				return fmt.Errorf("alert.webhook_url is invalid: %w", err)
+			}
+		}
+		if c.Alert.SMTPServer != "" {
+			if c.Alert.SMTPPort <= 0 {
+				return fmt.Errorf("alert.smtp_port must be positive when alert.smtp_server is set")
+			}
+			if c.Alert.FromAddress == "" {
+				return fmt.Errorf("alert.from_address is required when alert.smtp_server is set")
+			}
+			if len(c.Alert.ToAddresses) == 0 {
+				return fmt.Errorf("alert.to_addresses must contain at least one recipient when alert.smtp_server is set")
+			}
+		}
+		if c.Alert.MaxAlerts < 0 {
+			return fmt.Errorf("alert.max_alerts must be non-negative")
+		}
+		if c.Alert.MinInterval < 0 {
+			return fmt.Errorf("alert.min_interval must be non-negative")
+		}
+		for _, threshold := range []struct {
+			name  string
+			value float64
+		}{
+			{"alert.disk_threshold", c.Alert.DiskThreshold},
+			{"alert.memory_threshold", c.Alert.MemoryThreshold},
+			{"alert.error_threshold", c.Alert.ErrorThreshold},
+		} {
+			if threshold.value < 0 || threshold.value > 100 {
+				return fmt.Errorf("%s must be between 0 and 100", threshold.name)
+			}
+		}
+		if c.Alert.TLSWarningDays < 0 {
+			return fmt.Errorf("alert.tls_warning_days must be non-negative")
+		}
+		if c.Alert.QueueThreshold < 0 {
+			return fmt.Errorf("alert.queue_threshold must be non-negative")
+		}
+	}
+
+	// Validate push configuration
+	if c.Push.Enabled {
+		if c.Push.Subject == "" {
+			return fmt.Errorf("push.subject is required when push.enabled is true")
+		}
+		if !strings.HasPrefix(c.Push.Subject, "mailto:") && !strings.HasPrefix(c.Push.Subject, "https://") {
+			return fmt.Errorf("push.subject must be a mailto: or https:// URL")
+		}
+		// Either both VAPID keys are supplied, or neither (auto-generate fallback).
+		hasPub := c.Push.VAPIDPublicKey != ""
+		hasPriv := c.Push.VAPIDPrivateKey != ""
+		if hasPub != hasPriv {
+			return fmt.Errorf("push.vapid_public_key and push.vapid_private_key must be set together")
+		}
 	}
 
 	return nil

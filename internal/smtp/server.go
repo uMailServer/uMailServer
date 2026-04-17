@@ -40,7 +40,7 @@ type Server struct {
 	onDeliver          func(from string, to []string, data []byte) error
 	onDeliverWithSieve func(from string, to []string, data []byte, sieveActions []string) error
 	onGetUserSecret    func(username string) (string, error) // Get user's shared secret for CRAM-MD5
-	onLoginResult      func(username string, success bool, ip string)
+	onLoginResult      func(username string, success bool, ip, reason string)
 	pipeline           *Pipeline
 
 	// Rate limiting
@@ -194,8 +194,10 @@ func (s *Server) SetUserSecretHandler(handler func(username string) (string, err
 	s.onGetUserSecret = handler
 }
 
-// SetLoginResultHandler sets the handler for login result events (success/failure)
-func (s *Server) SetLoginResultHandler(handler func(username string, success bool, ip string)) {
+// SetLoginResultHandler sets the handler for login result events. The reason
+// argument is empty on success and populated with a short tag on failure
+// (e.g. "invalid_credentials") so consumers can record audit trails.
+func (s *Server) SetLoginResultHandler(handler func(username string, success bool, ip, reason string)) {
 	s.onLoginResult = handler
 }
 

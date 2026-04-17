@@ -29,6 +29,7 @@ func (s *Server) startMCP() {
 	}
 	// Configure MCP rate limiting (use same limit as HTTP API)
 	mcpSrv.SetRateLimit(s.config.Security.RateLimit.HTTPRequestsPerMinute)
+	mcpSrv.SetTracingProvider(s.tracingProvider)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
 

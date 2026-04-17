@@ -67,6 +67,7 @@ type Server struct {
 	carddavHTTPServer *http.Server
 	jmapServer        *jmap.Server
 	jmapHTTPServer    *http.Server
+	metricsHTTPServer *http.Server
 
 	// S/MIME and OpenPGP keystores
 	smimeKeystore   *smtp.SMIMEKeystore
@@ -222,20 +223,30 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Initialize webhook manager
 	webhookMgr := webhook.NewManager(database, cfg.Security.JWTSecret)
+	webhookMgr.SetTracingProvider(s.tracingProvider)
 	s.webhookMgr = webhookMgr
 
-	// Initialize alert manager (disabled by default unless configured)
-	alertCfg := alert.DefaultConfig()
-	s.alertMgr = alert.NewManager(alertCfg, s.logger)
+	// Initialize alert manager from config (disabled by default unless cfg.Alert.Enabled)
+	s.alertMgr = alert.NewManager(buildAlertConfig(cfg.Alert), s.logger)
+	s.alertMgr.SetAllowPrivateIP(cfg.Alert.AllowPrivateIP)
 
-	// Initialize push notification service
-	pushDataDir := filepath.Join(s.config.Server.DataDir, "push")
-	pushSvc, err := push.NewService(pushDataDir, logger)
-	if err != nil {
-		logger.Warn("Failed to initialize push service", "error", err)
+	// Initialize push notification service (subject + optional VAPID keys
+	// come from `cfg.Push`; on-disk fallback handles the unconfigured case).
+	if cfg.Push.Enabled {
+		pushDataDir := filepath.Join(s.config.Server.DataDir, "push")
+		pushSvc, err := push.NewServiceWithConfig(pushDataDir, push.Config{
+			VAPIDPublicKey:  cfg.Push.VAPIDPublicKey,
+			VAPIDPrivateKey: cfg.Push.VAPIDPrivateKey,
+			Subject:         cfg.Push.Subject,
+		}, logger)
+		if err != nil {
+			logger.Warn("Failed to initialize push service", "error", err)
+		} else {
+			s.pushSvc = pushSvc
+			logger.Info("Push notification service initialized")
+		}
 	} else {
-		s.pushSvc = pushSvc
-		logger.Info("Push notification service initialized")
+		logger.Info("Push notification service disabled in config")
 	}
 
 	// Initialize LDAP client if enabled

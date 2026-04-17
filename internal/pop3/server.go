@@ -2,6 +2,7 @@ package pop3
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -13,6 +14,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	otrace "go.opentelemetry.io/otel/trace"
 )
 
 // Server represents a POP3 server
@@ -44,6 +49,14 @@ type Server struct {
 	// Connection limits
 	maxConnections int
 	requireTLS     bool
+
+	// onLoginResult fires after every USER+PASS exchange (success or failure).
+	// Consumers wire it for audit logging, webhooks, and metrics. reason is
+	// only populated on failure.
+	onLoginResult func(username string, success bool, ip, reason string)
+
+	// tracingProvider wraps command dispatch and authentication when set.
+	tracingProvider *tracing.Provider
 }
 
 // SetRequireTLS sets whether TLS is required before authentication.
@@ -88,6 +101,10 @@ type Session struct {
 	messages          []*Message
 	isTLS             bool
 	greetingTimestamp string // Timestamp from greeting banner
+
+	// activeSpan is set by handleCommand for the duration of one command so
+	// inner handlers (notably PASS) can record auth attributes against it.
+	activeSpan otrace.Span
 }
 
 // State represents the POP3 session state
@@ -124,6 +141,36 @@ func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 func (s *Server) SetAuthLimits(maxAttempts int, lockoutDuration time.Duration) {
 	s.maxLoginAttempts = maxAttempts
 	s.lockoutDuration = lockoutDuration
+}
+
+// SetLoginResultHandler registers a callback fired after every PASS attempt.
+// The reason argument is only populated on failure ("lockout" or
+// "invalid_credentials").
+func (s *Server) SetLoginResultHandler(fn func(username string, success bool, ip, reason string)) {
+	s.onLoginResult = fn
+}
+
+// SetTracingProvider wires an OpenTelemetry provider into the POP3 server.
+// When set, every command dispatch is wrapped in a `pop3.<COMMAND>` server
+// span, and PASS additionally records auth.success / reason attributes.
+func (s *Server) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
+}
+
+// startCommandSpan begins a `pop3.<COMMAND>` server-kind span when tracing is
+// enabled. Returns a no-op span when disabled so callers can defer End()
+// unconditionally.
+func (s *Server) startCommandSpan(ctx context.Context, command, sessionID, ip string) (context.Context, otrace.Span) {
+	if s.tracingProvider == nil || !s.tracingProvider.IsEnabled() {
+		return ctx, otrace.SpanFromContext(ctx)
+	}
+	return s.tracingProvider.StartSpanWithKind(ctx,
+		"pop3."+command,
+		tracing.SpanKindServer,
+		attribute.String("session.id", sessionID),
+		attribute.String("ip", ip),
+		attribute.String("pop3.command", command),
+	)
 }
 
 // isAuthLockedOut returns true if the given IP is temporarily locked out
@@ -440,16 +487,38 @@ func (s *Session) handleCommand(line string) error {
 	command := strings.ToUpper(parts[0])
 	args := parts[1:]
 
+	host := clientIP(s.conn)
+	_, span := s.server.startCommandSpan(context.Background(), command, s.id, host)
+	s.activeSpan = span
+	defer func() {
+		s.activeSpan = nil
+		span.End()
+	}()
+
+	var err error
 	switch s.state {
 	case StateAuthorization:
-		return s.handleAuthorizationCommand(command, args)
+		err = s.handleAuthorizationCommand(command, args)
 	case StateTransaction:
-		return s.handleTransactionCommand(command, args)
+		err = s.handleTransactionCommand(command, args)
 	case StateUpdate:
-		return s.handleUpdateCommand(command, args)
+		err = s.handleUpdateCommand(command, args)
 	}
 
-	return nil
+	if err != nil && err.Error() != "quit" {
+		tracing.SetStatus(span, tracing.StatusError, err.Error())
+	}
+	return err
+}
+
+// clientIP extracts the host portion from the connection's remote address,
+// matching what auth + tracing record as the "ip" attribute.
+func clientIP(conn net.Conn) string {
+	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
+	if err != nil {
+		return conn.RemoteAddr().String()
+	}
+	return host
 }
 
 // truncateCommand truncates a command for safe logging.
@@ -489,12 +558,18 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 			return nil
 		}
 
-		host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String())
-		if err != nil {
-			host = s.conn.RemoteAddr().String()
+		host := clientIP(s.conn)
+		span := s.activeSpan
+		if span != nil && s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
+			tracing.SetStringAttribute(span, "user", s.user)
 		}
 		if s.server.isAuthLockedOut(host) {
 			s.WriteResponse("-ERR Too many failed authentication attempts")
+			if s.server.onLoginResult != nil {
+				s.server.onLoginResult(s.user, false, host, "lockout")
+			}
+			tracing.SetBoolAttribute(span, "auth.success", false)
+			tracing.SetStatus(span, tracing.StatusError, "auth lockout")
 			s.user = ""
 			return nil
 		}
@@ -516,6 +591,11 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		if !authenticated {
 			s.server.recordAuthFailure(host)
 			s.WriteResponse("-ERR Authentication failed")
+			if s.server.onLoginResult != nil {
+				s.server.onLoginResult(s.user, false, host, "invalid_credentials")
+			}
+			tracing.SetBoolAttribute(span, "auth.success", false)
+			tracing.SetStatus(span, tracing.StatusError, "authentication failed")
 			s.user = ""
 			return nil
 		}
@@ -531,6 +611,11 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 
 		s.messages = messages
 		s.state = StateTransaction
+		if s.server.onLoginResult != nil {
+			s.server.onLoginResult(s.user, true, host, "")
+		}
+		tracing.SetBoolAttribute(span, "auth.success", true)
+		tracing.SetStatus(span, tracing.StatusOk, "")
 		s.WriteResponse("+OK")
 
 	case "QUIT":

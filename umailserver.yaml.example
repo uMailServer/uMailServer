@@ -122,6 +122,46 @@ tracing:
     deployment: "primary"
     region: "us-east-1"
 
+# Web Push notifications (VAPID-based, mobile + desktop browsers)
+# VAPID keys are auto-generated and stored in `<data_dir>/push/vapid.json` on
+# first start. Paste them back here only if you need them to survive a data
+# wipe or to share keys across replicas. `subject` identifies the operator to
+# push services (must be mailto: or https://).
+push:
+  enabled: true                 # Master switch for browser push delivery
+  subject: "mailto:admin@example.com"
+  # vapid_public_key: ""        # Optional override — must be set together with vapid_private_key
+  # vapid_private_key: ""       # Plain string in YAML; do not commit real values
+
+# Production alerting (webhook + email notifications for system conditions)
+# When enabled, the alert manager sends notifications for queue backlog,
+# TLS certificate expiry, and other operational thresholds. At least one of
+# webhook_url or smtp_server must be set when enabled is true.
+alert:
+  enabled: false                  # Master switch for alerting
+  # Webhook delivery (e.g., Slack, PagerDuty, custom HTTP endpoint)
+  webhook_url: ""                 # https://hooks.slack.com/services/...
+  webhook_headers: {}             # Optional headers, e.g., {"Authorization": "Bearer xyz"}
+  webhook_template: ""            # Optional Go-template body override
+  allow_private_ip: false         # Allow webhook URLs to private/loopback IPs (SSRF risk; testing only)
+  # Email delivery
+  smtp_server: ""                 # smtp.example.com (required for email delivery)
+  smtp_port: 587                  # 25, 465, or 587
+  smtp_username: ""
+  smtp_password: ""               # Plain string in YAML; do not commit real values
+  from_address: ""                # alerts@example.com
+  to_addresses: []                # ["oncall@example.com"]
+  use_tls: true                   # STARTTLS for SMTP delivery
+  # Rate limiting (prevents alert storms)
+  min_interval: 5m                # Minimum gap between two alerts of the same name
+  max_alerts: 100                 # Maximum alerts per hour across all names
+  # Thresholds (0 disables the check)
+  disk_threshold: 85.0            # Disk usage % that triggers a warning
+  memory_threshold: 90.0          # Memory usage % that triggers a warning
+  error_threshold: 5.0            # Error rate % that triggers a warning
+  tls_warning_days: 7             # Days before cert expiry to alert
+  queue_threshold: 1000           # Pending queue items that trigger a warning
+
 # Domains
 domains:
   - name: example.com

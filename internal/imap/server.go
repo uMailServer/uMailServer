@@ -59,6 +59,11 @@ type Server struct {
 	// Intended for loopback integration tests where TLS handshake setup adds
 	// no security but considerable boilerplate. Production must leave this false.
 	allowPlainAuth bool
+
+	// onLoginResult fires after every LOGIN / AUTHENTICATE attempt (success or
+	// failure). Consumers use it for audit trails, webhooks, and rate metrics.
+	// reason is populated only on failure and may be empty.
+	onLoginResult func(username string, success bool, ip, reason string)
 }
 
 // Mailstore interface for mailbox operations
@@ -157,6 +162,13 @@ func (s *Server) SetMaxConnections(n int) {
 // callers must never enable this.
 func (s *Server) SetAllowPlainAuth(allow bool) {
 	s.allowPlainAuth = allow
+}
+
+// SetLoginResultHandler registers a callback fired after every LOGIN /
+// AUTHENTICATE attempt. The reason argument is only populated on failure and
+// distinguishes between "lockout", "auth failed", and other paths.
+func (s *Server) SetLoginResultHandler(fn func(username string, success bool, ip, reason string)) {
+	s.onLoginResult = fn
 }
 
 // isAuthLockedOut returns true if the given IP is temporarily locked out

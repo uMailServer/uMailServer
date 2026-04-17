@@ -21,6 +21,7 @@ func (s *Server) startManageSieve() {
 		ok, _ := s.authenticate(user, pass)
 		return ok
 	})
+	sieveServer.SetTracingProvider(s.tracingProvider)
 	if err := sieveServer.Listen(); err != nil {
 		s.logger.Error("Failed to start ManageSieve server", "error", err)
 		return

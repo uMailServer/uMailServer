@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/tracing"
+	"go.opentelemetry.io/otel/attribute"
+	otrace "go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -24,6 +27,10 @@ type Server struct {
 	rateLimit    int // requests per minute, 0 = disabled
 	rateMu       sync.Mutex
 	rateAttempts map[string]*rateAttempt
+
+	// tracingProvider wraps every JSON-RPC method dispatch in an
+	// `mcp.<method>` server-kind span when set.
+	tracingProvider *tracing.Provider
 }
 
 // rateAttempt tracks MCP requests per IP for rate limiting
@@ -56,6 +63,12 @@ func (s *Server) SetRateLimit(limit int) {
 	s.rateMu.Lock()
 	defer s.rateMu.Unlock()
 	s.rateLimit = limit
+}
+
+// SetTracingProvider wires an OpenTelemetry provider into the MCP server so
+// every JSON-RPC method dispatch is wrapped in an `mcp.<method>` span.
+func (s *Server) SetTracingProvider(provider *tracing.Provider) {
+	s.tracingProvider = provider
 }
 
 // checkRateLimit returns true if the IP is allowed to make MCP requests
@@ -136,6 +149,29 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
+		var span otrace.Span
+		ctx, span = s.tracingProvider.StartSpanWithKind(ctx,
+			"mcp."+req.Method,
+			tracing.SpanKindServer,
+			attribute.String("mcp.method", req.Method),
+			attribute.Int("mcp.request_id", req.ID),
+			attribute.String("ip", ip),
+		)
+		// tools/call benefits from the inner tool name on the same span;
+		// peek into params without forcing every caller to do so.
+		if req.Method == "tools/call" {
+			var probe struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(req.Params, &probe); err == nil && probe.Name != "" {
+				tracing.SetStringAttribute(span, "mcp.tool", probe.Name)
+			}
+		}
+		defer span.End()
+	}
+
 	var result interface{}
 	var err error
 
@@ -156,11 +192,17 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		result, err = s.handlePromptGet(req.Params)
 	default:
 		s.writeError(w, http.StatusBadRequest, "Unknown method: "+req.Method)
+		if span := otrace.SpanFromContext(ctx); span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "unknown method")
+		}
 		return
 	}
 
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
+		if span := otrace.SpanFromContext(ctx); span != nil {
+			tracing.SetStatus(span, tracing.StatusError, err.Error())
+		}
 		return
 	}
 

@@ -350,6 +350,27 @@ func (l *Logger) LogTOTPEnable(user, target, ip string) {
 	})
 }
 
+// LogProtocolLogin records the result of a non-API authentication attempt
+// (SMTP submission, IMAP, POP3). service should be one of "smtp", "imap",
+// "pop3"; reason is recorded only on failure and may be empty.
+func (l *Logger) LogProtocolLogin(service, user, ip string, success bool, reason string) {
+	evt := Event{
+		User:    user,
+		IP:      ip,
+		Success: success,
+		Service: service,
+	}
+	if success {
+		evt.Type = LoginSuccess
+	} else {
+		evt.Type = LoginFailure
+		if reason != "" {
+			evt.Details = map[string]string{"reason": reason}
+		}
+	}
+	_ = l.Log(evt)
+}
+
 // LogTOTPDisable logs TOTP 2FA disablement
 func (l *Logger) LogTOTPDisable(user, target, ip string) {
 	_ = l.Log(Event{
