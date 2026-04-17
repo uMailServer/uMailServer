@@ -235,6 +235,38 @@ func (m *Manager) RecordVacationSent(sender string) {
 	m.vacationAccessor = append(m.vacationAccessor, sender)
 }
 
+// CheckAndRecordVacation atomically checks if we should send a vacation reply and records that we will.
+// This prevents race conditions where multiple goroutines could send vacation replies for the same sender.
+func (m *Manager) CheckAndRecordVacation(sender string, days int) bool {
+	m.vacationCacheMu.Lock()
+	defer m.vacationCacheMu.Unlock()
+
+	// Minimum interval is 1 day regardless of user's preference
+	interval := time.Duration(days) * 24 * time.Hour
+	if interval < 24*time.Hour {
+		interval = 24 * time.Hour
+	}
+
+	lastSent, ok := m.vacationCache[sender]
+	if ok && time.Since(lastSent) < interval {
+		return false
+	}
+
+	// LRU eviction: remove oldest 25% if at capacity
+	if len(m.vacationCache) >= m.vacationMaxSize {
+		removeCount := m.vacationMaxSize / 4
+		for i := 0; i < removeCount && len(m.vacationAccessor) > 0; i++ {
+			oldest := m.vacationAccessor[0]
+			m.vacationAccessor = m.vacationAccessor[1:]
+			delete(m.vacationCache, oldest)
+		}
+	}
+
+	m.vacationCache[sender] = time.Now()
+	m.vacationAccessor = append(m.vacationAccessor, sender)
+	return true
+}
+
 // GetVacationInterval returns the minimum interval for vacation replies
 func (m *Manager) GetVacationInterval(days int) time.Duration {
 	interval := time.Duration(days) * 24 * time.Hour

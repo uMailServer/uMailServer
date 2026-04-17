@@ -186,6 +186,7 @@ type SecurityConfig struct {
 	LockoutDuration  Duration        `yaml:"lockout_duration"`
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`
 	JWTSecret        string          `yaml:"jwt_secret"`
+	TOTPKey          string          `yaml:"totp_key"` // Separate encryption key for TOTP secrets (default: JWTSecret if empty)
 	AuditLog         AuditLogConfig  `yaml:"audit_log"`
 	SPFCacheTTL      Duration        `yaml:"spf_cache_ttl"` // TTL for cached SPF lookups (default 5m)
 }

@@ -123,6 +123,7 @@ type Config struct {
 	TokenExpiry       time.Duration
 	CorsOrigins       []string
 	TrustedProxies    []string // IPs that are allowed to set X-Forwarded-For
+	TOTPKey           string   // Separate encryption key for TOTP secrets (falls back to JWTSecret if empty)
 	AuditLog          AuditLogConfig
 	PasswordHasher    string // "bcrypt" (default) or "argon2id"
 }
@@ -390,7 +391,7 @@ func (s *Server) initRouter() {
 
 	// Authentication
 	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
-	mux.Handle("/api/v1/auth/logout", s.authMiddleware(http.HandlerFunc(s.handleLogout)))
+	mux.Handle("/api/v1/auth/logout", s.rateLimitMiddleware(s.authMiddleware(http.HandlerFunc(s.handleLogout))))
 
 	// Protected routes
 	api := http.NewServeMux()

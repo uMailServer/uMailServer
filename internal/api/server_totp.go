@@ -42,7 +42,7 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 	}
 
 	// Encrypt secret before storage
-	encryptedSecret, err := auth.EncryptTOTPSecret(secret, s.config.JWTSecret)
+	encryptedSecret, err := auth.EncryptTOTPSecret(secret, s.getTOTPKey())
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to encrypt TOTP secret")
 		return
@@ -105,7 +105,7 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 		return
 	}
 
-	totpSecret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.config.JWTSecret)
+	totpSecret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.getTOTPKey())
 	if err != nil {
 		s.logger.Error("failed to decrypt TOTP secret", "error", err, "email", email)
 		s.sendError(w, http.StatusInternalServerError, "authentication error")

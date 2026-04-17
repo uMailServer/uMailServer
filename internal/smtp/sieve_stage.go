@@ -99,8 +99,8 @@ func (s *SieveStage) Process(ctx *MessageContext) PipelineResult {
 				ctx.SpamResult.Reasons = append(ctx.SpamResult.Reasons, fmt.Sprintf("redirect:%s", a.Address))
 			case sieve.VacationAction:
 				// Call vacation handler if set (for async vacation reply)
-				if s.vacationHandler != nil && s.manager.ShouldSendVacation(from, a.Days) {
-					s.manager.RecordVacationSent(from)
+				// CheckAndRecordVacation is atomic to prevent race conditions
+				if s.vacationHandler != nil && s.manager.CheckAndRecordVacation(from, a.Days) {
 					// Call handler asynchronously to not block the pipeline
 					go s.vacationHandler(from, recipient, a)
 				}

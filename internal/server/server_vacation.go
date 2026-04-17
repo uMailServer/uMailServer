@@ -60,12 +60,30 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		}
 	}
 
+	// Parse settings first to get SendInterval for deduplication
+	var settings struct {
+		Enabled      bool          `json:"enabled"`
+		Message      string        `json:"message"`
+		StartDate    string        `json:"start_date"`
+		EndDate      string        `json:"end_date"`
+		SendInterval time.Duration `json:"send_interval"`
+	}
+	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil || !settings.Enabled {
+		return
+	}
+
+	// Use SendInterval from settings, default to 24h if not set or too small
+	sendInterval := settings.SendInterval
+	if sendInterval < 24*time.Hour {
+		sendInterval = 24 * time.Hour
+	}
+
 	key := recipientEmail + "|" + senderEmail
 	s.vacationRepliesMu.Lock()
 	if s.vacationReplies == nil {
 		s.vacationReplies = make(map[string]time.Time)
 	}
-	if lastSent, ok := s.vacationReplies[key]; ok && time.Since(lastSent) < 24*time.Hour {
+	if lastSent, ok := s.vacationReplies[key]; ok && time.Since(lastSent) < sendInterval {
 		s.vacationRepliesMu.Unlock()
 		return
 	}
@@ -77,16 +95,6 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 	}
 
 	s.vacationRepliesMu.Unlock()
-
-	var settings struct {
-		Enabled   bool   `json:"enabled"`
-		Message   string `json:"message"`
-		StartDate string `json:"start_date"`
-		EndDate   string `json:"end_date"`
-	}
-	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil || !settings.Enabled {
-		return
-	}
 
 	now := time.Now()
 	if settings.StartDate != "" {

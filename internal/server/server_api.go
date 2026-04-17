@@ -11,6 +11,7 @@ func (s *Server) startAPI() {
 	apiCfg := api.Config{
 		Addr:           fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
 		JWTSecret:      s.config.Security.JWTSecret,
+		TOTPKey:        s.config.Security.TOTPKey,
 		CorsOrigins:    s.config.HTTP.CorsOrigins,
 		PasswordHasher: "bcrypt", // or "argon2id" (OWASP recommended)
 		AuditLog: api.AuditLogConfig{

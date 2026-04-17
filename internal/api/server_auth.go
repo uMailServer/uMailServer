@@ -3,7 +3,6 @@ package api
 import (
 	"crypto/sha256"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -13,10 +12,11 @@ import (
 	"github.com/umailserver/umailserver/internal/auth"
 )
 
-// loginAttempt tracks failed login attempts per IP
+// loginAttempt tracks failed login attempts per IP with exponential backoff
 type loginAttempt struct {
-	count    int
-	lastSeen time.Time
+	count        int       // consecutive failures
+	lastSeen     time.Time // last attempt timestamp
+	lockoutUntil time.Time // lockout expiration (0 = not locked out)
 }
 
 // apiRateAttempt tracks API requests per IP for rate limiting
@@ -84,6 +84,15 @@ func (s *Server) clearAccountLoginFailures(email string) {
 	delete(s.accountLoginAttempts, email)
 }
 
+// getTOTPKey returns the encryption key for TOTP secrets.
+// Returns TOTPKey if set, otherwise falls back to JWTSecret.
+func (s *Server) getTOTPKey() string {
+	if s.config.TOTPKey != "" {
+		return s.config.TOTPKey
+	}
+	return s.config.JWTSecret
+}
+
 // RevokeToken adds a token to the blacklist (for logout).
 // If a database is configured, the revocation is persisted; otherwise it falls back to memory.
 func (s *Server) RevokeToken(tokenHash string) {
@@ -148,7 +157,7 @@ func (s *Server) CleanupExpiredTokens() {
 }
 
 // checkLoginRateLimit returns true if the IP is allowed to attempt login.
-// Allows 5 attempts per 5-minute window per IP; blocks after that.
+// Uses exponential backoff: 5 attempts, then lockout doubles each failure (5min, 10min, 20min, etc.)
 func (s *Server) checkLoginRateLimit(ip string) bool {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
@@ -159,12 +168,39 @@ func (s *Server) checkLoginRateLimit(ip string) bool {
 
 	now := time.Now()
 	attempt, exists := s.loginAttempts[ip]
-	if !exists || now.Sub(attempt.lastSeen) > 5*time.Minute {
+	if !exists {
 		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
 		return true
 	}
 
+	// Reset if previous lockout expired (sliding window from last attempt)
+	if now.Sub(attempt.lastSeen) > 5*time.Minute {
+		attempt.count = 1
+		attempt.lastSeen = now
+		attempt.lockoutUntil = time.Time{}
+		return true
+	}
+
+	// Check if currently locked out
+	if !attempt.lockoutUntil.IsZero() && now.Before(attempt.lockoutUntil) {
+		return false
+	}
+
+	// Clear lockout if expired
+	if !attempt.lockoutUntil.IsZero() && now.After(attempt.lockoutUntil) {
+		attempt.lockoutUntil = time.Time{}
+		attempt.count = 1
+		return true
+	}
+
 	if attempt.count >= 5 {
+		// Apply exponential backoff: 5min * 2^(attempts-5)
+		// attempts=5: 5min, attempts=6: 10min, attempts=7: 20min, etc.
+		backoffMinutes := 5 * (1 << (attempt.count - 5))
+		if backoffMinutes > 60 {
+			backoffMinutes = 60 // cap at 60 minutes
+		}
+		attempt.lockoutUntil = now.Add(time.Duration(backoffMinutes) * time.Minute)
 		return false
 	}
 	attempt.count++
@@ -173,6 +209,7 @@ func (s *Server) checkLoginRateLimit(ip string) bool {
 }
 
 // recordLoginFailure increments the failed login counter for an IP.
+// Lockout timing is calculated in checkLoginRateLimit.
 func (s *Server) recordLoginFailure(ip string) {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
@@ -187,6 +224,17 @@ func (s *Server) recordLoginFailure(ip string) {
 		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
 		return
 	}
+
+	// Reset if window expired
+	if now.Sub(attempt.lastSeen) > 5*time.Minute {
+		attempt.count = 1
+		attempt.lastSeen = now
+		attempt.lockoutUntil = time.Time{}
+		return
+	}
+
+	// Clear any existing lockout when recording new failure
+	attempt.lockoutUntil = time.Time{}
 	attempt.count++
 	attempt.lastSeen = now
 }
@@ -254,11 +302,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rate limit login attempts by IP
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if ip == "" {
-		ip = r.RemoteAddr
-	}
+	// Rate limit login attempts by IP (respects X-Forwarded-For from trusted proxies)
+	ip := getClientIP(r, s.config.TrustedProxies)
 	if !s.checkLoginRateLimit(ip) {
 		s.sendError(w, http.StatusTooManyRequests, "too many login attempts")
 		return
@@ -328,7 +373,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusTooManyRequests, "too many failed TOTP attempts")
 			return
 		}
-		totpSecret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.config.JWTSecret)
+		totpSecret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.getTOTPKey())
 		if err != nil {
 			s.logger.Error("failed to decrypt TOTP secret", "error", err, "email", req.Email)
 			s.sendError(w, http.StatusInternalServerError, "authentication error")
@@ -342,8 +387,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 			return
 		}
-		// Replay protection: reject reuse of the same time step
-		if step <= account.TOTPLastUsedStep {
+		// Replay protection: reject reuse of the same or older time step
+		if step < account.TOTPLastUsedStep {
 			s.recordTOTPFailure(req.Email)
 			s.recordAccountLoginFailure(emailKey)
 			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_replay")
