@@ -79,17 +79,44 @@ func (s *Server) getUserSecret(username string) (string, error) {
 	return account.PasswordHash, nil
 }
 
-// loginResult handles login success/failure events and triggers webhooks
+// loginResult handles SMTP login success/failure events and triggers webhooks
+// + audit. It exists for backwards compatibility with the SMTP wiring; new
+// callers should use protoLoginHandler which is service-parameterized.
 func (s *Server) loginResult(username string, success bool, ip string) {
+	s.recordLoginResult("smtp", username, success, ip, "")
+}
+
+// recordLoginResult is the unified login-event sink for all auth-bearing
+// protocols (smtp, imap, pop3). It writes to the audit log and fires the
+// webhook event in one place so consumers stay consistent across protocols.
+func (s *Server) recordLoginResult(service, username string, success bool, ip, reason string) {
+	if s.apiServer != nil {
+		if al := s.apiServer.AuditLogger(); al != nil {
+			al.LogProtocolLogin(service, username, ip, success, reason)
+		}
+	}
 	if s.webhookMgr != nil {
 		eventType := "auth.login.success"
 		if !success {
 			eventType = "auth.login.failed"
 		}
-		s.webhookMgr.Trigger(eventType, map[string]interface{}{
+		payload := map[string]interface{}{
+			"service":  service,
 			"username": username,
 			"ip":       ip,
-		})
+		}
+		if !success && reason != "" {
+			payload["reason"] = reason
+		}
+		s.webhookMgr.Trigger(eventType, payload)
+	}
+}
+
+// protoLoginHandler returns a SetLoginResultHandler-compatible callback that
+// tags every event with the given protocol service ("smtp", "imap", "pop3").
+func (s *Server) protoLoginHandler(service string) func(username string, success bool, ip, reason string) {
+	return func(username string, success bool, ip, reason string) {
+		s.recordLoginResult(service, username, success, ip, reason)
 	}
 }
 
@@ -129,7 +156,17 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 
 	// Handle redirects - queue copies to redirect addresses
 	for _, redirectAddr := range redirectAddrs {
-		if err := s.relayMessage(from, redirectAddr, data); err != nil {
+		// Check for forwarding loop
+		loopAddrs := getMailLoopHeaders(data)
+		for _, loopAddr := range loopAddrs {
+			if strings.EqualFold(loopAddr, redirectAddr) {
+				s.logger.Warn("Forwarding loop detected, skipping redirect", "loop_addr", loopAddr, "redirect_to", redirectAddr)
+				continue
+			}
+		}
+		// Add this sender to the loop tracking header
+		dataWithLoop := addMailLoopHeader(data, from)
+		if err := s.relayMessage(from, redirectAddr, dataWithLoop); err != nil {
 			s.logger.Error("Failed to queue redirect message", "to", redirectAddr, "error", err)
 			// Continue with other deliveries even if redirect fails
 		} else {
@@ -189,6 +226,40 @@ func (s *Server) relayMessage(from, to string, data []byte) error {
 	}
 	s.logger.Debug("Relaying message (queue not available)", "from", from, "to", to)
 	return nil
+}
+
+// getMailLoopHeaders returns all addresses in existing X-Mail-Loop headers.
+func getMailLoopHeaders(data []byte) []string {
+	if len(data) == 0 {
+		return nil
+	}
+	msg, err := mail.ReadMessage(strings.NewReader(string(data)))
+	if err != nil {
+		return nil
+	}
+	return msg.Header["X-Mail-Loop"]
+}
+
+// addMailLoopHeader appends an X-Mail-Loop header with the given address.
+func addMailLoopHeader(data []byte, addr string) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	idx := strings.Index(string(data), "\r\n\r\n")
+	if idx == -1 {
+		idx = strings.Index(string(data), "\n\n")
+		if idx == -1 {
+			return data
+		}
+		// Insert before blank line (Unix newline)
+		headerPart := string(data[:idx+2])
+		bodyPart := string(data[idx+2:])
+		return []byte(headerPart + "X-Mail-Loop: " + addr + "\r\n" + bodyPart)
+	}
+	// Insert before blank line (Windows newline)
+	headerPart := string(data[:idx+4])
+	bodyPart := string(data[idx+4:])
+	return []byte(headerPart + "X-Mail-Loop: " + addr + "\r\n" + bodyPart)
 }
 
 // deliverLocal delivers a message to a local mailbox

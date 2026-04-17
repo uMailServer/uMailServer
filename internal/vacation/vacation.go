@@ -171,6 +171,15 @@ func (m *Manager) ShouldSendAutoReply(user, sender string, headers map[string]st
 		return false
 	}
 
+	// Don't reply if this address already appears in the mail loop chain
+	if loopHeader := headers["X-Mail-Loop"]; loopHeader != "" {
+		for _, addr := range strings.Split(loopHeader, ",") {
+			if strings.EqualFold(strings.TrimSpace(addr), user) {
+				return false
+			}
+		}
+	}
+
 	// Check send interval (don't spam the same sender)
 	m.cacheMu.RLock()
 	userCache, ok := m.sentCache[user]
