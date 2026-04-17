@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -217,9 +218,28 @@ func parseMTASTSRecord(record string) (*MTASTSRecord, error) {
 // fetchPolicyFile fetches the MTA-STS policy file via HTTPS
 func (v *MTASTSValidator) fetchPolicyFile(ctx context.Context, domain string) (*MTASTSPolicy, error) {
 	// URL: https://mta-sts.domain/.well-known/mta-sts.txt
-	url := fmt.Sprintf("https://mta-sts.%s/.well-known/mta-sts.txt", domain)
+	urlStr := fmt.Sprintf("https://mta-sts.%s/.well-known/mta-sts.txt", domain)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// Parse URL to get hostname for SSRF protection
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Resolve hostname to check for private IP rebinding
+	ips, err := v.resolver.LookupIP(ctx, u.Hostname())
+	if err != nil {
+		return nil, fmt.Errorf("DNS lookup failed for %s: %w", u.Hostname(), err)
+	}
+
+	// Validate resolved IPs are not private/loopback/link-local
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return nil, fmt.Errorf("SSRF blocked: resolved IP %s is private/local/link-local", ip.String())
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
 	if err != nil {
 		return nil, err
 	}

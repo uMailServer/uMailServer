@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -115,6 +116,8 @@ func TestFetchPolicyFile_Success_Cov3(t *testing.T) {
 	policyText := "version: STSv1\nmode: enforce\nmax_age: 86400\nmx: mail.example.com\n"
 
 	resolver := newMockDNSResolver()
+	// Add IP record for SSRF check (mta-sts.example.com resolves to public IP)
+	resolver.ipRecords["mta-sts.example.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
@@ -138,6 +141,7 @@ func TestFetchPolicyFile_Success_Cov3(t *testing.T) {
 
 func TestFetchPolicyFile_HTTPError_Cov3(t *testing.T) {
 	resolver := newMockDNSResolver()
+	resolver.ipRecords["mta-sts.example.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 500, body: "error"},
@@ -174,6 +178,7 @@ func TestFetchPolicyFile_InvalidPolicy_Cov3(t *testing.T) {
 	policyText := "version: STSv1\nmode: invalid_mode\nmax_age: 86400\n"
 
 	resolver := newMockDNSResolver()
+	resolver.ipRecords["mta-sts.example.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
@@ -261,6 +266,7 @@ func TestFetchPolicy_Success_Cov3(t *testing.T) {
 	resolver := newMockDNSResolver()
 	policyID := computePolicyID(policyText)
 	resolver.txtRecords["_mta-sts.example.com"] = []string{"v=STSv1; id=" + policyID}
+	resolver.ipRecords["mta-sts.example.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
@@ -1048,6 +1054,7 @@ func TestFetchPolicyFile_LargeBody_Cov3(t *testing.T) {
 	largeBody := "version: STSv1\nmode: enforce\nmax_age: 86400\nmx: mail.example.com\n" + strings.Repeat("x", 65*1024)
 
 	resolver := newMockDNSResolver()
+	resolver.ipRecords["mta-sts.example.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: largeBody},

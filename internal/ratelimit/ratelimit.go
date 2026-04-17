@@ -21,8 +21,18 @@ type RateLimiter struct {
 	userMu       sync.RWMutex
 	connLimits   map[string]*connCounter
 	connMu       sync.RWMutex
+	globalBucket *globalBucket
+	globalMu     sync.RWMutex
 	stopCh       chan struct{}
 	stopOnce     sync.Once
+}
+
+// globalBucket tracks global rate limit state
+type globalBucket struct {
+	minuteCount int64
+	minuteReset time.Time
+	hourCount   int64
+	hourReset   time.Time
 }
 
 // Config holds rate limiting configuration
@@ -103,13 +113,18 @@ func New(bolt *bbolt.DB, cfg *Config) *RateLimiter {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
+	now := time.Now()
 	rl := &RateLimiter{
 		bolt:         bolt,
 		config:       cfg,
 		ipCounters:   make(map[string]*ipBucket),
 		userCounters: make(map[string]*userBucket),
 		connLimits:   make(map[string]*connCounter),
-		stopCh:       make(chan struct{}),
+		globalBucket: &globalBucket{
+			minuteReset: now.Add(time.Minute),
+			hourReset:   now.Add(time.Hour),
+		},
+		stopCh: make(chan struct{}),
 	}
 
 	// Initialize bbolt buckets for persistent user quotas
@@ -310,6 +325,55 @@ func (rl *RateLimiter) checkUserBucket(user string, bucket *userBucket) Result {
 	bucket.dayCount++
 	bucket.sentToday++
 	rl.saveUserSentToday(user, bucket.sentToday)
+
+	return Result{Allowed: true}
+}
+
+// CheckGlobal checks global rate limits across all users/connections
+func (rl *RateLimiter) CheckGlobal() Result {
+	rl.globalMu.Lock()
+	defer rl.globalMu.Unlock()
+
+	now := time.Now()
+
+	// Reset expired windows
+	if now.After(rl.globalBucket.minuteReset) {
+		rl.globalBucket.minuteCount = 0
+		rl.globalBucket.minuteReset = now.Add(time.Minute)
+	}
+	if now.After(rl.globalBucket.hourReset) {
+		rl.globalBucket.hourCount = 0
+		rl.globalBucket.hourReset = now.Add(time.Hour)
+	}
+
+	// Check global limits
+	if rl.config.GlobalPerMinute > 0 && rl.globalBucket.minuteCount >= int64(rl.config.GlobalPerMinute) {
+		retrySecs := int(time.Until(rl.globalBucket.minuteReset).Seconds())
+		if retrySecs < 1 {
+			retrySecs = 1
+		}
+		return Result{
+			Allowed:    false,
+			Reason:     fmt.Sprintf("Global rate limit exceeded: %d/min", rl.config.GlobalPerMinute),
+			RetryAfter: retrySecs,
+		}
+	}
+
+	if rl.config.GlobalPerHour > 0 && rl.globalBucket.hourCount >= int64(rl.config.GlobalPerHour) {
+		retrySecs := int(time.Until(rl.globalBucket.hourReset).Seconds())
+		if retrySecs < 1 {
+			retrySecs = 60
+		}
+		return Result{
+			Allowed:    false,
+			Reason:     fmt.Sprintf("Global rate limit exceeded: %d/hour", rl.config.GlobalPerHour),
+			RetryAfter: retrySecs,
+		}
+	}
+
+	// Increment global counters
+	rl.globalBucket.minuteCount++
+	rl.globalBucket.hourCount++
 
 	return Result{Allowed: true}
 }

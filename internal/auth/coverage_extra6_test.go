@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -136,6 +137,8 @@ func TestGetPolicy_SuccessfulFetchAndCache_Cov6(t *testing.T) {
 
 	resolver := newMockDNSResolver()
 	resolver.txtRecords["_mta-sts.valid.com"] = []string{"v=STSv1; id=" + policyID}
+	// Add IP record for SSRF check
+	resolver.ipRecords["mta-sts.valid.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{

@@ -331,6 +331,17 @@ func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
 		return ResultReject
 	}
 
+	// Check global rate limits (applies to all messages regardless of user/IP)
+	if globalResult := s.limiter.CheckGlobal(); !globalResult.Allowed {
+		ctx.Rejected = true
+		ctx.RejectionCode = 421
+		ctx.RejectionMessage = globalResult.Reason
+		if globalResult.RetryAfter > 0 {
+			ctx.RejectionMessage = fmt.Sprintf("%s (retry in %ds)", ctx.RejectionMessage, globalResult.RetryAfter)
+		}
+		return ResultReject
+	}
+
 	return ResultAccept
 }
 
