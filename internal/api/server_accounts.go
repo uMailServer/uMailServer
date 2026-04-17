@@ -127,6 +127,8 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
+	isAdmin, _ := r.Context().Value("isAdmin").(bool)
+
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -140,6 +142,12 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 
 	if req.Email == "" || req.Password == "" {
 		s.sendError(w, http.StatusBadRequest, "email and password are required")
+		return
+	}
+
+	// Non-admin cannot create admin accounts
+	if !isAdmin && req.IsAdmin {
+		s.sendError(w, http.StatusForbidden, "only admins can create admin accounts")
 		return
 	}
 

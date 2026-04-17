@@ -289,8 +289,8 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 		return fmt.Errorf("user does not exist or is not active: %s", email)
 	}
 
-	// Check quota
-	if account.QuotaLimit > 0 && account.QuotaUsed >= account.QuotaLimit {
+	// Reserve quota atomically before storing
+	if err := s.database.IncrementQuota(domain, user, int64(len(data))); err != nil {
 		return fmt.Errorf("quota exceeded for user: %s", email)
 	}
 
@@ -309,6 +309,8 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 			}
 		}
 		if !account.ForwardKeepCopy {
+			// Release the quota we reserved since we're not storing locally
+			s.database.IncrementQuota(domain, user, -int64(len(data)))
 			s.logger.Debug("Message forwarded (no local copy)",
 				"to", email,
 				"from", from,
@@ -320,12 +322,9 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 	// Store message locally
 	messageID, err := s.msgStore.StoreMessage(email, data)
 	if err != nil {
+		// Release the quota we reserved since store failed
+		s.database.IncrementQuota(domain, user, -int64(len(data)))
 		return fmt.Errorf("failed to store message: %w", err)
-	}
-
-	// Update quota atomically
-	if err := s.database.IncrementQuota(domain, user, int64(len(data))); err != nil {
-		s.logger.Error("Failed to update quota", "email", email, "error", err)
 	}
 
 	s.logger.Debug("Message delivered",

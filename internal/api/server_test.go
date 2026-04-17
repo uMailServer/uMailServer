@@ -1759,6 +1759,7 @@ func TestCreateAccountInvalidBody(t *testing.T) {
 }
 
 // TestCreateAccountWithAdminFlag tests creating an account with is_admin=true
+// Non-admin requests should be rejected with 403
 func TestCreateAccountWithAdminFlag(t *testing.T) {
 	database, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -1785,6 +1786,47 @@ func TestCreateAccountWithAdminFlag(t *testing.T) {
 	jsonBody, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+
+	server.handleAccounts(rec, req)
+
+	// Non-admin cannot create admin accounts - should be rejected
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected status 403, got %d", rec.Code)
+	}
+}
+
+// TestCreateAccountAsAdmin tests that an admin CAN create admin accounts
+func TestCreateAccountAsAdmin(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{
+		Name:        "admin-test.com",
+		MaxAccounts: 10,
+		IsActive:    true,
+	}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("failed to create domain: %v", err)
+	}
+
+	// Create an admin context
+	ctx := context.WithValue(context.Background(), "user", "admin@admin-test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+
+	body := map[string]interface{}{
+		"email":    "admin@admin-test.com",
+		"password": "Adminpass123!",
+		"is_admin": true,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody)).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	server.handleAccounts(rec, req)
