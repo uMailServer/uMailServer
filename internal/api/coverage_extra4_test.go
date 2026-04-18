@@ -359,9 +359,10 @@ func TestHandleMailDelete_Success(t *testing.T) {
 		Flags:        []string{},
 	})
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mail/delete?id="+msgID, nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mail/delete?id="+msgID, strings.NewReader("{}"))
 	req = req.WithContext(context.WithValue(req.Context(), "user", "user@mailtest.com"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
 	server.ServeHTTP(rec, req)
