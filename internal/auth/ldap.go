@@ -26,9 +26,10 @@ type LDAPConfig struct {
 	GroupAttribute string        `yaml:"group_attribute"`        // Attribute for group membership (default: "memberOf")
 	AdminGroups    []string      `yaml:"admin_groups"`           // Groups that grant admin access
 	StartTLS       bool          `yaml:"start_tls"`              // Use StartTLS on port 389
-	SkipVerify     bool          `yaml:"skip_verify"`            // Skip TLS certificate verification (dev only)
+	SkipVerify     bool          `yaml:"skip_verify"`            // Skip TLS certificate verification
 	Timeout        time.Duration `yaml:"timeout"`                // Connection timeout
 	MaxConnections int           `yaml:"max_connections"`        // Max pooled LDAP connections (default 10)
+	Environment    string        `yaml:"environment"`            // "development", "staging", "production" - used to gate insecure settings
 }
 
 // LDAPClient handles LDAP authentication
@@ -153,6 +154,9 @@ func NewLDAPClient(config LDAPConfig) (*LDAPClient, error) {
 		slog.Warn("ldap: tls certificate verification is disabled (skip_verify=true). " +
 			"This is INSECURE and should only be used in development or with self-signed certs. " +
 			"For production, use proper TLS certificates.")
+		if config.Environment != "" && config.Environment != "development" {
+			return nil, fmt.Errorf("ldap: skip_verify is not allowed in %s environment; use proper TLS certificates instead", config.Environment)
+		}
 	}
 
 	client := &LDAPClient{
