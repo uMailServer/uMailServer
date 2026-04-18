@@ -88,8 +88,9 @@ func TestHandleDeleteFilter_Success(t *testing.T) {
 
 	if filterID != "" {
 		// Delete the filter
-		req = httptest.NewRequest(http.MethodDelete, "/api/v1/filters/"+filterID, nil)
+		req = httptest.NewRequest(http.MethodDelete, "/api/v1/filters/"+filterID, strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
 		rec = httptest.NewRecorder()
 		server.ServeHTTP(rec, req)
 
@@ -159,8 +160,9 @@ func TestHandlePushTest_Success(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/test", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -457,8 +459,9 @@ func TestHandleDeleteVacation_WithError(t *testing.T) {
 	// Close database
 	database.Close()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/vacation", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/vacation", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -473,7 +476,7 @@ func TestHandlePushSubscribe_NoBody(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscribe", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscribe", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -561,8 +564,9 @@ func TestHandleTOTPSetup_MethodNotAllowed(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/admin@example.com/totp/setup", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/admin@example.com/totp/setup", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -727,8 +731,9 @@ func TestHandlePushUnsubscribe_WithQueryParam(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/push/unsubscribe?id=test-sub-id", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/push/unsubscribe?id=test-sub-id", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -929,8 +934,9 @@ func TestHandlePushSubscriptions_MethodNotAllowedCoverage(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscriptions", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscriptions", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1479,8 +1485,9 @@ func TestHandleDeleteVacation_WithMockError(t *testing.T) {
 	// Set mock error
 	server.vacationDeleteError = fmt.Errorf("mock vacation delete error")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/vacation", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/vacation", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1591,8 +1598,9 @@ func TestHandleFilterToggle_WithSaveError(t *testing.T) {
 		// Set mock error
 		server.filterSaveError = fmt.Errorf("mock save error")
 
-		req = httptest.NewRequest(http.MethodPost, "/api/v1/filters/"+filterID+"/toggle", nil)
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/filters/"+filterID+"/toggle", strings.NewReader("{}"))
 		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
 		rec = httptest.NewRecorder()
 		server.ServeHTTP(rec, req)
 
@@ -1635,8 +1643,9 @@ func TestHandlePushUnsubscribe_WithError(t *testing.T) {
 	// Set mock error
 	server.pushUnsubscribeError = fmt.Errorf("mock unsubscribe error")
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/push/unsubscribe?id=test-sub", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/push/unsubscribe?id=test-sub", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1653,8 +1662,9 @@ func TestHandlePushTest_WithError(t *testing.T) {
 	// Set mock error
 	server.pushSendError = fmt.Errorf("mock send error")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/test", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
