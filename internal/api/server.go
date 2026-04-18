@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -503,11 +502,8 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Get client IP
-		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if ip == "" {
-			ip = r.RemoteAddr
-		}
+		// Get client IP (respects X-Forwarded-For from trusted proxies)
+		ip := getClientIP(r, s.config.TrustedProxies)
 
 		if !s.checkAPIRateLimit(ip) {
 			s.logger.Warn("API rate limit exceeded",

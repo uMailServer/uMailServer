@@ -88,19 +88,19 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		origin := s.corsOrigin
-		if origin == "" {
-			origin = "*"
-		}
-		if reqOrigin := r.Header.Get("Origin"); origin != "*" && reqOrigin != "" {
-			for _, o := range strings.Split(origin, ",") {
-				if strings.TrimSpace(o) == reqOrigin {
-					origin = reqOrigin
-					break
+		// Only set CORS if explicitly configured; empty means no CORS headers (secure default)
+		if s.corsOrigin != "" {
+			origin := s.corsOrigin
+			if reqOrigin := r.Header.Get("Origin"); origin != "*" && reqOrigin != "" {
+				for _, o := range strings.Split(origin, ",") {
+					if strings.TrimSpace(o) == reqOrigin {
+						origin = reqOrigin
+						break
+					}
 				}
 			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}
-		w.Header().Set("Access-Control-Allow-Origin", origin)
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {

@@ -129,8 +129,9 @@ func TestMCPServer(t *testing.T) {
 			t.Errorf("Expected status 200 for OPTIONS, got %d", rr.Code)
 		}
 
-		if rr.Header().Get("Access-Control-Allow-Origin") != "*" {
-			t.Error("Expected CORS header")
+		// When corsOrigin is empty (default), no CORS headers should be set (secure default)
+		if origin := rr.Header().Get("Access-Control-Allow-Origin"); origin != "" {
+			t.Errorf("Expected no CORS header when unconfigured, got %q", origin)
 		}
 	})
 }
