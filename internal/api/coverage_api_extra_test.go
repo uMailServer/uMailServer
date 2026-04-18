@@ -764,7 +764,8 @@ func TestHandlePushUnsubscribe_NoAuth(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/push/unsubscribe?id=test", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/push/unsubscribe?id=test", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -787,8 +788,9 @@ func TestHandleVacation_NoAuth(t *testing.T) {
 		t.Errorf("GET vacation: Expected 401, got %d", rec.Code)
 	}
 
-	// Test PUT without auth
-	req = httptest.NewRequest(http.MethodPut, "/api/v1/vacation", nil)
+	// Test PUT without auth (empty body to avoid body reading issues)
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/vacation", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -796,8 +798,9 @@ func TestHandleVacation_NoAuth(t *testing.T) {
 		t.Errorf("PUT vacation: Expected 401, got %d", rec.Code)
 	}
 
-	// Test DELETE without auth
-	req = httptest.NewRequest(http.MethodDelete, "/api/v1/vacation", nil)
+	// Test DELETE without auth (with empty JSON body to avoid body issues)
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/vacation", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -811,8 +814,9 @@ func TestHandleVacation_InvalidMethod(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/vacation", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/vacation", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -879,8 +883,9 @@ func TestHandlePushVAPID_InvalidMethod(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/vapid-public-key", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/vapid-public-key", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -894,7 +899,8 @@ func TestHandlePushTest_NoAuth(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/test", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -998,8 +1004,9 @@ func TestHandleSearch_InvalidMethod(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/search", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/search", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1013,8 +1020,9 @@ func TestHandleThreadSearch_InvalidMethod(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/threads/search", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/threads/search", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1081,8 +1089,9 @@ func TestHandleThreads_InvalidMethod(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/threads", nil)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/threads", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1124,7 +1133,8 @@ func TestHandleThreadDelete_NoAuth(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/threads/thread-id", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/threads/thread-id", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1138,7 +1148,8 @@ func TestHandleFilterToggle_NoAuth(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters/filter-id/toggle", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters/filter-id/toggle", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1152,8 +1163,9 @@ func TestHandleFilters_InvalidMethod(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPatch, "/api/v1/filters", nil)
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/filters", strings.NewReader("{}"))
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1167,7 +1179,8 @@ func TestHandleFilterReorder_NoAuth(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters/reorder", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/filters/reorder", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1181,7 +1194,8 @@ func TestHandlePushSubscribe_NoAuth(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscribe", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscribe", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
@@ -1316,7 +1330,8 @@ func TestHandleDeleteFilter_NoAuth(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/filters/filter-id", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/filters/filter-id", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
