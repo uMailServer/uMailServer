@@ -645,18 +645,33 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("spam.reject_threshold must be between 0 and 100")
 	}
 
-	// Validate rate limits
+	// Validate rate limits (non-negative, with upper bounds to prevent accidental disabling)
 	if c.Security.RateLimit.SMTPPerMinute < 0 {
 		return fmt.Errorf("security.rate_limit.smtp_per_minute must be non-negative")
 	}
+	if c.Security.RateLimit.SMTPPerMinute > 1_000_000 {
+		return fmt.Errorf("security.rate_limit.smtp_per_minute must be <= 1000000 (effectively unlimited)")
+	}
 	if c.Security.RateLimit.SMTPPerHour < 0 {
 		return fmt.Errorf("security.rate_limit.smtp_per_hour must be non-negative")
+	}
+	if c.Security.RateLimit.SMTPPerHour > 10_000_000 {
+		return fmt.Errorf("security.rate_limit.smtp_per_hour must be <= 10000000 (effectively unlimited)")
 	}
 	if c.Security.RateLimit.IMAPConnections < 0 {
 		return fmt.Errorf("security.rate_limit.imap_connections must be non-negative")
 	}
 	if c.Security.RateLimit.HTTPRequestsPerMinute < 0 {
 		return fmt.Errorf("security.rate_limit.http_requests_per_minute must be non-negative")
+	}
+	if c.Security.RateLimit.HTTPRequestsPerMinute > 1_000_000 {
+		return fmt.Errorf("security.rate_limit.http_requests_per_minute must be <= 1000000 (effectively unlimited)")
+	}
+	if c.Security.RateLimit.GlobalPerMinute > 1_000_000 {
+		return fmt.Errorf("security.rate_limit.global_per_minute must be <= 1000000")
+	}
+	if c.Security.RateLimit.GlobalPerHour > 10_000_000 {
+		return fmt.Errorf("security.rate_limit.global_per_hour must be <= 10000000")
 	}
 
 	// Validate timeouts

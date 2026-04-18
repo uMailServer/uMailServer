@@ -117,7 +117,7 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 		Alias:    aliasUser,
 		Domain:   aliasDomain,
 		Target:   req.Target,
-		IsActive: req.IsActive,
+		IsActive: true, // Always default to active; client can override via update
 	}
 
 	if err := s.db.CreateAlias(alias); err != nil {

@@ -197,7 +197,90 @@ func (m *Manager) ShouldSendAutoReply(user, sender string, headers map[string]st
 	return true
 }
 
+// CheckAndRecordAutoReply atomically checks if auto-reply should be sent and records it.
+// This prevents race conditions where two concurrent deliveries could both pass the check
+// before either records the send (VULN-007).
+func (m *Manager) CheckAndRecordAutoReply(user, sender string, headers map[string]string) bool {
+	m.mu.RLock()
+	config, ok := m.configs[user]
+	m.mu.RUnlock()
+
+	if !ok || !config.Enabled {
+		return false
+	}
+
+	// Check date range
+	now := time.Now()
+	if !config.StartDate.IsZero() && now.Before(config.StartDate) {
+		return false
+	}
+	if !config.EndDate.IsZero() && now.After(config.EndDate) {
+		return false
+	}
+
+	// Check exclude addresses
+	for _, addr := range config.ExcludeAddresses {
+		if addr == sender {
+			return false
+		}
+	}
+
+	// Check headers for mailing list
+	if config.IgnoreLists {
+		if headers["List-Id"] != "" || headers["List-Unsubscribe"] != "" {
+			return false
+		}
+		if headers["Precedence"] == "list" || headers["Precedence"] == "bulk" {
+			return false
+		}
+	}
+
+	// Check headers for bulk mail
+	if config.IgnoreBulk {
+		if headers["Precedence"] == "bulk" || headers["Precedence"] == "junk" {
+			return false
+		}
+		if headers["X-Mailer"] == "MassMailer" {
+			return false
+		}
+	}
+
+	// Don't reply to auto-generated messages
+	if headers["Auto-Submitted"] != "" && headers["Auto-Submitted"] != "no" {
+		return false
+	}
+	if headers["X-Auto-Response-Suppress"] != "" {
+		return false
+	}
+
+	// Don't reply if this address already appears in the mail loop chain
+	if loopHeader := headers["X-Mail-Loop"]; loopHeader != "" {
+		for _, addr := range strings.Split(loopHeader, ",") {
+			if strings.EqualFold(strings.TrimSpace(addr), user) {
+				return false
+			}
+		}
+	}
+
+	// Atomically check send interval and record
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+
+	if m.sentCache[user] == nil {
+		m.sentCache[user] = make(map[string]time.Time)
+	}
+
+	lastSent, ok := m.sentCache[user][sender]
+	if ok && time.Since(lastSent) < config.SendInterval {
+		return false
+	}
+
+	m.sentCache[user][sender] = time.Now()
+	return true
+}
+
 // RecordAutoReplySent records that an auto-reply was sent
+// Deprecated: Use CheckAndRecordAutoReply instead for atomic check-and-record.
 func (m *Manager) RecordAutoReplySent(user, sender string) {
 	m.cacheMu.Lock()
 	defer m.cacheMu.Unlock()
