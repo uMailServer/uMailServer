@@ -582,6 +582,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate TOTPKey minimum length if set (must be at least 32 chars for AES-256)
+	if c.Security.TOTPKey != "" && len(c.Security.TOTPKey) < 32 {
+		return fmt.Errorf("security.totp_key must be at least 32 characters for AES-256 encryption")
+	}
+
 	// Validate TLS MinVersion
 	if c.TLS.MinVersion != "" && c.TLS.MinVersion != "1.2" && c.TLS.MinVersion != "1.3" {
 		return fmt.Errorf("tls.min_version must be '1.2' or '1.3'")
