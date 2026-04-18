@@ -16,12 +16,11 @@ import type { User, Activity, RealtimeMetrics } from "@/types";
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [metrics, setMetrics] = useState<RealtimeMetrics | undefined>();
 
   // Check for existing session on mount
-  // Token is now stored in HttpOnly cookie (more secure against XSS)
+  // Token is stored in HttpOnly cookie (more secure against XSS)
   useEffect(() => {
     // Check if user is already authenticated via cookie
     // The server will validate the cookie on API requests
@@ -38,7 +37,7 @@ function App() {
   }, []);
 
   // WebSocket connection for realtime updates
-  const { isConnected } = useWebSocket(token, {
+  const { isConnected } = useWebSocket({
     onMetrics: (newMetrics) => {
       setMetrics(newMetrics);
     },
@@ -47,17 +46,15 @@ function App() {
     },
   });
 
-  const handleLogin = (newToken: string, userData: { email: string }) => {
+  const handleLogin = (userData: { email: string }) => {
     // Token is stored in HttpOnly cookie by the server
     // No need to store in localStorage (more secure against XSS)
-    setToken(newToken);
     setIsAuthenticated(true);
     setUser({ email: userData.email, isAdmin: true });
   };
 
   const handleLogout = () => {
     // Server will clear the HttpOnly cookie
-    setToken(null);
     setIsAuthenticated(false);
     setUser(null);
     setActivities([]);

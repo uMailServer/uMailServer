@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface LoginProps {
-  onLogin: (token: string, user: { email: string }) => void;
+  onLogin: (user: { email: string }) => void;
 }
 
 export function Login({ onLogin }: LoginProps) {
@@ -38,7 +38,7 @@ export function Login({ onLogin }: LoginProps) {
         throw new Error(data.error || "Login failed");
       }
 
-      onLogin(data.token, { email });
+      onLogin({ email });
       navigate("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");

@@ -249,46 +249,34 @@ func TestSSEServerHandler(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
 
-	t.Run("MissingUserParameter", func(t *testing.T) {
+	// Development mode removed - authFunc is now required
+	// Tests should set authFunc before calling Handler()
+	t.Run("WithoutAuthFuncSet", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/sse", nil)
 		rec := httptest.NewRecorder()
 
 		server.Handler().ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
+		// Without authFunc configured, should return 500 Internal Server Error
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("expected status %d (Internal Server Error), got %d", http.StatusInternalServerError, rec.Code)
 		}
 	})
+}
 
-	t.Run("WithUserParameter", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/sse?user=testuser", nil)
-		rec := &mockResponseRecorder{
-			ResponseRecorder: httptest.NewRecorder(),
+func TestSSEServerHandlerWithAuthFunc(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	server := NewSSEServer(logger)
+	server.SetAuthFunc(func(token string) (string, bool, error) {
+		if token == "valid-token" {
+			return "authed-user", true, nil
 		}
-
-		// Run handler in goroutine since it blocks
-		go server.Handler().ServeHTTP(rec, req)
-
-		// Wait for context to timeout (handler will exit when context is done)
-		time.Sleep(500 * time.Millisecond)
-
-		// Should have set SSE headers before blocking
-		if rec.Header().Get("Content-Type") != "text/event-stream" {
-			t.Errorf("expected Content-Type text/event-stream, got %s", rec.Header().Get("Content-Type"))
-		}
+		return "", false, errors.New("invalid token")
 	})
 
 	t.Run("WithAuthToken", func(t *testing.T) {
-		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		server := NewSSEServer(logger)
-		server.SetAuthFunc(func(token string) (string, bool, error) {
-			if token == "valid-token" {
-				return "authed-user", true, nil
-			}
-			return "", false, errors.New("invalid token")
-		})
-
-		req := httptest.NewRequest(http.MethodGet, "/sse?token=valid-token", nil)
+		req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+		req.Header.Set("X-Auth-Token", "valid-token")
 		rec := &mockResponseRecorder{
 			ResponseRecorder: httptest.NewRecorder(),
 		}
@@ -302,12 +290,6 @@ func TestSSEServerHandler(t *testing.T) {
 	})
 
 	t.Run("WithInvalidAuthToken", func(t *testing.T) {
-		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-		server := NewSSEServer(logger)
-		server.SetAuthFunc(func(token string) (string, bool, error) {
-			return "", false, errors.New("unauthorized")
-		})
-
 		req := httptest.NewRequest(http.MethodGet, "/sse?token=invalid-token", nil)
 		rec := httptest.NewRecorder()
 
@@ -325,7 +307,7 @@ func TestSSEServerHandler(t *testing.T) {
 			if token == "header-token" {
 				return "header-user", false, nil
 			}
-			return "", false, errors.New("invalid")
+			return "", false, errors.New("invalid token")
 		})
 
 		req := httptest.NewRequest(http.MethodGet, "/sse", nil)
@@ -549,6 +531,9 @@ func containsAt(s, substr string) bool {
 func TestSSEServerHandlerAllowsMultipleClientsForSameUser(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
+	server.SetAuthFunc(func(token string) (string, bool, error) {
+		return "testuser", false, nil
+	})
 
 	// First client
 	oldStop := make(chan struct{})
@@ -566,7 +551,8 @@ func TestSSEServerHandlerAllowsMultipleClientsForSameUser(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/sse?user=testuser", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+	req.Header.Set("X-Auth-Token", "second-token")
 	rec := &mockResponseRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
 	}

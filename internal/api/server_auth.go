@@ -430,11 +430,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(s.config.TokenExpiry.Seconds()),
 	})
 
-	// Also return token in JSON for API clients (mobile, desktop)
-	s.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"token":     tokenString,
-		"expiresIn": int(s.config.TokenExpiry.Seconds()),
-	})
+	// Check User-Agent to distinguish web browsers from API clients
+	// Web browsers receive token only via HttpOnly cookie (XSS protection)
+	// API clients (mobile, desktop) receive token in JSON response
+	userAgent := r.Header.Get("User-Agent")
+	isWebBrowser := strings.Contains(userAgent, "Mozilla/") || strings.Contains(userAgent, "Chrome/") ||
+		strings.Contains(userAgent, "Firefox/") || strings.Contains(userAgent, "Safari/") ||
+		strings.Contains(userAgent, "Edge/")
+
+	if !isWebBrowser {
+		// Return token in JSON only for non-browser API clients
+		s.sendJSON(w, http.StatusOK, map[string]interface{}{
+			"token":     tokenString,
+			"expiresIn": int(s.config.TokenExpiry.Seconds()),
+		})
+	} else {
+		// For web browsers, don't expose token in JSON - rely on HttpOnly cookie
+		s.sendJSON(w, http.StatusOK, map[string]interface{}{
+			"expiresIn": int(s.config.TokenExpiry.Seconds()),
+		})
+	}
 
 	// Clear login failures on successful login
 	s.clearAccountLoginFailures(emailKey)

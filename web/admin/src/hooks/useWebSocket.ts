@@ -17,7 +17,7 @@ interface UseWebSocketOptions {
   maxReconnectAttempts?: number;
 }
 
-export function useWebSocket(token: string | null, options: UseWebSocketOptions = {}) {
+export function useWebSocket(options: UseWebSocketOptions = {}) {
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -35,8 +35,8 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
   } = options;
 
   const connect = useCallback(() => {
-    if (!token) return;
-
+    // SSE endpoint uses HttpOnly cookie for auth on the server side
+    // The browser automatically sends cookies with requests to the same origin
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/api/v1/events`;
 
@@ -47,10 +47,8 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
       ws.onopen = () => {
         setIsConnected(true);
         reconnectCountRef.current = 0;
-        // Send auth token via first message (WebSocket doesn't support custom headers)
-        if (token) {
-          ws.send(JSON.stringify({ type: "auth", token }));
-        }
+        // Auth is handled via HttpOnly cookie on the server side
+        // No token needed in message body
       };
 
       ws.onmessage = (event) => {
@@ -96,7 +94,7 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
     } catch (err) {
       onError?.(err as Error);
     }
-  }, [token, maxReconnectAttempts, reconnectInterval, onMetrics, onActivity, onStatus, onHealth, onError]);
+  }, [maxReconnectAttempts, reconnectInterval, onMetrics, onActivity, onStatus, onHealth, onError]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -116,11 +114,9 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
   }, []);
 
   useEffect(() => {
-    if (token) {
-      connect();
-    }
+    connect();
     return () => disconnect();
-  }, [token, connect, disconnect]);
+  }, [connect, disconnect]);
 
   return {
     isConnected,

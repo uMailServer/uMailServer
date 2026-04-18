@@ -18,6 +18,10 @@ import (
 func TestSSEHandler_ClientStopChannel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
+	// AuthFunc is now required - set it for tests
+	server.SetAuthFunc(func(token string) (string, bool, error) {
+		return "testuser", false, nil
+	})
 
 	// Pre-register the maximum number of SSE clients for "testuser"
 	const maxClientsPerUser = 5
@@ -56,7 +60,8 @@ func TestSSEHandler_ClientStopChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/sse?user=testuser", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+	req.Header.Set("X-Auth-Token", "test-token")
 	rec := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 
 	go server.Handler().ServeHTTP(rec, req)
@@ -75,11 +80,15 @@ func TestSSEHandler_ClientStopChannel(t *testing.T) {
 func TestSSEHandler_NotificationChannel(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
+	server.SetAuthFunc(func(token string) (string, bool, error) {
+		return "notifyuser", false, nil
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/sse?user=notifyuser", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+	req.Header.Set("X-Auth-Token", "notify-token")
 	rec := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 
 	handlerDone := make(chan struct{})
@@ -115,6 +124,9 @@ func TestSSEHandler_NotificationChannel(t *testing.T) {
 func TestSSEHandler_HeartbeatTick(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
+	server.SetAuthFunc(func(token string) (string, bool, error) {
+		return "testuser", false, nil
+	})
 
 	// Use a context timeout longer than the 30s heartbeat would take.
 	// Since 30s is too long for tests, we verify indirectly:
@@ -129,7 +141,8 @@ func TestSSEHandler_HeartbeatTick(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/sse?user=hbuser", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+	req.Header.Set("X-Auth-Token", "hb-token")
 	rec := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 
 	handlerDone := make(chan struct{})
@@ -170,11 +183,15 @@ func TestSSEHandler_HeartbeatTick(t *testing.T) {
 func TestSSEHandler_ClientStopTriggeredDuringConnection(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	server := NewSSEServer(logger)
+	server.SetAuthFunc(func(token string) (string, bool, error) {
+		return "dupeuser", false, nil
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/sse?user=dupeuser", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+	req.Header.Set("X-Auth-Token", "dupe-token")
 	rec := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 
 	handlerDone := make(chan struct{})
@@ -248,11 +265,15 @@ func TestSSEHandler_FullNotificationFlow(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 			server := NewSSEServer(logger)
+			server.SetAuthFunc(func(token string) (string, bool, error) {
+				return "flowuser", false, nil
+			})
 
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 
-			req := httptest.NewRequest(http.MethodGet, "/sse?user=flowuser", nil).WithContext(ctx)
+			req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+			req.Header.Set("X-Auth-Token", "flow-token")
 			rec := &mockResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 
 			handlerDone := make(chan struct{})

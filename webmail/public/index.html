@@ -284,28 +284,22 @@
         // API client
         async function api(endpoint, options = {}) {
             const url = API_URL + endpoint;
-            const token = localStorage.getItem('token');
 
             const headers = {
                 'Content-Type': 'application/json',
                 ...options.headers
             };
 
-            if (token) {
-                headers['Authorization'] = 'Bearer ' + token;
-            }
-
             try {
                 const response = await fetch(url, {
                     ...options,
-                    headers
+                    headers,
+                    credentials: 'include' // HttpOnly cookie handles auth
                 });
 
                 if (!response.ok) {
                     if (response.status === 401) {
-                        localStorage.removeItem('token');
                         localStorage.removeItem('user');
-                        state.token = null;
                         state.user = null;
                         render();
                         return null;
@@ -321,7 +315,6 @@
         }
 
         let state = {
-            token: localStorage.getItem('token'),
             user: JSON.parse(localStorage.getItem('user') || 'null'),
             emails: [],
             folders: ['Inbox', 'Sent', 'Drafts', 'Trash', 'Junk'],
@@ -336,10 +329,9 @@
                 body: JSON.stringify({ email, password })
             });
 
-            if (data && data.token) {
-                state.token = data.token;
+            if (data) {
+                // Token is now in HttpOnly cookie - no need to store in localStorage
                 state.user = { email };
-                localStorage.setItem('token', data.token);
                 localStorage.setItem('user', JSON.stringify({ email }));
                 await loadEmails();
                 render();
@@ -368,9 +360,7 @@
         }
 
         function logout() {
-            localStorage.removeItem('token');
             localStorage.removeItem('user');
-            state.token = null;
             state.user = null;
             state.emails = [];
             render();
@@ -378,7 +368,7 @@
 
         function render() {
             const root = document.getElementById('root');
-            if (!state.token) {
+            if (!state.user) {
                 root.innerHTML = LoginPage();
             } else {
                 root.innerHTML = MainApp();
@@ -563,7 +553,7 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            if (state.token) {
+            if (state.user) {
                 loadEmails();
             }
             render();

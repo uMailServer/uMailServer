@@ -39,9 +39,7 @@ function VacationPage() {
   const loadConfig = async () => {
     try {
       const response = await fetch('/api/v1/vacation', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+        credentials: 'include' // HttpOnly cookie handles auth
       })
       if (response.ok) {
         const data = await response.json()
@@ -75,9 +73,9 @@ function VacationPage() {
       const response = await fetch('/api/v1/vacation', {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Content-Type': 'application/json'
         },
+        credentials: 'include', // HttpOnly cookie handles auth
         body: JSON.stringify(config)
       })
 

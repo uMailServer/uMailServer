@@ -34,7 +34,7 @@ export interface AuthLoginRequest {
 }
 
 export interface AuthLoginResponse {
-  token?: string
+  expiresIn?: number
 }
 
 export interface Filter {

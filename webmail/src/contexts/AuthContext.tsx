@@ -3,7 +3,6 @@ import api from '../utils/api'
 
 interface AuthContextType {
   user: { email: string } | null
-  token: string | null
   isAuthenticated: boolean
   isLoading: boolean
   loading: boolean
@@ -16,22 +15,19 @@ const AuthContext = createContext<AuthContextType | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<{ email: string } | null>(null)
-  const [token, setToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     setLoading(true)
     setError(null)
     try {
-      const data = await api.post<{ token?: string }>('/auth/login', { email, password })
-      if (data?.token) {
-        setToken(data.token)
-        setUser({ email })
-        api.setToken(data.token)
-        return true
-      }
-      return false
+      // Token is now in HttpOnly cookie - no need to store in memory
+      await api.post<{ expiresIn?: number }>('/auth/login', { email, password })
+      setUser({ email })
+      setIsAuthenticated(true)
+      return true
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Login failed')
       return false
@@ -41,22 +37,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const logout = useCallback(() => {
-    setToken(null)
     setUser(null)
+    setIsAuthenticated(false)
     api.setToken(null)
   }, [])
 
-  // Set token on api when it changes
-  useEffect(() => {
-    if (token) {
-      api.setToken(token)
-    }
-  }, [token])
-
   const value: AuthContextType = {
     user,
-    token,
-    isAuthenticated: !!token,
+    isAuthenticated,
     isLoading: false,
     loading,
     error,

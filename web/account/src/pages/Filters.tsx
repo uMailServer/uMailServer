@@ -40,9 +40,7 @@ function FiltersPage() {
   const loadFilters = async () => {
     try {
       const response = await fetch('/api/v1/filters', {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+        credentials: 'include' // HttpOnly cookie handles auth
       })
       if (response.ok) {
         const data = await response.json()
@@ -64,9 +62,9 @@ function FiltersPage() {
       const response = await fetch(url, {
         method,
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Content-Type': 'application/json'
         },
+        credentials: 'include', // HttpOnly cookie handles auth
         body: JSON.stringify(filter)
       })
 
@@ -88,9 +86,7 @@ function FiltersPage() {
     try {
       const response = await fetch(`/api/v1/filters/${id}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+        credentials: 'include' // HttpOnly cookie handles auth
       })
 
       if (response.ok) {
@@ -105,9 +101,7 @@ function FiltersPage() {
     try {
       const response = await fetch(`/api/v1/filters/${filter.id}/toggle`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
+        credentials: 'include' // HttpOnly cookie handles auth
       })
 
       if (response.ok) {
@@ -139,9 +133,9 @@ function FiltersPage() {
       await fetch('/api/v1/filters/reorder', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Content-Type': 'application/json'
         },
+        credentials: 'include', // HttpOnly cookie handles auth
         body: JSON.stringify({ filterIds: newFilters.map(f => f.id) })
       })
     } catch (err) {

@@ -78,12 +78,10 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		} else {
-			// No authFunc configured - development mode, use user parameter (NOT for production)
-			user = r.URL.Query().Get("user")
-			if user == "" {
-				http.Error(w, "Missing user parameter", http.StatusBadRequest)
-				return
-			}
+			// authFunc is not configured - this is a misconfiguration
+			// In production, SetAuthFunc must always be called
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
 		}
 
 		// Set up SSE headers
