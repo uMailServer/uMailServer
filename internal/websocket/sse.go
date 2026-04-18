@@ -55,10 +55,12 @@ func (s *SSEServer) SetCorsOrigin(origin string) {
 // Handler returns the HTTP handler for SSE connections
 func (s *SSEServer) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Authenticate the request
-		token := r.URL.Query().Get("token")
+		// Authenticate the request - token from X-Auth-Token header or Authorization Bearer
+		token := r.Header.Get("X-Auth-Token")
 		if token == "" {
-			token = r.Header.Get("X-Auth-Token")
+			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+				token = strings.TrimPrefix(authHeader, "Bearer ")
+			}
 		}
 
 		var user string
@@ -76,7 +78,7 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		} else {
-			// No authFunc configured — development mode, use user parameter
+			// No authFunc configured - development mode, use user parameter (NOT for production)
 			user = r.URL.Query().Get("user")
 			if user == "" {
 				http.Error(w, "Missing user parameter", http.StatusBadRequest)

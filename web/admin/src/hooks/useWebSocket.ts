@@ -38,7 +38,7 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
     if (!token) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/events?token=${token}`;
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/events`;
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -47,6 +47,10 @@ export function useWebSocket(token: string | null, options: UseWebSocketOptions 
       ws.onopen = () => {
         setIsConnected(true);
         reconnectCountRef.current = 0;
+        // Send auth token via first message (WebSocket doesn't support custom headers)
+        if (token) {
+          ws.send(JSON.stringify({ type: "auth", token }));
+        }
       };
 
       ws.onmessage = (event) => {

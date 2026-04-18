@@ -178,7 +178,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		Domain:       domain,
 		PasswordHash: hashedPassword,
 		APOPHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password))),
-		IsAdmin:      req.IsAdmin,
+		IsAdmin:      false, // Always false on creation; use separate admin endpoint for admin accounts
 		IsActive:     true,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),

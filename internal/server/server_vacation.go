@@ -38,9 +38,10 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 	if vacation.From != "" {
 		fromAddr = vacation.From
 	}
-	vacationMsg := fmt.Sprintf("From: %s\r\nSubject: %s\r\n\r\n%s",
+	vacationMsg := fmt.Sprintf("From: %s\r\nSubject: %s\r\nX-Mail-Loop: <%s>\r\n\r\n%s",
 		fromAddr,
 		subject,
+		recipient,
 		body)
 
 	// Enqueue vacation reply TO the sender FROM the recipient

@@ -227,7 +227,7 @@ func (s *Server) handleUpdateFilter(w http.ResponseWriter, r *http.Request) {
 		Actions    []FilterAction    `json:"actions"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -358,7 +358,7 @@ func (s *Server) handleFilterReorder(w http.ResponseWriter, r *http.Request) {
 		FilterIDs []string `json:"filterIds"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

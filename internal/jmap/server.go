@@ -269,8 +269,9 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read upload data
-	data, err := io.ReadAll(r.Body)
+	// Read upload data (limit to 50MB to prevent DoS)
+	limitedReader := http.MaxBytesReader(w, r.Body, 50<<20)
+	data, err := io.ReadAll(limitedReader)
 	if err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalidArguments", nil)
 		return

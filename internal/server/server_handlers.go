@@ -296,6 +296,16 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 
 	// Handle mail forwarding (before storing, so we skip local store if not keeping copy)
 	if account.ForwardTo != "" {
+		// Check for forwarding loop
+		loopAddrs := getMailLoopHeaders(data)
+		for _, loopAddr := range loopAddrs {
+			if strings.EqualFold(loopAddr, email) {
+				s.logger.Warn("Forwarding loop detected, skipping forward", "from", from, "to", email)
+				return nil
+			}
+		}
+		// Add this sender to the loop tracking header
+		dataWithLoop := addMailLoopHeader(data, email)
 		forwardTargets := strings.Split(account.ForwardTo, ",")
 		for _, fwd := range forwardTargets {
 			fwd = strings.TrimSpace(fwd)
@@ -303,7 +313,7 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 				continue
 			}
 			if s.queue != nil {
-				if _, err := s.queue.Enqueue(email, []string{fwd}, data); err != nil {
+				if _, err := s.queue.Enqueue(email, []string{fwd}, dataWithLoop); err != nil {
 					s.logger.Error("Failed to enqueue forwarded message", "from", email, "to", fwd, "error", err)
 				}
 			}

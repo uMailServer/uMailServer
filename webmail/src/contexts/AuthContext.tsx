@@ -15,15 +15,8 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<{ email: string } | null>(() => {
-    try {
-      const saved = localStorage.getItem('user')
-      return saved ? JSON.parse(saved) : null
-    } catch {
-      return null
-    }
-  })
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('token'))
+  const [user, setUser] = useState<{ email: string } | null>(null)
+  const [token, setToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -35,8 +28,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (data?.token) {
         setToken(data.token)
         setUser({ email })
-        localStorage.setItem('token', data.token)
-        localStorage.setItem('user', JSON.stringify({ email }))
         api.setToken(data.token)
         return true
       }
@@ -52,8 +43,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     setToken(null)
     setUser(null)
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
     api.setToken(null)
   }, [])
 
