@@ -233,7 +233,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 		if err := s.db.CreateMailbox(user, name); err != nil {
 			notCreated[key] = map[string]interface{}{
 				"type":        "serverFail",
-				"description": err.Error(),
+				"description": s.safeError("CreateMailbox", err),
 			}
 			continue
 		}
@@ -263,7 +263,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 			if err := s.db.RenameMailbox(user, oldName, newName); err != nil {
 				notUpdated[key] = map[string]interface{}{
 					"type":        "serverFail",
-					"description": err.Error(),
+					"description": s.safeError("RenameMailbox", err),
 				}
 				continue
 			}
@@ -279,7 +279,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 			if err := s.db.DeleteMailbox(user, name); err != nil {
 				notDestroyed[idStr] = map[string]interface{}{
 					"type":        "serverFail",
-					"description": err.Error(),
+					"description": s.safeError("DeleteMailbox", err),
 				}
 			} else {
 				destroyed = append(destroyed, idStr)
@@ -705,7 +705,7 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 				if err := s.db.StoreMessageMetadata(user, newMbox, newUID, meta); err != nil {
 					notUpdated[emailID] = map[string]interface{}{
 						"type":        "serverFail",
-						"description": err.Error(),
+						"description": s.safeError("StoreMessageMetadata", err),
 					}
 					continue
 				}
@@ -720,7 +720,7 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		if err := s.db.UpdateMessageMetadata(user, targetMbox, targetUID, meta); err != nil {
 			notUpdated[emailID] = map[string]interface{}{
 				"type":        "serverFail",
-				"description": err.Error(),
+				"description": s.safeError("UpdateMessageMetadata", err),
 			}
 			continue
 		}
@@ -878,7 +878,7 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 		if err != nil {
 			notCreated[key] = map[string]interface{}{
 				"type":        "serverFail",
-				"description": err.Error(),
+				"description": s.safeError("GetNextUID", err),
 			}
 			continue
 		}
@@ -888,7 +888,7 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 		if err := s.db.StoreMessageMetadata(user, targetMbox, uid, meta); err != nil {
 			notCreated[key] = map[string]interface{}{
 				"type":        "serverFail",
-				"description": err.Error(),
+				"description": s.safeError("StoreMessageMetadata", err),
 			}
 			continue
 		}
@@ -1310,7 +1310,7 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 			Name: methodName,
 			Args: map[string]interface{}{
 				"type":        "serverFail",
-				"description": err.Error(),
+				"description": s.safeError("GetChangesSince", err),
 			},
 			ID: call.ID,
 		}

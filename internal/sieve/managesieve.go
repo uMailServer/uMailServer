@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -165,7 +166,8 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Best-effort
 
 		if err := s.processCommandSession(session, line); err != nil {
-			_ = s.sendResponse(conn, "NO %s", err.Error())
+			slog.Error("managesieve command error", "error", err)
+			_ = s.sendResponse(conn, "NO command failed")
 			return
 		}
 	}

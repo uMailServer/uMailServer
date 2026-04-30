@@ -186,6 +186,7 @@ type SecurityConfig struct {
 	LockoutDuration  Duration        `yaml:"lockout_duration"`
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`
 	JWTSecret        string          `yaml:"jwt_secret"`
+	DisableLegacyJWT bool            `yaml:"disable_legacy_jwt"` // When true, disables fallback to legacy JWTSecret after kid rotation
 	TOTPKey          string          `yaml:"totp_key"` // Separate encryption key for TOTP secrets (default: JWTSecret if empty)
 	AuditLog         AuditLogConfig  `yaml:"audit_log"`
 	SPFCacheTTL      Duration        `yaml:"spf_cache_ttl"` // TTL for cached SPF lookups (default 5m)
@@ -238,15 +239,17 @@ type LDAPConfig struct {
 	AdminGroups    []string      `yaml:"admin_groups"`
 	StartTLS       bool          `yaml:"start_tls"`
 	SkipVerify     bool          `yaml:"skip_verify"`
+	RootCA         string        `yaml:"root_ca"`
 	Timeout        time.Duration `yaml:"timeout"`
 }
 
 // MCPConfig holds MCP server settings
 type MCPConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Port      int    `yaml:"port"`
-	AuthToken string `yaml:"auth_token"`
-	Bind      string `yaml:"bind"`
+	Enabled        bool   `yaml:"enabled"`
+	Port           int    `yaml:"port"`
+	AuthToken      string `yaml:"auth_token"`
+	AdminAuthToken string `yaml:"admin_auth_token"`
+	Bind           string `yaml:"bind"`
 }
 
 // ManageSieveConfig holds ManageSieve server settings
@@ -575,6 +578,7 @@ func (c *Config) Validate() error {
 		"dev-secret-key-change-in-production-32ch",
 		"demo-secret-key-for-local-testing-32ch",
 		"CHANGE-THIS-TO-A-32+CHARACTER-SECRET-KEY",
+		"dzrirX+6LZseBmgwE+GaCj5gP7KcSt9UvWxYz12345=",
 	}
 	for _, placeholder := range knownPlaceholders {
 		if c.Security.JWTSecret == placeholder {

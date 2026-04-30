@@ -845,3 +845,84 @@ func TestSaveConfig_WriteError(t *testing.T) {
 	err := manager.SetConfig("user@example.com", config)
 	t.Logf("SetConfig result in blocked dir: %v", err)
 }
+
+func TestCheckAndRecordAutoReply(t *testing.T) {
+	tmpDir := t.TempDir()
+	manager := NewManager(tmpDir, nil)
+
+	user := "user@example.com"
+	sender := "sender@example.com"
+
+	// No config set - should return false
+	if manager.CheckAndRecordAutoReply(user, sender, nil) {
+		t.Error("should return false when no config exists")
+	}
+
+	// Set enabled config
+	config := &Config{
+		Enabled:      true,
+		Subject:      "Away",
+		Message:      "I am away",
+		SendInterval: 24 * time.Hour,
+		IgnoreLists:  true,
+		IgnoreBulk:   true,
+	}
+	_ = manager.SetConfig(user, config)
+
+	// First call should return true
+	if !manager.CheckAndRecordAutoReply(user, sender, nil) {
+		t.Error("first call should return true")
+	}
+
+	// Immediate second call should return false (within send interval)
+	if manager.CheckAndRecordAutoReply(user, sender, nil) {
+		t.Error("second call within interval should return false")
+	}
+
+	// Different sender should return true
+	if !manager.CheckAndRecordAutoReply(user, "other@example.com", nil) {
+		t.Error("different sender should return true")
+	}
+
+	// Excluded sender should return false
+	config.ExcludeAddresses = []string{"blocked@example.com"}
+	_ = manager.SetConfig(user, config)
+	if manager.CheckAndRecordAutoReply(user, "blocked@example.com", nil) {
+		t.Error("excluded sender should return false")
+	}
+
+	// Mailing list headers should return false
+	if manager.CheckAndRecordAutoReply(user, "list@example.com", map[string]string{
+		"List-Id": "test-list",
+	}) {
+		t.Error("mailing list should return false")
+	}
+
+	// Bulk precedence should return false
+	if manager.CheckAndRecordAutoReply(user, "bulk@example.com", map[string]string{
+		"Precedence": "bulk",
+	}) {
+		t.Error("bulk mail should return false")
+	}
+
+	// Auto-submitted should return false
+	if manager.CheckAndRecordAutoReply(user, "auto@example.com", map[string]string{
+		"Auto-Submitted": "auto-generated",
+	}) {
+		t.Error("auto-submitted should return false")
+	}
+
+	// X-Auto-Response-Suppress should return false
+	if manager.CheckAndRecordAutoReply(user, "suppress@example.com", map[string]string{
+		"X-Auto-Response-Suppress": "OOF",
+	}) {
+		t.Error("X-Auto-Response-Suppress should return false")
+	}
+
+	// Mail loop detection
+	if manager.CheckAndRecordAutoReply(user, "loop@example.com", map[string]string{
+		"X-Mail-Loop": user,
+	}) {
+		t.Error("mail loop should return false")
+	}
+}

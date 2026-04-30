@@ -20,24 +20,45 @@ func NewPIDFile(dataDir string) *PIDFile {
 	}
 }
 
-// Create creates the PID file with the current process ID
+// Create creates the PID file with the current process ID.
+// It uses O_EXCL to atomically create the file, eliminating the TOCTOU race.
 func (p *PIDFile) Create() error {
-	// Check if PID file already exists
-	if _, err := os.Stat(p.path); err == nil {
-		// PID file exists, check if process is still running
-		pid, err := p.Read()
-		if err == nil && pid > 0 {
-			if isProcessRunning(pid) {
-				return fmt.Errorf("server already running (PID: %d)", pid)
+	pid := os.Getpid()
+	data := fmt.Sprintf("%d\n", pid)
+
+	// Attempt atomic creation with O_EXCL
+	file, err := os.OpenFile(p.path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err == nil {
+		_, writeErr := file.WriteString(data)
+		closeErr := file.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+
+	// If file already exists, check for stale PID file
+	if os.IsExist(err) {
+		existingPID, readErr := p.Read()
+		if readErr == nil && existingPID > 0 {
+			if isProcessRunning(existingPID) {
+				return fmt.Errorf("server already running (PID: %d)", existingPID)
 			}
-			// Stale PID file, remove it
-			_ = os.Remove(p.path)
+		}
+		// Stale PID file, remove and retry atomically
+		_ = os.Remove(p.path)
+		file, err = os.OpenFile(p.path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			_, writeErr := file.WriteString(data)
+			closeErr := file.Close()
+			if writeErr != nil {
+				return writeErr
+			}
+			return closeErr
 		}
 	}
 
-	pid := os.Getpid()
-	data := fmt.Sprintf("%d\n", pid)
-	return os.WriteFile(p.path, []byte(data), 0o600)
+	return fmt.Errorf("failed to create PID file: %w", err)
 }
 
 // Read reads the PID from the file

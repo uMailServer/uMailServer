@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +42,8 @@ func TestToolAddDomain(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), "isAdmin", true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
@@ -117,7 +119,8 @@ func TestToolDeleteDomain(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), "isAdmin", true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
@@ -156,7 +159,8 @@ func TestToolAddAccount(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), "isAdmin", true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
@@ -305,7 +309,8 @@ func TestToolDeleteAccount(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), "isAdmin", true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d: %s", rr.Code, rr.Body.String())
@@ -462,7 +467,8 @@ func TestToolFlushQueue(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), "isAdmin", true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -621,7 +627,8 @@ func TestToolReloadConfig(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), "isAdmin", true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)

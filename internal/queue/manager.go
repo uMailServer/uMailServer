@@ -259,17 +259,6 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check queue size limit
-	stats, err := m.getStats()
-	if err != nil {
-		deleteFile(messagePath)
-		return "", fmt.Errorf("failed to get queue stats: %w", err)
-	}
-	if stats.Total >= m.maxQueueSize {
-		deleteFile(messagePath)
-		return "", fmt.Errorf("queue is full (max %d entries)", m.maxQueueSize)
-	}
-
 	now := time.Now()
 	baseID := id
 
@@ -287,7 +276,9 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 			Status:      "pending",
 		}
 
-		if err := m.db.Enqueue(entry); err != nil {
+		// EnqueueWithLimit performs an atomic check-and-set inside a single
+		// bbolt transaction, eliminating the race between getStats and Enqueue.
+		if err := m.db.EnqueueWithLimit(entry, m.maxQueueSize); err != nil {
 			for j := 0; j < i; j++ {
 				rollbackID := fmt.Sprintf("%s-%d", baseID, j)
 				_ = m.db.Dequeue(rollbackID)

@@ -25,6 +25,31 @@ interface EmailFilter {
   priority: number
 }
 
+const validFilterFields: FilterCondition['field'][] = ['from', 'to', 'subject', 'body', 'header']
+const validFilterOperators: FilterCondition['operator'][] = ['contains', 'equals', 'startsWith', 'endsWith', 'matches']
+const validFilterActions: FilterAction['type'][] = ['move', 'copy', 'delete', 'markRead', 'markSpam', 'forward', 'flag']
+
+function parseFilterField(value: string): FilterCondition['field'] {
+  if (validFilterFields.includes(value as FilterCondition['field'])) {
+    return value as FilterCondition['field']
+  }
+  return 'from'
+}
+
+function parseFilterOperator(value: string): FilterCondition['operator'] {
+  if (validFilterOperators.includes(value as FilterCondition['operator'])) {
+    return value as FilterCondition['operator']
+  }
+  return 'contains'
+}
+
+function parseFilterAction(value: string): FilterAction['type'] {
+  if (validFilterActions.includes(value as FilterAction['type'])) {
+    return value as FilterAction['type']
+  }
+  return 'move'
+}
+
 function FiltersPage() {
   const { t } = useI18n()
   const [filters, setFilters] = useState<EmailFilter[]>([])
@@ -344,7 +369,7 @@ function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
             <div key={index} className="flex items-center gap-2">
               <select
                 value={condition.field}
-                onChange={(e) => updateCondition(index, { field: e.target.value as any })}
+                onChange={(e) => updateCondition(index, { field: parseFilterField(e.target.value) })}
                 className="px-3 py-2 border border-gray-300 rounded-md text-sm"
               >
                 <option value="from">{t('filters.from')}</option>
@@ -366,7 +391,7 @@ function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
 
               <select
                 value={condition.operator}
-                onChange={(e) => updateCondition(index, { operator: e.target.value as any })}
+                onChange={(e) => updateCondition(index, { operator: parseFilterOperator(e.target.value) })}
                 className="px-3 py-2 border border-gray-300 rounded-md text-sm"
               >
                 <option value="contains">{t('filters.contains')}</option>
@@ -413,7 +438,7 @@ function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
             <div key={index} className="flex items-center gap-2">
               <select
                 value={action.type}
-                onChange={(e) => updateAction(index, { type: e.target.value as any })}
+                onChange={(e) => updateAction(index, { type: parseFilterAction(e.target.value) })}
                 className="px-3 py-2 border border-gray-300 rounded-md text-sm"
               >
                 <option value="move">{t('filters.moveTo')}</option>

@@ -239,7 +239,7 @@ func TestRevokeToken_InMemory(t *testing.T) {
 	tokenHash := "test-token-hash-123"
 
 	// Revoke token
-	server.RevokeToken(tokenHash)
+	server.RevokeToken(tokenHash, time.Now().Add(time.Hour))
 
 	// Should be revoked
 	if !server.IsTokenRevoked(tokenHash) {

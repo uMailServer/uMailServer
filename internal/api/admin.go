@@ -17,6 +17,7 @@ type AdminConfig struct {
 	Addr              string            // e.g., "127.0.0.1:8443"
 	JWTSecret         string            // Legacy single secret
 	JWTSecretVersions map[string]string // kid -> secret, for key rotation
+	DisableLegacyJWT  bool              // When true, disables fallback to legacy JWTSecret after kid rotation
 	AuditLog          AuditLogConfig
 }
 
@@ -46,6 +47,7 @@ func (s *AdminServer) Start() error {
 		Handler:      s.router(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	s.logger.Info("Admin API server starting", "addr", s.config.Addr)
@@ -131,8 +133,8 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
 			// Try kid-based secret lookup first
-			if t.Header["kid"] != nil {
-				if kidSecret, ok := s.Server.jwtSecrets[t.Header["kid"].(string)]; ok {
+			if kid, ok := t.Header["kid"].(string); ok && kid != "" {
+				if kidSecret, ok := s.Server.jwtSecrets[kid]; ok {
 					return []byte(kidSecret), nil
 				}
 			}
@@ -140,8 +142,11 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 			if secret, ok := s.Server.jwtSecrets[s.Server.currentKid]; ok {
 				return []byte(secret), nil
 			}
-			// Last resort: try legacy JWTSecret
-			return []byte(s.config.JWTSecret), nil
+			// Last resort: try legacy JWTSecret only if not disabled
+			if !s.config.DisableLegacyJWT {
+				return []byte(s.config.JWTSecret), nil
+			}
+			return nil, fmt.Errorf("unknown signing key")
 		})
 		if err != nil || !parsed.Valid {
 			writeError(w, "unauthorized", "Invalid token", http.StatusUnauthorized)

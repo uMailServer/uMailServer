@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -527,5 +528,170 @@ func TestToolListDomainsNoDomains(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+// --- RBAC tests ---
+
+func TestMCPServer_AdminTool_WithoutAdminContext(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      15,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "add_domain",
+			"arguments": map[string]interface{}{
+				"name": "evil.com",
+			},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500, got %d", rr.Code)
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Fatal("Expected error in response")
+	}
+	errMsg, _ := resp["error"].(map[string]interface{})["message"].(string)
+	if errMsg != "admin access required" {
+		t.Errorf("Expected 'admin access required', got %q", errMsg)
+	}
+}
+
+func TestMCPServer_AdminTool_WithAdminContext(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      16,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "add_domain",
+			"arguments": map[string]interface{}{
+				"name": "testdomain.com",
+			},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	ctx := context.WithValue(req.Context(), "isAdmin", true)
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, req.WithContext(ctx))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+func TestMCPServer_NonAdminTool_WithoutAdminContext(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	server := NewServer(database)
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      17,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name":      "list_domains",
+			"arguments": map[string]interface{}{},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", rr.Code)
+	}
+}
+
+func TestSetAdminAuthToken(t *testing.T) {
+	tmpDB, _ := os.CreateTemp("", "mcp-test-*.db")
+	defer os.Remove(tmpDB.Name())
+	tmpDB.Close()
+
+	database, _ := db.Open(tmpDB.Name())
+	defer database.Close()
+
+	server := NewServer(database)
+	server.SetAuthToken("regular-token")
+	server.SetAdminAuthToken("admin-token")
+
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]interface{}{
+			"name": "add_domain",
+			"arguments": map[string]interface{}{
+				"name": "admindomain.com",
+			},
+		},
+	}
+	body, _ := json.Marshal(reqBody)
+
+	// Admin token should allow admin tools
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer admin-token")
+	handler := http.HandlerFunc(server.HandleHTTP)
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("Expected status 200 with admin token, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Regular token should block admin tools
+	rr = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer regular-token")
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status 500 with regular token, got %d", rr.Code)
+	}
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["error"] == nil {
+		t.Fatal("Expected error in response")
+	}
+	errMsg, _ := resp["error"].(map[string]interface{})["message"].(string)
+	if errMsg != "admin access required" {
+		t.Errorf("Expected 'admin access required', got %q", errMsg)
 	}
 }

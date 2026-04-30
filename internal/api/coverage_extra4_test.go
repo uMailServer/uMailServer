@@ -28,7 +28,7 @@ func TestRevokeToken_SingleToken(t *testing.T) {
 	server := NewServer(database, nil, Config{JWTSecret: "test-secret"})
 
 	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte("test-token")))
-	server.RevokeToken(tokenHash)
+	server.RevokeToken(tokenHash, time.Now().Add(time.Hour))
 
 	if !server.IsTokenRevoked(tokenHash) {
 		t.Error("Expected token to be revoked")
@@ -40,7 +40,7 @@ func TestRevokeToken_NilDatabase(t *testing.T) {
 	server := NewServer(nil, nil, Config{JWTSecret: "test-secret"})
 
 	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte("test-token")))
-	server.RevokeToken(tokenHash)
+	server.RevokeToken(tokenHash, time.Now().Add(time.Hour))
 
 	if !server.IsTokenRevoked(tokenHash) {
 		t.Error("Expected token to be revoked with nil database")
@@ -59,7 +59,7 @@ func TestRevokeToken_MultipleTokens(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		token := fmt.Sprintf("token-%d", i)
 		tokenHash := fmt.Sprintf("%x", md5.Sum([]byte(token)))
-		server.RevokeToken(tokenHash)
+		server.RevokeToken(tokenHash, time.Now().Add(time.Hour))
 	}
 
 	// All should be revoked
@@ -83,7 +83,7 @@ func TestRevokeToken_DatabaseErrorFallback(t *testing.T) {
 	database.Close()
 
 	tokenHash := fmt.Sprintf("%x", md5.Sum([]byte("test-token")))
-	server.RevokeToken(tokenHash)
+	server.RevokeToken(tokenHash, time.Now().Add(time.Hour))
 
 	// Should fall back to in-memory on DB error
 	if !server.IsTokenRevoked(tokenHash) {

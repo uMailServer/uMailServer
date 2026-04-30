@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -1346,9 +1348,9 @@ func TestEncryptDecryptTOTPSecret(t *testing.T) {
 		t.Fatalf("EncryptTOTPSecret failed: %v", err)
 	}
 
-	// Should have enc: prefix
-	if !strings.HasPrefix(encrypted, "enc:") {
-		t.Error("encrypted secret should have 'enc:' prefix")
+	// Should have enc2: prefix (PBKDF2 v2 format)
+	if !strings.HasPrefix(encrypted, "enc2:") {
+		t.Error("encrypted secret should have 'enc2:' prefix")
 	}
 
 	// Decrypt the secret
@@ -1441,5 +1443,37 @@ func TestDecryptTOTPSecret_WrongKey(t *testing.T) {
 	_, err = DecryptTOTPSecret(encrypted, wrongKey)
 	if err == nil {
 		t.Error("DecryptTOTPSecret with wrong master key should error")
+	}
+}
+
+// TestDecryptTOTPSecret_LegacyFormat tests backward compatibility with legacy enc: format
+func TestDecryptTOTPSecret_LegacyFormat(t *testing.T) {
+	secret := "JBSWY3DPEHPK3PXP"
+	masterKey := "my-master-key-123"
+
+	// Manually create a legacy enc: secret using SHA-256 derivation
+	key := deriveTOTPKey(masterKey)
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+	nonce := make([]byte, gcm.NonceSize())
+	copy(nonce, []byte("testnonce123"))
+	ciphertext := gcm.Seal(nonce, nonce, []byte(secret), nil)
+	legacyEncrypted := "enc:" + base64.StdEncoding.EncodeToString(ciphertext)
+
+	// Decrypt legacy format should still work
+	decrypted, err := DecryptTOTPSecret(legacyEncrypted, masterKey)
+	if err != nil {
+		t.Fatalf("DecryptTOTPSecret failed for legacy format: %v", err)
+	}
+	if decrypted != secret {
+		t.Errorf("decrypted secret mismatch: got %q, want %q", decrypted, secret)
+	}
+}
+
+// TestDecryptTOTPSecretV2_InvalidPayload tests v2 decryption with invalid payload
+func TestDecryptTOTPSecretV2_InvalidPayload(t *testing.T) {
+	_, err := DecryptTOTPSecret("enc2:short", "master-key")
+	if err == nil {
+		t.Error("expected error for short v2 payload")
 	}
 }

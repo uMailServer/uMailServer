@@ -90,8 +90,8 @@ func (s *Server) handlePutRateLimitConfig(w http.ResponseWriter, r *http.Request
 		"global_per_hour":     req.GlobalPerHour,
 	}
 	for name, val := range fields {
-		if val < 0 {
-			s.sendError(w, http.StatusBadRequest, name+" must be non-negative")
+		if val < 1 {
+			s.sendError(w, http.StatusBadRequest, name+" must be at least 1")
 			return
 		}
 		if val > maxRate {

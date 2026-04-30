@@ -121,7 +121,7 @@ export function ComposePage() {
     const files = e.target.files
     if (files) {
       const newAttachments = Array.from(files).map((file) => ({
-        id: Math.random().toString(36).substr(2, 9),
+        id: crypto.randomUUID(),
         name: file.name,
         size: file.size,
         file,

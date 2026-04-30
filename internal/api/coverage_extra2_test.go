@@ -502,3 +502,93 @@ func TestHandleWebmail2(t *testing.T) {
 		t.Errorf("Expected text/html content type, got %s", rec.Header().Get("Content-Type"))
 	}
 }
+
+// TestUpdateDomain_NegativeMaxAccounts tests max_accounts bounds.
+func TestUpdateDomain_NegativeMaxAccounts(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "negdom.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/domains/negdom.com", bytes.NewReader([]byte(`{"max_accounts":-1,"is_active":true}`)))
+	rec := httptest.NewRecorder()
+	server.updateDomain(rec, req, "negdom.com")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for negative max_accounts, got %d", rec.Code)
+	}
+}
+
+// TestUpdateDomain_MaxAccountsTooHigh tests upper bound validation.
+func TestUpdateDomain_MaxAccountsTooHigh(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "highdom.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/domains/highdom.com", bytes.NewReader([]byte(`{"max_accounts":2000000,"is_active":true}`)))
+	rec := httptest.NewRecorder()
+	server.updateDomain(rec, req, "highdom.com")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for max_accounts too high, got %d", rec.Code)
+	}
+}
+
+// TestUpdateDomain_DeactivateWithAccounts tests deactivation blocked when accounts exist.
+func TestUpdateDomain_DeactivateWithAccounts(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{})
+
+	domain := &db.DomainData{Name: "actdom.com", MaxAccounts: 10, IsActive: true}
+	if err := database.CreateDomain(domain); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+	if err := database.CreateAccount(&db.AccountData{Email: "user@actdom.com", Domain: "actdom.com", LocalPart: "user", PasswordHash: "hash"}); err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/domains/actdom.com", bytes.NewReader([]byte(`{"max_accounts":10,"is_active":false}`)))
+	rec := httptest.NewRecorder()
+	server.updateDomain(rec, req, "actdom.com")
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("Expected 409 for deactivation with accounts, got %d", rec.Code)
+	}
+}
+
+// TestCreateDomain_MaxAccountsTooHigh tests upper bound on create.
+func TestCreateDomain_MaxAccountsTooHigh(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+	server := NewServer(database, nil, Config{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/domains", bytes.NewReader([]byte(`{"name":"huge.com","max_accounts":2000000}`)))
+	rec := httptest.NewRecorder()
+	server.createDomain(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for max_accounts too high on create, got %d", rec.Code)
+	}
+}

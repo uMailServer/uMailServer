@@ -209,10 +209,7 @@ func TestHandleTOTPSetup_Success(t *testing.T) {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	// Should contain secret and uri
-	if _, ok := resp["secret"]; !ok {
-		t.Error("expected secret in response")
-	}
+	// Should contain uri (secret is no longer exposed in API response)
 	if _, ok := resp["uri"]; !ok {
 		t.Error("expected uri in response")
 	}

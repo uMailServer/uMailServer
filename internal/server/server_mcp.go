@@ -24,6 +24,9 @@ func (s *Server) startMCP() {
 		s.logger.Info("MCP auth token generated", "token_length", len(token))
 	}
 	mcpSrv.SetAuthToken(s.config.MCP.AuthToken)
+	if s.config.MCP.AdminAuthToken != "" {
+		mcpSrv.SetAdminAuthToken(s.config.MCP.AdminAuthToken)
+	}
 	if len(s.config.HTTP.CorsOrigins) > 0 {
 		mcpSrv.SetCorsOrigin(strings.Join(s.config.HTTP.CorsOrigins, ","))
 	}
@@ -36,7 +39,10 @@ func (s *Server) startMCP() {
 	s.mcpHTTPServer = &http.Server{
 		Addr:              mcpAddr,
 		Handler:           mux,
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {

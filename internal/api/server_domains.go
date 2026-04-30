@@ -98,6 +98,10 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "max_accounts must be non-negative")
 		return
 	}
+	if req.MaxAccounts > 1000000 {
+		s.sendError(w, http.StatusBadRequest, "max_accounts exceeds maximum allowed")
+		return
+	}
 
 	domain := &db.DomainData{
 		Name:        req.Name,
@@ -152,6 +156,28 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	if req.MaxAccounts < 0 {
+		s.sendError(w, http.StatusBadRequest, "max_accounts must be non-negative")
+		return
+	}
+	if req.MaxAccounts > 1000000 {
+		s.sendError(w, http.StatusBadRequest, "max_accounts exceeds maximum allowed")
+		return
+	}
+
+	// Prevent deactivation if active accounts exist
+	if domain.IsActive && !req.IsActive {
+		accounts, err := s.db.ListAccountsByDomain(name)
+		if err != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to check domain accounts")
+			return
+		}
+		if len(accounts) > 0 {
+			s.sendError(w, http.StatusConflict, "cannot deactivate domain with active accounts")
+			return
+		}
 	}
 
 	domain.MaxAccounts = req.MaxAccounts

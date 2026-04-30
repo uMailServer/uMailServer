@@ -126,7 +126,7 @@ export function ContactsPage() {
       toast.success("Contact updated")
     } else {
       const newContact: Contact = {
-        id: Math.random().toString(36).substr(2, 9),
+        id: crypto.randomUUID(),
         ...formData,
         labels: [],
       }

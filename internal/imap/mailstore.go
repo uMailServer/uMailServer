@@ -418,40 +418,36 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 			continue
 		}
 
-		// Get current metadata
-		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
+		// Atomically update flags to prevent lost updates under concurrent access
+		var updatedFlags []string
+		err = m.db.UpdateMessageMetadataFunc(user, mailbox, uid, func(meta *storage.MessageMetadata) error {
+			switch op {
+			case FlagAdd:
+				for _, flag := range flags {
+					if !hasFlag(meta.Flags, flag) {
+						meta.Flags = append(meta.Flags, flag)
+					}
+				}
+			case FlagRemove:
+				var newFlags []string
+				for _, f := range meta.Flags {
+					if !hasFlag(flags, f) {
+						newFlags = append(newFlags, f)
+					}
+				}
+				meta.Flags = newFlags
+			case FlagReplace:
+				meta.Flags = flags
+			}
+			updatedFlags = meta.Flags
+			return nil
+		})
 		if err != nil {
 			continue
 		}
 
-		// Update flags based on operation
-		switch op {
-		case FlagAdd:
-			// Add flags
-			for _, flag := range flags {
-				if !hasFlag(meta.Flags, flag) {
-					meta.Flags = append(meta.Flags, flag)
-				}
-			}
-		case FlagRemove:
-			// Remove flags
-			var newFlags []string
-			for _, f := range meta.Flags {
-				if !hasFlag(flags, f) {
-					newFlags = append(newFlags, f)
-				}
-			}
-			meta.Flags = newFlags
-		case FlagReplace:
-			// Replace all flags
-			meta.Flags = flags
-		}
-
-		// Save updated metadata
-		_ = m.db.UpdateMessageMetadata(user, mailbox, uid, meta)
-
 		// Notify about flag changes
-		GetNotificationHub().NotifyFlagsChanged(user, mailbox, uid, seqNum, meta.Flags)
+		GetNotificationHub().NotifyFlagsChanged(user, mailbox, uid, seqNum, updatedFlags)
 	}
 
 	return nil

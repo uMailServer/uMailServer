@@ -252,13 +252,13 @@ func addMailLoopHeader(data []byte, addr string) []byte {
 			return data
 		}
 		// Insert before blank line (Unix newline)
-		headerPart := string(data[:idx+2])
-		bodyPart := string(data[idx+2:])
-		return []byte(headerPart + "X-Mail-Loop: " + addr + "\r\n" + bodyPart)
+		headerPart := string(data[:idx+1])
+		bodyPart := string(data[idx+1:])
+		return []byte(headerPart + "X-Mail-Loop: " + addr + "\n" + bodyPart)
 	}
 	// Insert before blank line (Windows newline)
-	headerPart := string(data[:idx+4])
-	bodyPart := string(data[idx+4:])
+	headerPart := string(data[:idx+2])
+	bodyPart := string(data[idx+2:])
 	return []byte(headerPart + "X-Mail-Loop: " + addr + "\r\n" + bodyPart)
 }
 

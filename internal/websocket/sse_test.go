@@ -323,6 +323,23 @@ func TestSSEServerHandlerWithAuthFunc(t *testing.T) {
 			t.Error("expected SSE headers to be set")
 		}
 	})
+
+	t.Run("NoTokenProvided", func(t *testing.T) {
+		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+		server := NewSSEServer(logger)
+		server.SetAuthFunc(func(token string) (string, bool, error) {
+			return "", false, errors.New("invalid token")
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+		rec := httptest.NewRecorder()
+
+		server.Handler().ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("expected status %d for missing token, got %d", http.StatusUnauthorized, rec.Code)
+		}
+	})
 }
 
 func TestSSEServerSendToUserWithClient(t *testing.T) {

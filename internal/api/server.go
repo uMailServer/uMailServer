@@ -119,6 +119,7 @@ type Config struct {
 	Addr              string
 	JWTSecret         string            // Legacy single secret (used if JWTSecretVersions not set)
 	JWTSecretVersions map[string]string // kid -> secret, for key rotation
+	DisableLegacyJWT  bool              // When true, disables fallback to legacy JWTSecret after kid rotation
 	TokenExpiry       time.Duration
 	CorsOrigins       []string
 	TrustedProxies    []string // IPs that are allowed to set X-Forwarded-For
@@ -180,8 +181,8 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
 			// Try kid-based secret lookup first
-			if t.Header["kid"] != nil {
-				if kidSecret, ok := secrets[t.Header["kid"].(string)]; ok {
+			if kid, ok := t.Header["kid"].(string); ok && kid != "" {
+				if kidSecret, ok := secrets[kid]; ok {
 					return []byte(kidSecret), nil
 				}
 			}
@@ -189,8 +190,11 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 			if secret, ok := secrets[kid]; ok {
 				return []byte(secret), nil
 			}
-			// Last resort: try legacy JWTSecret
-			return []byte(config.JWTSecret), nil
+			// Last resort: try legacy JWTSecret only if not disabled
+			if !config.DisableLegacyJWT {
+				return []byte(config.JWTSecret), nil
+			}
+			return nil, fmt.Errorf("unknown signing key")
 		})
 		if err != nil || !parsed.Valid {
 			return "", false, fmt.Errorf("invalid token")
@@ -289,7 +293,10 @@ func NewServerWithInterfaces(
 			if secret, ok := secrets[kid]; ok {
 				return []byte(secret), nil
 			}
-			return []byte(config.JWTSecret), nil
+			if !config.DisableLegacyJWT {
+				return []byte(config.JWTSecret), nil
+			}
+			return nil, fmt.Errorf("unknown signing key")
 		})
 		if err != nil || !parsed.Valid {
 			return "", false, fmt.Errorf("invalid token")
@@ -697,8 +704,8 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
 			// Try kid-based secret lookup first
-			if token.Header["kid"] != nil {
-				if kidSecret, ok := s.jwtSecrets[token.Header["kid"].(string)]; ok {
+			if kid, ok := token.Header["kid"].(string); ok && kid != "" {
+				if kidSecret, ok := s.jwtSecrets[kid]; ok {
 					return []byte(kidSecret), nil
 				}
 			}
@@ -706,8 +713,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			if secret, ok := s.jwtSecrets[s.currentKid]; ok {
 				return []byte(secret), nil
 			}
-			// Last resort: try legacy JWTSecret
-			return []byte(s.config.JWTSecret), nil
+			// Last resort: try legacy JWTSecret only if not disabled
+			if !s.config.DisableLegacyJWT {
+				return []byte(s.config.JWTSecret), nil
+			}
+			return nil, fmt.Errorf("unknown signing key")
 		}, jwt.WithValidMethods([]string{"HS256"}))
 
 		if err != nil || !token.Valid {

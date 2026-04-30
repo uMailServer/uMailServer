@@ -2,8 +2,15 @@ package api
 
 import (
 	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +18,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -2192,7 +2200,10 @@ func TestSSEEndpoint_WithAuth(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
@@ -2775,5 +2786,835 @@ func TestHandleLogin_IPRateLimited(t *testing.T) {
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("Expected 429 for IP rate limited, got %d", rec.Code)
+	}
+}
+
+// --- Security Coverage Tests ---
+
+func TestTokenExpiryFromString_InvalidJWT(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+	exp := server.tokenExpiryFromString("not.a.jwt")
+	// On parse error it falls back to Now+TokenExpiry (24h default)
+	if !exp.After(time.Now()) {
+		t.Errorf("Expected future time for invalid JWT, got %v", exp)
+	}
+}
+
+func TestTokenExpiryFromString_MissingExp(t *testing.T) {
+	server := NewServer(nil, nil, Config{JWTSecret: "test-secret"})
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "user@test.com",
+	})
+	tokenStr, _ := token.SignedString([]byte("test-secret"))
+	exp := server.tokenExpiryFromString(tokenStr)
+	if !exp.After(time.Now()) {
+		t.Errorf("Expected future time for missing exp, got %v", exp)
+	}
+}
+
+func TestTokenExpiryFromString_NonFloat64Exp(t *testing.T) {
+	server := NewServer(nil, nil, Config{JWTSecret: "test-secret"})
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": "user@test.com",
+		"exp": "not-a-number",
+	})
+	tokenStr, _ := token.SignedString([]byte("test-secret"))
+	exp := server.tokenExpiryFromString(tokenStr)
+	if !exp.After(time.Now()) {
+		t.Errorf("Expected future time for non-float64 exp, got %v", exp)
+	}
+}
+
+func TestRevokeToken_NilBlacklist(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+	server.tokenBlacklist = nil
+	server.RevokeToken("hash1", time.Now().Add(time.Hour))
+	if server.tokenBlacklist == nil {
+		t.Error("Expected in-memory blacklist to be initialized")
+	}
+}
+
+func TestRevokeToken_DBErrorNilBlacklist(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	// Close DB to force StoreRevokedToken to fail
+	database.Close()
+	server.tokenBlacklist = nil
+	server.RevokeToken("hash1", time.Now().Add(time.Hour))
+	if server.tokenBlacklist == nil {
+		t.Error("Expected in-memory blacklist to be initialized after DB error")
+	}
+}
+
+func TestGetTOTPKey_Fallback(t *testing.T) {
+	server := NewServer(nil, nil, Config{JWTSecret: "my-secret"})
+	key := server.getTOTPKey()
+	if key != "my-secret" {
+		t.Errorf("Expected TOTP key to fall back to JWTSecret, got %q", key)
+	}
+}
+
+func TestGetTOTPKey_Set(t *testing.T) {
+	server := NewServer(nil, nil, Config{JWTSecret: "my-secret", TOTPKey: "totp-secret"})
+	key := server.getTOTPKey()
+	if key != "totp-secret" {
+		t.Errorf("Expected TOTP key to be TOTPKey, got %q", key)
+	}
+}
+
+func TestRecordAccountLoginFailure_Existing(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+	server.recordAccountLoginFailure("user@example.com")
+	server.recordAccountLoginFailure("user@example.com")
+	server.recordAccountLoginFailure("user@example.com")
+
+	server.accountLoginMu.Lock()
+	attempt := server.accountLoginAttempts["user@example.com"]
+	server.accountLoginMu.Unlock()
+
+	if attempt == nil {
+		t.Fatal("Expected attempt to exist")
+	}
+	if attempt.count != 3 {
+		t.Errorf("Expected count 3, got %d", attempt.count)
+	}
+}
+
+func TestHandleLogout_WithUser(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	ctx := context.WithValue(req.Context(), "user", "admin@test.com")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleLogout(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 for logout, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
+	if !server.IsTokenRevoked(tokenHash) {
+		t.Error("Expected token to be revoked after logout")
+	}
+}
+
+func TestRecordLoginFailure_WindowReset(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+	server.recordLoginFailure("192.168.1.1")
+	server.loginAttempts["192.168.1.1"].lastSeen = time.Now().Add(-6 * time.Minute)
+	server.recordLoginFailure("192.168.1.1")
+
+	attempt := server.loginAttempts["192.168.1.1"]
+	if attempt.count != 1 {
+		t.Errorf("Expected count to reset to 1 after window expiry, got %d", attempt.count)
+	}
+}
+
+func TestRecordLoginFailure_LockoutExpired(t *testing.T) {
+	server := NewServer(nil, nil, Config{})
+	server.loginAttempts = map[string]*loginAttempt{
+		"192.168.1.1": {
+			count:        10,
+			lastSeen:     time.Now().Add(-6 * time.Minute),
+			lockoutUntil: time.Now().Add(-1 * time.Minute),
+		},
+	}
+	server.recordLoginFailure("192.168.1.1")
+
+	attempt := server.loginAttempts["192.168.1.1"]
+	if !attempt.lockoutUntil.IsZero() {
+		t.Error("Expected lockoutUntil to be cleared after expiry")
+	}
+}
+
+func TestUpdateAccount_MissingAuthUser(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true,
+	})
+
+	body := map[string]interface{}{"is_active": false}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for missing auth user, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAccount_Forbidden(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true,
+	})
+
+	body := map[string]interface{}{"is_active": false}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/admin@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "admin@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for forbidden updateAccount, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAccount_NegativeQuota(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true,
+	})
+
+	body := map[string]interface{}{"quota_limit": -1}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for negative quota, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetAccount_DBError(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	server := NewServer(database, nil, Config{})
+
+	_ = database.CreateDomain(&db.DomainData{Name: "test.com", MaxAccounts: 10, IsActive: true})
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true,
+	})
+
+	database.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/user@test.com", nil)
+	rec := httptest.NewRecorder()
+	server.getAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for DB error, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteAccount_DBError(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	server := NewServer(database, nil, Config{})
+
+	_ = database.CreateDomain(&db.DomainData{Name: "test.com", MaxAccounts: 10, IsActive: true})
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true,
+	})
+
+	database.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/user@test.com", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.deleteAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("Expected 500 for DB error, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthMiddleware_CookieAuth(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := server.authMiddleware(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
+	req.AddCookie(&http.Cookie{Name: "jwt", Value: token})
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 for cookie auth, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthMiddleware_JWTSecretFallback(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":   "admin@test.com",
+		"admin": true,
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = "nonexistent-kid"
+	server.currentKid = "also-nonexistent"
+	server.config.JWTSecret = "test-secret"
+	tokenStr, _ := token.SignedString([]byte("test-secret"))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := server.authMiddleware(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 for JWTSecret fallback, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthMiddleware_JWTSecretFallback_Disabled(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":   "admin@test.com",
+		"admin": true,
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = "nonexistent-kid"
+	server.currentKid = "also-nonexistent"
+	server.config.JWTSecret = "test-secret"
+	server.config.DisableLegacyJWT = true
+	tokenStr, _ := token.SignedString([]byte("test-secret"))
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := server.authMiddleware(handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 when legacy JWT fallback is disabled, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRefresh_RevokedToken(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
+	server.RevokeToken(tokenHash, time.Now().Add(time.Hour))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for revoked token refresh, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleRefresh_RevokedTokenDirect(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(token)))
+	server.RevokeToken(tokenHash, time.Now().Add(time.Hour))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.handleRefresh(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for revoked token direct refresh, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAccount_NonAdminGrantAdmin(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true, IsAdmin: false,
+	})
+
+	body := map[string]interface{}{"is_admin": true}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for non-admin granting admin, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAccount_AdminSelfChange(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	// Create a non-admin account in DB but simulate admin JWT context
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "admin2@test.com", LocalPart: "admin2", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true, IsAdmin: false,
+	})
+
+	body := map[string]interface{}{"is_admin": true}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/admin2@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "admin2@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "admin2@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for admin self-change, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAccount_AdminStatusMissingPassword(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true, IsAdmin: false,
+	})
+
+	body := map[string]interface{}{"is_admin": true}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for missing admin password, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAccount_AdminStatusWrongPassword(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true, IsAdmin: false,
+	})
+
+	body := map[string]interface{}{
+		"is_admin":               true,
+		"current_admin_password": "wrongpassword",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for wrong admin password, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateAccount_NonAdminCreatesAdmin(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	body := map[string]interface{}{
+		"email":    "new@test.com",
+		"password": "StrongPass123!",
+		"is_admin": true,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.createAccount(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for non-admin creating admin, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateAccount_InvalidEmail(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	body := map[string]interface{}{
+		"email":    "not-an-email",
+		"password": "StrongPass123!",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.createAccount(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid email, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCreateAccount_InvalidPassword(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	body := map[string]interface{}{
+		"email":    "new@test.com",
+		"password": "weak",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.createAccount(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid password, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleLogin_BrowserUserAgent(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	body := map[string]string{"email": "admin@test.com", "password": "password123"}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", rec.Code)
+	}
+
+	var result map[string]interface{}
+	_ = json.NewDecoder(rec.Body).Decode(&result)
+	if _, hasToken := result["token"]; hasToken {
+		t.Error("Browser login should not return token in JSON response")
+	}
+	if result["expiresIn"] == nil {
+		t.Error("Browser login should still return expiresIn")
+	}
+}
+
+func TestHandleLogin_TOTPLockedOut(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	secret, _ := auth.GenerateTOTPSecret()
+	encryptedSecret, _ := auth.EncryptTOTPSecret(secret, server.getTOTPKey())
+	_ = database.UpdateAccount(&db.AccountData{
+		Email: "admin@test.com", LocalPart: "admin", Domain: "test.com",
+		PasswordHash: string(bcryptHash("password123")), IsActive: true,
+		TOTPEnabled: true, TOTPSecret: encryptedSecret,
+	})
+
+	// Record max TOTP failures to trigger lockout
+	for i := 0; i < 10; i++ {
+		server.recordTOTPFailure("admin@test.com")
+	}
+
+	body := map[string]string{
+		"email":     "admin@test.com",
+		"password":  "password123",
+		"totp_code": "000000",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("Expected 429 for TOTP locked out, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleLogin_TOTPSuccess(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	secret, _ := auth.GenerateTOTPSecret()
+	encryptedSecret, _ := auth.EncryptTOTPSecret(secret, server.getTOTPKey())
+	_ = database.UpdateAccount(&db.AccountData{
+		Email: "admin@test.com", LocalPart: "admin", Domain: "test.com",
+		PasswordHash: string(bcryptHash("password123")), IsActive: true,
+		TOTPEnabled: true, TOTPSecret: encryptedSecret,
+	})
+
+	now := time.Now()
+	code := computeTestTOTP(secret, now)
+
+	body := map[string]string{
+		"email":     "admin@test.com",
+		"password":  "password123",
+		"totp_code": code,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected 200 for valid TOTP login, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetAccount_Forbidden(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/admin@test.com", nil)
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.getAccount(rec, req, "admin@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for forbidden getAccount, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteAccount_Forbidden(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/admin@test.com", strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.deleteAccount(rec, req, "admin@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 for forbidden deleteAccount, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateAccount_AdminVerifyGetAccountError(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.CreateAccount(&db.AccountData{
+		Email: "user@test.com", LocalPart: "user", Domain: "test.com",
+		PasswordHash: "hash", IsActive: true, IsAdmin: false,
+	})
+
+	body := map[string]interface{}{
+		"is_admin":               true,
+		"current_admin_password": "adminpass123",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/user@test.com", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(context.Background(), "user", "nonexistent@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	server.updateAccount(rec, req, "user@test.com")
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("Expected 403 when admin account lookup fails, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleLogin_TOTPMissingCode(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	secret, _ := auth.GenerateTOTPSecret()
+	encryptedSecret, _ := auth.EncryptTOTPSecret(secret, server.getTOTPKey())
+	_ = database.UpdateAccount(&db.AccountData{
+		Email: "admin@test.com", LocalPart: "admin", Domain: "test.com",
+		PasswordHash: string(bcryptHash("password123")), IsActive: true,
+		TOTPEnabled: true, TOTPSecret: encryptedSecret,
+	})
+
+	body := map[string]string{"email": "admin@test.com", "password": "password123"}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 when TOTP code missing, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleLogin_TOTPDecryptError(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	_ = database.UpdateAccount(&db.AccountData{
+		Email: "admin@test.com", LocalPart: "admin", Domain: "test.com",
+		PasswordHash: string(bcryptHash("password123")), IsActive: true,
+		TOTPEnabled: true, TOTPSecret: "enc:invalid",
+	})
+
+	body := map[string]string{"email": "admin@test.com", "password": "password123", "totp_code": "123456"}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("Expected 500 when TOTP secret decrypt fails, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleLogin_TOTPReplay(t *testing.T) {
+	server, database, _ := helperSetupAccount(t)
+	defer database.Close()
+
+	secret, _ := auth.GenerateTOTPSecret()
+	encryptedSecret, _ := auth.EncryptTOTPSecret(secret, server.getTOTPKey())
+	now := time.Now()
+	code := computeTestTOTP(secret, now)
+
+	_ = database.UpdateAccount(&db.AccountData{
+		Email: "admin@test.com", LocalPart: "admin", Domain: "test.com",
+		PasswordHash: string(bcryptHash("password123")), IsActive: true,
+		TOTPEnabled: true, TOTPSecret: encryptedSecret,
+		TOTPLastUsedStep: 999999999,
+	})
+
+	body := map[string]string{"email": "admin@test.com", "password": "password123", "totp_code": code}
+	jsonBody, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.handleLogin(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected 401 for TOTP replay, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func computeTestTOTP(secret string, now time.Time) string {
+	key, _ := base32.StdEncoding.DecodeString(strings.ToUpper(secret))
+	timeStep := uint64(now.Unix()) / 30
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, timeStep)
+	mac := hmac.New(sha1.New, key)
+	mac.Write(buf)
+	hash := mac.Sum(nil)
+	offset := hash[len(hash)-1] & 0x0f
+	code := binary.BigEndian.Uint32(hash[offset:offset+4]) & 0x7fffffff
+	mod := uint32(math.Pow10(6))
+	code = code % mod
+	return fmt.Sprintf("%06d", code)
+}
+
+func bcryptHash(password string) []byte {
+	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return hash
+}
+
+// TestHandlePushSubscribe_InvalidEndpointURL tests push subscribe with invalid endpoint.
+func TestHandlePushSubscribe_InvalidEndpointURL(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	body := []byte(`{"endpoint":"not-a-url","p256dh":"key","auth":"secret"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscribe", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid endpoint URL, got %d", rec.Code)
+	}
+}
+
+// TestHandlePushSubscribe_NonHTTPSEndpoint tests push subscribe with non-HTTPS endpoint.
+func TestHandlePushSubscribe_NonHTTPSEndpoint(t *testing.T) {
+	server, database, token := helperSetupAccount(t)
+	defer database.Close()
+
+	body := []byte(`{"endpoint":"http://example.com/push","p256dh":"key","auth":"secret"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/subscribe", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for non-HTTPS endpoint, got %d", rec.Code)
 	}
 }

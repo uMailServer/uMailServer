@@ -963,3 +963,68 @@ func TestCoverNew_LoggingFileOutput(t *testing.T) {
 		t.Log("Log file not created yet (may be created on first write)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestGetMailLoopHeaders tests the getMailLoopHeaders helper.
+// ---------------------------------------------------------------------------
+func TestGetMailLoopHeaders(t *testing.T) {
+	// Empty data returns nil
+	result := getMailLoopHeaders(nil)
+	if result != nil {
+		t.Errorf("expected nil for empty data, got %v", result)
+	}
+
+	// Invalid message data returns nil
+	result = getMailLoopHeaders([]byte("not a valid email"))
+	if result != nil {
+		t.Errorf("expected nil for invalid data, got %v", result)
+	}
+
+	// Message without X-Mail-Loop returns nil
+	msg := "Subject: Test\r\n\r\nBody"
+	result = getMailLoopHeaders([]byte(msg))
+	if result != nil {
+		t.Errorf("expected nil for message without header, got %v", result)
+	}
+
+	// Message with X-Mail-Loop headers
+	msg = "Subject: Test\r\nX-Mail-Loop: user1@example.com\r\nX-Mail-Loop: user2@example.com\r\n\r\nBody"
+	result = getMailLoopHeaders([]byte(msg))
+	if len(result) != 2 {
+		t.Errorf("expected 2 loop headers, got %d", len(result))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestAddMailLoopHeader tests the addMailLoopHeader helper.
+// ---------------------------------------------------------------------------
+func TestAddMailLoopHeader(t *testing.T) {
+	// Empty data returns empty
+	result := addMailLoopHeader([]byte{}, "user@example.com")
+	if len(result) != 0 {
+		t.Errorf("expected empty for empty data, got %s", string(result))
+	}
+
+	// Data without proper header/body separator returns unchanged
+	data := []byte("just some text without headers")
+	result = addMailLoopHeader(data, "user@example.com")
+	if string(result) != string(data) {
+		t.Errorf("expected unchanged data, got %s", string(result))
+	}
+
+	// Windows-style line endings (CRLF)
+	data = []byte("Subject: Test\r\nFrom: sender@example.com\r\n\r\nBody content")
+	result = addMailLoopHeader(data, "user@example.com")
+	expected := "Subject: Test\r\nFrom: sender@example.com\r\nX-Mail-Loop: user@example.com\r\n\r\nBody content"
+	if string(result) != expected {
+		t.Errorf("expected:\n%s\ngot:\n%s", expected, string(result))
+	}
+
+	// Unix-style line endings (LF)
+	data = []byte("Subject: Test\nFrom: sender@example.com\n\nBody content")
+	result = addMailLoopHeader(data, "user@example.com")
+	expected = "Subject: Test\nFrom: sender@example.com\nX-Mail-Loop: user@example.com\n\nBody content"
+	if string(result) != expected {
+		t.Errorf("expected:\n%s\ngot:\n%s", expected, string(result))
+	}
+}

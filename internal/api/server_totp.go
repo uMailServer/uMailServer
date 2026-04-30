@@ -62,8 +62,7 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 	s.auditLogger.LogTOTPEnable(authenticatedUser, email, audit.ExtractIP(r))
 
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"secret": secret,
-		"uri":    uri,
+		"uri": uri,
 	})
 }
 

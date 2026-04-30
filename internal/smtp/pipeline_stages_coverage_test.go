@@ -71,6 +71,80 @@ func TestRateLimitStage_AuthenticatedUser(t *testing.T) {
 	}
 }
 
+func TestRateLimitStage_AuthenticatedUserRateLimited(t *testing.T) {
+	cfg := &ratelimit.Config{UserPerMinute: 2}
+	limiter := ratelimit.New(nil, cfg)
+	stage := NewRateLimitStage(limiter)
+
+	ip := net.ParseIP("192.168.1.102")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+	ctx.Authenticated = true
+	ctx.Username = "limiteduser"
+
+	// First two accepted
+	stage.Process(ctx)
+	stage.Process(ctx)
+
+	// Third should be rejected
+	result := stage.Process(ctx)
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject for rate-limited user, got %d", result)
+	}
+	if ctx.RejectionCode != 421 {
+		t.Errorf("Expected rejection code 421, got %d", ctx.RejectionCode)
+	}
+}
+
+func TestRateLimitStage_AuthenticatedUserNoRecipients(t *testing.T) {
+	limiter := ratelimit.New(nil, nil)
+	stage := NewRateLimitStage(limiter)
+
+	ip := net.ParseIP("192.168.1.103")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{}, []byte("test"))
+	ctx.Authenticated = true
+	ctx.Username = "testuser"
+
+	result := stage.Process(ctx)
+	if result != ResultAccept {
+		t.Errorf("Expected ResultAccept for authenticated user with no recipients, got %d", result)
+	}
+}
+
+func TestRateLimitStage_AuthenticatedUserRecipientLimit(t *testing.T) {
+	cfg := &ratelimit.Config{UserMaxRecipients: 2}
+	limiter := ratelimit.New(nil, cfg)
+	stage := NewRateLimitStage(limiter)
+
+	ip := net.ParseIP("192.168.1.104")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"a@example.com", "b@example.com", "c@example.com"}, []byte("test"))
+	ctx.Authenticated = true
+	ctx.Username = "testuser"
+
+	result := stage.Process(ctx)
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject for too many recipients, got %d", result)
+	}
+}
+
+func TestRateLimitStage_GlobalRateLimited(t *testing.T) {
+	cfg := &ratelimit.Config{GlobalPerMinute: 2}
+	limiter := ratelimit.New(nil, cfg)
+	stage := NewRateLimitStage(limiter)
+
+	ip := net.ParseIP("192.168.1.105")
+	ctx := NewMessageContext(ip, "sender@example.com", []string{"recipient@example.com"}, []byte("test"))
+
+	// First two accepted
+	stage.Process(ctx)
+	stage.Process(ctx)
+
+	// Third should be rejected due to global limit
+	result := stage.Process(ctx)
+	if result != ResultReject {
+		t.Errorf("Expected ResultReject for global rate limit, got %d", result)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // NewSieveStage tests
 // ---------------------------------------------------------------------------

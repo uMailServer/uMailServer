@@ -303,16 +303,22 @@ func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string)
 	// Find source file (strip any flags using platform separator)
 	baseName, _ := splitFlags(filename)
 
+	// Try moving directly without Stat checks to avoid TOCTOU race.
+	// Construct candidate paths and attempt Rename; if none succeed, report failure.
 	var fromPath string
-	for _, subdir := range []string{"cur", "new"} {
-		path := filepath.Join(fromBase, subdir, filename)
-		if _, err := os.Stat(path); err == nil {
-			fromPath = path
-			break
-		}
-		// Try without flags
-		path = filepath.Join(fromBase, subdir, baseName)
-		if _, err := os.Stat(path); err == nil {
+	candidates := []string{
+		filepath.Join(fromBase, "cur", filename),
+		filepath.Join(fromBase, "cur", baseName),
+		filepath.Join(fromBase, "new", filename),
+		filepath.Join(fromBase, "new", baseName),
+	}
+
+	// Generate new unique name for destination to avoid collisions
+	uniqueName := s.generateUniqueName()
+	toPath := filepath.Join(toBase, "new", uniqueName)
+
+	for _, path := range candidates {
+		if err := os.Rename(path, toPath); err == nil {
 			fromPath = path
 			break
 		}
@@ -320,15 +326,6 @@ func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string)
 
 	if fromPath == "" {
 		return fmt.Errorf("source message not found: %s", filename)
-	}
-
-	// Generate new unique name for destination to avoid collisions
-	uniqueName := s.generateUniqueName()
-	toPath := filepath.Join(toBase, "new", uniqueName)
-
-	// Move file
-	if err := os.Rename(fromPath, toPath); err != nil {
-		return fmt.Errorf("failed to move message: %w", err)
 	}
 
 	// Best-effort sync of destination new/ directory
@@ -344,21 +341,6 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 	}
 	basePath := s.folderPath(domain, user, folder)
 
-	// Find current file
-	var oldPath, subdir string
-	for _, sd := range []string{"cur", "new"} {
-		path := filepath.Join(basePath, sd, filename)
-		if _, err := os.Stat(path); err == nil {
-			oldPath = path
-			subdir = sd
-			break
-		}
-	}
-
-	if oldPath == "" {
-		return fmt.Errorf("message not found: %s", filename)
-	}
-
 	// Extract base name (without flags)
 	baseName, _ := splitFlags(filename)
 
@@ -370,20 +352,24 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 		return nil
 	}
 
-	// Move to cur/ with new flags
+	// Try renaming directly without Stat checks to avoid TOCTOU race.
+	// Construct candidate paths in cur/ and new/ and attempt Rename.
 	newPath := filepath.Join(basePath, "cur", newName)
-
-	// If currently in new/, move to cur/
-	if subdir == "new" {
-		// Ensure cur/ exists
-		if err := os.MkdirAll(filepath.Join(basePath, "cur"), 0o750); err != nil {
-			return fmt.Errorf("failed to create cur directory: %w", err)
+	var oldPath string
+	for _, sd := range []string{"cur", "new"} {
+		candidate := filepath.Join(basePath, sd, filename)
+		if err := os.Rename(candidate, newPath); err == nil {
+			oldPath = candidate
+			break
 		}
 	}
 
-	if err := os.Rename(oldPath, newPath); err != nil {
-		return fmt.Errorf("failed to update flags: %w", err)
+	if oldPath == "" {
+		return fmt.Errorf("message not found: %s", filename)
 	}
+
+	// If the source was in new/, ensure cur/ exists (best-effort, already created by Rename if needed on most filesystems)
+	_ = os.MkdirAll(filepath.Join(basePath, "cur"), 0o750)
 
 	// Best-effort sync of cur/ directory
 	s.syncDir(filepath.Join(basePath, "cur"))

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 
 	"github.com/umailserver/umailserver/internal/push"
 )
@@ -66,6 +67,21 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 	// Validate required fields
 	if req.Endpoint == "" || req.P256dh == "" || req.Auth == "" {
 		s.sendError(w, http.StatusBadRequest, "endpoint, p256dh, and auth are required")
+		return
+	}
+
+	// Validate endpoint URL to prevent SSRF / exfiltration
+	endpointURL, err := url.Parse(req.Endpoint)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid endpoint URL")
+		return
+	}
+	if endpointURL.Scheme != "https" {
+		s.sendError(w, http.StatusBadRequest, "endpoint must use HTTPS")
+		return
+	}
+	if endpointURL.Host == "" {
+		s.sendError(w, http.StatusBadRequest, "invalid endpoint host")
 		return
 	}
 

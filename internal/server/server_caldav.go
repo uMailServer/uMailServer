@@ -31,7 +31,10 @@ func (s *Server) startCalDAV() {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           caldavServer,
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	s.caldavHTTPServer = srv
 

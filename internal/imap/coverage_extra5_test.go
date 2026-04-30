@@ -1,6 +1,7 @@
 package imap
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -213,4 +214,146 @@ func TestHandleCompress_InvalidArgument(t *testing.T) {
 }
 
 // Note: gzip.NewReader failure (line 260-264) is not easily testable
+
+// --- checkAndSendMDN coverage ---
+
+func TestCheckAndSendMDN_NoHandler(t *testing.T) {
+	tmpDir := t.TempDir()
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	ms.checkAndSendMDN("user", "msg1", "from@example.com", "to@example.com", []byte("test"))
+}
+
+func TestCheckAndSendMDN_AlreadySent(t *testing.T) {
+	tmpDir := t.TempDir()
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	ms.SetMDNHandler(func(_, _, _, _ string, _ []byte) error { return nil })
+	ms.mdnSent = map[string]bool{"msg1": true}
+
+	ms.checkAndSendMDN("user", "msg1", "from@example.com", "to@example.com", []byte("test"))
+}
+
+func TestCheckAndSendMDN_NoDispositionHeader(t *testing.T) {
+	tmpDir := t.TempDir()
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	ms.SetMDNHandler(func(_, _, _, _ string, _ []byte) error { return nil })
+
+	msg := []byte("Subject: Test\r\n\r\nBody")
+	ms.checkAndSendMDN("user", "msg2", "from@example.com", "to@example.com", msg)
+}
+
+func TestCheckAndSendMDN_InvalidAddress(t *testing.T) {
+	tmpDir := t.TempDir()
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	ms.SetMDNHandler(func(_, _, _, _ string, _ []byte) error { return nil })
+
+	msg := []byte("Disposition-Notification-To: <invalid\r\n\r\nBody")
+	ms.checkAndSendMDN("user", "msg3", "from@example.com", "to@example.com", msg)
+}
+
+func TestCheckAndSendMDN_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	done := make(chan struct{}, 1)
+	ms.SetMDNHandler(func(_, _, _, _ string, _ []byte) error {
+		done <- struct{}{}
+		return nil
+	})
+
+	msg := []byte("Disposition-Notification-To: <sender@example.com>\r\n\r\nBody")
+	ms.checkAndSendMDN("user", "msg4", "from@example.com", "to@example.com", msg)
+
+	select {
+	case <-done:
+		// Handler was called
+	case <-time.After(2 * time.Second):
+		t.Error("expected MDN handler to be called")
+	}
+}
+
+func TestCheckAndSendMDN_HandlerError(t *testing.T) {
+	tmpDir := t.TempDir()
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	done := make(chan struct{}, 1)
+	ms.SetMDNHandler(func(_, _, _, _ string, _ []byte) error {
+		defer close(done)
+		return fmt.Errorf("send failed")
+	})
+
+	msg := []byte("Disposition-Notification-To: <sender@example.com>\r\n\r\nBody")
+	ms.checkAndSendMDN("user", "msg5", "from@example.com", "to@example.com", msg)
+
+	select {
+	case <-done:
+		// Handler completed
+	case <-time.After(2 * time.Second):
+		t.Error("expected MDN handler to complete")
+	}
+
+	// After error, the message ID should be removed from mdnSent to allow retry
+	ms.mdnSentMu.Lock()
+	sent := ms.mdnSent["msg5"]
+	ms.mdnSentMu.Unlock()
+	if sent {
+		t.Error("expected msg5 to be removed from mdnSent after handler error")
+	}
+}
+
+func TestCheckAndSendMDN_SemaphoreFull(t *testing.T) {
+	tmpDir := t.TempDir()
+	ms, err := NewBboltMailstore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewBboltMailstore failed: %v", err)
+	}
+	defer ms.Close()
+
+	// Fill the semaphore
+	for i := 0; i < cap(ms.mdnSem); i++ {
+		ms.mdnSem <- struct{}{}
+	}
+	defer func() {
+		// Drain semaphore
+		for i := 0; i < cap(ms.mdnSem); i++ {
+			select {
+			case <-ms.mdnSem:
+			default:
+			}
+		}
+	}()
+
+	ms.SetMDNHandler(func(_, _, _, _ string, _ []byte) error { return nil })
+
+	msg := []byte("Disposition-Notification-To: <sender@example.com>\r\n\r\nBody")
+	ms.checkAndSendMDN("user", "msg6", "from@example.com", "to@example.com", msg)
+	// Semaphore full - should drop MDN without blocking
+}
 // because it blocks waiting for gzip headers from the pipe

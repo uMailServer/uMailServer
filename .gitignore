@@ -91,3 +91,5 @@ security-report/
 api/docs.go
 # Added by code-review-graph
 .code-review-graph/
+
+.dfmt/

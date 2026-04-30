@@ -310,6 +310,37 @@ func TestAdminServer_withAuth_MissingSubject(t *testing.T) {
 	}
 }
 
+// TestAdminServer_withAuth_LegacyJWTDisabled tests that legacy JWTSecret fallback is blocked
+func TestAdminServer_withAuth_LegacyJWTDisabled(t *testing.T) {
+	adminServer, _, cleanup := setupAdminTestServer(t)
+	defer cleanup()
+	adminServer.config.DisableLegacyJWT = true
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not be called when legacy JWT is disabled")
+	})
+	wrapped := adminServer.withAuth(handler)
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":   "admin@example.com",
+		"admin": true,
+		"exp":   time.Now().Add(time.Hour).Unix(),
+	})
+	token.Header["kid"] = "nonexistent-kid"
+	adminServer.Server.currentKid = "also-nonexistent"
+	tokenStr, _ := token.SignedString([]byte(adminServer.config.JWTSecret))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	w := httptest.NewRecorder()
+
+	wrapped(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, w.Code)
+	}
+}
+
 // TestAdminServer_adminMiddleware_AdminUser tests admin middleware with admin user
 func TestAdminServer_adminMiddleware_AdminUser(t *testing.T) {
 	adminServer, _, cleanup := setupAdminTestServer(t)

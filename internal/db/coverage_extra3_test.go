@@ -2,6 +2,7 @@ package db
 
 import (
 	"testing"
+	"time"
 )
 
 // =======================================================================
@@ -73,4 +74,88 @@ func TestOpen_MkdirAllAlreadyExists_Cov3(t *testing.T) {
 		t.Fatalf("Second Open: %v", err)
 	}
 	database2.Close()
+}
+
+// TestEnqueueWithLimit_Basic tests EnqueueWithLimit success and limit enforcement.
+func TestEnqueueWithLimit_Basic_Cov3(t *testing.T) {
+	database := helperDB(t)
+	defer database.Close()
+
+	entry := &QueueEntry{
+		ID:        "q1",
+		From:      "sender@example.com",
+		To:        []string{"recipient@example.com"},
+		Status:    "pending",
+		CreatedAt: time.Now(),
+		NextRetry: time.Now(),
+	}
+
+	// Enqueue should succeed
+	if err := database.EnqueueWithLimit(entry, 10); err != nil {
+		t.Fatalf("EnqueueWithLimit failed: %v", err)
+	}
+
+	// Verify entry exists
+	got, err := database.GetQueueEntry("q1")
+	if err != nil {
+		t.Fatalf("GetQueueEntry failed: %v", err)
+	}
+	if got.ID != "q1" {
+		t.Errorf("expected ID q1, got %s", got.ID)
+	}
+}
+
+// TestEnqueueWithLimit_QueueFull tests EnqueueWithLimit when max size is reached.
+func TestEnqueueWithLimit_QueueFull_Cov3(t *testing.T) {
+	database := helperDB(t)
+	defer database.Close()
+
+	// Enqueue one entry with maxSize=1
+	entry1 := &QueueEntry{
+		ID:        "q1",
+		From:      "a@example.com",
+		To:        []string{"b@example.com"},
+		Status:    "pending",
+		CreatedAt: time.Now(),
+		NextRetry: time.Now(),
+	}
+	if err := database.EnqueueWithLimit(entry1, 1); err != nil {
+		t.Fatalf("first EnqueueWithLimit failed: %v", err)
+	}
+
+	// Second enqueue should fail because queue is full
+	entry2 := &QueueEntry{
+		ID:        "q2",
+		From:      "c@example.com",
+		To:        []string{"d@example.com"},
+		Status:    "pending",
+		CreatedAt: time.Now(),
+		NextRetry: time.Now(),
+	}
+	if err := database.EnqueueWithLimit(entry2, 1); err == nil {
+		t.Error("expected error when queue is full")
+	}
+}
+
+// TestEnqueueWithLimit_SetsCreatedAt tests that EnqueueWithLimit sets CreatedAt if zero.
+func TestEnqueueWithLimit_SetsCreatedAt_Cov3(t *testing.T) {
+	database := helperDB(t)
+	defer database.Close()
+
+	entry := &QueueEntry{
+		ID:     "q3",
+		From:   "sender@example.com",
+		To:     []string{"recipient@example.com"},
+		Status: "pending",
+		// CreatedAt intentionally left zero
+		NextRetry: time.Now(),
+	}
+
+	if err := database.EnqueueWithLimit(entry, 10); err != nil {
+		t.Fatalf("EnqueueWithLimit failed: %v", err)
+	}
+
+	if entry.CreatedAt.IsZero() {
+		t.Error("expected CreatedAt to be set")
+	}
 }

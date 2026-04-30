@@ -10,8 +10,9 @@ import (
 func (s *Server) startAPI() {
 	apiCfg := api.Config{
 		Addr:           fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
-		JWTSecret:      s.config.Security.JWTSecret,
-		TOTPKey:        s.config.Security.TOTPKey,
+		JWTSecret:        s.config.Security.JWTSecret,
+		DisableLegacyJWT: s.config.Security.DisableLegacyJWT,
+		TOTPKey:          s.config.Security.TOTPKey,
 		CorsOrigins:    s.config.HTTP.CorsOrigins,
 		PasswordHasher: "bcrypt", // or "argon2id" (OWASP recommended)
 		AuditLog: api.AuditLogConfig{
@@ -53,7 +54,8 @@ func (s *Server) startAPI() {
 	if s.config.Admin.Enabled {
 		adminCfg := api.AdminConfig{
 			Addr:      fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
-			JWTSecret: s.config.Security.JWTSecret,
+			JWTSecret:        s.config.Security.JWTSecret,
+			DisableLegacyJWT: s.config.Security.DisableLegacyJWT,
 			AuditLog: api.AuditLogConfig{
 				Path:       s.config.Security.AuditLog.Path,
 				MaxSizeMB:  s.config.Security.AuditLog.MaxSizeMB,

@@ -32,6 +32,10 @@ services:
       - TZ=UTC
       - UMAILSERVER_SERVER_DATA_DIR=/data
       - UMAILSERVER_SERVER_HOSTNAME=${HOSTNAME:-mail.example.com}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     networks:
       - mailnet
     healthcheck:

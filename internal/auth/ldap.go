@@ -2,10 +2,12 @@ package auth
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +28,8 @@ type LDAPConfig struct {
 	GroupAttribute string        `yaml:"group_attribute"`        // Attribute for group membership (default: "memberOf")
 	AdminGroups    []string      `yaml:"admin_groups"`           // Groups that grant admin access
 	StartTLS       bool          `yaml:"start_tls"`              // Use StartTLS on port 389
-	SkipVerify     bool          `yaml:"skip_verify"`            // Skip TLS certificate verification
+	SkipVerify     bool          `yaml:"skip_verify"`            // Skip TLS certificate verification (development only)
+	RootCA         string        `yaml:"root_ca"`                // Path to PEM-encoded CA cert for custom/internal CAs
 	Timeout        time.Duration `yaml:"timeout"`                // Connection timeout
 	MaxConnections int           `yaml:"max_connections"`        // Max pooled LDAP connections (default 10)
 	Environment    string        `yaml:"environment"`            // "development", "staging", "production" - used to gate insecure settings
@@ -159,6 +162,16 @@ func NewLDAPClient(config LDAPConfig) (*LDAPClient, error) {
 		}
 	}
 
+	if config.RootCA != "" && config.SkipVerify {
+		return nil, fmt.Errorf("ldap: root_ca and skip_verify cannot be used together")
+	}
+
+	if config.RootCA != "" {
+		if _, err := os.Stat(config.RootCA); err != nil {
+			return nil, fmt.Errorf("ldap: root_ca file not found: %w", err)
+		}
+	}
+
 	client := &LDAPClient{
 		config: config,
 	}
@@ -232,6 +245,35 @@ func validateLDAPHost(hostname string) error {
 	return nil
 }
 
+// buildLDAPTLSConfig creates a tls.Config for LDAP connections.
+// If RootCA is set, it loads the custom CA certificate pool.
+func (c *LDAPClient) buildLDAPTLSConfig(serverName string) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		ServerName: serverName,
+		MinVersion: tls.VersionTLS12,
+	}
+
+	if c.config.RootCA != "" {
+		certPool, err := x509.SystemCertPool()
+		if err != nil {
+			certPool = x509.NewCertPool()
+		}
+		caCert, err := os.ReadFile(c.config.RootCA)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read root_ca file: %w", err)
+		}
+		if !certPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse root_ca certificate")
+		}
+		tlsConfig.RootCAs = certPool
+	} else if c.config.SkipVerify {
+		// Only allow SkipVerify when no RootCA is provided (development/testing)
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	return tlsConfig, nil
+}
+
 // connect establishes a connection to the LDAP server
 func (c *LDAPClient) connect() (*ldap.Conn, error) {
 	u, err := url.Parse(c.config.URL)
@@ -259,21 +301,17 @@ func (c *LDAPClient) connect() (*ldap.Conn, error) {
 	timeout := c.config.Timeout
 
 	if u.Scheme == "ldaps" {
-		tlsConfig := &tls.Config{
-			// #nosec G402 -- SkipVerify is intentionally user-configurable for self-signed/internal CA environments
-			InsecureSkipVerify: c.config.SkipVerify,
-			ServerName:         u.Hostname(),
-			MinVersion:         tls.VersionTLS12,
+		tlsConfig, err := c.buildLDAPTLSConfig(u.Hostname())
+		if err != nil {
+			return nil, err
 		}
 		conn, err = ldap.DialURL(fmt.Sprintf("ldaps://%s", host), ldap.DialWithTLSConfig(tlsConfig))
 	} else {
 		conn, err = ldap.DialURL(fmt.Sprintf("ldap://%s", host))
 		if err == nil && c.config.StartTLS {
-			tlsConfig := &tls.Config{
-				// #nosec G402 -- SkipVerify is intentionally user-configurable for self-signed/internal CA environments
-				InsecureSkipVerify: c.config.SkipVerify,
-				ServerName:         u.Hostname(),
-				MinVersion:         tls.VersionTLS12,
+			tlsConfig, tlsErr := c.buildLDAPTLSConfig(u.Hostname())
+			if tlsErr != nil {
+				return nil, tlsErr
 			}
 			err = conn.StartTLS(tlsConfig)
 		}

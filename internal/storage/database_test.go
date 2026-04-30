@@ -321,6 +321,47 @@ func TestDatabaseUpdateMessageMetadata(t *testing.T) {
 	}
 }
 
+func TestDatabaseUpdateMessageMetadataFunc(t *testing.T) {
+	database := setupTestDB(t)
+
+	// Store initial metadata
+	initial := &MessageMetadata{
+		UID:     1,
+		Subject: "Initial",
+		Flags:   []string{"\\Seen"},
+	}
+	if err := database.StoreMessageMetadata("user", "INBOX", 1, initial); err != nil {
+		t.Fatalf("StoreMessageMetadata failed: %v", err)
+	}
+
+	// Atomically append a flag
+	err := database.UpdateMessageMetadataFunc("user", "INBOX", 1, func(meta *MessageMetadata) error {
+		meta.Flags = append(meta.Flags, "\\Flagged")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateMessageMetadataFunc failed: %v", err)
+	}
+
+	// Verify the update
+	meta, err := database.GetMessageMetadata("user", "INBOX", 1)
+	if err != nil {
+		t.Fatalf("GetMessageMetadata failed: %v", err)
+	}
+	if len(meta.Flags) != 2 || meta.Flags[1] != "\\Flagged" {
+		t.Errorf("expected flags [\\Seen \\Flagged], got %v", meta.Flags)
+	}
+
+	// Test that error from fn is propagated
+	expectedErr := fmt.Errorf("intentional error")
+	err = database.UpdateMessageMetadataFunc("user", "INBOX", 1, func(meta *MessageMetadata) error {
+		return expectedErr
+	})
+	if err != expectedErr {
+		t.Errorf("expected intentional error, got: %v", err)
+	}
+}
+
 func TestDatabaseDeleteMessage(t *testing.T) {
 	database := setupTestDB(t)
 

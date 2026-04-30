@@ -127,10 +127,11 @@ func DefaultConfig() *Config {
 			},
 		},
 		MCP: MCPConfig{
-			Enabled:   true,
-			Port:      3000,
-			AuthToken: "",
-			Bind:      "127.0.0.1",
+			Enabled:        true,
+			Port:           3000,
+			AuthToken:      "",
+			AdminAuthToken: "",
+			Bind:           "127.0.0.1",
 		},
 		ManageSieve: ManageSieveConfig{
 			Enabled: true,

@@ -264,7 +264,9 @@ func New(cfg *config.Config) (*Server, error) {
 			AdminGroups:    cfg.LDAP.AdminGroups,
 			StartTLS:       cfg.LDAP.StartTLS,
 			SkipVerify:     cfg.LDAP.SkipVerify,
+			RootCA:         cfg.LDAP.RootCA,
 			Timeout:        cfg.LDAP.Timeout,
+			Environment:    cfg.Tracing.Environment,
 		}
 		ldapClient, err := auth.NewLDAPClient(ldapCfg)
 		if err != nil {

@@ -1,8 +1,10 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -18,10 +20,11 @@ import (
 
 // Server implements MCP (Model Context Protocol)
 type Server struct {
-	db         *db.DB
-	version    string
-	corsOrigin string
-	authToken  string
+	db             *db.DB
+	version        string
+	corsOrigin     string
+	authToken      string
+	adminAuthToken string
 
 	// Rate limiting
 	rateLimit    int // requests per minute, 0 = disabled
@@ -51,6 +54,13 @@ func NewServer(database *db.DB) *Server {
 // If set, all requests must include this token in the Authorization header.
 func (s *Server) SetAuthToken(token string) {
 	s.authToken = token
+}
+
+// SetAdminAuthToken sets the admin authentication token for the MCP server.
+// When set, requests bearing this token are granted admin privileges (isAdmin=true).
+// Admin tools such as add_domain, delete_domain, add_account, etc. require this token.
+func (s *Server) SetAdminAuthToken(token string) {
+	s.adminAuthToken = token
 }
 
 // SetCorsOrigin sets the allowed CORS origin(s).
@@ -132,11 +142,21 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+
 	// Check authentication if token is configured
-	if s.authToken != "" {
+	if s.authToken != "" || s.adminAuthToken != "" {
 		authHeader := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token != s.authToken {
+		valid := false
+		if s.authToken != "" && token == s.authToken {
+			valid = true
+		}
+		if s.adminAuthToken != "" && token == s.adminAuthToken {
+			valid = true
+			ctx = context.WithValue(ctx, "isAdmin", true)
+		}
+		if !valid {
 			s.writeError(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
@@ -147,8 +167,6 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
 		return
 	}
-
-	ctx := r.Context()
 	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
 		var span otrace.Span
 		ctx, span = s.tracingProvider.StartSpanWithKind(ctx,
@@ -180,7 +198,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	case "tools/list":
 		result = s.handleToolsList()
 	case "tools/call":
-		result, err = s.handleToolCall(req.Params)
+		result, err = s.handleToolCall(ctx, req.Params)
 	case "resources/list":
 		result = s.handleResourcesList()
 	case "resources/read":
@@ -198,6 +216,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		slog.Error("mcp handler error", "method", req.Method, "error", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		if span := otrace.SpanFromContext(ctx); span != nil {
 			tracing.SetStatus(span, tracing.StatusError, err.Error())
@@ -455,11 +474,29 @@ func (s *Server) handleToolsList() map[string]interface{} {
 	}}
 }
 
+// adminTools is the set of tools that require admin privileges.
+var adminTools = map[string]struct{}{
+	"add_domain":    {},
+	"delete_domain": {},
+	"add_account":   {},
+	"delete_account": {},
+	"flush_queue":   {},
+	"reload_config": {},
+}
+
 // Handle tool call
-func (s *Server) handleToolCall(params json.RawMessage) (map[string]interface{}, error) {
+func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (map[string]interface{}, error) {
 	var req ToolCallRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, err
+	}
+
+	// Enforce RBAC: admin tools require isAdmin in context
+	if _, isAdminTool := adminTools[req.Name]; isAdminTool {
+		isAdmin, ok := ctx.Value("isAdmin").(bool)
+		if !ok || !isAdmin {
+			return nil, fmt.Errorf("admin access required")
+		}
 	}
 
 	switch req.Name {
@@ -533,13 +570,13 @@ func (s *Server) handleToolCall(params json.RawMessage) (map[string]interface{},
 func (s *Server) toolGetStats() (map[string]interface{}, error) {
 	domains, err := s.db.ListDomains()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list domains: %w", err)
+		slog.Error("mcp tool error", "tool", "list_domains", "error", err); return nil, fmt.Errorf("internal server error")
 	}
 	accounts := 0
 	for _, d := range domains {
 		accts, err := s.db.ListAccountsByDomain(d.Name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list accounts for domain %s: %w", d.Name, err)
+			slog.Error("mcp tool error", "tool", "list_accounts", "domain", d.Name, "error", err); return nil, fmt.Errorf("internal server error")
 		}
 		accounts += len(accts)
 	}
@@ -560,12 +597,12 @@ func (s *Server) toolListAccounts(domain string) (map[string]interface{}, error)
 	} else {
 		domains, err := s.db.ListDomains()
 		if err != nil {
-			return nil, fmt.Errorf("failed to list domains: %w", err)
+			slog.Error("mcp tool error", "tool", "list_domains", "error", err); return nil, fmt.Errorf("internal server error")
 		}
 		for _, d := range domains {
 			domainAccounts, err := s.db.ListAccountsByDomain(d.Name)
 			if err != nil {
-				return nil, fmt.Errorf("failed to list accounts for domain %s: %w", d.Name, err)
+				slog.Error("mcp tool error", "tool", "list_accounts", "domain", d.Name, "error", err); return nil, fmt.Errorf("internal server error")
 			}
 			accounts = append(accounts, domainAccounts...)
 		}
@@ -626,7 +663,7 @@ func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (ma
 		MaxAccounts: maxAccounts,
 	}
 	if err := s.db.CreateDomain(domain); err != nil {
-		return nil, fmt.Errorf("failed to create domain: %w", err)
+		slog.Error("mcp tool error", "tool", "add_domain", "error", err); return nil, fmt.Errorf("internal server error")
 	}
 
 	text := fmt.Sprintf("Domain '%s' created successfully (max accounts: %d)", name, maxAccounts)
@@ -643,7 +680,7 @@ func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 	}
 
 	if err := s.db.DeleteDomain(name); err != nil {
-		return nil, fmt.Errorf("failed to delete domain: %w", err)
+		slog.Error("mcp tool error", "tool", "delete_domain", "error", err); return nil, fmt.Errorf("internal server error")
 	}
 
 	text := fmt.Sprintf("Domain '%s' deleted successfully", name)
@@ -686,7 +723,7 @@ func (s *Server) toolAddAccount(email, password string, isAdmin bool) (map[strin
 	// Hash password
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, fmt.Errorf("failed to hash password: %w", err)
+		slog.Error("mcp tool error", "tool", "add_account", "error", err); return nil, fmt.Errorf("internal server error")
 	}
 
 	account := &db.AccountData{
@@ -697,7 +734,7 @@ func (s *Server) toolAddAccount(email, password string, isAdmin bool) (map[strin
 		IsAdmin:      isAdmin,
 	}
 	if err := s.db.CreateAccount(account); err != nil {
-		return nil, fmt.Errorf("failed to create account: %w", err)
+		slog.Error("mcp tool error", "tool", "add_account", "error", err); return nil, fmt.Errorf("internal server error")
 	}
 
 	text := fmt.Sprintf("Account '%s' created successfully", email)
@@ -723,7 +760,7 @@ func (s *Server) toolDeleteAccount(email string) (map[string]interface{}, error)
 	}
 
 	if err := s.db.DeleteAccount(parts[1], parts[0]); err != nil {
-		return nil, fmt.Errorf("failed to delete account: %w", err)
+		slog.Error("mcp tool error", "tool", "delete_account", "error", err); return nil, fmt.Errorf("internal server error")
 	}
 
 	text := fmt.Sprintf("Account '%s' deleted successfully", email)
@@ -747,7 +784,7 @@ func (s *Server) toolGetAccountInfo(email string) (map[string]interface{}, error
 
 	account, err := s.db.GetAccount(parts[1], parts[0])
 	if err != nil {
-		return nil, fmt.Errorf("account not found: %w", err)
+		slog.Error("mcp tool error", "tool", "get_account_info", "error", err); return nil, fmt.Errorf("account not found")
 	}
 
 	text := fmt.Sprintf("Account Information:\n")

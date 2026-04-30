@@ -74,6 +74,13 @@ func NewServer(db *storage.Database, msgStore *storage.MessageStore, logger *slo
 	}
 }
 
+// safeError logs the actual error server-side and returns a generic
+// description suitable for exposure to JMAP clients.
+func (s *Server) safeError(context string, err error) string {
+	s.logger.Error("jmap error", "context", context, "error", err)
+	return "internal server error"
+}
+
 // ServeHTTP implements the http.Handler interface
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.logger.Debug("JMAP request",

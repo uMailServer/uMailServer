@@ -513,6 +513,38 @@ func (d *DB) Enqueue(entry *QueueEntry) error {
 	return d.Put(BucketQueue, entry.ID, entry)
 }
 
+// EnqueueWithLimit adds a message to the queue only if the total number of
+// entries in the queue bucket is below maxSize. The count and insert are
+// performed inside a single bbolt transaction so the check is atomic.
+func (d *DB) EnqueueWithLimit(entry *QueueEntry, maxSize int) error {
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = time.Now()
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value: %w", err)
+	}
+
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketQueue))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketQueue)
+		}
+
+		// Count existing entries
+		count := 0
+		_ = b.ForEach(func(_, _ []byte) error {
+			count++
+			return nil
+		})
+		if count >= maxSize {
+			return fmt.Errorf("queue is full (max %d entries)", maxSize)
+		}
+
+		return b.Put([]byte(entry.ID), data)
+	})
+}
+
 // GetQueueEntry retrieves a queue entry
 func (d *DB) GetQueueEntry(id string) (*QueueEntry, error) {
 	var entry QueueEntry

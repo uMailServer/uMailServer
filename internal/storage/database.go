@@ -445,6 +445,47 @@ func (db *Database) UpdateMessageMetadata(user, mailbox string, uid uint32, meta
 	return db.StoreMessageMetadata(user, mailbox, uid, meta)
 }
 
+// UpdateMessageMetadataFunc atomically reads message metadata, applies fn to it,
+// and writes it back inside a single bbolt transaction. This eliminates the
+// read-modify-write race when multiple sessions update flags concurrently.
+func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, fn func(*MessageMetadata) error) error {
+	if db.bolt == nil {
+		return nil
+	}
+
+	preexisting := false
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(messagesBucket(user, mailbox)))
+		if err != nil {
+			return err
+		}
+
+		var meta MessageMetadata
+		data := b.Get(itob(uid))
+		if data != nil {
+			preexisting = true
+			if err := json.Unmarshal(data, &meta); err != nil {
+				return err
+			}
+		}
+
+		if err := fn(&meta); err != nil {
+			return err
+		}
+
+		newData, err := json.Marshal(&meta)
+		if err != nil {
+			return err
+		}
+		return b.Put(itob(uid), newData)
+	})
+	if err == nil && preexisting {
+		// We don't have MessageID here, so we can't record changes.
+		// This is acceptable for flag updates which don't change message content.
+	}
+	return err
+}
+
 // DeleteMessage deletes a message
 func (db *Database) DeleteMessage(user, mailbox string, uid uint32) error {
 	if db.bolt == nil {

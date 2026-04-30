@@ -219,6 +219,118 @@ func TestManager_GenerateBounce_RetNotFound(t *testing.T) {
 	m.generateBounce(entry)
 }
 
+// --- SetWebhookTrigger ---
+
+type mockWebhookTrigger struct {
+	triggered bool
+}
+
+func (m *mockWebhookTrigger) Trigger(eventType string, data interface{}) {
+	m.triggered = true
+}
+
+func TestManager_SetWebhookTrigger(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	m := NewManager(database, nil, dataDir, nil)
+
+	wh := &mockWebhookTrigger{}
+	m.SetWebhookTrigger(wh)
+
+	if m.webhook == nil {
+		t.Fatal("webhook not set")
+	}
+
+	m.webhook.Trigger("test", nil)
+	if !wh.triggered {
+		t.Error("webhook was not triggered")
+	}
+}
+
+// --- getStats ---
+
+func TestManager_GetStats_VariousStatuses(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := dataDir + "/test.db"
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+	m := NewManager(database, nil, dataDir, nil)
+
+	// Enqueue entries with different statuses
+	statuses := []string{"pending", "sending", "failed", "delivered", "bounced"}
+	for _, status := range statuses {
+		entry := &db.QueueEntry{
+			ID:        "msg-" + status,
+			From:      "sender@example.com",
+			To:        []string{"recipient@example.com"},
+			Status:    status,
+			CreatedAt: time.Now(),
+			NextRetry: time.Now(),
+		}
+		_ = database.Enqueue(entry)
+	}
+
+	stats, err := m.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats: %v", err)
+	}
+	if stats.Total != 5 {
+		t.Errorf("expected total=5, got %d", stats.Total)
+	}
+	if stats.Pending != 1 {
+		t.Errorf("expected pending=1, got %d", stats.Pending)
+	}
+	if stats.Sending != 1 {
+		t.Errorf("expected sending=1, got %d", stats.Sending)
+	}
+	if stats.Failed != 1 {
+		t.Errorf("expected failed=1, got %d", stats.Failed)
+	}
+	if stats.Delivered != 1 {
+		t.Errorf("expected delivered=1, got %d", stats.Delivered)
+	}
+	if stats.Bounced != 1 {
+		t.Errorf("expected bounced=1, got %d", stats.Bounced)
+	}
+}
+
+// --- ParseMDNAddress ---
+
+func TestParseMDNAddress_Empty(t *testing.T) {
+	_, err := ParseMDNAddress("")
+	if err == nil {
+		t.Error("expected error for empty address")
+	}
+}
+
+func TestParseMDNAddress_InvalidWithAngle(t *testing.T) {
+	result, err := ParseMDNAddress("invalid <broken")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Original != "invalid <broken" {
+		t.Errorf("expected original to be preserved, got %s", result.Original)
+	}
+}
+
+func TestParseMDNAddress_InvalidWithoutAngle(t *testing.T) {
+	result, err := ParseMDNAddress("not-an-email")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Original != "not-an-email" {
+		t.Errorf("expected original to be preserved, got %s", result.Original)
+	}
+}
+
 // --- helper ---
 
 func testTime() time.Time {

@@ -178,7 +178,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		Domain:       domain,
 		PasswordHash: hashedPassword,
 		APOPHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password))),
-		IsAdmin:      false, // Always false on creation; use separate admin endpoint for admin accounts
+		IsAdmin:      req.IsAdmin && isAdmin,
 		IsActive:     true,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -247,13 +247,14 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 
 	// Parse request body first to check IsAdmin modification
 	var req struct {
-		Password         string `json:"password"`
-		IsAdmin          bool   `json:"is_admin"`
-		IsActive         bool   `json:"is_active"`
-		ForwardTo        string `json:"forward_to"`
-		ForwardKeepCopy  bool   `json:"forward_keep_copy"`
-		QuotaLimit       int64  `json:"quota_limit"`
-		VacationSettings string `json:"vacation_settings"`
+		Password             string `json:"password"`
+		IsAdmin              bool   `json:"is_admin"`
+		IsActive             bool   `json:"is_active"`
+		ForwardTo            string `json:"forward_to"`
+		ForwardKeepCopy      bool   `json:"forward_keep_copy"`
+		QuotaLimit           int64  `json:"quota_limit"`
+		VacationSettings     string `json:"vacation_settings"`
+		CurrentAdminPassword string `json:"current_admin_password"`
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
@@ -276,6 +277,33 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	if isAdmin && req.IsAdmin && authUser == email && account.IsAdmin != req.IsAdmin {
 		s.sendError(w, http.StatusForbidden, "cannot modify your own admin status")
 		return
+	}
+
+	// Admin status changes require re-authentication (current admin password)
+	if isAdmin && account.IsAdmin != req.IsAdmin {
+		if req.CurrentAdminPassword == "" {
+			s.sendError(w, http.StatusForbidden, "current_admin_password required for admin privilege changes")
+			return
+		}
+		// Verify the acting admin's password
+		adminUser, adminDomain := parseEmail(authUser)
+		adminAccount, err := s.db.GetAccount(adminDomain, adminUser)
+		if err != nil {
+			s.sendError(w, http.StatusForbidden, "unable to verify admin credentials")
+			return
+		}
+		matches, _ := s.verifyPassword(req.CurrentAdminPassword, adminAccount.PasswordHash)
+		if !matches {
+			s.sendError(w, http.StatusForbidden, "invalid current_admin_password")
+			return
+		}
+		// Audit log the privilege change
+		ip := audit.ExtractIP(r)
+		action := "demoted"
+		if req.IsAdmin {
+			action = "promoted"
+		}
+		s.auditLogger.LogAccountUpdate(authUser, email, ip, []string{"admin_status_" + action})
 	}
 
 	if req.Password != "" {

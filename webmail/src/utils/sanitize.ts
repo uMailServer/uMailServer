@@ -1,11 +1,20 @@
 import DOMPurify from 'isomorphic-dompurify'
 
+// Hook to inject rel="noopener noreferrer" on all links with target="_blank"
+// preventing tabnabbing attacks (CWE-1022)
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A' && node.getAttribute('target') === '_blank') {
+    node.setAttribute('rel', 'noopener noreferrer')
+  }
+})
+
 /**
  * Sanitizes HTML content to prevent XSS attacks.
  * Uses DOMPurify with a strict configuration that:
  * - Strips all script tags and event handlers
  * - Removes dangerous protocols (javascript:, data:)
  * - Keeps safe HTML tags for email rendering
+ * - Injects rel="noopener noreferrer" on target="_blank" links
  */
 export function sanitizeHTML(dirty: string): string {
   return DOMPurify.sanitize(dirty, {

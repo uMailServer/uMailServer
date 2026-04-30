@@ -9,7 +9,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o umailserver ./cmd/umailserver
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates
 

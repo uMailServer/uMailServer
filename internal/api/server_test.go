@@ -1396,10 +1396,25 @@ func TestUpdateAccount(t *testing.T) {
 		t.Fatalf("failed to create account: %v", err)
 	}
 
+	// Create admin account for re-authentication
+	adminHash, _ := bcrypt.GenerateFromPassword([]byte("adminpass"), bcrypt.DefaultCost)
+	adminAccount := &db.AccountData{
+		Email:        "admin@test.com",
+		LocalPart:    "admin",
+		Domain:       "test.com",
+		PasswordHash: string(adminHash),
+		IsActive:     true,
+		IsAdmin:      true,
+	}
+	if err := database.CreateAccount(adminAccount); err != nil {
+		t.Fatalf("failed to create admin account: %v", err)
+	}
+
 	// Update the account
 	body := map[string]interface{}{
-		"is_admin":  true,
-		"is_active": false,
+		"is_admin":               true,
+		"is_active":              false,
+		"current_admin_password": "adminpass",
 	}
 	jsonBody, _ := json.Marshal(body)
 
@@ -2295,10 +2310,21 @@ func TestUpdateAccountWithPassword(t *testing.T) {
 		t.Fatalf("failed to create account: %v", err)
 	}
 
+	// Create admin account for re-authentication
+	adminHash, _ := bcrypt.GenerateFromPassword([]byte("adminpass"), bcrypt.DefaultCost)
+	adminAccount := &db.AccountData{
+		Email: "admin@updpass.com", LocalPart: "admin", Domain: "updpass.com",
+		PasswordHash: string(adminHash), IsActive: true, IsAdmin: true,
+	}
+	if err := database.CreateAccount(adminAccount); err != nil {
+		t.Fatalf("failed to create admin account: %v", err)
+	}
+
 	body := map[string]interface{}{
-		"password":  "newpassword123",
-		"is_admin":  true,
-		"is_active": true,
+		"password":               "newpassword123",
+		"is_admin":               true,
+		"is_active":              true,
+		"current_admin_password": "adminpass",
 	}
 	jsonBody, _ := json.Marshal(body)
 

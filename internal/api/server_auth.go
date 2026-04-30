@@ -12,6 +12,12 @@ import (
 	"github.com/umailserver/umailserver/internal/auth"
 )
 
+// dummyPasswordHash is a valid bcrypt hash used for timing-safe login.
+// When an account does not exist we still run password verification against
+// this hash so that "account not found" and "wrong password" take roughly
+// the same amount of time, preventing account enumeration.
+const dummyPasswordHash = "$2a$10$vI8aWBnW3fID.ZQ4/zo1G.q1lRps.9cGLcZEiGDMVr5yUP1KUOYTa"
+
 // loginAttempt tracks failed login attempts per IP with exponential backoff
 type loginAttempt struct {
 	count        int       // consecutive failures
@@ -94,9 +100,10 @@ func (s *Server) getTOTPKey() string {
 }
 
 // RevokeToken adds a token to the blacklist (for logout).
+// The expiry parameter should match the token's actual expiration so the
+// blacklist entry lives exactly as long as the token remains valid.
 // If a database is configured, the revocation is persisted; otherwise it falls back to memory.
-func (s *Server) RevokeToken(tokenHash string) {
-	expiry := time.Now().Add(time.Hour)
+func (s *Server) RevokeToken(tokenHash string, expiry time.Time) {
 	if s.db != nil {
 		if err := s.db.StoreRevokedToken(tokenHash, expiry); err != nil {
 			// Fall back to in-memory on DB error
@@ -115,6 +122,24 @@ func (s *Server) RevokeToken(tokenHash string) {
 		s.tokenBlacklist = make(map[string]time.Time)
 	}
 	s.tokenBlacklist[tokenHash] = expiry
+}
+
+// tokenExpiryFromString parses a JWT string and returns its exp claim.
+// If parsing fails or the claim is missing, it falls back to Now+TokenExpiry.
+func (s *Server) tokenExpiryFromString(tokenStr string) time.Time {
+	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, jwt.MapClaims{})
+	if err != nil {
+		return time.Now().Add(s.config.TokenExpiry)
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return time.Now().Add(s.config.TokenExpiry)
+	}
+	expClaim, ok := claims["exp"].(float64)
+	if !ok {
+		return time.Now().Add(s.config.TokenExpiry)
+	}
+	return time.Unix(int64(expClaim), 0)
 }
 
 // IsTokenRevoked checks if a token is in the blacklist.
@@ -335,6 +360,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Get account
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
+		// Timing-safe: perform a dummy password check to avoid revealing
+		// whether the account exists through response timing.
+		_, _ = s.verifyPassword(req.Password, dummyPasswordHash)
 		s.recordLoginFailure(ip)
 		s.recordAccountLoginFailure(emailKey)
 		s.auditLogger.LogLoginFailure(req.Email, ip, "account_not_found")
@@ -484,7 +512,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Revoke the token by adding it to blacklist (if we have a token)
 	if tokenStr != "" {
 		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
-		s.RevokeToken(tokenHash)
+		expiry := s.tokenExpiryFromString(tokenStr)
+		s.RevokeToken(tokenHash, expiry)
 	}
 
 	// Clear the cookie
@@ -530,7 +559,15 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
 		oldTokenStr := parts[1]
 		oldTokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldTokenStr)))
-		s.RevokeToken(oldTokenHash)
+
+		// Defense-in-depth: verify the old token has not already been revoked
+		if s.IsTokenRevoked(oldTokenHash) {
+			s.sendError(w, http.StatusUnauthorized, "token has been revoked")
+			return
+		}
+
+		expiry := s.tokenExpiryFromString(oldTokenStr)
+		s.RevokeToken(oldTokenHash, expiry)
 	}
 
 	// The auth middleware already validated the token

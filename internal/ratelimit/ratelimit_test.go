@@ -426,3 +426,75 @@ func TestConfigDefaults(t *testing.T) {
 		t.Errorf("Expected CleanupInterval=5m, got %v", cfg.CleanupInterval)
 	}
 }
+
+func TestCheckGlobal_UnderLimit(t *testing.T) {
+	cfg := &Config{
+		GlobalPerMinute: 10,
+		GlobalPerHour:   100,
+		CleanupInterval: time.Hour,
+	}
+	rl := New(nil, cfg)
+
+	result := rl.CheckGlobal()
+	if !result.Allowed {
+		t.Errorf("Expected allowed, got rejected: %s", result.Reason)
+	}
+}
+
+func TestCheckGlobal_OverMinuteLimit(t *testing.T) {
+	cfg := &Config{
+		GlobalPerMinute: 2,
+		CleanupInterval: time.Hour,
+	}
+	rl := New(nil, cfg)
+
+	// Use up the limit
+	for i := 0; i < 2; i++ {
+		rl.CheckGlobal()
+	}
+
+	// Next should be rejected
+	result := rl.CheckGlobal()
+	if result.Allowed {
+		t.Errorf("Expected rejected due to global minute limit")
+	}
+	if !strings.Contains(result.Reason, "Global rate limit exceeded") {
+		t.Errorf("Expected global limit reason, got: %s", result.Reason)
+	}
+	if result.RetryAfter <= 0 {
+		t.Errorf("Expected positive RetryAfter")
+	}
+}
+
+func TestCheckGlobal_OverHourLimit(t *testing.T) {
+	cfg := &Config{
+		GlobalPerMinute: 1000, // High so minute doesn't trigger first
+		GlobalPerHour:   2,
+		CleanupInterval: time.Hour,
+	}
+	rl := New(nil, cfg)
+
+	// Use up the limit
+	for i := 0; i < 2; i++ {
+		rl.CheckGlobal()
+	}
+
+	// Next should be rejected
+	result := rl.CheckGlobal()
+	if result.Allowed {
+		t.Errorf("Expected rejected due to global hour limit")
+	}
+	if !strings.Contains(result.Reason, "hour") {
+		t.Errorf("Expected hourly limit reason, got: %s", result.Reason)
+	}
+}
+
+func TestStop(t *testing.T) {
+	rl := New(nil, nil)
+
+	// Stop should not panic
+	rl.Stop()
+
+	// Calling Stop again should be safe (sync.Once)
+	rl.Stop()
+}

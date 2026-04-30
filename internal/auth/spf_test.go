@@ -1114,3 +1114,188 @@ func TestSPFMechanismString(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// spfCache coverage tests
+// ---------------------------------------------------------------------------
+
+func TestSPFCache_Set_Eviction(t *testing.T) {
+	c := &spfCache{
+		records:     make(map[string]*cacheEntry),
+		maxSize:     3,
+		nextCleanup: time.Now().Add(1 * time.Hour),
+		ttl:         1 * time.Hour,
+	}
+
+	// Fill cache to maxSize
+	c.set("d1.example.com", "v=spf1 ip4:1.1.1.1 -all", 1*time.Hour)
+	c.set("d2.example.com", "v=spf1 ip4:2.2.2.2 -all", 1*time.Hour)
+	c.set("d3.example.com", "v=spf1 ip4:3.3.3.3 -all", 1*time.Hour)
+
+	if len(c.records) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(c.records))
+	}
+
+	// Add a 4th entry - should trigger eviction
+	c.set("d4.example.com", "v=spf1 ip4:4.4.4.4 -all", 1*time.Hour)
+
+	if len(c.records) > 3 {
+		t.Errorf("expected eviction to keep cache at or below maxSize, got %d", len(c.records))
+	}
+}
+
+func TestSPFCache_Set_PeriodicCleanup(t *testing.T) {
+	c := &spfCache{
+		records:     make(map[string]*cacheEntry),
+		maxSize:     100,
+		nextCleanup: time.Now().Add(-1 * time.Second), // overdue
+		ttl:         1 * time.Hour,
+	}
+
+	// Add an already-expired entry manually
+	c.records["old.example.com"] = &cacheEntry{
+		record:    "v=spf1 -all",
+		expiresAt: time.Now().Add(-1 * time.Hour),
+	}
+
+	// set should trigger cleanup because nextCleanup is past
+	c.set("new.example.com", "v=spf1 ip4:1.2.3.4 -all", 1*time.Hour)
+
+	if _, ok := c.records["old.example.com"]; ok {
+		t.Error("expected expired entry to be cleaned up")
+	}
+
+	if _, ok := c.records["new.example.com"]; !ok {
+		t.Error("expected new entry to exist after cleanup")
+	}
+}
+
+func TestSPFCache_EvictOldest(t *testing.T) {
+	c := &spfCache{
+		records:     make(map[string]*cacheEntry),
+		maxSize:     10,
+		nextCleanup: time.Now().Add(1 * time.Hour),
+		ttl:         1 * time.Hour,
+	}
+
+	now := time.Now()
+	// Add entries with staggered expiry times
+	for i := 0; i < 10; i++ {
+		c.records[fmt.Sprintf("d%d.example.com", i)] = &cacheEntry{
+			record:    fmt.Sprintf("v=spf1 ip4:%d.%d.%d.%d -all", i, i, i, i),
+			expiresAt: now.Add(time.Duration(i) * time.Hour),
+		}
+	}
+
+	c.evictOldest()
+
+	// Should have removed ~10% (1 entry) and any expired (none)
+	if len(c.records) != 9 {
+		t.Errorf("expected 9 entries after evictOldest, got %d", len(c.records))
+	}
+}
+
+func TestSPFCache_EvictOldest_WithExpired(t *testing.T) {
+	c := &spfCache{
+		records:     make(map[string]*cacheEntry),
+		maxSize:     10,
+		nextCleanup: time.Now().Add(1 * time.Hour),
+		ttl:         1 * time.Hour,
+	}
+
+	now := time.Now()
+	// Fill cache so that eviction + expired removal is needed
+	for i := 0; i < 10; i++ {
+		c.records[fmt.Sprintf("d%d.example.com", i)] = &cacheEntry{
+			record:    fmt.Sprintf("v=spf1 ip4:%d.%d.%d.%d -all", i, i, i, i),
+			expiresAt: now.Add(time.Duration(i+1) * time.Hour),
+		}
+	}
+	// Make two entries expired; the oldest expired is removed by eviction,
+	// the second-oldest expired is removed by cleanupExpiredLocked.
+	c.records["d0.example.com"].expiresAt = now.Add(-2 * time.Hour)
+	c.records["d1.example.com"].expiresAt = now.Add(-1 * time.Hour)
+
+	c.evictOldest()
+
+	// Evict removes oldest 10% (1 entry = d0) plus cleanupExpiredLocked removes d1
+	// Net result: 8 entries remain
+	if len(c.records) != 8 {
+		t.Errorf("expected 8 entries, got %d", len(c.records))
+	}
+}
+
+func TestSPFCache_CleanupExpired(t *testing.T) {
+	c := &spfCache{
+		records:     make(map[string]*cacheEntry),
+		maxSize:     100,
+		nextCleanup: time.Now().Add(1 * time.Hour),
+		ttl:         1 * time.Hour,
+	}
+
+	now := time.Now()
+	c.records["expired.example.com"] = &cacheEntry{
+		record:    "v=spf1 -all",
+		expiresAt: now.Add(-1 * time.Hour),
+	}
+	c.records["valid.example.com"] = &cacheEntry{
+		record:    "v=spf1 ip4:1.1.1.1 -all",
+		expiresAt: now.Add(1 * time.Hour),
+	}
+
+	c.cleanupExpired()
+
+	if _, ok := c.records["expired.example.com"]; ok {
+		t.Error("expected expired entry to be removed")
+	}
+	if _, ok := c.records["valid.example.com"]; !ok {
+		t.Error("expected valid entry to remain")
+	}
+}
+
+func TestSPFCache_CleanupExpiredLocked(t *testing.T) {
+	c := &spfCache{
+		records:     make(map[string]*cacheEntry),
+		maxSize:     100,
+		nextCleanup: time.Now().Add(1 * time.Hour),
+		ttl:         1 * time.Hour,
+	}
+
+	now := time.Now()
+	c.records["old.example.com"] = &cacheEntry{
+		record:    "v=spf1 -all",
+		expiresAt: now.Add(-1 * time.Minute),
+	}
+	c.records["future.example.com"] = &cacheEntry{
+		record:    "v=spf1 ip4:8.8.8.8 -all",
+		expiresAt: now.Add(1 * time.Hour),
+	}
+
+	c.cleanupExpiredLocked(now)
+
+	if len(c.records) != 1 {
+		t.Errorf("expected 1 entry after cleanup, got %d", len(c.records))
+	}
+	if _, ok := c.records["future.example.com"]; !ok {
+		t.Error("expected future entry to remain")
+	}
+}
+
+func TestSPFCache_Get_Expired(t *testing.T) {
+	c := &spfCache{
+		records:     make(map[string]*cacheEntry),
+		maxSize:     100,
+		nextCleanup: time.Now().Add(1 * time.Hour),
+		ttl:         1 * time.Hour,
+	}
+
+	c.records["expired.example.com"] = &cacheEntry{
+		record:    "v=spf1 -all",
+		expiresAt: time.Now().Add(-1 * time.Hour),
+	}
+
+	_, ok := c.get("expired.example.com")
+	if ok {
+		t.Error("expected get to return false for expired entry")
+	}
+}

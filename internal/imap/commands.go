@@ -1256,14 +1256,16 @@ func (s *Session) handleSort(args []string, line string) error {
 
 	criteria, err := parseSortCriteria(criteriaArgs)
 	if err != nil {
-		s.WriteResponse(s.tag, "BAD "+err.Error())
+		s.server.logger.Error("imap sort criteria parse error", "error", err)
+		s.WriteResponse(s.tag, "BAD invalid sort criteria")
 		return nil
 	}
 
 	// Get all messages in mailbox with metadata
 	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
 	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		s.server.logger.Error("imap fetch messages error", "error", err)
+		s.WriteResponse(s.tag, "NO unable to fetch messages")
 		return nil
 	}
 
@@ -1410,14 +1412,16 @@ func (s *Session) handleUIDSort(args []string, line string) error {
 
 	criteria, err := parseSortCriteria(criteriaArgs)
 	if err != nil {
-		s.WriteResponse(s.tag, "BAD "+err.Error())
+		s.server.logger.Error("imap sort criteria parse error", "error", err)
+		s.WriteResponse(s.tag, "BAD invalid sort criteria")
 		return nil
 	}
 
 	// Get all messages with UID
 	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
 	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		s.server.logger.Error("imap fetch messages error", "error", err)
+		s.WriteResponse(s.tag, "NO unable to fetch messages")
 		return nil
 	}
 

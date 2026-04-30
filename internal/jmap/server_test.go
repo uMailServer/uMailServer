@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1117,5 +1118,13 @@ func TestServeHTTP_RouteNotFound(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("Status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestSafeError(t *testing.T) {
+	server := NewServer(nil, nil, nil, Config{})
+	msg := server.safeError("test_context", fmt.Errorf("sensitive detail"))
+	if msg != "internal server error" {
+		t.Errorf("expected generic error message, got %q", msg)
 	}
 }

@@ -699,8 +699,8 @@ func TestFullRouter_AccountCRUD(t *testing.T) {
 		t.Errorf("Get account: Expected 200, got %d", rec.Code)
 	}
 
-	// Update account via router
-	body = map[string]interface{}{"is_admin": true, "is_active": false}
+	// Update account via router (admin promotion requires current_admin_password)
+	body = map[string]interface{}{"is_admin": true, "is_active": false, "current_admin_password": "password123"}
 	jsonBody, _ = json.Marshal(body)
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/accounts/new@test.com", bytes.NewReader(jsonBody))
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -3114,7 +3114,7 @@ func TestHandlePutRateLimitConfig_Success(t *testing.T) {
 	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
 	server.rateLimitMgr = mockRL
 
-	body := `{"ip_per_minute": 60, "ip_per_hour": 500, "user_per_day": 1000}`
+	body := `{"ip_per_minute":60,"ip_per_hour":500,"ip_per_day":5000,"ip_connections":10,"user_per_minute":60,"user_per_hour":1000,"user_per_day":5000,"user_max_recipients":100,"global_per_minute":10000,"global_per_hour":100000}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
@@ -3128,6 +3128,31 @@ func TestHandlePutRateLimitConfig_Success(t *testing.T) {
 	}
 	if mockRL.cfg.CleanupInterval != 600 {
 		t.Errorf("Expected CleanupInterval to be preserved as 600, got %v", mockRL.cfg.CleanupInterval)
+	}
+}
+
+func TestHandlePutRateLimitConfig_ZeroValueRejected(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer database.Close()
+
+	mockRL := &mockRateLimitManager{cfg: &ratelimit.Config{}}
+	server := NewServerWithInterfaces(database, nil, Config{}, nil, nil, nil, nil, nil)
+	server.rateLimitMgr = mockRL
+
+	body := `{"ip_per_minute":0,"ip_per_hour":500,"ip_per_day":5000,"ip_connections":10,"user_per_minute":60,"user_per_hour":1000,"user_per_day":5000,"user_max_recipients":100,"global_per_minute":10000,"global_per_hour":100000}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/ratelimits/config", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	server.handleRateLimitConfig(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "ip_per_minute must be at least 1") {
+		t.Errorf("Expected error about minimum value, got: %s", w.Body.String())
 	}
 }
 

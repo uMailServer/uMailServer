@@ -141,7 +141,7 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 	if err != nil {
 		// Create mailbox if it doesn't exist (only for INBOX)
 		if mailbox == "INBOX" {
-			_ = h.mailDB.CreateMailbox(userEmail, mailbox) // Best-effort, already handling error // Best-effort, already handling error
+			_ = h.mailDB.CreateMailbox(userEmail, mailbox) // Best-effort
 		}
 		return []Mail{}, nil
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/alert"
 	"github.com/umailserver/umailserver/internal/config"
+	tlspkg "github.com/umailserver/umailserver/internal/tls"
 )
 
 // TestStartAlertChecker_NoAlertManager tests starting checker without alert manager
@@ -124,6 +125,27 @@ func TestBuildAlertConfig_DefaultsBackfill(t *testing.T) {
 	if out.QueueThreshold != defaults.QueueThreshold {
 		t.Errorf("QueueThreshold = %d, want %d", out.QueueThreshold, defaults.QueueThreshold)
 	}
+}
+
+// TestCheckAlerts_TLSInvalidCert tests checkAlerts with a TLS certificate that is invalid/missing
+func TestCheckAlerts_TLSInvalidCert(t *testing.T) {
+	srv := helperServer(t)
+	alertMgr := alert.NewManager(alert.Config{
+		Enabled:        true,
+		QueueThreshold: 100,
+		TLSWarningDays: 30,
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	srv.alertMgr = alertMgr
+	// Create a TLS manager with a domain that doesn't have a certificate file
+	tlsMgr, _ := tlspkg.NewManager(tlspkg.Config{
+		Enabled: true,
+		Domains: []string{"nonexistent.example.com"},
+	}, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	srv.tlsManager = tlsMgr
+
+	// Should not panic even when cert is missing
+	srv.checkAlerts()
 }
 
 // TestBuildAlertConfig_ExplicitValuesPreserved verifies user-supplied values
