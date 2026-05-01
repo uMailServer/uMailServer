@@ -1,0 +1,129 @@
+version: '3.8'
+
+services:
+  umailserver:
+    image: ghcr.io/umailserver/umailserver:latest
+    container_name: umailserver
+    restart: always
+    ports:
+      # SMTP (inbound mail)
+      - "25:25"
+      # SMTP Submission (STARTTLS)
+      - "587:587"
+      # SMTP Submission (Implicit TLS)
+      - "465:465"
+      # IMAP (STARTTLS)
+      - "143:143"
+      # IMAPS
+      - "993:993"
+      # POP3S (Implicit TLS)
+      - "995:995"
+      # ManageSieve
+      - "4190:4190"
+      # HTTP API and Web UI
+      - "443:443"
+      # Prometheus metrics
+      - "8080:8080"
+    volumes:
+      - umail_data:/data
+      - ./config/umailserver.yaml:/etc/umailserver/umailserver.yaml:ro
+    environment:
+      - TZ=UTC
+      - UMAILSERVER_SERVER_DATA_DIR=/data
+      - UMAILSERVER_SERVER_HOSTNAME=${UMAILSERVER_HOSTNAME:-mail.example.com}
+      # JWT Secret - KEEP THIS SECRET IN PRODUCTION!
+      - UMAILSERVER_SECURITY_JWTSECRET=${UMAILSERVER_JWT_SECRET:-}
+      # TLS ACME
+      - UMAILSERVER_TLS_ACME_ENABLED=${UMAILSERVER_TLS_ACME_ENABLED:-true}
+      - UMAILSERVER_TLS_ACME_EMAIL=${UMAILSERVER_TLS_ACME_EMAIL:-}
+      # Logging
+      - UMAILSERVER_LOGGING_LEVEL=${UMAILSERVER_LOGGING_LEVEL:-info}
+      # Spam settings
+      - UMAILSERVER_SPAM_REJECTTHRESHOLD=${UMAILSERVER_SPAM_REJECT_THRESHOLD:-9.0}
+    env_file:
+      - .env
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - mailnet
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+        compress: "true"
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: umail-prometheus
+    restart: always
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - mailnet
+    profiles:
+      - monitoring
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: umail-grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./config/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://grafana.${UMAILSERVER_HOSTNAME:-mail.example.com}
+    networks:
+      - mailnet
+    profiles:
+      - monitoring
+
+  # AlertManager for alerts
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: umail-alertmanager
+    restart: always
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./config/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - mailnet
+    profiles:
+      - monitoring
+
+volumes:
+  umail_data:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+
+networks:
+  mailnet:
+    driver: bridge

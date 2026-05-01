@@ -696,14 +696,67 @@ func (s *Session) handleRename(args []string) error {
 
 // SUBSCRIBE command
 func (s *Session) handleSubscribe(args []string) error {
-	// Subscription is not implemented in this version
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox name")
+		return nil
+	}
+
+	mailboxName := strings.Trim(args[0], "\"'")
+	if mailboxName == "" {
+		s.WriteResponse(s.tag, "BAD Empty mailbox name")
+		return nil
+	}
+
+	// Verify mailbox exists first
+	mailboxes, err := s.server.mailstore.ListMailboxes(s.user, mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
+	// Check if the mailbox exists (exact match)
+	found := false
+	for _, m := range mailboxes {
+		if m == mailboxName {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		s.WriteResponse(s.tag, "NO Mailbox not found")
+		return nil
+	}
+
+	// Subscribe to the mailbox
+	if err := s.server.mailstore.SetSubscribed(s.user, mailboxName, true); err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
 	s.WriteResponse(s.tag, "OK SUBSCRIBE completed")
 	return nil
 }
 
 // UNSUBSCRIBE command
 func (s *Session) handleUnsubscribe(args []string) error {
-	// Subscription is not implemented in this version
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD Missing mailbox name")
+		return nil
+	}
+
+	mailboxName := strings.Trim(args[0], "\"'")
+	if mailboxName == "" {
+		s.WriteResponse(s.tag, "BAD Empty mailbox name")
+		return nil
+	}
+
+	// Unsubscribe from the mailbox
+	if err := s.server.mailstore.SetSubscribed(s.user, mailboxName, false); err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+
 	s.WriteResponse(s.tag, "OK UNSUBSCRIBE completed")
 	return nil
 }
@@ -748,8 +801,74 @@ func (s *Session) handleList(args []string) error {
 
 // LSUB command
 func (s *Session) handleLsub(args []string) error {
-	// Subscribed mailboxes not implemented, return same as LIST
-	return s.handleList(args)
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD Missing reference or pattern")
+		return nil
+	}
+
+	reference := strings.Trim(args[0], "\"'")
+	pattern := strings.Trim(args[1], "\"'")
+
+	// Combine reference and pattern
+	fullPattern := reference
+	if pattern != "" {
+		if fullPattern != "" && !strings.HasSuffix(fullPattern, "/") {
+			fullPattern += "/"
+		}
+		fullPattern += pattern
+	}
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
+		return nil
+	}
+
+	// Get subscribed mailboxes
+	var mailboxes []string
+	subscribed, err := s.server.mailstore.ListSubscribed(s.user)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	// Filter by pattern
+	for _, mbox := range subscribed {
+		if matchMailboxPattern(mbox, fullPattern) {
+			mailboxes = append(mailboxes, mbox)
+		}
+	}
+
+	for _, mbox := range mailboxes {
+		s.WriteData(fmt.Sprintf("LSUB (\\HasNoChildren) \"/\" \"%s\"", mbox))
+	}
+
+	s.WriteResponse(s.tag, "OK LSUB completed")
+	return nil
+}
+
+// matchMailboxPattern checks if a mailbox name matches an IMAP pattern
+func matchMailboxPattern(name, pattern string) bool {
+	if pattern == "*" {
+		return true
+	}
+
+	// Handle * wildcard at end
+	if strings.HasSuffix(pattern, "*") {
+		prefix := pattern[:len(pattern)-1]
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+
+	// Handle * wildcard at start
+	if strings.HasPrefix(pattern, "*") {
+		suffix := pattern[1:]
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+
+	// Exact match
+	return name == pattern
 }
 
 // STATUS command

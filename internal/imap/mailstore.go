@@ -161,6 +161,21 @@ func (m *BboltMailstore) ListMailboxes(user, pattern string) ([]string, error) {
 	return result, nil
 }
 
+// SetSubscribed sets the subscription status of a mailbox
+func (m *BboltMailstore) SetSubscribed(user, mailbox string, subscribed bool) error {
+	return m.db.SetSubscribed(user, mailbox, subscribed)
+}
+
+// GetSubscribed returns the subscription status of a mailbox
+func (m *BboltMailstore) GetSubscribed(user, mailbox string) (bool, error) {
+	return m.db.GetSubscribed(user, mailbox)
+}
+
+// ListSubscribed lists all subscribed mailboxes for a user
+func (m *BboltMailstore) ListSubscribed(user string) ([]string, error) {
+	return m.db.ListSubscribed(user)
+}
+
 // matchPattern checks if a mailbox name matches an IMAP pattern
 func matchPattern(name, pattern string) bool {
 	// Simple pattern matching

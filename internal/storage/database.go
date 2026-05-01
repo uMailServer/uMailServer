@@ -65,6 +65,7 @@ type Mailbox struct {
 	Name        string
 	UIDValidity uint32
 	UIDNext     uint32
+	Subscribed  bool
 }
 
 // mailboxKey returns the bucket name for a user's mailbox metadata
@@ -257,6 +258,72 @@ func (db *Database) ListMailboxes(user string) ([]string, error) {
 	}
 	if len(result) == 0 {
 		result = []string{"INBOX"}
+	}
+	return result, nil
+}
+
+// subscribedBucket returns the bucket name for user's subscribed mailboxes
+func subscribedBucket(user string) string {
+	return fmt.Sprintf("subscribed:%s", user)
+}
+
+// SetSubscribed sets the subscription status of a mailbox
+func (db *Database) SetSubscribed(user, mailbox string, subscribed bool) error {
+	if db.bolt == nil {
+		return nil
+	}
+
+	return db.bolt.Update(func(tx *bbolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(subscribedBucket(user)))
+		if err != nil {
+			return err
+		}
+
+		if subscribed {
+			return bucket.Put([]byte(mailbox), []byte("1"))
+		}
+		return bucket.Delete([]byte(mailbox))
+	})
+}
+
+// GetSubscribed returns the subscription status of a mailbox
+func (db *Database) GetSubscribed(user, mailbox string) (bool, error) {
+	if db.bolt == nil {
+		return false, nil
+	}
+
+	var subscribed bool
+	err := db.bolt.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(subscribedBucket(user)))
+		if bucket == nil {
+			return nil
+		}
+		subscribed = bucket.Get([]byte(mailbox)) != nil
+		return nil
+	})
+	return subscribed, err
+}
+
+// ListSubscribed lists all subscribed mailboxes for a user
+func (db *Database) ListSubscribed(user string) ([]string, error) {
+	if db.bolt == nil {
+		// In nil mode, no subscriptions exist
+		return nil, nil
+	}
+
+	var result []string
+	err := db.bolt.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(subscribedBucket(user)))
+		if bucket == nil {
+			return nil
+		}
+		return bucket.ForEach(func(k, _ []byte) error {
+			result = append(result, string(k))
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
 	}
 	return result, nil
 }

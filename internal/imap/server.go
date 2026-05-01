@@ -78,6 +78,11 @@ type Mailstore interface {
 	RenameMailbox(user, oldName, newName string) error
 	ListMailboxes(user, pattern string) ([]string, error)
 
+	// Subscription operations
+	SetSubscribed(user, mailbox string, subscribed bool) error
+	GetSubscribed(user, mailbox string) (bool, error)
+	ListSubscribed(user string) ([]string, error)
+
 	// Message operations
 	FetchMessages(user, mailbox string, seqSet string, items []string) ([]*Message, error)
 	StoreFlags(user, mailbox string, seqSet string, flags []string, op FlagOperation) error

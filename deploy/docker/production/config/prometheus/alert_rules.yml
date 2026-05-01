@@ -1,0 +1,78 @@
+groups:
+  - name: umailserver_alerts
+    interval: 30s
+    rules:
+      # Queue depth alerts
+      - alert: QueueDepthHigh
+        expr: umailserver_queue_depth > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "uMailServer queue depth is high"
+          description: "Queue has {{ $value }} messages pending"
+
+      - alert: QueueDepthCritical
+        expr: umailserver_queue_depth > 500
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "uMailServer queue is critically backlogged"
+          description: "Queue has {{ $value }} messages pending - immediate attention required"
+
+      # Disk space alerts
+      - alert: DiskSpaceLow
+        expr: umailserver_disk_free_bytes < 1073741824  # 1GB
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space is low on {{ $labels.instance }}"
+          description: "Less than 1GB free space remaining"
+
+      # TLS certificate expiry
+      - alert: TLSCertExpiringSoon
+        expr: umailserver_tls_cert_expiry_days < 7
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expires in {{ $value }} days"
+
+      # Authentication failures
+      - alert: AuthFailureRateHigh
+        expr: rate(umailserver_auth_failures_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of authentication failures"
+          description: "{{ $value }} failures per second over the last 5 minutes"
+
+      # SMTP connection issues
+      - alert: SMTPConnectionErrors
+        expr: rate(umailserver_smtp_connection_errors_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High SMTP connection error rate"
+
+      # IMAP connection issues
+      - alert: IMAPConnectionErrors
+        expr: rate(umailserver_imap_connection_errors_total[5m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High IMAP connection error rate"
+
+      # Server health
+      - alert: ServerUnhealthy
+        expr: umailserver_health_status != 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "uMailServer is unhealthy"

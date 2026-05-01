@@ -632,8 +632,8 @@ func TestHandleSubscribeMissingArgs(t *testing.T) {
 	}
 
 	written := mock.Written()
-	if !strings.Contains(written, "OK") {
-		t.Errorf("expected OK response, got: %s", written)
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response, got: %s", written)
 	}
 }
 
@@ -651,8 +651,8 @@ func TestHandleUnsubscribeMissingArgs(t *testing.T) {
 	}
 
 	written := mock.Written()
-	if !strings.Contains(written, "OK") {
-		t.Errorf("expected OK response, got: %s", written)
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD response, got: %s", written)
 	}
 }
 
@@ -1908,9 +1908,10 @@ func TestHandleAuthenticatedLsub(t *testing.T) {
 	}
 
 	written := mock.Written()
-	// LSUB returns LIST responses in this implementation
-	if !strings.Contains(written, "LIST") {
-		t.Errorf("expected LIST in response, got: %s", written)
+	// LSUB returns LSUB responses with subscribed mailboxes
+	// Empty subscribed list is valid - just means no subscriptions yet
+	if !strings.Contains(written, "OK LSUB completed") {
+		t.Errorf("expected OK LSUB completed in response, got: %s", written)
 	}
 }
 

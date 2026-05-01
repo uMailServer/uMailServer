@@ -36,6 +36,18 @@ func (m *mockMailstore) ListMailboxes(user, pattern string) ([]string, error) {
 	return []string{"INBOX", "Sent", "Drafts"}, nil
 }
 
+func (m *mockMailstore) SetSubscribed(user, mailbox string, subscribed bool) error {
+	return nil
+}
+
+func (m *mockMailstore) GetSubscribed(user, mailbox string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockMailstore) ListSubscribed(user string) ([]string, error) {
+	return []string{}, nil
+}
+
 func (m *mockMailstore) FetchMessages(user, mailbox string, seqSet string, items []string) ([]*Message, error) {
 	return []*Message{}, nil
 }

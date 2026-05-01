@@ -1,21 +1,48 @@
-name: Backup Restore Test
+name: Backup and Restore
 
-# Weekly backup smoke test — creates a backup, restores it, verifies contents
 on:
   schedule:
-    # Run every Sunday at 4am UTC
+    # Automated daily backup at 2 AM UTC
+    - cron: '0 2 * * *'
+    # Weekly restore test on Sunday at 4 AM UTC
     - cron: '0 4 * * 0'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Operation mode'
+        required: true
+        default: 'backup'
+        type: choice
+        options:
+          - backup
+          - restore
+          - verify
+      backup_file:
+        description: 'Backup file to restore (for restore mode)'
+        required: false
+        type: string
+      retention_days:
+        description: 'Backup retention in days'
+        required: false
+        type: number
+        default: 30
 
 permissions:
   contents: read
+  actions: read
+  packages: read
+
+env:
+  GO_VERSION: '1.25'
 
 jobs:
-  backup-restore-test:
-    name: Backup Restore Test
+  backup:
+    name: Create Backup
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    if: github.event_name == 'schedule' || github.event.inputs.mode == 'backup'
+    outputs:
+      backup_file: ${{ steps.create_backup.outputs.backup_file }}
+      checksum: ${{ steps.create_backup.outputs.checksum }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -24,10 +51,165 @@ jobs:
         uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
         with:
           go-version: ${{ env.GO_VERSION }}
-        env:
-          GO_VERSION: '1.25'
 
-      - name: Create test data dir
+      - name: Determine backup destination
+        id: backup_dest
+        run: |
+          if [ "${{ vars.BACKUP_DESTINATION }}" ]; then
+            echo "destination=${{ vars.BACKUP_DESTINATION }}" >> $GITHUB_OUTPUT
+          elif [ "${{ secrets.BACKUP_S3_BUCKET }}" ]; then
+            echo "destination=s3://${{ secrets.BACKUP_S3_BUCKET }}/$(date +%Y/%m/%d)" >> $GITHUB_OUTPUT
+          else
+            echo "destination=/tmp/umailserver-backups" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create backup directory
+        run: |
+          BACKUP_DIR="${{ steps.backup_dest.outputs.destination }}"
+          mkdir -p "$BACKUP_DIR"
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 go build -ldflags "-X main.Version=${{ github.sha }}" -o umailserver ./cmd/umailserver
+
+      - name: Get current server config
+        env:
+          UMAILSERVER_API_TOKEN: ${{ secrets.UMAILSERVER_API_TOKEN }}
+          UMAILSERVER_API_URL: ${{ vars.UMAILSERVER_API_URL || 'http://localhost:8080' }}
+        run: |
+          # Export current configuration
+          curl -s -H "Authorization: Bearer $UMAILSERVER_API_TOKEN" \
+            "$UMAILSERVER_API_URL/api/v1/config" > /tmp/umailserver_current_config.yaml || true
+
+      - name: Create encrypted backup
+        id: create_backup
+        env:
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_PASSWORD }}
+        run: |
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          BACKUP_FILE="umailserver_backup_${TIMESTAMP}.tar.gz.enc"
+          BACKUP_PATH="${{ steps.backup_dest.outputs.destination }}/${BACKUP_FILE}"
+          
+          # Create backup with encryption
+          ./umailserver backup "$BACKUP_PATH" \
+            --password "${BACKUP_PASSWORD:-default-password-change-me}" \
+            --config /tmp/umailserver_current_config.yaml \
+            --compress \
+            --encrypt
+          
+          # Calculate checksum
+          CHECKSUM=$(sha256sum "$BACKUP_PATH" | cut -d' ' -f1)
+          
+          echo "backup_file=$BACKUP_PATH" >> $GITHUB_OUTPUT
+          echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+          
+          # Create checksum file
+          echo "$CHECKSUM" > "${BACKUP_PATH}.sha256"
+          
+          echo "Backup created: $BACKUP_FILE"
+          echo "Checksum: $CHECKSUM"
+          
+          # Upload to S3 if configured
+          if [ "${{ secrets.BACKUP_S3_BUCKET }}" ]; then
+            aws s3 cp "$BACKUP_PATH" "s3://${{ secrets.BACKUP_S3_BUCKET }}/$(date +%Y/%m/%d)/${BACKUP_FILE}"
+            aws s3 cp "${BACKUP_PATH}.sha256" "s3://${{ secrets.BACKUP_S3_BUCKET }}/$(date +%Y/%m/%d)/${BACKUP_FILE}.sha256"
+            echo "Uploaded to S3"
+          fi
+
+      - name: Cleanup old backups
+        if: github.event.inputs.retention_days != ''
+        env:
+          RETENTION_DAYS: ${{ github.event.inputs.retention_days || 30 }}
+        run: |
+          find "${{ steps.backup_dest.outputs.destination }}" -name "umailserver_backup_*.tar.gz.enc" -mtime +$RETENTION_DAYS -delete
+          echo "Cleaned up backups older than $RETENTION_DAYS days"
+
+      - name: Notify success
+        if: success()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "✅ uMailServer Backup Successful",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*uMailServer Backup Completed*\n• File: `${{ steps.create_backup.outputs.backup_file }}`\n• SHA256: `{{ steps.create_backup.outputs.checksum }}`\n• Timestamp: ${{ github.event.head_commit.timestamp }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "❌ uMailServer Backup Failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*uMailServer Backup FAILED*\n• Error: ${{ github.run_id }}\n• Link: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  restore-test:
+    name: Restore Verification
+    runs-on: ubuntu-latest
+    needs: backup
+    if: github.event_name == 'schedule' || github.event.inputs.mode == 'verify' || github.event.inputs.mode == 'restore'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Find latest backup
+        id: find_backup
+        run: |
+          if [ "${{ github.event.inputs.backup_file }}" ]; then
+            BACKUP_FILE="${{ github.event.inputs.backup_file }}"
+          elif [ "${{ secrets.BACKUP_S3_BUCKET }}" ]; then
+            # Get latest backup from S3
+            aws s3 ls "${{ secrets.BACKUP_S3_BUCKET }}/" --recursive | sort | tail -1 | awk '{print $4}' > /tmp/backup_key.txt
+            BACKUP_KEY=$(cat /tmp/backup_key.txt)
+            aws s3 cp "s3://${{ secrets.BACKUP_S3_BUCKET }}/${BACKUP_KEY}" /tmp/umailserver_backups/
+            BACKUP_FILE="/tmp/umailserver_backups/$(basename $BACKUP_KEY)"
+          else
+            # Find local backup
+            BACKUP_FILE=$(ls -t /tmp/umailserver-backups/*.tar.gz.enc 2>/dev/null | head -1 || echo "")
+          fi
+          
+          if [ -z "$BACKUP_FILE" ] || [ ! -f "$BACKUP_FILE" ]; then
+            echo "No backup found"
+            exit 1
+          fi
+          
+          echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
+          echo "Using backup: $BACKUP_FILE"
+
+      - name: Build binary
+        run: |
+          CGO_ENABLED=0 go build -ldflags "-X main.Version=test" -o umailserver-test ./cmd/umailserver
+
+      - name: Create test environment
         run: |
           mkdir -p /tmp/umailserver-test/data/config
           cat > /tmp/umailserver-test/data/config/umailserver.yaml << 'YAML'
@@ -39,37 +221,39 @@ jobs:
           mkdir -p /tmp/umailserver-test/data/messages/new
           echo "test message" > /tmp/umailserver-test/data/messages/new/1
 
-      - name: Build binary
+      - name: Verify backup integrity
+        env:
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_PASSWORD }}
         run: |
-          CGO_ENABLED=0 go build -ldflags "-X main.Version=test" -o umailserver-test ./cmd/umailserver
+          # Verify checksum if available
+          CHECKSUM_FILE="${{ steps.find_backup.outputs.backup_file }}.sha256"
+          if [ -f "$CHECKSUM_FILE" ]; then
+            CALCULATED=$(sha256sum "${{ steps.find_backup.outputs.backup_file }}" | cut -d' ' -f1)
+            STORED=$(cat "$CHECKSUM_FILE")
+            if [ "$CALCULATED" != "$STORED" ]; then
+              echo "Checksum mismatch!"
+              echo "Expected: $STORED"
+              echo "Got: $CALCULATED"
+              exit 1
+            fi
+            echo "Checksum verified"
+          fi
 
-      - name: Create test backup
-        run: |
-          mkdir -p /tmp/umailserver-backups
-          ./umailserver-test backup /tmp/umailserver-backups \
-            --config /tmp/umailserver-test/data/config/umailserver.yaml \
-            --password "test-password-123"
-          ls -la /tmp/umailserver-backups/
-
-      - name: Find latest encrypted backup
-        id: find_backup
-        run: |
-          BACKUP=$(ls -t /tmp/umailserver-backups/*.tar.gz.enc 2>/dev/null | head -1)
-          echo "backup_file=$BACKUP" >> $GITHUB_OUTPUT
-          echo "Found backup: $BACKUP"
-
-      - name: Restore to temp location
+      - name: Restore backup
         if: steps.find_backup.outputs.backup_file != ''
+        env:
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_PASSWORD }}
         run: |
           ./umailserver-test restore "${{ steps.find_backup.outputs.backup_file }}" \
             --config /tmp/umailserver-test/data/config/umailserver.yaml \
-            --password "test-password-123"
+            --password "${BACKUP_PASSWORD:-default-password-change-me}"
 
       - name: Verify restored contents
         if: steps.find_backup.outputs.backup_file != ''
         run: |
-          RESTORE_DIR="/tmp/umailserver-test/data/../restore_temp"
+          RESTORE_DIR="/tmp/umailserver-test/restore_temp"
           echo "=== Checking restored files ==="
+          
           # Check manifest exists
           if [ -f "$RESTORE_DIR/manifest.json" ]; then
             echo "✓ manifest.json present"
@@ -78,6 +262,7 @@ jobs:
             echo "✗ manifest.json missing"
             exit 1
           fi
+          
           # Check config directory
           if [ -d "$RESTORE_DIR/config" ]; then
             echo "✓ config/ directory present"
@@ -85,6 +270,7 @@ jobs:
             echo "✗ config/ directory missing"
             exit 1
           fi
+          
           # Check database backup
           if [ -f "$RESTORE_DIR/database/umailserver.db" ]; then
             echo "✓ database/umailserver.db present"
@@ -92,9 +278,53 @@ jobs:
             echo "✗ database/umailserver.db missing"
             exit 1
           fi
+          
           echo "=== All restore checks passed ==="
 
+      - name: Notify restore success
+        if: success()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "✅ uMailServer Restore Verified",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*uMailServer Restore Test Passed*\n• Backup: `${{ steps.find_backup.outputs.backup_file }}`\n• All files verified successfully"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify restore failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "❌ uMailServer Restore Failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*uMailServer Restore Test FAILED*\n• Backup: `${{ steps.find_backup.outputs.backup_file }}`\n• Error: ${{ github.run_id }}\n• Link: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
       - name: Cleanup
+        if: always()
         run: |
           rm -rf /tmp/umailserver-test /tmp/umailserver-backups
           echo "Cleanup complete"
