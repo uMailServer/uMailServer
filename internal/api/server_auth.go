@@ -2,6 +2,8 @@ package api
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -124,15 +126,19 @@ func (s *Server) RevokeToken(tokenHash string, expiry time.Time) {
 	s.tokenBlacklist[tokenHash] = expiry
 }
 
-// tokenExpiryFromString parses a JWT string and returns its exp claim.
-// If parsing fails or the claim is missing, it falls back to Now+TokenExpiry.
+// tokenExpiryFromString extracts the exp claim from a JWT without verifying the signature.
+// It decodes the payload segment directly via base64 to avoid the security risk of ParseUnverified.
 func (s *Server) tokenExpiryFromString(tokenStr string) time.Time {
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenStr, jwt.MapClaims{})
+	parts := strings.Split(tokenStr, ".")
+	if len(parts) != 3 {
+		return time.Now().Add(s.config.TokenExpiry)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return time.Now().Add(s.config.TokenExpiry)
 	}
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
 		return time.Now().Add(s.config.TokenExpiry)
 	}
 	expClaim, ok := claims["exp"].(float64)

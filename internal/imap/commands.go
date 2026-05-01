@@ -2015,13 +2015,19 @@ func formatFetchResponse(msg *Message, items []string) string {
 		case "ENVELOPE":
 			fromLocal, fromDomain := splitAddress(msg.From)
 			toLocal, toDomain := splitAddress(msg.To)
-			parts = append(parts, fmt.Sprintf("ENVELOPE (\"%s\" \"%s\" ((\"%s\" NIL \"%s\" \"%s\")) NIL NIL ((\"%s\" NIL \"%s\" \"%s\")) NIL NIL NIL NIL)",
-				msg.Subject, msg.Date, msg.From, fromLocal, fromDomain,
-				msg.To, toLocal, toDomain))
+			parts = append(parts, fmt.Sprintf("ENVELOPE (%s %s ((%s NIL %s %s)) NIL NIL ((%s NIL %s %s)) NIL NIL NIL NIL)",
+				imapQuotedString(msg.Subject), imapQuotedString(msg.Date),
+				imapQuotedString(msg.From), imapQuotedString(fromLocal), imapQuotedString(fromDomain),
+				imapQuotedString(msg.To), imapQuotedString(toLocal), imapQuotedString(toDomain)))
 		}
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// imapQuotedString quotes a string for use in an IMAP quoted-string per RFC 3501.
+func imapQuotedString(s string) string {
+	return strconv.Quote(s)
 }
 
 // splitAddress safely splits an email address into local and domain parts.

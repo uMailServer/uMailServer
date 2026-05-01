@@ -22,51 +22,17 @@ func NewOpenPGPSigner(privateKeyData []byte) *OpenPGPSigner {
 	}
 }
 
-// SignMessage signs a message using OpenPGP (structure only - actual signing requires external library)
+// SignMessage signs a message using OpenPGP.
+// WARNING: This is a stub implementation that always returns an error.
+// Do not use in production — cryptographic signing is not performed.
 func (s *OpenPGPSigner) SignMessage(msg []byte, from, to string) ([]byte, error) {
 	if len(s.privateKey) == 0 {
 		return nil, fmt.Errorf("private key not available")
 	}
 
-	// Create the multipart/signed structure
-	boundary := generateBoundary()
-	headers := fmt.Sprintf(
-		"From: %s\r\n"+
-			"To: %s\r\n"+
-			"Content-Type: multipart/signed; boundary=%s; protocol=\"application/pgp-signature\"\r\n"+
-			"Date: %s\r\n"+
-			"MIME-Version: 1.0\r\n"+
-			"\r\n",
-		from,
-		to,
-		boundary,
-		time.Now().Format(time.RFC1123Z),
-	)
-
-	// Create a placeholder signature (in production, use go-crypto library)
-	signature := s.createSignature(msg)
-
-	// Build the signed message
-	signedMsg := headers +
-		"--" + boundary + "\r\n" +
-		"Content-Type: text/plain\r\n\r\n" +
-		string(msg) + "\r\n" +
-		"--" + boundary + "\r\n" +
-		"Content-Type: application/pgp-signature\r\n" +
-		"Content-Transfer-Encoding: 7bit\r\n\r\n" +
-		string(signature) + "\r\n" +
-		"--" + boundary + "--\r\n"
-
-	return []byte(signedMsg), nil
-}
-
-// createSignature creates a placeholder OpenPGP signature
-func (s *OpenPGPSigner) createSignature(content []byte) []byte {
-	// In production, use github.com/ProtonMail/go-crypto for actual signing
-	// This creates a placeholder signature structure
-	sig := fmt.Sprintf("-----BEGIN PGP SIGNATURE-----\nVersion: GoMailServer\n\n%s\n-----END PGP SIGNATURE-----\n",
-		base64.StdEncoding.EncodeToString(content))
-	return []byte(sig)
+	// Stub: actual OpenPGP signing requires github.com/ProtonMail/go-crypto
+	// and is not implemented. Return an error instead of a fake signature.
+	return nil, fmt.Errorf("openpgp signing is not implemented")
 }
 
 // OpenPGPVerifier handles OpenPGP verification
@@ -81,13 +47,15 @@ func NewOpenPGPVerifier(publicKeyData []byte) *OpenPGPVerifier {
 	}
 }
 
-// VerifyMessage verifies an OpenPGP signed message
+// VerifyMessage verifies an OpenPGP signed message.
+// WARNING: This is a stub implementation that always returns an error.
+// Do not use in production — signature verification is not performed.
 func (v *OpenPGPVerifier) VerifyMessage(msg []byte) (bool, error) {
 	if len(v.publicKey) == 0 {
 		return false, fmt.Errorf("no public key available for verification")
 	}
 
-	// Parse the multipart message
+	// Parse the multipart message to validate structure
 	parts, err := parseMultipart(msg)
 	if err != nil {
 		return false, fmt.Errorf("failed to parse multipart message: %w", err)
@@ -97,12 +65,9 @@ func (v *OpenPGPVerifier) VerifyMessage(msg []byte) (bool, error) {
 		return false, fmt.Errorf("expected at least 2 parts in multipart signed message")
 	}
 
-	// In production, use github.com/ProtonMail/go-crypto for actual verification
-	// For now, just check that we have the parts
-	_ = parts[0]
-	_ = parts[1]
-
-	return true, nil
+	// Stub: actual cryptographic signature verification requires
+	// github.com/ProtonMail/go-crypto and is not implemented.
+	return false, fmt.Errorf("openpgp signature verification is not implemented")
 }
 
 // OpenPGPEncryptor handles OpenPGP encryption

@@ -370,7 +370,6 @@ func (s *Server) handleToolsList() map[string]interface{} {
 				Properties: map[string]SchemaProperty{
 					"email":    {Type: "string", Description: "Full email address"},
 					"password": {Type: "string", Description: "Account password"},
-					"is_admin": {Type: "boolean", Description: "Grant admin privileges"},
 				},
 				Required: []string{"email", "password"},
 			},
@@ -530,8 +529,7 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 	case "add_account":
 		email, _ := req.Arguments["email"].(string)
 		password, _ := req.Arguments["password"].(string)
-		isAdmin, _ := req.Arguments["is_admin"].(bool)
-		return s.toolAddAccount(email, password, isAdmin)
+		return s.toolAddAccount(email, password)
 	case "delete_account":
 		email, _ := req.Arguments["email"].(string)
 		return s.toolDeleteAccount(email)
@@ -691,7 +689,7 @@ func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 	}, nil
 }
 
-func (s *Server) toolAddAccount(email, password string, isAdmin bool) (map[string]interface{}, error) {
+func (s *Server) toolAddAccount(email, password string) (map[string]interface{}, error) {
 	if email == "" || password == "" {
 		return nil, fmt.Errorf("email and password are required")
 	}
@@ -731,19 +729,15 @@ func (s *Server) toolAddAccount(email, password string, isAdmin bool) (map[strin
 		LocalPart:    localPart,
 		Domain:       domain,
 		PasswordHash: string(hash),
-		IsAdmin:      isAdmin,
+		IsAdmin:      false,
 	}
 	if err := s.db.CreateAccount(account); err != nil {
 		slog.Error("mcp tool error", "tool", "add_account", "error", err); return nil, fmt.Errorf("internal server error")
 	}
 
-	text := fmt.Sprintf("Account '%s' created successfully", email)
-	if isAdmin {
-		text += " with admin privileges"
-	}
 	return map[string]interface{}{
 		"content": []map[string]string{
-			{"type": "text", "text": text},
+			{"type": "text", "text": fmt.Sprintf("Account '%s' created successfully", email)},
 		},
 	}, nil
 }

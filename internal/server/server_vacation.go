@@ -9,6 +9,13 @@ import (
 	"github.com/umailserver/umailserver/internal/sieve"
 )
 
+// sanitizeHeaderValue removes CR/LF characters to prevent SMTP header injection.
+func sanitizeHeaderValue(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", "")
+	return s
+}
+
 // handleSieveVacation handles Sieve vacation action by sending a vacation auto-reply
 func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.VacationAction) {
 	if s.queue == nil {
@@ -38,11 +45,14 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 	if vacation.From != "" {
 		fromAddr = vacation.From
 	}
+	safeSubject := sanitizeHeaderValue(subject)
+	safeBody := sanitizeHeaderValue(body)
+	safeFrom := sanitizeHeaderValue(fromAddr)
 	vacationMsg := fmt.Sprintf("From: %s\r\nSubject: %s\r\nX-Mail-Loop: <%s>\r\n\r\n%s",
-		fromAddr,
-		subject,
+		safeFrom,
+		safeSubject,
 		recipient,
-		body)
+		safeBody)
 
 	// Enqueue vacation reply TO the sender FROM the recipient
 	if _, err := s.queue.Enqueue(fromAddr, []string{sender}, []byte(vacationMsg)); err != nil {
@@ -114,14 +124,14 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		return
 	}
 
-	autoReply := "From: " + recipientEmail + "\r\n" +
-		"To: " + senderEmail + "\r\n" +
+	autoReply := "From: " + sanitizeHeaderValue(recipientEmail) + "\r\n" +
+		"To: " + sanitizeHeaderValue(senderEmail) + "\r\n" +
 		"Subject: Auto: Out of Office\r\n" +
 		"Auto-Submitted: auto-replied\r\n" +
 		"Precedence: bulk\r\n" +
 		"Date: " + now.Format(time.RFC1123Z) + "\r\n" +
 		"\r\n" +
-		settings.Message
+		sanitizeHeaderValue(settings.Message)
 
 	if _, err := s.queue.Enqueue(recipientEmail, []string{senderEmail}, []byte(autoReply)); err != nil {
 		s.logger.Error("Failed to enqueue vacation reply", "error", err)
