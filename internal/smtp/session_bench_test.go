@@ -1,26 +1,8 @@
 package smtp
 
 import (
-	"strings"
 	"testing"
 )
-
-// BenchmarkParseAddress measures email address parsing performance
-func BenchmarkParseAddress(b *testing.B) {
-	addresses := []string{
-		"<user@example.com>",
-		"User Name <user@example.com>",
-		"\"Quoted Name\" <user@example.com>",
-		"user@example.com",
-		"<user+tag@example.com>",
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		addr := addresses[i%len(addresses)]
-		parseAddress(addr)
-	}
-}
 
 // BenchmarkParseCommand measures SMTP command parsing
 func BenchmarkParseCommand(b *testing.B) {
@@ -86,88 +68,4 @@ func BenchmarkValidateEmail(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		ValidateEmail(emails[i%len(emails)])
 	}
-}
-
-// BenchmarkExtractSender measures sender extraction from message
-func BenchmarkExtractSender(b *testing.B) {
-	msg := []byte("Return-Path: <sender@example.com>\r\n" +
-		"From: Sender Name <sender@example.com>\r\n" +
-		"To: recipient@example.com\r\n" +
-		"Subject: Test\r\n" +
-		"\r\n" +
-		"Body")
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		extractSender(msg)
-	}
-}
-
-// BenchmarkExtractRecipients measures recipient extraction
-func BenchmarkExtractRecipients(b *testing.B) {
-	msg := []byte("From: sender@example.com\r\n" +
-		"To: recipient1@example.com, recipient2@example.com\r\n" +
-		"Cc: cc1@example.com, cc2@example.com\r\n" +
-		"Subject: Test\r\n" +
-		"\r\n" +
-		"Body")
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		extractRecipients(msg)
-	}
-}
-
-// Helper that mirrors actual implementation for consistent benchmarking
-func parseAddress(addr string) string {
-	addr = strings.TrimSpace(addr)
-	if idx := strings.LastIndex(addr, "<"); idx != -1 {
-		if endIdx := strings.Index(addr[idx:], ">"); endIdx != -1 {
-			return addr[idx+1 : idx+endIdx]
-		}
-	}
-	return addr
-}
-
-func extractSender(data []byte) string {
-	// Look for Return-Path first
-	if idx := strings.Index(string(data), "Return-Path:"); idx != -1 {
-		start := idx + len("Return-Path:")
-		remaining := string(data[start:])
-		if end := strings.Index(remaining, "\r\n"); end != -1 {
-			return strings.Trim(remaining[:end], " <>\t")
-		}
-	}
-
-	// Fall back to From header
-	if idx := strings.Index(string(data), "From:"); idx != -1 {
-		start := idx + len("From:")
-		remaining := string(data[start:])
-		if end := strings.Index(remaining, "\r\n"); end != -1 {
-			return parseAddress(remaining[:end])
-		}
-	}
-
-	return ""
-}
-
-func extractRecipients(data []byte) []string {
-	var recipients []string
-
-	for _, header := range []string{"To:", "Cc:", "Bcc:"} {
-		if idx := strings.Index(string(data), header); idx != -1 {
-			start := idx + len(header)
-			remaining := string(data[start:])
-			if end := strings.Index(remaining, "\r\n"); end != -1 {
-				value := remaining[:end]
-				// Split by comma
-				parts := strings.Split(value, ",")
-				for _, part := range parts {
-					recipients = append(recipients, parseAddress(strings.TrimSpace(part)))
-				}
-			}
-		}
-	}
-
-	return recipients
 }

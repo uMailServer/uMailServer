@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/ratelimit"
@@ -168,10 +169,6 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 	traceCtx := context.Background()
 	for _, stage := range p.stages {
 		ctx.Stage = stage.Name()
-		p.logger.Debug("Running pipeline stage",
-			"stage", stage.Name(),
-			"from", ctx.From,
-		)
 
 		result := p.runStage(traceCtx, stage, ctx)
 
@@ -735,7 +732,10 @@ func defaultHeuristicRules() []HeuristicRule {
 					return false
 				}
 				subject := subjects[0]
-				return subject != "" && strings.ToUpper(subject) == subject && len(subject) > 5
+				if len(subject) <= 5 {
+					return false
+				}
+				return strings.IndexFunc(subject, unicode.IsLower) == -1
 			},
 		},
 		{

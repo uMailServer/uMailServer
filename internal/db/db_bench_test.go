@@ -172,6 +172,50 @@ func BenchmarkGetPendingQueue(b *testing.B) {
 	}
 }
 
+// BenchmarkGetPendingQueueRealistic models a healthier production queue: most
+// entries are in a terminal state (delivered/bounced/failed) lingering until
+// cleanup, with only a small minority actually pending. The sweeper hits this
+// shape every 30s, so the cost of skipping non-pending entries dominates.
+func BenchmarkGetPendingQueueRealistic(b *testing.B) {
+	tempDir := b.TempDir()
+	db, err := Open(tempDir + "/bench.db")
+	if err != nil {
+		b.Fatalf("failed to open db: %v", err)
+	}
+	defer db.Close()
+
+	// 1000 entries: 50 pending, 950 in terminal states (skewed roughly the way
+	// a queue with sticky completed entries would look).
+	statuses := []string{"delivered", "bounced", "failed", "delivered", "delivered"}
+	for i := 0; i < 1000; i++ {
+		status := "pending"
+		if i >= 50 {
+			status = statuses[i%len(statuses)]
+		}
+		entry := &QueueEntry{
+			ID:          fmt.Sprintf("msg-%d", i),
+			From:        "sender@example.com",
+			To:          []string{"recipient@example.com"},
+			MessagePath: "/tmp/test.eml",
+			Status:      status,
+			CreatedAt:   time.Now(),
+			NextRetry:   time.Now(),
+			RetryCount:  0,
+		}
+		if err := db.Enqueue(entry); err != nil {
+			b.Fatalf("setup enqueue failed: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := db.GetPendingQueue(time.Now().Add(time.Hour))
+		if err != nil {
+			b.Fatalf("get pending queue failed: %v", err)
+		}
+	}
+}
+
 // BenchmarkListDomains measures domain listing
 func BenchmarkListDomains(b *testing.B) {
 	tempDir := b.TempDir()

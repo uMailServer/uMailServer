@@ -1021,13 +1021,8 @@ func (m *Manager) GetStats() (*QueueStats, error) {
 func (m *Manager) getStats() (*QueueStats, error) {
 	stats := &QueueStats{}
 
-	_, err := m.db.GetPendingQueue(time.Now().Add(24 * time.Hour))
-	if err != nil {
-		return stats, err
-	}
-
 	// Count all queue entries by status
-	_ = m.db.ForEach(db.BucketQueue, func(key string, value []byte) error {
+	err := m.db.ForEach(db.BucketQueue, func(key string, value []byte) error {
 		var entry db.QueueEntry
 		if err := json.Unmarshal(value, &entry); err != nil {
 			return nil // skip malformed entries
@@ -1048,7 +1043,7 @@ func (m *Manager) getStats() (*QueueStats, error) {
 		return nil
 	})
 
-	return stats, nil
+	return stats, err
 }
 
 // SetMaxRetries sets the maximum number of retry attempts

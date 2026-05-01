@@ -1,7 +1,9 @@
 package db
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -564,16 +566,37 @@ func (d *DB) Dequeue(id string) error {
 	return d.Delete(BucketQueue, id)
 }
 
-// GetPendingQueue returns entries ready for delivery
+// pendingStatusMarker is the byte sequence json.Marshal produces for
+// `Status: "pending"` on a QueueEntry. The encoder is whitespace-free, so
+// exact substring matching is reliable for entries written via db.Put.
+var pendingStatusMarker = []byte(`"status":"pending"`)
+
+// errInvalidQueueEntry signals corruption in the queue bucket. It's a
+// package-level sentinel so the GetPendingQueue hot loop doesn't allocate
+// per non-pending entry — any per-call error string with %q would force the
+// key argument to escape on every iteration, costing ~1 alloc/entry.
+var errInvalidQueueEntry = errors.New("queue entry has invalid JSON")
+
+// GetPendingQueue returns entries ready for delivery. It is called on every
+// queue sweep tick, so the bucket scan is hot — we substring-match the
+// status marker before paying for a full json.Unmarshal of the entry, which
+// skips the ~12 allocs/entry decode cost for non-pending rows.
 func (d *DB) GetPendingQueue(now time.Time) ([]*QueueEntry, error) {
 	var entries []*QueueEntry
 
 	err := d.ForEach(BucketQueue, func(key string, value []byte) error {
+		if !bytes.Contains(value, pendingStatusMarker) {
+			// Cheap sniff: real entries always begin with `{` from json.Marshal.
+			// Anything else is corruption and is surfaced rather than silently skipped.
+			if len(value) == 0 || value[0] != '{' {
+				return errInvalidQueueEntry
+			}
+			return nil
+		}
 		var entry QueueEntry
 		if err := json.Unmarshal(value, &entry); err != nil {
 			return err
 		}
-
 		if entry.Status == "pending" && entry.NextRetry.Before(now) {
 			entries = append(entries, &entry)
 		}

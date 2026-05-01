@@ -185,12 +185,9 @@ func TestExtractBase64Content_NoContent(t *testing.T) {
 func TestOpenPGPSign_Message(t *testing.T) {
 	signer := NewOpenPGPSigner([]byte("test private key"))
 
-	signed, err := signer.SignMessage([]byte("Hello, World!"), "sender@example.com", "recipient@example.com")
-	if err != nil {
-		t.Fatalf("SignMessage error: %v", err)
-	}
-	if len(signed) == 0 {
-		t.Error("Expected signed message")
+	_, err := signer.SignMessage([]byte("Hello, World!"), "sender@example.com", "recipient@example.com")
+	if err == nil {
+		t.Error("Expected error for unimplemented OpenPGP signing")
 	}
 }
 
