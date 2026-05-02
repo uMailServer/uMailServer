@@ -215,13 +215,17 @@ func TestResourceMonitor_MemoryLimitCallback(t *testing.T) {
 		callbackCalled = true
 	})
 
-	monitor.Start()
-
-	// Allocate memory to trigger limit
+	// Allocate memory BEFORE starting monitor so it's present during initial check
 	data := make([]byte, 1024*1024*5) // 5MB
 	_ = data
 
+	monitor.Start()
+
+	// Wait for the ticker to fire at least once (interval is 50ms)
 	time.Sleep(100 * time.Millisecond)
+
+	// Force a direct check in case ticker hasn't fired yet
+	monitor.checkResources()
 
 	monitor.Stop()
 

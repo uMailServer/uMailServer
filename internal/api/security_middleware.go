@@ -65,7 +65,13 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// csrfMiddleware validates CSRF tokens for state-changing requests
+// csrfMiddleware validates CSRF protection for state-changing requests.
+// For API endpoints using JWT Bearer tokens in the Authorization header,
+// the JWT itself provides CSRF protection because browsers don't
+// automatically include Authorization headers in cross-origin form submissions.
+// We additionally validate Content-Type: application/json to block
+// traditional form-based attacks, and verify Origin/Referer consistency
+// as defense-in-depth.
 func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Skip CSRF check for safe methods

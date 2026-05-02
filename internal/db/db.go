@@ -147,6 +147,15 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// On POSIX systems, bbolt applies the mode at the syscall level so umask
+	// is respected. However, we also explicitly chmod the file after opening
+	// to ensure strict permissions even if umask is unusually permissive.
+	// On Windows this is a no-op (Chmod returns nil).
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = bolt.Close()
+		return nil, fmt.Errorf("failed to set database file permissions: %w", err)
+	}
+
 	closeOnErr := true
 	defer func() {
 		if closeOnErr {

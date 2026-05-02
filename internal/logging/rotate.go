@@ -68,6 +68,12 @@ func (w *RotatingWriter) open() error {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
 
+	// Ensure correct permissions after creation (defense against permissive umask)
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("failed to set log file permissions: %w", err)
+	}
+
 	w.file = f
 	return nil
 }

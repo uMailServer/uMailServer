@@ -9,12 +9,12 @@ import (
 // startAPI creates and starts the HTTP API server (webmail + admin).
 func (s *Server) startAPI() {
 	apiCfg := api.Config{
-		Addr:           fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
+		Addr:             fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
 		JWTSecret:        s.config.Security.JWTSecret,
 		DisableLegacyJWT: s.config.Security.DisableLegacyJWT,
 		TOTPKey:          s.config.Security.TOTPKey,
-		CorsOrigins:    s.config.HTTP.CorsOrigins,
-		PasswordHasher: "bcrypt", // or "argon2id" (OWASP recommended)
+		CorsOrigins:      s.config.HTTP.CorsOrigins,
+		PasswordHasher:   "bcrypt", // or "argon2id" (OWASP recommended)
 		AuditLog: api.AuditLogConfig{
 			Path:       s.config.Security.AuditLog.Path,
 			MaxSizeMB:  s.config.Security.AuditLog.MaxSizeMB,
@@ -53,7 +53,7 @@ func (s *Server) startAPI() {
 	// Start admin server on separate port (localhost only)
 	if s.config.Admin.Enabled {
 		adminCfg := api.AdminConfig{
-			Addr:      fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
+			Addr:             fmt.Sprintf("%s:%d", s.config.Admin.Bind, s.config.Admin.Port),
 			JWTSecret:        s.config.Security.JWTSecret,
 			DisableLegacyJWT: s.config.Security.DisableLegacyJWT,
 			AuditLog: api.AuditLogConfig{

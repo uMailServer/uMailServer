@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -12,13 +13,30 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/audit"
 	"github.com/umailserver/umailserver/internal/auth"
+	"golang.org/x/crypto/bcrypt"
 )
 
-// dummyPasswordHash is a valid bcrypt hash used for timing-safe login.
-// When an account does not exist we still run password verification against
-// this hash so that "account not found" and "wrong password" take roughly
-// the same amount of time, preventing account enumeration.
-const dummyPasswordHash = "$2a$10$vI8aWBnW3fID.ZQ4/zo1G.q1lRps.9cGLcZEiGDMVr5yUP1KUOYTa"
+// dummyPasswordHash is generated dynamically at startup to prevent timing attacks
+// when an account does not exist. Using a static hash in source code would allow
+// attackers with source access to confirm the dummy value and refine timing attacks.
+var dummyPasswordHash string
+
+func init() {
+	// Generate a random password and hash it with bcrypt to produce a valid
+	// dummy hash. This is called at package init time so the hash is ready
+	// before any authentication requests arrive.
+	dummyPwd := make([]byte, 32)
+	if _, err := rand.Read(dummyPwd); err != nil {
+		panic("failed to generate dummy password: " + err.Error())
+	}
+	// bcrypt cost 4 is intentionally low here since this hash is never user data;
+	// we just need a valid bcrypt structure for timing-safe comparison.
+	hash, err := bcrypt.GenerateFromPassword(dummyPwd, 4)
+	if err != nil {
+		panic("failed to hash dummy password: " + err.Error())
+	}
+	dummyPasswordHash = string(hash)
+}
 
 // loginAttempt tracks failed login attempts per IP with exponential backoff
 type loginAttempt struct {

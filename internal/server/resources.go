@@ -81,6 +81,9 @@ func (rm *ResourceMonitor) Start() {
 		rm.wg.Add(1)
 		go rm.monitorLoop()
 	}
+
+	// Perform initial check immediately to catch any existing issues
+	rm.checkResources()
 }
 
 // Stop stops the resource monitor
