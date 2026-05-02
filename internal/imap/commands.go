@@ -990,7 +990,7 @@ func (s *Session) handleStatus(args []string) error {
 	return nil
 }
 
-// APPEND command
+// APPEND command (RFC 3501) with MULTIAPPEND extension (RFC 7889)
 func (s *Session) handleAppend(args []string, line string) error {
 	ctx := context.Background()
 
@@ -1018,79 +1018,129 @@ func (s *Session) handleAppend(args []string, line string) error {
 		tracing.SetStringAttribute(span, "append.mailbox", mailboxName)
 	}
 
-	// Parse flags if present
-	flags := []string{}
-	date := time.Now()
+	// Limit APPEND message size to 50MB
+	const maxAppendSize = 50 * 1024 * 1024
 
-	// Check for flags in parentheses
-	for i, arg := range args[1:] {
-		if strings.HasPrefix(arg, "(") {
-			flagsStr := strings.Join(args[1+i:], " ")
-			end := strings.Index(flagsStr, ")")
-			if end > 0 {
-				flagsStr = flagsStr[1:end]
-				flags = strings.Fields(flagsStr)
+	// Process first message (has literal in command or needs continuation)
+	flags, date, size, err := s.parseAppendParams(args[1:], line)
+	if err != nil {
+		s.WriteResponse(s.tag, "BAD "+err.Error())
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "parse error")
+		}
+		return nil
+	}
+
+	if size == 0 {
+		s.WriteResponse(s.tag, "BAD Missing message data")
+		return nil
+	}
+
+	if size > maxAppendSize {
+		s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "message too large")
+		}
+		return nil
+	}
+
+	if span != nil {
+		tracing.SetIntAttribute(span, "append.size", size)
+		tracing.SetIntAttribute(span, "append.flag_count", len(flags))
+	}
+
+	// Check if non-synchronizing literal (no + suffix) - needs continuation
+	needsCont := !strings.Contains(line, "+}")
+
+	// Request the literal if non-synchronizing
+	if needsCont {
+		s.WriteContinuation(fmt.Sprintf("Ready for %d octets", size))
+	}
+
+	// Read the message data
+	data := make([]byte, size)
+	_, err = io.ReadFull(s.reader, data)
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Failed to read message data")
+		if span != nil {
+			tracing.RecordError(span, err)
+			tracing.SetStatus(span, tracing.StatusError, "read message data failed")
+		}
+		return err
+	}
+
+	// Append to mailbox
+	if s.server.mailstore != nil {
+		err := s.server.mailstore.AppendMessage(s.user, mailboxName, flags, date, data)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			if span != nil {
+				tracing.RecordError(span, err)
+				tracing.SetStatus(span, tracing.StatusError, "append failed")
 			}
-			break
+			return nil
 		}
 	}
 
-	// Find literal string indicator {N}
-	literalStart := strings.Index(line, "{")
-	if literalStart > 0 {
-		literalEnd := strings.Index(line[literalStart:], "}")
-		if literalEnd > 0 {
-			sizeStr := line[literalStart+1 : literalStart+literalEnd]
-			size, err := strconv.Atoi(sizeStr)
-			if err != nil {
-				s.WriteResponse(s.tag, "BAD Invalid literal size")
-				if span != nil {
-					tracing.SetStatus(span, tracing.StatusError, "invalid literal size")
-				}
-				return nil
-			}
+	// RFC 7889 MULTIAPPEND: Check for additional messages in the stream
+	// After reading one literal, there might be more synchronizing literals waiting
+	for {
+		// Look ahead for another literal marker
+		rest, err := s.reader.Peek(256)
+		if err != nil || len(rest) == 0 {
+			break
+		}
+		restStr := string(rest)
+		litIdx := strings.Index(restStr, "{")
+		if litIdx < 0 {
+			break
+		}
 
-			// Limit APPEND message size to 50MB
-			const maxAppendSize = 50 * 1024 * 1024
-			if size > maxAppendSize {
-				s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
-				if span != nil {
-					tracing.SetStatus(span, tracing.StatusError, "message too large")
-				}
-				return nil
-			}
+		// Found another literal - parse its size
+		litEnd := strings.Index(restStr[litIdx:], "}")
+		if litEnd < 0 {
+			break
+		}
 
+		sizeStr := restStr[litIdx+1 : litIdx+litEnd]
+		nextSize, err := strconv.Atoi(sizeStr)
+		if err != nil {
+			break
+		}
+
+		// Consume what we peeked (including the {size} part)
+		discard := make([]byte, litIdx+litEnd+1)
+		s.reader.Read(discard)
+
+		if nextSize > maxAppendSize {
+			s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
 			if span != nil {
-				tracing.SetIntAttribute(span, "append.size", size)
-				tracing.SetIntAttribute(span, "append.flag_count", len(flags))
+				tracing.SetStatus(span, tracing.StatusError, "message too large")
 			}
+			return nil
+		}
 
-			// Request the literal
-			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", size))
+		// Check if non-synchronizing (has + suffix)
+		hasPlus := strings.Contains(restStr[litIdx:litIdx+litEnd+1], "+")
 
-			// Read the message data
-			data := make([]byte, size)
-			_, err = io.ReadFull(s.reader, data)
+		if !hasPlus {
+			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", nextSize))
+		}
+
+		// Read this message
+		data := make([]byte, nextSize)
+		_, err = io.ReadFull(s.reader, data)
+		if err != nil {
+			s.WriteResponse(s.tag, "NO Failed to read message data")
+			return err
+		}
+
+		// Append message with default flags
+		if s.server.mailstore != nil {
+			err := s.server.mailstore.AppendMessage(s.user, mailboxName, nil, time.Now(), data)
 			if err != nil {
-				s.WriteResponse(s.tag, "NO Failed to read message data")
-				if span != nil {
-					tracing.RecordError(span, err)
-					tracing.SetStatus(span, tracing.StatusError, "read message data failed")
-				}
-				return err
-			}
-
-			// Append to mailbox
-			if s.server.mailstore != nil {
-				err := s.server.mailstore.AppendMessage(s.user, mailboxName, flags, date, data)
-				if err != nil {
-					s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
-					if span != nil {
-						tracing.RecordError(span, err)
-						tracing.SetStatus(span, tracing.StatusError, "append failed")
-					}
-					return nil
-				}
+				s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+				return nil
 			}
 		}
 	}
@@ -1101,6 +1151,46 @@ func (s *Session) handleAppend(args []string, line string) error {
 
 	s.WriteResponse(s.tag, "OK APPEND completed")
 	return nil
+}
+
+// parseAppendParams extracts flags, date, and literal size from APPEND args
+func (s *Session) parseAppendParams(args []string, line string) ([]string, time.Time, int, error) {
+	flags := []string{}
+	date := time.Now()
+	size := 0
+
+	// Check for flags in parentheses
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "(") {
+			flagsStr := strings.Join(args[i:], " ")
+			end := strings.Index(flagsStr, ")")
+			if end > 0 {
+				flagsStr = flagsStr[1:end]
+				flags = strings.Fields(flagsStr)
+			}
+			break
+		}
+	}
+
+	// Find literal string indicator {N} in the command line
+	// Handle both {size} and {size}+ forms
+	literalStart := strings.Index(line, "{")
+	if literalStart < 0 {
+		return flags, date, 0, fmt.Errorf("missing literal size")
+	}
+
+	literalEnd := strings.Index(line[literalStart:], "}")
+	if literalEnd < 0 {
+		return flags, date, 0, fmt.Errorf("invalid literal format")
+	}
+
+	sizeStr := line[literalStart+1 : literalStart+literalEnd]
+	size, err := strconv.Atoi(sizeStr)
+	if err != nil {
+		return flags, date, 0, fmt.Errorf("invalid literal size")
+	}
+
+	return flags, date, size, nil
 }
 
 // NAMESPACE command

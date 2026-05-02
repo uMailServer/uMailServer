@@ -516,6 +516,7 @@ func defaultCapabilities() []string {
 		"UIDPLUS",
 		"MOVE",
 		"CONDSTORE",
+		"QRESYNC",
 		"ENABLE",
 		"LITERAL+",
 		"SASL-IR",
@@ -526,6 +527,7 @@ func defaultCapabilities() []string {
 		"SORT",
 		"THREAD=REFERENCES",
 		"THREAD=ORDEREDSUBJECT",
+		"MULTIAPPEND",
 	}
 }
 
