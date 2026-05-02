@@ -88,6 +88,11 @@ type indexJob struct {
 // runIndexWorker processes search indexing jobs.
 func (s *Server) runIndexWorker() {
 	defer s.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("Index worker panic", "recover", r)
+		}
+	}()
 	for job := range s.indexWork {
 		if err := s.searchSvc.IndexMessage(job.email, "INBOX", job.uid); err != nil {
 			s.logger.Error("Failed to index message for search", "email", job.email, "uid", job.uid, "error", err)

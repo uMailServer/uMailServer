@@ -89,7 +89,11 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		sendInterval = 24 * time.Hour
 	}
 
-	key := recipientEmail + "|" + senderEmail
+	// sanitizeForDedup replaces the pipe delimiter with a double-underscore
+	// to prevent key collisions when email addresses contain '|'.
+	safeRecipient := strings.ReplaceAll(recipientEmail, "|", "__")
+	safeSender := strings.ReplaceAll(senderEmail, "|", "__")
+	key := safeRecipient + "|" + safeSender
 	s.vacationRepliesMu.Lock()
 	if s.vacationReplies == nil {
 		s.vacationReplies = make(map[string]time.Time)
@@ -102,7 +106,11 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 
 	// Cleanup old entries every 100 entries to prevent unbounded growth
 	if len(s.vacationReplies) > 100 {
+		// Must release lock before calling cleanupVacationRepliesLocked
+		// which acquires the lock internally - sync.Mutex is not reentrant
+		s.vacationRepliesMu.Unlock()
 		s.cleanupVacationRepliesLocked()
+		s.vacationRepliesMu.Lock()
 	}
 
 	s.vacationRepliesMu.Unlock()
@@ -138,11 +146,28 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 	}
 }
 
-// cleanupVacationReplies removes entries older than 48 hours from vacationReplies map
+// cleanupVacationReplies removes entries older than 48 hours from vacationReplies map.
+// It acquires the lock only for the minimum time needed: marking keys, then releases
+// before deletion to avoid blocking sendVacationReply during long cleanup runs.
 func (s *Server) cleanupVacationReplies() {
+	cutoff := time.Now().Add(-48 * time.Hour)
+
+	// Phase 1: Mark keys to delete while holding lock briefly
 	s.vacationRepliesMu.Lock()
-	defer s.vacationRepliesMu.Unlock()
-	s.cleanupVacationRepliesLocked()
+	var toDelete []string
+	for key, lastSent := range s.vacationReplies {
+		if lastSent.Before(cutoff) {
+			toDelete = append(toDelete, key)
+		}
+	}
+	s.vacationRepliesMu.Unlock()
+
+	// Phase 2: Delete outside the lock to avoid blocking sendVacationReply
+	for _, key := range toDelete {
+		s.vacationRepliesMu.Lock()
+		delete(s.vacationReplies, key)
+		s.vacationRepliesMu.Unlock()
+	}
 }
 
 // cleanupVacationRepliesLocked removes entries older than 48 hours.

@@ -351,6 +351,12 @@ func NewServerWithInterfaces(
 
 // ServeHTTP implements the http.Handler interface
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.logger.Error("HTTP handler panic", "panic", recovered, "path", r.URL.Path)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
 	if s.router == nil {
 		s.initRouter()
 	}
@@ -396,7 +402,7 @@ func (s *Server) initRouter() {
 	mux.Handle("/mcp", s.authMiddleware(http.HandlerFunc(s.mcpServer.HandleHTTP)))
 
 	// Authentication
-	mux.HandleFunc("/api/v1/auth/login", s.handleLogin)
+	mux.Handle("/api/v1/auth/login", s.limitBodyMiddleware(http.HandlerFunc(s.handleLogin)))
 	mux.Handle("/api/v1/auth/logout", s.rateLimitMiddleware(s.authMiddleware(http.HandlerFunc(s.handleLogout))))
 
 	// Protected routes
@@ -986,7 +992,9 @@ func (s *Server) checkAPIRateLimit(ip string) bool {
 func (s *Server) sendJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		s.logger.Error("Failed to encode JSON response", "error", err)
+	}
 }
 
 func (s *Server) sendError(w http.ResponseWriter, status int, message string) {

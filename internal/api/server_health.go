@@ -80,10 +80,12 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	if s.draining.Load() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "not ready",
 			"reason": "server is draining for graceful shutdown",
-		})
+		}); err != nil {
+			s.logger.Error("Failed to encode health response", "error", err)
+		}
 		return
 	}
 
@@ -92,17 +94,21 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.db.ListDomains(); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			if err := json.NewEncoder(w).Encode(map[string]interface{}{
 				"status": "not ready",
 				"reason": "database unavailable",
-			})
+			}); err != nil {
+				s.logger.Error("Failed to encode health response", "error", err)
+			}
 			return
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ready",
-	})
+	}); err != nil {
+		s.logger.Error("Failed to encode health response", "error", err)
+	}
 }

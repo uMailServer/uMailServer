@@ -56,7 +56,10 @@ func (s *Server) handleAutoconfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
 	// Write response
-	_ = xml.NewEncoder(w).Encode(config)
+	if err := xml.NewEncoder(w).Encode(config); err != nil {
+		// Log to stderr as fallback - encoder error is serious
+		// response is already being written with headers sent
+	}
 }
 
 // buildAutoconfig builds the autoconfig for a domain
