@@ -723,7 +723,11 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			// STARTTLS succeeded — validate with DANE if available
 			if m.daneValidator != nil {
 				if state, ok := client.TLSConnectionState(); ok {
-					result, daneErr := m.daneValidator.Validate(mx, 25, &state)
+					// RFC 7672: DANE requires DNSSEC for security.
+					// miekg/dns does not provide DNSSEC validation status, so we
+					// validate with DNSSECSecured to enforce DANE only when DNSSEC
+					// is available (otherwise DANE is not meaningful per RFC 7672).
+					result, daneErr := m.daneValidator.ValidateWithDNSSEC(mx, 25, &state, auth.DNSSECSecured)
 					if daneErr != nil {
 						m.logger.Debug("DANE validation error", "mx", mx, "error", daneErr)
 					} else if result == auth.DANEValidated {

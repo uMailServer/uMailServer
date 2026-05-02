@@ -7,6 +7,7 @@ package auth
 import (
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -309,8 +310,8 @@ func (v *DANEValidator) validateRecord(tlsa *TLSARecord, cert *x509.Certificate,
 		return false
 	}
 
-	// Compare
-	return string(computedData) == string(tlsa.Certificate)
+	// Compare using constant-time comparison to prevent timing attacks
+	return subtle.ConstantTimeCompare(computedData, tlsa.Certificate) == 1
 }
 
 // ValidateMX validates the MX server for a domain using DANE
@@ -423,8 +424,9 @@ const (
 	DNSSECBogus
 )
 
-// ValidateWithDNSSEC validates DANE with DNSSEC check
-// Note: This requires a DNS resolver that supports DNSSEC validation
+// ValidateWithDNSSEC validates DANE with DNSSEC check.
+// RFC 7672 requires DNSSEC for DANE to provide security; without DNSSEC
+// the TLSA records are not trustworthy.
 func (v *DANEValidator) ValidateWithDNSSEC(domain string, port int, state *tls.ConnectionState, dnssec DNSSECStatus) (DANEResult, error) {
 	// RFC 7672 requires DNSSEC validation for DANE
 	if dnssec != DNSSECSecured {

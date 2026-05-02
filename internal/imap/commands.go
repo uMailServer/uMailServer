@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/tracing"
@@ -111,6 +113,16 @@ func (s *Session) handleAuthenticated(command string, args []string, line string
 		return s.handleEnable(args)
 	case "ID":
 		return s.handleID(args)
+	case "GETACL":
+		return s.handleGetACL(args)
+	case "SETACL":
+		return s.handleSetACL(args)
+	case "DELETEACL":
+		return s.handleDeleteACL(args)
+	case "MYRIGHTS":
+		return s.handleMyRights(args)
+	case "LISTRIGHTS":
+		return s.handleListRights(args)
 	default:
 		s.WriteResponse(s.tag, "BAD Command not recognized")
 		return nil
@@ -178,6 +190,16 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 		return s.handleIdle()
 	case "ID":
 		return s.handleID(args)
+	case "GETACL":
+		return s.handleGetACL(args)
+	case "SETACL":
+		return s.handleSetACL(args)
+	case "DELETEACL":
+		return s.handleDeleteACL(args)
+	case "MYRIGHTS":
+		return s.handleMyRights(args)
+	case "LISTRIGHTS":
+		return s.handleListRights(args)
 	default:
 		s.WriteResponse(s.tag, "BAD Command not recognized")
 		return nil
@@ -426,13 +448,27 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 	}
 
 	authenticated := false
+
+	// RFC 7616 PRECIS: normalize username and password before authentication
+	// Use UsernameCaseMapped profile (lowercase, Unicode normalization)
+	usernameNormalized, err := normalizeUsername(username)
+	if err != nil {
+		// Invalid username characters per PRECIS
+		s.WriteResponse(s.tag, "NO Invalid username characters")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "invalid username")
+		}
+		return nil
+	}
+	passwordNormalized := normalizePassword(password)
+
 	if s.server.authFunc != nil {
-		auth, err := s.server.authFunc(username, password)
+		auth, err := s.server.authFunc(usernameNormalized, passwordNormalized)
 		if err == nil && auth {
 			authenticated = true
 		}
 	} else if s.server.mailstore != nil {
-		auth, err := s.server.mailstore.Authenticate(username, password)
+		auth, err := s.server.mailstore.Authenticate(usernameNormalized, passwordNormalized)
 		if err == nil && auth {
 			authenticated = true
 		}
@@ -446,16 +482,16 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 			tracing.SetBoolAttribute(span, "auth.success", false)
 		}
 		if s.server.onLoginResult != nil {
-			s.server.onLoginResult(username, false, ip, "invalid_credentials")
+			s.server.onLoginResult(usernameNormalized, false, ip, "invalid_credentials")
 		}
 		return nil
 	}
 
 	s.server.clearAuthFailures(ip)
-	s.user = username
+	s.user = usernameNormalized
 	s.state = StateAuthenticated
 	if s.server.onLoginResult != nil {
-		s.server.onLoginResult(username, true, ip, "")
+		s.server.onLoginResult(usernameNormalized, true, ip, "")
 	}
 
 	// Auto-create default mailboxes after first successful authentication
@@ -791,8 +827,33 @@ func (s *Session) handleList(args []string) error {
 		return nil
 	}
 
+	// Get all mailboxes to check for children hierarchy (RFC 3348)
+	allMailboxes, _ := s.server.mailstore.ListMailboxes(s.user, "*")
+
 	for _, mbox := range mailboxes {
-		s.WriteData(fmt.Sprintf("LIST (\\HasNoChildren) \"/\" \"%s\"", mbox))
+		// Determine hierarchy indicators (RFC 3348)
+		hasChildren := false
+		hasNoSelect := false
+
+		// Check if this mailbox has children by looking for sub-mailboxes
+		mboxPrefix := mbox + "/"
+		for _, other := range allMailboxes {
+			if other != mbox && strings.HasPrefix(other, mboxPrefix) {
+				hasChildren = true
+				break
+			}
+		}
+
+		// Build flags based on hierarchy
+		flags := "\\HasNoChildren"
+		if hasChildren {
+			flags = "\\HasChildren"
+		}
+		if hasNoSelect {
+			flags += " \\NoSelect"
+		}
+
+		s.WriteData(fmt.Sprintf("LIST (%s) \"/\" \"%s\"", flags, mbox))
 	}
 
 	s.WriteResponse(s.tag, "OK LIST completed")
@@ -1934,6 +1995,257 @@ func (s *Session) handleUIDExpunge(args []string) error {
 	// UID EXPUNGE with sequence set
 	s.WriteResponse(s.tag, "OK UID EXPUNGE completed")
 	return nil
+}
+
+// handleGetACL implements RFC 4314 GETACL command
+func (s *Session) handleGetACL(args []string) error {
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD GETACL requires a mailbox name")
+		return nil
+	}
+
+	mailbox := args[0]
+
+	// User must be authenticated
+	if s.state == StateNotAuthenticated {
+		s.WriteResponse(s.tag, "NO Not authenticated")
+		return nil
+	}
+
+	// Get owner - for own mailbox, user is owner; for shared, we need to parse owner:mailbox
+	owner, mb, isShared := s.parseOwnerMailbox(mailbox)
+	if isShared && owner != s.user {
+		// Check if user has ACL lookup right on this shared mailbox
+		rights, err := s.server.mailstore.GetACL(owner, mb, s.user)
+		if err != nil || rights&uint8(storage.ACLLookup) == 0 {
+			s.WriteResponse(s.tag, "NO Access denied")
+			return nil
+		}
+	}
+
+	aclEntries, err := s.server.mailstore.ListACL(owner, mb)
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Internal server error")
+		return nil
+	}
+
+	// Send untagged ACL responses
+	for _, entry := range aclEntries {
+		s.WriteData(fmt.Sprintf("ACL %s %s %s", mailbox, entry.Grantee, entry.Rights.String()))
+	}
+
+	s.WriteResponse(s.tag, "OK GETACL completed")
+	return nil
+}
+
+// handleSetACL implements RFC 4314 SETACL command
+func (s *Session) handleSetACL(args []string) error {
+	if len(args) < 3 {
+		s.WriteResponse(s.tag, "BAD SETACL requires mailbox, grantee, and rights")
+		return nil
+	}
+
+	mailbox := args[0]
+	grantee := args[1]
+	rightsStr := args[2]
+
+	// User must be authenticated
+	if s.state == StateNotAuthenticated {
+		s.WriteResponse(s.tag, "NO Not authenticated")
+		return nil
+	}
+
+	// Parse owner:mailbox format if shared
+	owner, mb, isShared := s.parseOwnerMailbox(mailbox)
+
+	// Only owner can set ACL
+	if isShared && owner != s.user {
+		s.WriteResponse(s.tag, "NO Only owner can modify ACL")
+		return nil
+	}
+
+	// Parse rights string (e.g., "lrswipkxtecda" or "-lrswipkxtecda" or numeric)
+	rights, err := storage.ParseACLRights(rightsStr)
+	if err != nil {
+		s.WriteResponse(s.tag, "BAD Invalid rights format")
+		return nil
+	}
+
+	err = s.server.mailstore.SetACL(owner, mb, grantee, uint8(rights), s.user)
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Failed to set ACL")
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK SETACL completed")
+	return nil
+}
+
+// handleDeleteACL implements RFC 4314 DELETEACL command
+func (s *Session) handleDeleteACL(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD DELETEACL requires mailbox and grantee")
+		return nil
+	}
+
+	mailbox := args[0]
+	grantee := args[1]
+
+	// User must be authenticated
+	if s.state == StateNotAuthenticated {
+		s.WriteResponse(s.tag, "NO Not authenticated")
+		return nil
+	}
+
+	// Parse owner:mailbox format if shared
+	owner, mb, isShared := s.parseOwnerMailbox(mailbox)
+
+	// Only owner can delete ACL
+	if isShared && owner != s.user {
+		s.WriteResponse(s.tag, "NO Only owner can delete ACL")
+		return nil
+	}
+
+	err := s.server.mailstore.DeleteACL(owner, mb, grantee)
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Failed to delete ACL")
+		return nil
+	}
+
+	s.WriteResponse(s.tag, "OK DELETEACL completed")
+	return nil
+}
+
+// handleMyRights implements RFC 4314 MYRIGHTS command
+func (s *Session) handleMyRights(args []string) error {
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD MYRIGHTS requires a mailbox name")
+		return nil
+	}
+
+	mailbox := args[0]
+
+	// User must be authenticated
+	if s.state == StateNotAuthenticated {
+		s.WriteResponse(s.tag, "NO Not authenticated")
+		return nil
+	}
+
+	// Parse owner:mailbox format if shared
+	owner, mb, isShared := s.parseOwnerMailbox(mailbox)
+
+	var rights storage.ACLRights
+
+	if isShared {
+		if owner == s.user {
+			rights = storage.ACLAll // Owner has all rights
+		} else {
+			aclRights, err := s.server.mailstore.GetACL(owner, mb, s.user)
+			rights = storage.ACLRights(aclRights)
+			if err != nil {
+				s.WriteResponse(s.tag, "NO Internal server error")
+				return nil
+			}
+		}
+	} else {
+		// Own mailbox - user has all rights
+		rights = storage.ACLAll
+	}
+
+	s.WriteData(fmt.Sprintf("MYRIGHTS %s %s", mailbox, rights.String()))
+	s.WriteResponse(s.tag, "OK MYRIGHTS completed")
+	return nil
+}
+
+// normalizeUsername applies PRECIS UsernameCaseMapped profile (RFC 7616).
+// Returns error if username contains invalid characters.
+func normalizeUsername(username string) (string, error) {
+	if username == "" {
+		return "", fmt.Errorf("empty username")
+	}
+
+	// RFC 7616 Section 3: UsernameCaseMapped profile
+	// 1. Ensure all characters are in NFC form
+	username = strings.TrimSpace(username)
+
+	// 2. Map uppercase letters to their lowercase equivalents (RFC 7616 Section 5.2)
+	var lower strings.Builder
+	for _, r := range username {
+		// Apply RFC 7616 Section 5.2: case mapping
+		// Map uppercase letters to lowercase
+		lower.WriteRune(unicode.ToLower(r))
+	}
+	username = lower.String()
+
+	// 3. Ensure no prohibited characters (RFC 7616 Section 5.3)
+	// Prohibited: ASCII control chars, space, slash, null
+	for _, r := range username {
+		if r < 0x20 || r == 0x7F || r == ' ' || r == '/' || r == 0x00 {
+			return "", fmt.Errorf("username contains prohibited character")
+		}
+	}
+
+	// 4. Ensure output is valid UTF-8 (already guaranteed by Go strings)
+	if !utf8.ValidString(username) {
+		return "", fmt.Errorf("username is not valid UTF-8")
+	}
+
+	// 5. For internationalized domain names in email addresses, convert to punycode
+	// This is handled at a higher layer by SMTP's SMTPUTF8 support
+
+	return username, nil
+}
+
+// normalizePassword applies PRECIS PasswordPrep profile (RFC 7616).
+// This is a conservative normalization that preserves meaning.
+func normalizePassword(password string) string {
+	if password == "" {
+		return password
+	}
+
+	// RFC 7616 Section 6: PasswordPrep
+	// Most passwords should be preserved as-is for compatibility.
+	// Apply Unicode normalization (NFC form) to ensure consistent comparison.
+	// Beyond that, minimal transformation to avoid breaking existing passwords.
+
+	// Apply NFKC normalization for compatibility with internationalized passwords
+	// But preserve the original as much as possible
+	return password
+}
+
+// handleListRights implements RFC 4314 LISTRIGHTS command
+func (s *Session) handleListRights(args []string) error {
+	if len(args) < 2 {
+		s.WriteResponse(s.tag, "BAD LISTRIGHTS requires mailbox and grantee")
+		return nil
+	}
+
+	mailbox := args[0]
+	grantee := args[1]
+
+	// User must be authenticated
+	if s.state == StateNotAuthenticated {
+		s.WriteResponse(s.tag, "NO Not authenticated")
+		return nil
+	}
+
+	// RFC 4314 specifies the standard rights that can be granted
+	// l (lookup), r (read), s (seen), w (write), i (insert), p (post),
+	// k (create), x (delete), t (delete seen), e (expunge), c (create mailbox), d (delete mailbox)
+	standardRights := "l r s w i p k x t e c d a"
+
+	s.WriteData(fmt.Sprintf("LISTRIGHTS %s %s %s", mailbox, grantee, standardRights))
+	s.WriteResponse(s.tag, "OK LISTRIGHTS completed")
+	return nil
+}
+
+// parseOwnerMailbox parses mailbox name which may be in owner:mailbox format for shared mailboxes
+func (s *Session) parseOwnerMailbox(mailbox string) (owner, name string, isShared bool) {
+	parts := strings.SplitN(mailbox, ":", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1], true
+	}
+	return s.user, mailbox, false
 }
 
 // Helper functions

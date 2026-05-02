@@ -40,6 +40,7 @@ type Server struct {
 	onDeliver          func(from string, to []string, data []byte) error
 	onDeliverWithSieve func(from string, to []string, data []byte, sieveActions []string) error
 	onGetUserSecret    func(username string) (string, error) // Get user's shared secret for CRAM-MD5
+	onGetPassword      func(username string) (string, error)  // Get user's password for SCRAM-SHA-256
 	onLoginResult      func(username string, success bool, ip, reason string)
 	pipeline           *Pipeline
 
@@ -192,6 +193,11 @@ func (s *Server) SetPipeline(p *Pipeline) {
 // SetUserSecretHandler sets the handler for retrieving a user's shared secret for CRAM-MD5 auth
 func (s *Server) SetUserSecretHandler(handler func(username string) (string, error)) {
 	s.onGetUserSecret = handler
+}
+
+// SetPasswordHandler sets the handler for retrieving a user's password for SCRAM-SHA-256 auth
+func (s *Server) SetPasswordHandler(handler func(username string) (string, error)) {
+	s.onGetPassword = handler
 }
 
 // SetLoginResultHandler sets the handler for login result events. The reason

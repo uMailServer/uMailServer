@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/storage"
@@ -110,6 +111,12 @@ func (m *BboltMailstore) SelectMailbox(user, mailbox string) (*Mailbox, error) {
 	// Get message counts
 	exists, recent, unseen, err := m.db.GetMailboxCounts(user, mailbox)
 	if err != nil {
+		return nil, err
+	}
+
+	// Clear \Recent flags when mailbox is selected (RFC 3501)
+	// Messages from previous sessions should no longer be marked \Recent
+	if err := m.db.ClearRecent(user, mailbox); err != nil {
 		return nil, err
 	}
 
@@ -572,6 +579,11 @@ func parseMessageHeaders(data []byte) (subject, from, to, date string) {
 
 // AppendMessage appends a message to a mailbox
 func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, date time.Time, data []byte) error {
+	// RFC 3629: validate UTF-8 well-formedness before storing
+	if !utf8.Valid(data) {
+		return fmt.Errorf("message contains invalid UTF-8 sequence")
+	}
+
 	// Store message
 	messageID, err := m.msgStore.StoreMessage(user, data)
 	if err != nil {
@@ -599,6 +611,11 @@ func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, dat
 		// Check if there's already a message with this thread ID
 		existingMsgs, _ := m.db.GetThreadMessages(user, mailbox, threadID)
 		isThreadRoot = len(existingMsgs) == 0
+	}
+
+	// Ensure \Recent flag is set for newly appended messages (RFC 3501)
+	if !storage.HasFlag(flags, "\\Recent") {
+		flags = append(flags, "\\Recent")
 	}
 
 	// Store metadata
@@ -1158,6 +1175,63 @@ func parseSeqNum(s string, maxSeq uint32) (uint32, error) {
 
 	return uint32(n), nil
 }
+
+// ---------------------------------------------------------------------------
+// ACL (Access Control List) — RFC 4314
+// ---------------------------------------------------------------------------
+
+// GetACL retrieves the rights a grantee has on a specific mailbox.
+func (m *BboltMailstore) GetACL(owner, mailbox, grantee string) (uint8, error) {
+	if m.db == nil {
+		return 0, nil
+	}
+	rights, err := m.db.GetACL(owner, mailbox, grantee)
+	return uint8(rights), err
+}
+
+// SetACL sets or updates an ACL entry.
+func (m *BboltMailstore) SetACL(owner, mailbox, grantee string, rights uint8, grantingUser string) error {
+	if m.db == nil {
+		return nil
+	}
+	return m.db.SetACL(owner, mailbox, grantee, storage.ACLRights(rights), grantingUser)
+}
+
+// DeleteACL removes ACL entries.
+func (m *BboltMailstore) DeleteACL(owner, mailbox, grantee string) error {
+	if m.db == nil {
+		return nil
+	}
+	return m.db.DeleteACL(owner, mailbox, grantee)
+}
+
+// ListACL returns all ACL entries for a mailbox.
+func (m *BboltMailstore) ListACL(owner, mailbox string) ([]storage.ACLEntry, error) {
+	if m.db == nil {
+		return nil, nil
+	}
+	return m.db.ListACL(owner, mailbox)
+}
+
+// ListMailboxesSharedWith returns mailboxes shared with the given user.
+func (m *BboltMailstore) ListMailboxesSharedWith(user string) ([]string, error) {
+	if m.db == nil {
+		return nil, nil
+	}
+	return m.db.ListMailboxesSharedWith(user)
+}
+
+// ListGranteesMailboxes returns mailboxes owned by owner that are shared.
+func (m *BboltMailstore) ListGranteesMailboxes(owner string) ([]string, error) {
+	if m.db == nil {
+		return nil, nil
+	}
+	return m.db.ListGranteesMailboxes(owner)
+}
+
+// ---------------------------------------------------------------------------
+// Default Mailbox Provisioning
+// ---------------------------------------------------------------------------
 
 // EnsureDefaultMailboxes creates default mailboxes (INBOX, Sent, Drafts, Junk, Trash, Archive)
 // for the given user if they do not already exist. Errors creating individual mailboxes

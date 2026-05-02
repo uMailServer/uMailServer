@@ -13,6 +13,8 @@ type Mailbox struct {
 	Flags          []string
 	PermanentFlags []string
 	ReadOnly       bool
+	HasChildren    bool // RFC 3348: mailbox has child mailboxes
+	HasNoSelect    bool // RFC 3348: mailbox cannot be selected
 }
 
 // Message represents an IMAP message

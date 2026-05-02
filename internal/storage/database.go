@@ -553,6 +553,41 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 	return err
 }
 
+// ClearRecent clears the \Recent flag from all messages in a mailbox.
+// Called when a mailbox is SELECTed so messages from previous sessions are
+// no longer marked \Recent (RFC 3501).
+func (db *Database) ClearRecent(user, mailbox string) error {
+	if db.bolt == nil {
+		return nil
+	}
+
+	return db.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(messagesBucket(user, mailbox)))
+		if b == nil {
+			return nil
+		}
+
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var meta MessageMetadata
+			if err := json.Unmarshal(v, &meta); err != nil {
+				continue
+			}
+			if HasFlag(meta.Flags, "\\Recent") {
+				meta.Flags = RemoveFlag(meta.Flags, "\\Recent")
+				newData, err := json.Marshal(&meta)
+				if err != nil {
+					continue
+				}
+				if err := b.Put(k, newData); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
 // DeleteMessage deletes a message
 func (db *Database) DeleteMessage(user, mailbox string, uid uint32) error {
 	if db.bolt == nil {
@@ -592,6 +627,17 @@ func HasFlag(flags []string, flag string) bool {
 		}
 	}
 	return false
+}
+
+// RemoveFlag removes a flag from the list (exported)
+func RemoveFlag(flags []string, flag string) []string {
+	var result []string
+	for _, f := range flags {
+		if !strings.EqualFold(f, flag) {
+			result = append(result, f)
+		}
+	}
+	return result
 }
 
 // itob converts uint32 to 4-byte big-endian slice

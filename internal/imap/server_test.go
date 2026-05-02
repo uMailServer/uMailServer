@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/storage"
 )
 
 type mockMailstore struct{}
@@ -78,6 +80,30 @@ func (m *mockMailstore) MoveMessages(user, sourceMailbox, destMailbox string, se
 
 func (m *mockMailstore) EnsureDefaultMailboxes(user string) error {
 	return nil
+}
+
+func (m *mockMailstore) GetACL(owner, mailbox, grantee string) (uint8, error) {
+	return 0, nil
+}
+
+func (m *mockMailstore) SetACL(owner, mailbox, grantee string, rights uint8, grantingUser string) error {
+	return nil
+}
+
+func (m *mockMailstore) DeleteACL(owner, mailbox, grantee string) error {
+	return nil
+}
+
+func (m *mockMailstore) ListACL(owner, mailbox string) ([]storage.ACLEntry, error) {
+	return nil, nil
+}
+
+func (m *mockMailstore) ListMailboxesSharedWith(user string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockMailstore) ListGranteesMailboxes(owner string) ([]string, error) {
+	return nil, nil
 }
 
 func TestNewServer(t *testing.T) {

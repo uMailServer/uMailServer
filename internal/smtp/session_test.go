@@ -1850,7 +1850,7 @@ func TestHandleEHLO_AuthAdvertisedWhenAllowInsecure(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(fullResp, "AUTH PLAIN LOGIN") {
+	if !strings.Contains(fullResp, "PLAIN") || !strings.Contains(fullResp, "LOGIN") {
 		t.Errorf("AUTH capability should be advertised when AllowInsecure=true, got: %q", fullResp)
 	}
 }

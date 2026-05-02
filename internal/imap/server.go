@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/tracing"
 )
 
@@ -94,6 +95,14 @@ type Mailstore interface {
 
 	// Default mailbox provisioning
 	EnsureDefaultMailboxes(user string) error
+
+	// ACL operations (RFC 4314)
+	GetACL(owner, mailbox, grantee string) (uint8, error)
+	SetACL(owner, mailbox, grantee string, rights uint8, grantingUser string) error
+	DeleteACL(owner, mailbox, grantee string) error
+	ListACL(owner, mailbox string) ([]storage.ACLEntry, error)
+	ListMailboxesSharedWith(user string) ([]string, error)
+	ListGranteesMailboxes(owner string) ([]string, error)
 }
 
 // Config holds server configuration
@@ -508,6 +517,7 @@ func defaultCapabilities() []string {
 		"SASL-IR",
 		"ESEARCH",
 		"ID",
+		"ACL",
 		"COMPRESS=DEFLATE",
 		"SORT",
 		"THREAD=REFERENCES",
