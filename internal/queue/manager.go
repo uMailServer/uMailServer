@@ -775,7 +775,9 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 // handleDeliverySuccess handles successful delivery
 func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 	entry.Status = "delivered"
-	_ = m.db.UpdateQueueEntry(entry)
+	if err := m.db.UpdateQueueEntry(entry); err != nil {
+		m.logger.Error("failed to update queue entry after delivery success", "error", err)
+	}
 
 	// Send DSN if requested (NOTIFY includes SUCCESS)
 	if entry.Notify != 0 && int(entry.Notify)&int(DSNNotifySuccess) != 0 {
@@ -866,7 +868,9 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 		entry.Status = "pending"
 	}
 
-	_ = m.db.UpdateQueueEntry(entry)
+	if err := m.db.UpdateQueueEntry(entry); err != nil {
+		m.logger.Error("failed to update queue entry after delivery failure", "error", err)
+	}
 
 	// Track metric
 	if m.metrics != nil {

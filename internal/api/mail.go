@@ -57,7 +57,10 @@ func (h *MailHandler) SetStorage(msgStore *storage.MessageStore, mailDB *storage
 func (h *MailHandler) sendError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message}) // Best-effort
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		// Best-effort - headers already sent, log error
+		fmt.Printf("ERROR: failed to encode error response: %v\n", err)
+	}
 }
 
 // folderMap maps webmail folder names to internal mailbox names
@@ -123,11 +126,13 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"emails": emails,
 		"total":  len(emails),
 		"folder": folder,
-	})
+	}); err != nil {
+		fmt.Printf("ERROR: failed to encode mail list response: %v\n", err)
+	}
 }
 
 // getEmailsFromStorage retrieves emails from real storage
@@ -259,7 +264,9 @@ func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
 	h.markAsRead(userEmail, internalFolder, emailID)
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(email)
+	if err := json.NewEncoder(w).Encode(email); err != nil {
+		fmt.Printf("ERROR: failed to encode email response: %v\n", err)
+	}
 }
 
 // getEmailFromStorage retrieves a single email from storage
@@ -469,14 +476,18 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 			From:         from,
 			To:           to,
 		}
-		_ = h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta)
+		if err := h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta); err != nil {
+			fmt.Printf("ERROR: failed to store message metadata: %v\n", err)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"message": "Email sent successfully",
 		"id":      msgID,
-	})
+	}); err != nil {
+		fmt.Printf("ERROR: failed to encode send confirmation: %v\n", err)
+	}
 }
 
 // handleMailDelete deletes an email (moves to trash)
@@ -536,10 +547,12 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"message": "Email deleted",
 		"id":      messageID,
-	})
+	}); err != nil {
+		fmt.Printf("ERROR: failed to encode delete confirmation: %v\n", err)
+	}
 }
 
 // deleteMessageMetadata finds and deletes message metadata by messageID
