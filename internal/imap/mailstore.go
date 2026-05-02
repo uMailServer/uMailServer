@@ -120,6 +120,12 @@ func (m *BboltMailstore) SelectMailbox(user, mailbox string) (*Mailbox, error) {
 		return nil, err
 	}
 
+	// Get highest modification sequence number (RFC 7162)
+	highestModSeq, err := m.db.GetHighestModSeq(user, mailbox)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Mailbox{
 		Name:           mb.Name,
 		Exists:         exists,
@@ -127,6 +133,7 @@ func (m *BboltMailstore) SelectMailbox(user, mailbox string) (*Mailbox, error) {
 		Unseen:         unseen,
 		UIDValidity:    mb.UIDValidity,
 		UIDNext:        mb.UIDNext,
+		HighestModSeq:  highestModSeq,
 		Flags:          []string{"\\Answered", "\\Flagged", "\\Deleted", "\\Seen", "\\Draft"},
 		PermanentFlags: []string{"\\Answered", "\\Flagged", "\\Deleted", "\\Seen", "\\Draft"},
 	}, nil

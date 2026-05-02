@@ -10,6 +10,7 @@ type Mailbox struct {
 	Unseen         int
 	UIDValidity    uint32
 	UIDNext        uint32
+	HighestModSeq  uint64  // RFC 7162: highest modification sequence number
 	Flags          []string
 	PermanentFlags []string
 	ReadOnly       bool
@@ -21,6 +22,7 @@ type Mailbox struct {
 type Message struct {
 	SeqNum        uint32
 	UID           uint32
+	ModSeq        uint64  // RFC 7162: modification sequence number
 	Flags         []string
 	InternalDate  time.Time
 	Size          int64

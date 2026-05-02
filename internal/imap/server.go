@@ -368,6 +368,9 @@ type Session struct {
 	// Capabilities
 	capabilities []string
 
+	// Enabled capabilities (via ENABLE command, RFC 5161)
+	enabledCaps map[string]bool
+
 	// Command tag
 	tag string
 
@@ -397,6 +400,7 @@ func NewSession(conn net.Conn, server *Server) *Session {
 		server:       server,
 		state:        StateNotAuthenticated,
 		capabilities: defaultCapabilities(),
+		enabledCaps:  make(map[string]bool),
 	}
 }
 

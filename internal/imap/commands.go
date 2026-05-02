@@ -592,6 +592,11 @@ func (s *Session) handleSelect(args []string) error {
 	s.WriteData(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", mailbox.UIDValidity))
 	s.WriteData(fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", mailbox.UIDNext))
 
+	// RFC 7162: HIGHESTMODSEQ when CONDSTORE/QRESYNC is enabled
+	if s.enabledCaps["CONDSTORE"] || s.enabledCaps["QRESYNC"] {
+		s.WriteData(fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest modification sequence", mailbox.HighestModSeq))
+	}
+
 	// PERMANENTFLAGS
 	s.WriteData("FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)")
 	s.WriteData("OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Flags permitted")
@@ -641,6 +646,11 @@ func (s *Session) handleExamine(args []string) error {
 
 	s.WriteData(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", mailbox.UIDValidity))
 	s.WriteData(fmt.Sprintf("OK [UIDNEXT %d] Predicted next UID", mailbox.UIDNext))
+
+	// RFC 7162: HIGHESTMODSEQ when CONDSTORE/QRESYNC is enabled
+	if s.enabledCaps["CONDSTORE"] || s.enabledCaps["QRESYNC"] {
+		s.WriteData(fmt.Sprintf("OK [HIGHESTMODSEQ %d] Highest modification sequence", mailbox.HighestModSeq))
+	}
 
 	s.WriteData("FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)")
 	s.WriteData("OK [PERMANENTFLAGS ()] No permanent flags permitted")
@@ -1239,13 +1249,13 @@ func (s *Session) handleIdle() error {
 	}
 }
 
-// ENABLE command
+// ENABLE command (RFC 5161)
 func (s *Session) handleEnable(args []string) error {
-	// Just acknowledge the command
 	enabled := []string{}
 	for _, arg := range args {
 		cap := strings.ToUpper(arg)
 		if cap == "CONDSTORE" || cap == "QRESYNC" {
+			s.enabledCaps[cap] = true
 			enabled = append(enabled, cap)
 		}
 	}

@@ -62,10 +62,11 @@ func (db *Database) AuthenticateUser(username, password string) (bool, error) {
 
 // Mailbox represents mailbox metadata
 type Mailbox struct {
-	Name        string
-	UIDValidity uint32
-	UIDNext     uint32
-	Subscribed  bool
+	Name           string
+	UIDValidity    uint32
+	UIDNext        uint32
+	HighestModSeq  uint64    // RFC 7162: highest modification sequence number
+	Subscribed     bool
 }
 
 // mailboxKey returns the bucket name for a user's mailbox metadata
@@ -81,20 +82,21 @@ func messagesBucket(user, mailbox string) string {
 // GetMailbox retrieves mailbox information
 func (db *Database) GetMailbox(user, mailbox string) (*Mailbox, error) {
 	if db.bolt == nil {
-		return &Mailbox{Name: mailbox, UIDValidity: 1, UIDNext: 1}, nil
+		return &Mailbox{Name: mailbox, UIDValidity: 1, UIDNext: 1, HighestModSeq: 0}, nil
 	}
 
 	var mb Mailbox
 	err := db.bolt.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(mailboxKey(user, mailbox)))
 		if b == nil {
-			mb = Mailbox{Name: mailbox, UIDValidity: 1, UIDNext: 1}
+			mb = Mailbox{Name: mailbox, UIDValidity: 1, UIDNext: 1, HighestModSeq: 0}
 			return nil
 		}
 		mb = Mailbox{
-			Name:        mailbox,
-			UIDValidity: btoi(b.Get([]byte("uidvalidity"))),
-			UIDNext:     btoi(b.Get([]byte("uidnext"))),
+			Name:          mailbox,
+			UIDValidity:   btoi(b.Get([]byte("uidvalidity"))),
+			UIDNext:       btoi(b.Get([]byte("uidnext"))),
+			HighestModSeq: btoi64(b.Get([]byte("highestmodseq"))),
 		}
 		return nil
 	})
@@ -125,6 +127,10 @@ func (db *Database) CreateMailbox(user, mailbox string) error {
 				return err
 			}
 			if err := b.Put([]byte("uidnext"), itob(1)); err != nil {
+				return err
+			}
+			// Initialize highest modification sequence (RFC 7162)
+			if err := b.Put([]byte("highestmodseq"), itob64(0)); err != nil {
 				return err
 			}
 			created = true
@@ -379,6 +385,43 @@ func (db *Database) GetNextUID(user, mailbox string) (uint32, error) {
 	return uid, err
 }
 
+// GetNextModSeq returns the next modification sequence number for a mailbox and increments it (RFC 7162)
+func (db *Database) GetNextModSeq(user, mailbox string) (uint64, error) {
+	if db.bolt == nil {
+		return 1, nil
+	}
+
+	var modSeq uint64
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(mailboxKey(user, mailbox)))
+		if err != nil {
+			return err
+		}
+		modSeq = btoi64(b.Get([]byte("highestmodseq")))
+		modSeq++
+		return b.Put([]byte("highestmodseq"), itob64(modSeq))
+	})
+	return modSeq, err
+}
+
+// GetHighestModSeq returns the highest modification sequence number for a mailbox
+func (db *Database) GetHighestModSeq(user, mailbox string) (uint64, error) {
+	if db.bolt == nil {
+		return 0, nil
+	}
+
+	var modSeq uint64
+	err := db.bolt.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(mailboxKey(user, mailbox)))
+		if b == nil {
+			return nil
+		}
+		modSeq = btoi64(b.Get([]byte("highestmodseq")))
+		return nil
+	})
+	return modSeq, err
+}
+
 // MessageMetadata stores message metadata
 type MessageMetadata struct {
 	MessageID    string    `json:"message_id"`
@@ -386,6 +429,7 @@ type MessageMetadata struct {
 	Flags        []string  `json:"flags"`
 	InternalDate time.Time `json:"internal_date"`
 	Size         int64     `json:"size"`
+	ModSeq       uint64    `json:"mod_seq"` // RFC 7162: highest modification sequence number
 	Subject      string    `json:"subject"`
 	Date         string    `json:"date"`
 	From         string    `json:"from"`
@@ -515,6 +559,7 @@ func (db *Database) UpdateMessageMetadata(user, mailbox string, uid uint32, meta
 // UpdateMessageMetadataFunc atomically reads message metadata, applies fn to it,
 // and writes it back inside a single bbolt transaction. This eliminates the
 // read-modify-write race when multiple sessions update flags concurrently.
+// Also updates the message's ModSeq if the metadata was modified (RFC 7162).
 func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, fn func(*MessageMetadata) error) error {
 	if db.bolt == nil {
 		return nil
@@ -540,6 +585,15 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 			return err
 		}
 
+		// Update ModSeq if this is an existing message (RFC 7162)
+		if preexisting {
+			modSeq, err := db.getNextModSeqTx(tx, user, mailbox)
+			if err != nil {
+				return err
+			}
+			meta.ModSeq = modSeq
+		}
+
 		newData, err := json.Marshal(&meta)
 		if err != nil {
 			return err
@@ -551,6 +605,17 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 		// This is acceptable for flag updates which don't change message content.
 	}
 	return err
+}
+
+// getNextModSeqTx returns the next modseq for a mailbox within a transaction
+func (db *Database) getNextModSeqTx(tx *bbolt.Tx, user, mailbox string) (uint64, error) {
+	b, err := tx.CreateBucketIfNotExists([]byte(mailboxKey(user, mailbox)))
+	if err != nil {
+		return 0, err
+	}
+	modSeq := btoi64(b.Get([]byte("highestmodseq")))
+	modSeq++
+	return modSeq, b.Put([]byte("highestmodseq"), itob64(modSeq))
 }
 
 // ClearRecent clears the \Recent flag from all messages in a mailbox.
@@ -660,6 +725,30 @@ func btoi(b []byte) uint32 {
 		return 0
 	}
 	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+// itob64 converts uint64 to 8-byte big-endian slice
+func itob64(v uint64) []byte {
+	b := make([]byte, 8)
+	// #nosec G115 -- Intentional big-endian byte extraction from uint64
+	b[0] = byte(v >> 56)
+	b[1] = byte(v >> 48)
+	b[2] = byte(v >> 40)
+	b[3] = byte(v >> 32)
+	b[4] = byte(v >> 24)
+	b[5] = byte(v >> 16)
+	b[6] = byte(v >> 8)
+	b[7] = byte(v)
+	return b
+}
+
+// btoi64 converts 8-byte big-endian slice to uint64
+func btoi64(b []byte) uint64 {
+	if len(b) < 8 {
+		return 0
+	}
+	return uint64(b[0])<<56 | uint64(b[1])<<48 | uint64(b[2])<<40 | uint64(b[3])<<32 |
+		uint64(b[4])<<24 | uint64(b[5])<<16 | uint64(b[6])<<8 | uint64(b[7])
 }
 
 // threadBucket returns the bucket name for thread storage
