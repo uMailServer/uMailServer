@@ -17,6 +17,7 @@
 9. [Directory Structure](#9-directory-structure)
 10. [Key Design Patterns](#10-key-design-patterns)
 11. [Implementation History](#11-implementation-history)
+12. [Observability Architecture](#12-observability-architecture)
 
 ---
 
@@ -33,9 +34,11 @@ uMailServer is a **single-binary monolith** email server implementing:
 | IMAP4rev2 | 143 | Mail Access (newer variant) |
 | POP3 | 110 | Mail Access (legacy) |
 | POP3 (TLS) | 995 | Implicit TLS pop3 |
-| HTTP | 8080 | REST API & Webmail |
+| HTTP | 443 | REST API & Webmail |
+| HTTPS (Admin) | 8443 | Admin Panel only (localhost-only) |
 | MCP | 3000 | Model Context Protocol (AI) |
 | ManageSieve | 4190 | Sieve Script Management |
+| HTTP (Metrics) | 8080 | Prometheus metrics endpoint |
 
 ### Design Principles
 
@@ -57,7 +60,11 @@ uMailServer is a **single-binary monolith** email server implementing:
 │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐                │
 │  │   SMTP    │   │   IMAP    │   │   POP3    │   │   HTTP    │                │
 │  │  Server   │   │  Server   │   │  Server   │   │   Server   │                │
-│  │  (port 25)│   │  (port 143)│   │  (port 110)│   │ (port 8080)│                │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐  │
+│  │   SMTP    │   │   IMAP    │   │   POP3    │   │   HTTP    │   │   MCP     │  │
+│  │  Server   │   │  Server   │   │  Server   │   │   Server   │   │  Server   │  │
+│  │  (port 25)│   │  (port 143)│   │  (port 110)│   │ (port 443) │   │ (port 3000)│  │
+│  └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘  │
 │  └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘                │
 │       │              │              │              │                       │
 │       └──────────────┴──────────────┴──────────────┘                       │
@@ -105,23 +112,39 @@ The `Server` struct is the central coordinator:
 
 ```go
 type Server struct {
-    config        *config.Config
-    logger        *slog.Logger
-    database      *db.DB           // Accounts/domains database
-    queue         *queue.Manager  // Outbound queue
-    msgStore      *storage.MessageStore  // Maildir++ file storage
-    smtpServer    *smtp.Server    // MX server (port 25)
-    imapServer    *imap.Server     // IMAP server (port 143)
-    pop3Server    *pop3.Server     // POP3 server (port 110)
-    apiServer     *api.Server      // HTTP API (port 8080)
-    tlsManager    *tls.Manager     // TLS certificates
-    webhookMgr    *webhook.Manager // Outbound webhooks
-    searchSvc     *search.Service  // Full-text search
-    sieveManager  *sieve.Manager   // Sieve filtering
-    storageDB     *storage.Database // Message metadata (bbolt)
-    mailstore     *imap.BboltMailstore // IMAP mailbox storage
-    healthMonitor *health.Monitor  // Health checks
-    // ...
+	config            *config.Config
+	logger            *slog.Logger
+	database          *db.DB             // Accounts/domains database
+	queue             *queue.Manager     // Outbound queue
+	msgStore          *storage.MessageStore // Maildir++ file storage
+	smtpServer        *smtp.Server       // MX server (port 25)
+	submissionServer  *smtp.Server       // Submission server (port 587)
+	submissionTLSServer *smtp.Server     // Submission TLS server (port 465)
+	imapServer        *imap.Server       // IMAP server (port 143)
+	pop3Server        *pop3.Server       // POP3 server (port 110)
+	apiServer         *api.Server        // HTTP API (port 443)
+	adminServer       *api.AdminServer    // Admin API (port 8443)
+	tlsManager        *umailTLS.Manager  // TLS certificates
+	webhookMgr        *webhook.Manager   // Outbound webhooks
+	alertMgr          *alert.Manager      // Alert manager
+	pushSvc           *push.Service       // WebPush notifications
+	searchSvc         *search.Service    // Full-text search
+	sieveManager      *sieve.Manager     // Sieve filtering
+	storageDB         *storage.Database  // Message metadata (bbolt) for search indexing
+	mailstore         *imap.BboltMailstore // IMAP mailbox storage
+	mcpHTTPServer     *http.Server       // MCP server (port 3000)
+	manageSieveServer *sieve.ManageSieveServer // ManageSieve (port 4190)
+	caldavServer      *caldav.Server     // CalDAV calendar server
+	carddavServer     *carddav.Server    // CardDAV contacts server
+	jmapServer        *jmap.Server       // JMAP email API
+	metricsHTTPServer *http.Server       // Prometheus metrics (port 8080)
+	healthMonitor     *health.Monitor    // Health checks
+	rateLimiter       *ratelimit.RateLimiter // Rate limiting
+	tracingProvider   *tracing.Provider  // Distributed tracing
+	smimeKeystore     *smtp.SMIMEKeystore   // S/MIME keystore
+	openpgpKeystore   *smtp.OpenPGPKeystore // OpenPGP keystore
+	ldapClient        *auth.LDAPClient   // LDAP authentication (optional)
+	// ...
 }
 ```
 
@@ -129,20 +152,27 @@ type Server struct {
 ```
 1. Load config (YAML)
 2. Initialize logging
-3. Open accounts database (bbolt)
+3. Open accounts database (db.DB at umailserver.db)
 4. Initialize TLS manager
 5. Create webhook manager
-6. Initialize storage database (mail metadata)
+6. Initialize storage database (storage.Database at mail/mail.db for search indexing)
 7. Initialize search service
 8. Initialize health monitor
 9. Start queue manager
-10. Create IMAP mailstore (shared storage!)
+10. Create IMAP mailstore (shared storage via NewBboltMailstoreWithInterfaces)
 11. Start SMTP servers (port 25, 587, 465)
-12. Start search indexing workers
-13. Start IMAP server
-14. Start POP3 server
-15. Start MCP server
-16. Start HTTP API server
+12. Start search indexing workers (pool of 10)
+13. Start vacation reply cleanup goroutine (hourly)
+14. Start alert checker goroutine
+15. Start IMAP server (port 143)
+16. Start POP3 server (port 110)
+17. Start MCP server (port 3000)
+18. Start ManageSieve server (port 4190)
+19. Start CalDAV server
+20. Start CardDAV server
+21. Start JMAP server
+22. Start HTTP API server (port 443)
+23. Start metrics server (port 8080)
 ```
 
 ### 3.2 SMTP Server (`internal/smtp/`)
@@ -155,20 +185,30 @@ type Server struct {
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐           │
-│  │   SPF   │──▶│  DKIM   │──▶│ DMARC   │──▶│  GREY   │           │
-│  │ Checker │   │ Verify  │   │ Check   │   │  List   │           │
+│  │   SPF   │──▶│  DKIM   │──▶│ DMARC   │──▶│  ARC    │           │
+│  │ Checker │   │ Verify  │   │ Check   │   │ Validate│           │
 │  └─────────┘   └─────────┘   └─────────┘   └─────────┘           │
-│       │                                            │              │
-│       │         ┌─────────┐   ┌─────────┐   ┌─────────┐           │
-│       └────────▶│   RBL   │──▶│SPAM HEU-──▶│   AV    │           │
-│                 │ Checker │   │  RISTICS│   │Scanner │           │
-│                 └─────────┘   └─────────┘   └─────────┘           │
-│                                              │                     │
-│                                              ▼                     │
-│                                    ┌───────────────┐            │
-│                                    │ deliverLocal  │            │
-│                                    │   or relay    │            │
-│                                    └───────────────┘            │
+│                                                            │
+│  ┌──────────────┐   ┌─────────┐   ┌─────────┐   ┌─────────────┐  │
+│  │Rate Limit    │──▶│ Greylist│──▶│  RBL    │──▶│ Heuristic   │  │
+│  │Stage         │   │ Stage   │   │ Checker │   │ Scoring     │  │
+│  └──────────────┘   └─────────┘   └─────────┘   └─────────────┘  │
+│                                                            │
+│  ┌─────────────┐   ┌─────────┐   ┌──────────┐   ┌──────────┐   │
+│  │  Bayesian   │──▶│  Score  │──▶│  Sieve   │──▶│  S/MIME  │   │
+│  │  Classifier │   │ Threshold│   │ Filtering│   │  Stage   │   │
+│  └─────────────┘   └─────────┘   └──────────┘   └──────────┘   │
+│                                                            │
+│  ┌───────────┐   ┌─────────────┐                            │
+│  │  OpenPGP  │──▶│     AV      │                            │
+│  │  Stage    │   │  Scanner    │                            │
+│  └───────────┘   └─────────────┘                            │
+│                                                            │
+│                        │                                    │
+│                        ▼                                    │
+│              ┌───────────────────────┐                     │
+│              │  deliverLocal or relay │                     │
+│              └───────────────────────┘                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -178,9 +218,16 @@ type Server struct {
 | SPF | Verify sender IP authorization | RFC 7208 |
 | DKIM | Verify cryptographic signature | RFC 6376 |
 | DMARC | Policy alignment check | RFC 7489 |
+| ARC | Authentication chain preservation | RFC 8617 |
+| Rate Limit | Per-IP/user rate limiting | - |
 | Greylist | Delay first-time senders | RFC 6647 |
 | RBL | DNS blacklist checking | RFC 5782 |
-| Heuristic | Bayesian spam scoring | - |
+| Heuristic | Bayesian-style pattern scoring | - |
+| Bayesian | Per-user spam classification | - |
+| Score | Threshold-based delivery decision | - |
+| Sieve | Server-side mail filtering | RFC 5228 |
+| S/MIME | S/MIME decryption/verification | RFC 8551 |
+| OpenPGP | OpenPGP decryption/verification | RFC 3156 |
 | AV | ClamAV virus scanning | - |
 
 ### 3.3 IMAP Server (`internal/imap/`)
@@ -305,7 +352,7 @@ Example: ./data/mail/messages/demo@localhost/86/47/8647b19daae2bddfcf7352...
 │        ▼                                                         │
 │   ┌─────────────────────────────────────────────────────────┐   │
 │   │              Middleware Chain                           │   │
-│   │  rateLimit → limitBody → cors → auth → admin         │   │
+│   │  rateLimit → limitBody → cors → auth → admin           │   │
 │   └─────────────────────────────────────────────────────────┘   │
 │                            │                                     │
 │                            ▼                                     │
@@ -338,6 +385,14 @@ Example: ./data/mail/messages/demo@localhost/86/47/8647b19daae2bddfcf7352...
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**HTTP Servers:**
+
+| Server | Port | Purpose |
+|--------|------|---------|
+| `api.Server` | 443 | Webmail + REST API + Admin Panel |
+| `api.AdminServer` | 8443 | Admin Panel only (localhost-only) |
+| Metrics server | 8080 | Prometheus metrics endpoint |
 
 **API Endpoints:**
 
@@ -551,19 +606,32 @@ Example: ./data/mail/messages/demo@localhost/86/47/8647b19daae2bddfcf7352...
 
 ### 5.1 Database Schema (bbolt)
 
-**Buckets:**
+**Two separate bbolt databases:**
+
+| Database | Path | Purpose |
+|----------|------|---------|
+| `db.DB` (accounts) | `./data/umailserver.db` | Domains, accounts, aliases |
+| `storage.Database` | `./data/mail/mail.db` | Search indexing, JMAP change journal |
+
+**Buckets (storage.Database — mail/mail.db):**
 
 | Bucket | Key Pattern | Value | Description |
 |--------|------------|-------|-------------|
-| `accounts` | `{domain}/{localPart}` | JSON | Account data |
-| `domains` | `{domainName}` | JSON | Domain config |
-| `aliases` | `{domain}/{localPart}` | String | Alias targets |
 | `msgs:{user}:{mailbox}` | UID (uint32) | JSON | Message metadata |
 | `mailbox:{user}:{mailbox}` | - | JSON | Mailbox metadata (uidnext, uidvalidity) |
-| `queue` | `{messageID}` | JSON | Queue entries |
 | `filters` | `{user}` | JSON | Sieve scripts |
 | `vacation` | `{user}` | JSON | Auto-reply config |
 | `push_subs` | `{endpoint}` | JSON | WebPush subscriptions |
+| `changes:{user}` | sequence | JSON | JMAP change journal |
+
+**Accounts Database (db.DB — umailserver.db):**
+
+| Bucket | Key Pattern | Value | Description |
+|--------|------------|-------|-------------|
+| `domains` | `{domainName}` | JSON | Domain config |
+| `accounts` | `{domain}/{localPart}` | JSON | Account data |
+| `aliases` | `{domain}/{localPart}` | String | Alias targets |
+| `queue` | `{messageID}` | JSON | Queue entries |
 
 **Accounts Database (accounts.db):**
 ```
@@ -642,9 +710,9 @@ Hello World!
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
 │  │                         Application Layer                              │   │
 │  │                                                                      │   │
-│  │   SMTP (5321)     IMAP4rev1 (3501)    POP3 (1939)    HTTP/1.1    │   │
-│  │   ESMTP           IMAP4rev2 (9051)                     REST API    │   │
-│  │   + Extensions    + Extensions                            JSON        │   │
+│  │   SMTP (5321)     IMAP4rev1 (3501)    POP3 (1939)    HTTP/1.1      │   │
+│  │   ESMTP           IMAP4rev2 (9051)                    REST API     │   │
+│  │   + Extensions    + Extensions                 CalDAV/CardDAV/JMAP │   │
 │  │                                                                      │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
@@ -673,11 +741,11 @@ Hello World!
 │  │                                                                      │   │
 │  │   TCP            TLS               UDP                               │   │
 │  │   Port 25        Implicit TLS      (for mDNS only)                   │   │
-│  │   Port 587       Port 465                                                │   │
-│  │   Port 993       Port 995                                               │   │
-│  │   Port 143                                                                  │   │
-│  │   Port 110                                                                  │   │
-│  │   Port 8080                                                                │   │
+│  │   Port 587       Port 465          Port 4190 (ManageSieve)           │   │
+│  │   Port 993       Port 995          Port 3000 (MCP)                   │   │
+│  │   Port 143       Port 443                                           │   │
+│  │   Port 110       Port 8080                                         │   │
+│  │   Port 8443 (Admin)                                                │   │
 │  │                                                                      │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
@@ -813,6 +881,9 @@ Hello World!
 | RFC 8314 | Implicit TLS | ✅ Full | Ports 465, 993, 995 |
 | RFC 3501 | IMAP4rev1 | ✅ Full | `internal/imap/` |
 | RFC 9051 | IMAP4rev2 | ✅ Full | Via ENABLE extension |
+| RFC 4791 | CalDAV | ✅ Full | `internal/caldav/` |
+| RFC 6352 | CardDAV | ✅ Full | `internal/carddav/` |
+| RFC 8620 | JMAP | ✅ Full | `internal/jmap/` |
 
 ### 8.2 Authentication & Security
 
@@ -822,8 +893,10 @@ Hello World!
 | RFC 6376 | DKIM | ✅ Full | `internal/auth/dkim.go` |
 | RFC 7489 | DMARC | ✅ Full | `internal/auth/dmarc.go` |
 | RFC 8617 | ARC | ✅ Full | `internal/auth/arc.go` |
+| RFC 6698 | DANE/TLSA | ✅ Full | `internal/auth/dane.go` |
 | RFC 7671 | DANE | ✅ Full | `internal/auth/dane.go` |
 | RFC 7672 | DANE for SMTP | ✅ Full | TLSA record verification |
+| RFC 6711 | MTA-STS | ✅ Full | SMTP TLS policy |
 | RFC 4422 | SASL | ✅ Full | PLAIN, LOGIN, SCRAM-SHA-256 |
 | RFC 7616 | SCRAM-SHA-256 | ✅ Full | Modern SASL mechanism |
 
@@ -847,6 +920,9 @@ Hello World!
 | RFC 3798 | MDN | ✅ Full | Read receipts |
 | RFC 6154 | SPECIAL-USE | ✅ Full | \Sent, \Drafts, etc. |
 | RFC 6851 | IMAP MOVE | ✅ Full | MOVE command |
+| RFC 7888 | LITERAL+ | ✅ Full | Non-synchronizing literals |
+| RFC 8551 | S/MIME | ✅ Full | AES-256-GCM + RSA OAEP |
+| RFC 3156 | OpenPGP | ✅ Full | AES-256-GCM symmetric |
 
 ### 8.5 Delivery & Notifications
 
@@ -910,13 +986,17 @@ uMailServer/
 │   │   ├── dmarc.go               # DMARC evaluation
 │   │   ├── arc.go                 # ARC chain verification
 │   │   ├── dane.go                # DANE/TLSA
-│   │   └── totp.go                # TOTP 2FA
+│   │   ├── totp.go                # TOTP 2FA
+│   │   ├── smime.go               # S/MIME encryption
+│   │   ├── openpgp.go             # OpenPGP encryption
+│   │   └── ldap.go                # LDAP authentication
 │   ├── storage/
-│   │   ├── database.go            # bbolt wrapper
+│   │   ├── database.go            # bbolt wrapper (mail/mail.db)
 │   │   ├── messagestore.go        # Maildir++ implementation
-│   │   └── search.go              # TF-IDF search service
+│   │   ├── search.go              # TF-IDF search service
+│   │   └── changes.go             # JMAP change journal
 │   ├── db/
-│   │   └── db.go                  # Accounts/domains database
+│   │   └── db.go                  # Accounts/domains database (umailserver.db)
 │   ├── queue/
 │   │   ├── manager.go             # Outbound queue
 │   │   └── delivery.go            # Queue delivery
@@ -1074,18 +1154,16 @@ func (s *Server) Stop() {
 
 | Commit | Description |
 |--------|-------------|
-| `c000ce3` | fix(webmail): connect API to real storage |
-| `2196142` | chore: add umailserver.yaml to .gitignore |
-| `bacbbb2` | feat: add webmail login page and demo setup script |
-| `3cde2de` | chore: update docs with RFC features and benchmark client |
-| `72e2805` | docs: add production and development config examples |
-| `54044f5` | docs: add RFC reference guide and UI screenshots |
-| `33ca141` | feat: implement RFC compliance features and benchmark client |
-| `4e09f48` | feat(webmail): add welcome banner for new users |
-| `2cf9438` | feat(webmail): improve compose and settings pages |
-| `cdaad65` | feat(webmail): add keyboard shortcuts and improved sidebar |
-| `f2ef3ee` | feat(webmail): polish UI with view modes and better UX |
-| `e9bf450` | feat(webmail): translate UI to English |
+| `8a07e4e` | fix: improve error handling in mail.go and queue manager |
+| `d9c07fb` | correct TestResourceMonitor_MemoryLimitCallback timing issue |
+| `d86a91a` | fix: resolve critical deadlock and improve error handling in server/API |
+| `b84a260` | feat: add production deployment manifests and IMAP subscription support |
+| `08859e8` | chore: add project documentation and pipeline benchmark |
+| `9f3dfc5` | fix: P0 security vulnerabilities and test coverage improvements |
+| `13c963f` | fix: P0 security vulnerabilities (auth/crypto) |
+| `8230248` | fix: format Go files |
+| `fc4f9b2` | test: fix TestHandleMailDelete tests |
+| `d7f5c30` | test: fix coverage_api_extra tests |
 
 ### Key Features Implemented
 
@@ -1102,6 +1180,7 @@ func (s *Server) Stop() {
    - ARC chain preservation
    - DANE/TLSA support
    - TOTP 2FA
+   - LDAP authentication (optional)
 
 3. **Anti-Spam**
    - Bayesian spam classifier
@@ -1115,8 +1194,11 @@ func (s *Server) Stop() {
    - Vacation auto-responder (RFC 5230)
 
 5. **Modern Protocols**
-   - JMAP (HTTP-based email)
-   - CalDAV/Calendars
+   - JMAP email API (RFC 8620) with per-user change journal
+   - CalDAV calendar server (RFC 4791)
+   - CardDAV contacts server (RFC 6352)
+   - S/MIME with AES-256-GCM + RSA OAEP (RFC 8551)
+   - OpenPGP with AES-256-GCM (RFC 3156)
 
 6. **Observability**
    - Prometheus metrics
@@ -1299,8 +1381,8 @@ tracing:
 
 The storage architecture has evolved through several iterations:
 
-1. **Separate Databases** (Original)
-   - `database` (accounts) at `./data/umailserver.db`
+1. **Original Design**
+   - `db.DB` (accounts) at `./data/umailserver.db`
    - `storageDB` at `./data/umailserver.db` (same file!)
    - `msgStore` at `./data/messages/`
 
@@ -1309,10 +1391,11 @@ The storage architecture has evolved through several iterations:
    - IMAP created separate `mailstore` at `./data/mail/mail.db`
    - Messages stored but not visible to API
 
-3. **Current: Unified Storage**
-   - All use `./data/mail/mail.db` for bbolt metadata
-   - All use `./data/mail/messages/` for message files
-   - Shared via `NewBboltMailstoreWithInterfaces()`
+3. **Current: Dual Database Design**
+   - `db.DB` (accounts) at `./data/umailserver.db` — domains, accounts, aliases, queue
+   - `storage.Database` at `./data/mail/mail.db` — message metadata, search indexing, JMAP change journal
+   - `msgStore` at `./data/mail/messages/` — Maildir++ message files
+   - Shared via `imap.NewBboltMailstoreWithInterfaces()`
 
 ---
 
@@ -1330,7 +1413,7 @@ database:
 
 http:
   bind: 0.0.0.0
-  port: 8080
+  port: 443
 
 smtp:
   inbound:
@@ -1363,5 +1446,5 @@ security:
 
 ---
 
-*Document generated: 2026-04-07*
+*Document generated: 2026-05-02*
 *uMailServer Version: 1.0.0*
