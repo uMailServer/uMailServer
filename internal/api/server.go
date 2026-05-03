@@ -16,6 +16,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver"
 	"github.com/umailserver/umailserver/internal/audit"
+	"github.com/umailserver/umailserver/internal/backup"
+	"github.com/umailserver/umailserver/internal/cluster"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
@@ -63,6 +65,13 @@ type Server struct {
 
 	// Audit logger for security events
 	auditLogger *audit.Logger
+
+	// Cluster manager for HA/clustering (optional)
+	clusterMgr    *cluster.ClusterManager
+	clusterConfig *ClusterConfig
+
+	// Backup manager for backup/restore operations
+	backupMgr *backup.Manager
 
 	// HTTP router (cached)
 	router http.Handler
@@ -126,6 +135,7 @@ type Config struct {
 	TOTPKey           string   // Separate encryption key for TOTP secrets (falls back to JWTSecret if empty)
 	AuditLog          AuditLogConfig
 	PasswordHasher    string // "bcrypt" (default) or "argon2id"
+	DataDir           string // Path to data directory for backups
 }
 
 // AuditLogConfig holds audit logging configuration
@@ -488,6 +498,20 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/send", http.HandlerFunc(s.mailHandler.handleMailSend).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/delete", http.HandlerFunc(s.mailHandler.handleMailDelete).ServeHTTP)
 
+	// Backup management
+	api.HandleFunc("/api/v1/backups", s.handleBackupList)
+	api.HandleFunc("/api/v1/backups/", s.handleBackupPath)
+	api.HandleFunc("/api/v1/backups/per-user/", s.handlePerUserBackup)
+	api.HandleFunc("/api/v1/backups/per-mailbox/", s.handlePerMailboxBackup)
+	api.HandleFunc("/api/v1/backup-jobs", s.handleBackupJobList)
+	api.HandleFunc("/api/v1/backup-jobs/", s.handleBackupJobPath)
+
+	// Cluster management (HA)
+	api.HandleFunc("/api/v1/cluster/status", s.handleClusterStatus)
+	api.HandleFunc("/api/v1/cluster/instances", s.handleClusterInstances)
+	api.HandleFunc("/api/v1/cluster/failover", s.handleClusterFailover)
+	api.HandleFunc("/api/v1/cluster/heartbeat", s.handleClusterHeartbeat)
+
 	// Wrap API with auth middleware and mount to main mux
 	apiHandler := s.rateLimitMiddleware(s.limitBodyMiddleware(s.securityHeadersMiddleware(s.csrfMiddleware(s.corsMiddleware(s.authMiddleware(api))))))
 	mux.Handle("/api/v1/", apiHandler)
@@ -544,6 +568,17 @@ func (s *Server) SetRateLimitManager(mgr RateLimitManager) {
 // SetTracingProvider sets the OpenTelemetry tracing provider
 func (s *Server) SetTracingProvider(provider *tracing.Provider) {
 	s.tracingProvider = provider
+}
+
+// SetClusterManager injects the cluster manager into the API server
+func (s *Server) SetClusterManager(mgr *cluster.ClusterManager, cfg *ClusterConfig) {
+	s.clusterMgr = mgr
+	s.clusterConfig = cfg
+}
+
+// SetBackupManager injects the backup manager into the API server
+func (s *Server) SetBackupManager(mgr *backup.Manager) {
+	s.backupMgr = mgr
 }
 
 // AuditLogger exposes the underlying audit logger so other subsystems

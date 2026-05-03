@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/umailserver/umailserver/internal/api"
+	"github.com/umailserver/umailserver/internal/backup"
 )
 
 // startAPI creates and starts the HTTP API server (webmail + admin).
@@ -21,6 +22,7 @@ func (s *Server) startAPI() {
 			MaxBackups: s.config.Security.AuditLog.MaxBackups,
 			MaxAgeDays: s.config.Security.AuditLog.MaxAgeDays,
 		},
+		DataDir: s.config.Server.DataDir,
 	}
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
 	s.apiServer.SetSearchService(s.searchSvc)
@@ -39,6 +41,11 @@ func (s *Server) startAPI() {
 	// Set message store for email operations
 	if s.msgStore != nil {
 		s.apiServer.SetMsgStore(s.msgStore)
+	}
+	// Set backup manager for backup/restore operations
+	if s.storageDB != nil {
+		backupMgr := backup.NewManager(s.config.Server.DataDir, s.storageDB, s.msgStore)
+		s.apiServer.SetBackupManager(backupMgr)
 	}
 	// Configure API rate limiting
 	s.apiServer.SetAPIRateLimit(s.config.Security.RateLimit.HTTPRequestsPerMinute)
