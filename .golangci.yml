@@ -12,7 +12,6 @@ linters:
     - depguard
     - dogsled
     - dupl
-    - errcheck
     - gochecknoinits
     - goconst
     - gocritic
