@@ -17,10 +17,8 @@ linters:
     - goconst
     - gocritic
     - gocyclo
-    - gomnd
     - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - lll
@@ -28,7 +26,6 @@ linters:
     - nakedret
     - rowserrcheck
     - staticcheck
-    - stylecheck
     - unconvert
     - unparam
     - unused
