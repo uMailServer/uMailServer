@@ -92,7 +92,10 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
+        # Scope ./internal/... ./cmd/... ./api/... to avoid pulling in
+        # web/admin/node_modules/flatted and webmail/node_modules/flatted
+        # (Go test glob ./... would otherwise try to compile those).
+        run: go test -v -race -coverprofile=coverage.out ./internal/... ./cmd/... ./api/...
 
       - name: Run webmail tests
         run: |
