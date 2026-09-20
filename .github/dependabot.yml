@@ -1,0 +1,122 @@
+# Dependabot configuration
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options
+version: 2
+
+# Shared defaults — applied to every ecosystem below.
+# `groups` collapses dozens of transitive bumps into one reviewable PR.
+# `open-pull-requests-limit` is raised so security batches aren't silently dropped.
+# `rebase-strategy: auto` keeps stacked PRs from going stale.
+x-base: &base
+  open-pull-requests-limit: 20
+  rebase-strategy: auto
+  commit-message:
+    prefix: "chore(deps)"
+    include: "scope"
+  labels:
+    - "dependencies"
+
+# Go modules — runtime is the production mail server; security bumps are P0.
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    <<: *base
+    # Group non-major bumps; majors stay individual for review.
+    groups:
+      gomod-minor:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    # Auto-merge non-major once CI is green.
+    # Security-only bumps (gomod) skip the wait.
+    # NOTE: enable auto-merge on the repo first:
+    #   gh repo edit --enable-auto-merge
+    # and ensure `go test ./...` is a required status check.
+
+# npm — webmail (production frontend)
+  - package-ecosystem: "npm"
+    directory: "/webmail"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    <<: *base
+    groups:
+      npm-runtime:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+        exclude-patterns: ["@types/*", "*-loader", "*-plugin"]
+      npm-types:
+        applies-to: version-updates
+        patterns: ["@types/*"]
+        update-types: ["minor", "patch"]
+
+# npm — web/admin (admin SPA)
+  - package-ecosystem: "npm"
+    directory: "/web/admin"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    <<: *base
+    groups:
+      npm-runtime:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+        exclude-patterns: ["@types/*", "*-loader", "*-plugin"]
+      npm-types:
+        applies-to: version-updates
+        patterns: ["@types/*"]
+        update-types: ["minor", "patch"]
+
+# npm — web/account (account portal)
+  - package-ecosystem: "npm"
+    directory: "/web/account"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    <<: *base
+    groups:
+      npm-runtime:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+        exclude-patterns: ["@types/*", "*-loader", "*-plugin"]
+      npm-types:
+        applies-to: version-updates
+        patterns: ["@types/*"]
+        update-types: ["minor", "patch"]
+
+# Docker — top-level Dockerfile + docker-compose
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    <<: *base
+
+# GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    <<: *base
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
