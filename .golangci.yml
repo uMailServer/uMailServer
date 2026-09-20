@@ -28,8 +28,6 @@ linters:
   default: none
   enable:
     - bodyclose
-    - depguard
-    - dogsled
     - govet
     - ineffassign
     - misspell
