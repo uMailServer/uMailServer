@@ -1085,8 +1085,18 @@ func (s *Session) handleAppend(args []string, line string) error {
 	// RFC 7889 MULTIAPPEND: Check for additional messages in the stream
 	// After reading one literal, there might be more synchronizing literals waiting
 	for {
-		// Look ahead for another literal marker
-		rest, err := s.reader.Peek(256)
+		// Look ahead for another literal marker using only bytes already buffered.
+		// A blocking Peek here would deadlock: after the literal octets the client
+		// sends the terminating CRLF and waits for the tagged response, so no
+		// further bytes may arrive until we reply.
+		buffered := s.reader.Buffered()
+		if buffered == 0 {
+			break
+		}
+		if buffered > 256 {
+			buffered = 256
+		}
+		rest, err := s.reader.Peek(buffered)
 		if err != nil || len(rest) == 0 {
 			break
 		}

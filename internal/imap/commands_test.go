@@ -1948,8 +1948,10 @@ func TestHandleAuthenticatedAppend(t *testing.T) {
 	}
 
 	written := mock.Written()
-	if !strings.Contains(written, "OK") && !strings.Contains(written, "+") {
-		t.Errorf("expected OK or continuation response, got: %s", written)
+	// A zero-length literal is rejected with BAD before any continuation is sent
+	// (see handleAppend: size == 0 -> "BAD Missing message data")
+	if !strings.Contains(written, "BAD") {
+		t.Errorf("expected BAD for zero-length literal, got: %s", written)
 	}
 }
 
