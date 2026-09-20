@@ -487,7 +487,13 @@ func (rl *RateLimiter) GetUserStats(user string) map[string]any {
 
 // cleanupLoop periodically cleans up expired entries
 func (rl *RateLimiter) cleanupLoop() {
+	// Take configMu briefly to read CleanupInterval under the same lock
+	// that SetConfig holds when swapping rl.config. Without this, the
+	// background goroutine started by New() races with concurrent
+	// SetConfig calls (caught by `go test -race`).
+	rl.configMu.RLock()
 	interval := rl.config.CleanupInterval
+	rl.configMu.RUnlock()
 	if interval <= 0 {
 		interval = 5 * time.Minute // Default cleanup interval
 	}
