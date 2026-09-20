@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -28,6 +29,7 @@ type AdminServer struct {
 	*Server    // Embed main server to reuse handlers
 	config     AdminConfig
 	httpServer *http.Server
+	mu         sync.Mutex // guards httpServer: Start assigns it on its own goroutine while Stop may read it concurrently
 }
 
 // NewAdminServer creates a new admin-only HTTP server
@@ -42,6 +44,7 @@ func NewAdminServer(server *Server, cfg AdminConfig) *AdminServer {
 
 // Start starts the admin HTTP server
 func (s *AdminServer) Start() error {
+	s.mu.Lock()
 	s.httpServer = &http.Server{
 		Addr:         s.config.Addr,
 		Handler:      s.router(),
@@ -49,17 +52,22 @@ func (s *AdminServer) Start() error {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	srv := s.httpServer
+	s.mu.Unlock()
 
 	s.logger.Info("Admin API server starting", "addr", s.config.Addr)
-	return s.httpServer.ListenAndServe()
+	return srv.ListenAndServe()
 }
 
 // Stop gracefully stops the admin server
 func (s *AdminServer) Stop() error {
-	if s.httpServer != nil {
+	s.mu.Lock()
+	srv := s.httpServer
+	s.mu.Unlock()
+	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return s.httpServer.Shutdown(ctx)
+		return srv.Shutdown(ctx)
 	}
 	return nil
 }
