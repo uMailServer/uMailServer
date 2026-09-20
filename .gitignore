@@ -93,3 +93,9 @@ api/docs.go
 .code-review-graph/
 
 .dfmt/
+.temp_files/
+
+.wrongstack/
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json
