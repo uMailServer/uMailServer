@@ -908,6 +908,77 @@ func TestCoverageHandleAppend_MissingArgs(t *testing.T) {
 	<-done
 }
 
+// recordingMailstore records appended messages so tests can assert on the
+// exact number and content of APPEND operations.
+type recordingMailstore struct {
+	*mockMailstore
+	appended []appendedMsg
+}
+
+type appendedMsg struct {
+	mailbox string
+	data    string
+}
+
+func (r *recordingMailstore) AppendMessage(user, mailbox string, flags []string, date time.Time, data []byte) error {
+	r.appended = append(r.appended, appendedMsg{mailbox: mailbox, data: string(data)})
+	return nil
+}
+
+// TestCoverageHandleAppendMultiappend_TwoLiteralsSingleWrite pins the
+// non-blocking MULTIAPPEND look-ahead: both literals arrive in ONE client
+// write, so after the first ReadFull the second literal spec "{5}" is already
+// buffered. The old blocking Peek(256) deadlocked here (only 8 bytes buffered
+// and the client sends nothing more until it sees the tagged OK); the
+// buffered-only peek must find "{5}", issue the second continuation, and
+// complete with two appends.
+func TestCoverageHandleAppendMultiappend_TwoLiteralsSingleWrite(t *testing.T) {
+	client, session := setupSessionWithPipe(t, StateAuthenticated, "test", nil)
+	defer client.Close()
+
+	rec := &recordingMailstore{mockMailstore: &mockMailstore{}}
+	session.server.mailstore = rec
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.handleCommand("A001 APPEND INBOX {5}")
+	}()
+
+	lines := scanLines(client)
+	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); !ok {
+		t.Fatal("expected first continuation for literal {5}")
+	}
+
+	// 5 octets + next literal spec + 5 octets, all in a single write
+	client.Write([]byte("hello{5}world"))
+
+	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); !ok {
+		t.Fatal("expected second continuation for MULTIAPPEND literal {5}")
+	}
+
+	line, ok := waitForLine(lines, "A001 OK", 500*time.Millisecond)
+	if !ok {
+		t.Fatal("expected tagged OK completing the APPEND command")
+	}
+	if !strings.Contains(line, "APPEND completed") {
+		t.Errorf("unexpected completion line: %q", line)
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("handleCommand returned error: %v", err)
+	}
+
+	if len(rec.appended) != 2 {
+		t.Fatalf("expected 2 appended messages, got %d: %v", len(rec.appended), rec.appended)
+	}
+	if rec.appended[0].data != "hello" || rec.appended[1].data != "world" {
+		t.Errorf("unexpected appended contents: %v", rec.appended)
+	}
+	if rec.appended[0].mailbox != "INBOX" || rec.appended[1].mailbox != "INBOX" {
+		t.Errorf("unexpected mailboxes: %v", rec.appended)
+	}
+}
+
 // ---------- handleCopy/Move no selected ----------
 
 func TestCoverageHandleCopy_NoSelected(t *testing.T) {
