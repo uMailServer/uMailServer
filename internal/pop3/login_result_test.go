@@ -1,6 +1,7 @@
 package pop3
 
 import (
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,10 +32,16 @@ func TestPOP3_LoginResultCallback_FiresOnSuccessAndFailure(t *testing.T) {
 	})
 	defer srv.Stop()
 
+	// The callback fires from a session goroutine while the test goroutine
+	// reads records after a deadline wait. Guard with a mutex so -race is
+	// happy and the test goroutine sees a consistent snapshot.
+	var recordsMu sync.Mutex
 	var records []loginResultRecord
 	calls := atomic.Int32{}
 	srv.SetLoginResultHandler(func(user string, ok bool, ip, reason string) {
+		recordsMu.Lock()
 		records = append(records, loginResultRecord{user, ip, reason, ok})
+		recordsMu.Unlock()
 		calls.Add(1)
 	})
 
@@ -64,6 +71,11 @@ func TestPOP3_LoginResultCallback_FiresOnSuccessAndFailure(t *testing.T) {
 		t.Fatalf("expected 2 callback calls, got %d", calls.Load())
 	}
 
+	recordsMu.Lock()
+	defer recordsMu.Unlock()
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records under mutex, got %d", len(records))
+	}
 	failure, success := records[0], records[1]
 	if failure.success || failure.reason != "invalid_credentials" {
 		t.Errorf("failure record: %+v", failure)
@@ -89,10 +101,15 @@ func TestPOP3_LoginResultCallback_LockoutReason(t *testing.T) {
 	conn.Close()
 
 	// Now register the callback so we capture only the lockout-triggered event.
+	// The callback writes gotReason from a session goroutine and the test
+	// goroutine reads it; guard with a mutex for -race.
+	var reasonMu sync.Mutex
 	var gotReason string
 	calls := atomic.Int32{}
 	srv.SetLoginResultHandler(func(_ string, _ bool, _, reason string) {
+		reasonMu.Lock()
 		gotReason = reason
+		reasonMu.Unlock()
 		calls.Add(1)
 	})
 
@@ -112,6 +129,8 @@ func TestPOP3_LoginResultCallback_LockoutReason(t *testing.T) {
 	if calls.Load() == 0 {
 		t.Fatal("expected lockout to fire callback")
 	}
+	reasonMu.Lock()
+	defer reasonMu.Unlock()
 	if gotReason != "lockout" {
 		t.Errorf("reason = %q, want lockout", gotReason)
 	}
