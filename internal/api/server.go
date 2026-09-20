@@ -520,10 +520,16 @@ func (s *Server) initRouter() {
 }
 
 // limitBodyMiddleware restricts request body size to prevent DoS.
+// The mail send endpoint accepts messages up to 25MB (enforced in the handler),
+// so it gets a larger cap with headroom for JSON encoding overhead.
 func (s *Server) limitBodyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, 4<<20) // 4 MB
+			maxSize := int64(4 << 20) // 4 MB default
+			if r.URL.Path == "/api/v1/mail/send" {
+				maxSize = 26 << 20 // 25MB message limit + JSON overhead
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxSize)
 		}
 		next.ServeHTTP(w, r)
 	})

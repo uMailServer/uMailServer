@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -85,13 +84,13 @@ func TestMailList_Inbox(t *testing.T) {
 		t.Skip("skipping integration test on Windows due to bbolt file locking")
 	}
 
-	server, database, mailDB, msgStore, _ := helperSetupMailIntegration(t)
+	server, database, mailDB, msgStore, token := helperSetupMailIntegration(t)
 
 	// Create INBOX mailbox
 	mailDB.CreateMailbox("user@mailtest.com", "INBOX")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/mail/inbox?folder=inbox", nil)
-	req = req.WithContext(context.WithValue(req.Context(), "user", "user@mailtest.com"))
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 
 	server.ServeHTTP(rec, req)
@@ -285,7 +284,9 @@ func TestMailSend_BodyTooLarge(t *testing.T) {
 
 	// Create a body that's just under the limit to test the parsing works
 	// The actual 25MB limit check happens after parsing
-	largeBody := make([]byte, 24*1024*1024) // 24MB - under limit
+	// Use 'a' filler bytes: NUL bytes would be JSON-escaped (\u0000),
+	// inflating the raw request ~6x past the middleware body cap
+	largeBody := bytes.Repeat([]byte("a"), 24*1024*1024) // 24MB - under limit
 	body := map[string]interface{}{
 		"to":      []string{"recipient@example.com"},
 		"subject": "Test",
