@@ -1,5 +1,10 @@
 # Dependabot configuration
 # https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options
+#
+# Preconditions (now satisfied on uMailServer/uMailServer):
+#   - Branch protection on `main` requires Lint, Test, Build (strict=true, admins enforced).
+#   - Repo-level auto-merge is enabled (gh repo edit uMailServer/uMailServer --enable-auto-merge).
+# Auto-merge is therefore safe to grant for non-major updates below.
 version: 2
 
 # Shared defaults — applied to every ecosystem below.
@@ -15,6 +20,14 @@ x-base: &base
   labels:
     - "dependencies"
 
+# Major-version bumps are NEVER auto-merged — they require manual review.
+# We model that by adding `ignore.update-types: ["version-update:semver-major"]`
+# at the ecosystem level on top of the YAML anchor.
+x-ignore-majors: &ignore_majors
+  ignore:
+    dependency-name: "*"
+    update-types: ["version-update:semver-major"]
+
 # Go modules — runtime is the production mail server; security bumps are P0.
 updates:
   - package-ecosystem: "gomod"
@@ -24,18 +37,17 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    <<: *base
+    <<: [*base, *ignore_majors]
+    auto-merge: true
     # Group non-major bumps; majors stay individual for review.
     groups:
       gomod-minor:
         applies-to: version-updates
         patterns: ["*"]
         update-types: ["minor", "patch"]
-    # Auto-merge non-major once CI is green.
-    # Security-only bumps (gomod) skip the wait.
-    # NOTE: enable auto-merge on the repo first:
-    #   gh repo edit --enable-auto-merge
-    # and ensure `go test ./...` is a required status check.
+      gomod-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
 # npm — webmail (production frontend)
   - package-ecosystem: "npm"
@@ -45,7 +57,8 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    <<: *base
+    <<: [*base, *ignore_majors]
+    auto-merge: true
     groups:
       npm-runtime:
         applies-to: version-updates
@@ -56,6 +69,9 @@ updates:
         applies-to: version-updates
         patterns: ["@types/*"]
         update-types: ["minor", "patch"]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
 # npm — web/admin (admin SPA)
   - package-ecosystem: "npm"
@@ -65,7 +81,8 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    <<: *base
+    <<: [*base, *ignore_majors]
+    auto-merge: true
     groups:
       npm-runtime:
         applies-to: version-updates
@@ -76,6 +93,9 @@ updates:
         applies-to: version-updates
         patterns: ["@types/*"]
         update-types: ["minor", "patch"]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
 # npm — web/account (account portal)
   - package-ecosystem: "npm"
@@ -85,7 +105,8 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    <<: *base
+    <<: [*base, *ignore_majors]
+    auto-merge: true
     groups:
       npm-runtime:
         applies-to: version-updates
@@ -96,6 +117,9 @@ updates:
         applies-to: version-updates
         patterns: ["@types/*"]
         update-types: ["minor", "patch"]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
 # Docker — top-level Dockerfile + docker-compose
   - package-ecosystem: "docker"
@@ -105,7 +129,8 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    <<: *base
+    <<: [*base, *ignore_majors]
+    auto-merge: true
 
 # GitHub Actions
   - package-ecosystem: "github-actions"
@@ -115,7 +140,8 @@ updates:
       day: "monday"
       time: "06:00"
       timezone: "UTC"
-    <<: *base
+    <<: [*base, *ignore_majors]
+    auto-merge: true
     groups:
       actions:
         applies-to: version-updates
