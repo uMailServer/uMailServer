@@ -1,10 +1,23 @@
 # Build stage
 FROM golang:1.25-alpine AS builder
 
+# Node is required to build the three embedded web UIs before `go build`
+# (embed.go references webmail/dist, web/admin/dist, web/account/dist).
+RUN apk add --no-cache nodejs npm
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
 RUN go mod download
+
+# Build the three web UIs so embed.go can find their dist/ trees.
+COPY webmail/package.json webmail/package-lock.json ./webmail/
+COPY web/admin/package.json web/admin/package-lock.json ./web/admin/
+COPY web/account/package.json web/account/package-lock.json ./web/account/
+RUN (cd webmail    && npm ci --legacy-peer-deps && npm run build) && \
+    (cd web/admin  && npm ci --legacy-peer-deps && npm run build) && \
+    (cd web/account && npm install --legacy-peer-deps && npm run build)
+
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o umailserver ./cmd/umailserver
 
