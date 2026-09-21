@@ -855,7 +855,7 @@ func TestIMAPAuthentication(t *testing.T) {
 
 	// Start server
 	go imapServer.Start()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	defer imapServer.Stop()
 
@@ -1223,7 +1223,7 @@ func TestFullMailFlow(t *testing.T) {
 	})
 
 	go imapServer.Start()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 	defer imapServer.Stop()
 
 	// Create SMTP server
