@@ -29,6 +29,11 @@ type Server struct {
 	shutdown   chan struct{}
 	stopOnce   sync.Once
 	running    atomic.Bool
+	// sessionWG tracks live session goroutines so Stop() can wait for them
+	// to exit before returning. Without this, deferred srv.Stop() in tests
+	// races the session goroutine's last writes to bbolt (caught by
+	// `go test -race`: Session.Close vs Database.RecordChange).
+	sessionWG sync.WaitGroup
 
 	// Authentication
 	authFunc func(username, password string) (bool, error)
@@ -278,6 +283,12 @@ func (s *Server) Stop() error {
 	s.sessions = make(map[string]*Session)
 	s.sessionsMu.Unlock()
 
+	// Wait for all session goroutines to finish so deferred srv.Stop() in
+	// tests (and production shutdowns) don't race the session's last writes
+	// to bbolt / storage. Without this, `go test -race` flags a Session.Close
+	// vs Database.RecordChange data race.
+	s.sessionWG.Wait()
+
 	s.logger.Info("IMAP server stopped")
 	return nil
 }
@@ -305,6 +316,8 @@ func (s *Server) acceptLoop(listener net.Listener) {
 
 // handleConnection handles a single IMAP connection
 func (s *Server) handleConnection(conn net.Conn) {
+	s.sessionWG.Add(1)
+	defer s.sessionWG.Done()
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("Panic in IMAP connection handler", "error", r)
