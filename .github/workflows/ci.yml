@@ -50,7 +50,11 @@ jobs:
           #  is lower than the targeted Go version (1.25.0)".
           version: v2.13.2
           install-mode: binary
-          args: --timeout=5m
+          # Scope to the same paths the test runner uses (see 'Run tests'
+          # step below) to avoid pulling in Go source files under
+          # web/admin/node_modules/flatted and webmail/node_modules/flatted
+          # (third-party Go sources checked into node_modules).
+          args: --timeout=5m ./internal/... ./cmd/... ./api/...
 
       - name: Run go vet
         run: go vet ./...
