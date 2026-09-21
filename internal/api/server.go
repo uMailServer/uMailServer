@@ -498,14 +498,6 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/send", http.HandlerFunc(s.mailHandler.handleMailSend).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/delete", http.HandlerFunc(s.mailHandler.handleMailDelete).ServeHTTP)
 
-	// Backup management
-	api.HandleFunc("/api/v1/backups", s.handleBackupList)
-	api.HandleFunc("/api/v1/backups/", s.handleBackupPath)
-	api.HandleFunc("/api/v1/backups/per-user/", s.handlePerUserBackup)
-	api.HandleFunc("/api/v1/backups/per-mailbox/", s.handlePerMailboxBackup)
-	api.HandleFunc("/api/v1/backup-jobs", s.handleBackupJobList)
-	api.HandleFunc("/api/v1/backup-jobs/", s.handleBackupJobPath)
-
 	// Cluster management (HA)
 	api.HandleFunc("/api/v1/cluster/status", s.handleClusterStatus)
 	api.HandleFunc("/api/v1/cluster/instances", s.handleClusterInstances)
