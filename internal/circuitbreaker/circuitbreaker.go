@@ -156,6 +156,9 @@ func (cb *CircuitBreaker) RecordFailure() {
 // Execute runs the given function if the circuit allows it
 // Returns ErrCircuitOpen if the circuit is open
 func (cb *CircuitBreaker) Execute(fn func() error) error {
+	if fn == nil {
+		return errors.New("circuit breaker: nil function")
+	}
 	if !cb.Allow() {
 		return ErrCircuitOpen
 	}

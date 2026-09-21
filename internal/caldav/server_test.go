@@ -1521,8 +1521,8 @@ END:VCALENDAR`
 	server.ServeHTTP(w, req)
 
 	// Storage creates at destination regardless
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	if w.Code != http.StatusPreconditionFailed {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusPreconditionFailed)
 	}
 }
 
@@ -1552,7 +1552,7 @@ END:VCALENDAR`
 	server.ServeHTTP(w, req)
 
 	// Storage creates at destination regardless
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	if w.Code != http.StatusPreconditionFailed {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusPreconditionFailed)
 	}
 }

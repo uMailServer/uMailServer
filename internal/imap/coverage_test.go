@@ -489,16 +489,22 @@ func TestCoverageHandleIdleNoSelectedMailbox(t *testing.T) {
 	defer client.Close()
 
 	idleDone := make(chan error, 1)
+	// Capture the channel before starting the goroutine to avoid data race
+	// on session.idleNotifyChan (written by handleIdle, read by the test).
+	notifyChan := session.idleNotifyChan
+
 	go func() {
 		idleDone <- session.handleIdle()
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "idling", 2*time.Second); !ok {
-		t.Fatal("timeout")
+	// IDLE returns BAD immediately without a selected mailbox (RFC 2177)
+	if _, ok := waitForLine(lines, "BAD no mailbox selected", 2*time.Second); !ok {
+		t.Fatal("timeout waiting for BAD response")
 	}
 
-	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
+	// Use the captured local channel — the goroutine reads its own local copy.
+	GetNotificationHub().Unsubscribe("testuser", notifyChan)
 
 	select {
 	case <-idleDone:
@@ -512,21 +518,27 @@ func TestCoverageHandleIdleNoSelectedMailbox(t *testing.T) {
 func TestCoverageHandleIdleReadError(t *testing.T) {
 	client, session := setupSessionWithPipe(t, StateAuthenticated, "test", nil)
 
+	// Capture the channel before starting the goroutine to avoid data race
+	// on session.idleNotifyChan (written by handleIdle, read by the test).
+	notifyChan := session.idleNotifyChan
+
 	idleDone := make(chan error, 1)
 	go func() {
 		idleDone <- session.handleIdle()
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "idling", 2*time.Second); !ok {
-		t.Fatal("timeout")
+	// IDLE returns BAD immediately without a selected mailbox (RFC 2177)
+	if _, ok := waitForLine(lines, "BAD no mailbox selected", 2*time.Second); !ok {
+		t.Fatal("timeout waiting for BAD response")
 	}
 
 	// Close the notification channel first to exit IDLE via the
 	// notification path, then close the client to clean up the pipe.
 	// This ordering ensures idleCleanup can unblock the DONE-reading
 	// goroutine via SetReadDeadline instead of hitting the 5-second timeout.
-	GetNotificationHub().Unsubscribe("test", session.idleNotifyChan)
+	// Use the captured local channel — the goroutine reads its own local copy.
+	GetNotificationHub().Unsubscribe("test", notifyChan)
 	client.Close()
 
 	select {
@@ -575,16 +587,12 @@ func TestCoverageAuthenticatedIdleViaHandleCommand(t *testing.T) {
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "idling", 2*time.Second); !ok {
-		t.Fatal("timeout")
+	// IDLE via handleCommand returns BAD immediately without a selected mailbox (RFC 2177)
+	if _, ok := waitForLine(lines, "BAD no mailbox selected", 2*time.Second); !ok {
+		t.Fatal("timeout waiting for BAD response")
 	}
 
-	client.Write([]byte("DONE\r\n"))
-
-	if _, ok := waitForLine(lines, "OK", 2*time.Second); !ok {
-		t.Log("timeout waiting for OK after DONE")
-	}
-
+	// No DONE needed — IDLE returns immediately
 	<-done
 }
 

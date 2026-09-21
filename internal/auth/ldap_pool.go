@@ -90,8 +90,10 @@ func (p *ldapPool) release(conn pooledLDAPConn) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	// Check closed under the lock so we never send on a closed channel.
+	// This also serializes with close(), eliminating the data race on p.closed.
 	if p.closed {
+		p.mu.Unlock()
 		_ = conn.Close()
 		return
 	}
@@ -100,6 +102,7 @@ func (p *ldapPool) release(conn pooledLDAPConn) {
 	default:
 		_ = conn.Close()
 	}
+	p.mu.Unlock()
 }
 
 // discard unconditionally closes a connection without returning it to the pool.

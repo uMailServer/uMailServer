@@ -53,9 +53,10 @@ func TestVacationMgr_SetConfig_Error(t *testing.T) {
 	server := NewServerWithInterfaces(database, nil, Config{}, mockVacationMgr, nil, nil, nil, nil)
 
 	body := VacationConfig{
-		Enabled: true,
-		Subject: "Vacation",
-		Message: "I'm on vacation",
+		Enabled:      true,
+		Subject:      "Vacation",
+		Message:      "I'm on vacation",
+		SendInterval: 1,
 	}
 	bodyJSON, _ := json.Marshal(body)
 

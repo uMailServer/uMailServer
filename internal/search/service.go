@@ -274,6 +274,9 @@ func parseDocID(docID string) (string, uint32, error) {
 
 // generatePreview generates a preview text from content
 func generatePreview(content string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if len(content) <= maxLen {
 		return content
 	}

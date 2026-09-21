@@ -1232,6 +1232,12 @@ func (s *Session) handleIdle() error {
 		}
 	}()
 
+	// Reject IDLE if no mailbox is selected (RFC 2177 §3)
+	if s.selected == nil {
+		s.WriteResponse(s.tag, "BAD no mailbox selected")
+		return nil
+	}
+
 	// Send continuation response
 	s.WriteContinuation("idling")
 
@@ -1611,10 +1617,10 @@ func (s *Session) handleThread(args []string, line string) error {
 	// Parse thread algorithm
 	algo := ThreadReferences
 	if len(args) > 0 {
-		arg := strings.ToUpper(args[0])
-		if arg == "ORDEREDSUBJECT" {
+		switch strings.ToUpper(args[0]) {
+		case "ORDEREDSUBJECT":
 			algo = ThreadOrderedSubject
-		} else if arg == "REFERENCES" {
+		case "REFERENCES":
 			algo = ThreadReferences
 		}
 	}
@@ -1758,10 +1764,10 @@ func (s *Session) handleUIDThread(args []string, line string) error {
 	// Parse thread algorithm
 	algo := ThreadReferences
 	if len(args) > 0 {
-		arg := strings.ToUpper(args[0])
-		if arg == "ORDEREDSUBJECT" {
+		switch strings.ToUpper(args[0]) {
+		case "ORDEREDSUBJECT":
 			algo = ThreadOrderedSubject
-		} else if arg == "REFERENCES" {
+		case "REFERENCES":
 			algo = ThreadReferences
 		}
 	}

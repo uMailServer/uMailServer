@@ -1480,6 +1480,7 @@ func TestHandleSetVacation_WithMockError(t *testing.T) {
 		"enabled": true,
 		"subject": "Test Subject",
 		"message": "Test Message",
+		"send_interval": 1,
 	}
 	jsonBody, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/vacation", bytes.NewReader(jsonBody))

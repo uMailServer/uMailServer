@@ -549,6 +549,8 @@ func TestToolCheckTLS(t *testing.T) {
 	defer database.Close()
 
 	server := NewServer(database)
+	adminToken := "test-admin-token"
+	server.SetAdminAuthToken(adminToken)
 
 	reqBody := map[string]interface{}{
 		"jsonrpc": "2.0",
@@ -565,7 +567,9 @@ func TestToolCheckTLS(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)

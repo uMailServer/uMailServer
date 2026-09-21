@@ -598,28 +598,114 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 		Days: 7, // Default interval
 	}
 
-	for _, arg := range cmd.Arguments {
+	// Track whether :subject was seen — determines positional string semantics.
+	// The parser stores the first tag in cmd.Tag; subsequent tags appear in
+	// cmd.Arguments as *TagValue nodes. We need both.
+	subjectTagSeen := cmd.Tag == "subject"
+
+	// Handle the first tag (parser stores it in cmd.Tag, not cmd.Arguments)
+	switch cmd.Tag {
+	case "subject":
+		// Next arg is the subject string
+		if len(cmd.Arguments) > 0 {
+			if sv, ok := cmd.Arguments[0].(*StringValue); ok {
+				vacation.Subject = sv.Value
+			}
+		}
+	case "days":
+		// Next arg is the days number
+		if len(cmd.Arguments) > 0 {
+			if nv, ok := cmd.Arguments[0].(*NumberValue); ok {
+				vacation.Days = int(nv.Value)
+			}
+		}
+	case "mime":
+		vacation.Mime = true
+	}
+
+	// Process remaining arguments.
+	// cmd.Tag consumes: nothing for non-string tags (:days, :mime),
+	// 1 positional slot for :subject (its value).
+	// When cmd.Tag is :subject, first positional = subject; else all positional = body.
+	argsStart := 0
+	if cmd.Tag == "subject" {
+		argsStart = 1
+	}
+
+	argIdx := argsStart
+	for argIdx < len(cmd.Arguments) {
+		arg := cmd.Arguments[argIdx]
 		switch a := arg.(type) {
 		case *TagValue:
 			switch a.Value {
 			case "subject":
-				// Next arg is subject
+				subjectTagSeen = true
+				// Next arg is the subject string
+				if argIdx+1 < len(cmd.Arguments) {
+					argIdx++
+					if sv, ok := cmd.Arguments[argIdx].(*StringValue); ok {
+						vacation.Subject = sv.Value
+					}
+				}
 			case "days":
+				// Next arg is the days number.
+				// Set subjectTagSeen so positional strings go to Body, not Subject
+				// (no :subject tag is present, so positional strings are body).
+				subjectTagSeen = true
+				if argIdx+1 < len(cmd.Arguments) {
+					argIdx++
+					if nv, ok := cmd.Arguments[argIdx].(*NumberValue); ok {
+						vacation.Days = int(nv.Value)
+					}
+				}
 			case "addresses":
+				// Next arg is the addresses list
+				if argIdx+1 < len(cmd.Arguments) {
+					argIdx++
+					if lv, ok := cmd.Arguments[argIdx].(*ListValue); ok {
+						vacation.Addresses = lv.Values
+					}
+				}
 			case "mime":
 				vacation.Mime = true
 			case "handle":
-				// Next arg is handle
+				// Next arg is the handle string
+				if argIdx+1 < len(cmd.Arguments) {
+					argIdx++
+					if sv, ok := cmd.Arguments[argIdx].(*StringValue); ok {
+						vacation.Handle = sv.Value
+					}
+				}
 			}
 		case *StringValue:
-			if vacation.Subject == "" {
-				vacation.Subject = a.Value
-			} else if vacation.Body == "" {
-				vacation.Body = a.Value
+			// Per RFC 5230 §4.1: when :subject is absent, the first positional
+			// string is the body. Only an explicit :subject tag or ":subject"
+			// TagValue routes a positional string to Subject.
+			// :days and :mime are non-string tags — they consume no positional
+			// slot, so positional strings (including the first) go to Body.
+			if subjectTagSeen {
+				// :subject tag was provided; first positional string = subject,
+				// second = body
+				if vacation.Body == "" {
+					vacation.Body = a.Value
+				}
+			} else if cmd.Tag == "mime" || cmd.Tag == "days" || cmd.Tag == "addresses" || cmd.Tag == "handle" {
+				// Non-string tags consume no positional slot; all strings = body
+				if vacation.Body == "" {
+					vacation.Body = a.Value
+				}
+			} else {
+				// No tag at all; first positional = subject, second = body
+				if vacation.Subject == "" {
+					vacation.Subject = a.Value
+				} else if vacation.Body == "" {
+					vacation.Body = a.Value
+				}
 			}
 		case *NumberValue:
 			vacation.Days = int(a.Value)
 		}
+		argIdx++
 	}
 
 	// Only send vacation if enabled

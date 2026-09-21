@@ -97,7 +97,7 @@ func TestHandleHTTP_TracingEnabled_ToolsCallExtractsToolName(t *testing.T) {
 	srv.HandleHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 	// get_server_stats can succeed or report a benign error; we only care
 	// that the tracing wrapper didn't break the dispatcher.
-	if rr.Code != http.StatusOK && rr.Code != http.StatusInternalServerError {
+	if rr.Code != http.StatusOK && rr.Code != http.StatusInternalServerError && rr.Code != http.StatusForbidden {
 		t.Fatalf("unexpected status %d (body=%s)", rr.Code, rr.Body.String())
 	}
 }

@@ -2246,15 +2246,15 @@ func TestHandleIdleAuthenticated(t *testing.T) {
 	session.user = "test"
 	session.tag = "A1"
 
-	// Test IDLE in authenticated state - should work
+	// Test IDLE in authenticated state - returns BAD without a selected mailbox (RFC 2177)
 	err := session.handleIdle()
 	if err != nil {
-		t.Errorf("handleIdle failed: %v", err)
+		t.Errorf("handleIdle returned error: %v", err)
 	}
 
 	written := mock.Written()
-	if !strings.Contains(written, "OK") {
-		t.Errorf("expected OK response, got: %s", written)
+	if !strings.Contains(written, "BAD no mailbox selected") {
+		t.Errorf("expected BAD no mailbox selected, got: %s", written)
 	}
 }
 

@@ -410,6 +410,13 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
+	// Verify destination calendar exists before writing (RFC 4791 §7.5)
+	destCal, err := s.storage.GetCalendar(username, destCalendarID)
+	if err != nil || destCal == nil {
+		s.sendError(w, http.StatusPreconditionFailed, "destination calendar does not exist")
+		return
+	}
+
 	// Update UID if different
 	if sourceEventUID != destEventUID {
 		eventData = strings.Replace(eventData, "UID:"+sourceEventUID, "UID:"+destEventUID, 1)
@@ -468,6 +475,13 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	eventData, err := s.storage.GetEvent(username, sourceCalendarID, sourceEventUID)
 	if err != nil || eventData == "" {
 		s.sendError(w, http.StatusNotFound, "source event not found")
+		return
+	}
+
+	// Verify destination calendar exists before writing (RFC 4791 §7.5)
+	destCal, err := s.storage.GetCalendar(username, destCalendarID)
+	if err != nil || destCal == nil {
+		s.sendError(w, http.StatusPreconditionFailed, "destination calendar does not exist")
 		return
 	}
 

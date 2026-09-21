@@ -477,7 +477,9 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 	}
 
 	if delivered {
-		m.handleDeliverySuccess(entry)
+		if err := m.handleDeliverySuccess(entry); err != nil {
+			m.logger.Error("delivery marked success but queue entry update failed", "error", err, "id", entry.ID)
+		}
 	} else {
 		m.handleDeliveryFailure(entry, lastErr)
 	}
@@ -776,11 +778,13 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 	})
 }
 
-// handleDeliverySuccess handles successful delivery
-func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
+// handleDeliverySuccess handles successful delivery. Returns error if the queue
+// entry could not be persisted — callers must not delete message files on error.
+func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) error {
 	entry.Status = "delivered"
 	if err := m.db.UpdateQueueEntry(entry); err != nil {
 		m.logger.Error("failed to update queue entry after delivery success", "error", err)
+		return err
 	}
 
 	// Send DSN if requested (NOTIFY includes SUCCESS)
@@ -805,6 +809,8 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) {
 			"domain":     extractDomain(entry.To[0]),
 		})
 	}
+
+	return nil
 }
 
 // sendSuccessDSN sends a DSN success notification
@@ -874,6 +880,7 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 
 	if err := m.db.UpdateQueueEntry(entry); err != nil {
 		m.logger.Error("failed to update queue entry after delivery failure", "error", err)
+		return
 	}
 
 	// Track metric
