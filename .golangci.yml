@@ -46,7 +46,7 @@ issues:
     # These files trip ineffassign / govet / SA1029 on real code but are
     # out of scope for this PR's typed-key fix. A follow-up PR should
     # clear them with proper refactors.
-    - path: internal/api/coverage_extra(_[0-9]+)?_test\.go
+    - path: internal/api/coverage_extra.*_test\.go
       linters:
         - ineffassign
         - staticcheck
