@@ -480,20 +480,13 @@ func (s *Server) handleToolsList() map[string]interface{} {
 
 // adminTools is the set of tools that require admin privileges.
 var adminTools = map[string]struct{}{
-	// Read/admin tools (round 20 fix)
-	"list_accounts":    {},
-	"get_account_info": {},
-	"get_queue_status": {},
-	"get_server_stats": {},
-	"get_system_status": {},
-	"list_domains":     {},
-	"check_dns":        {},
-	"check_tls":        {},
-	// Write/admin tools (add_domain and add_account self-validate — no double-gate)
-	"delete_domain": {},
+	"add_domain":     {},
+	"delete_domain":  {},
+	"add_account":    {},
 	"delete_account": {},
-	"flush_queue":   {},
-	"reload_config": {},
+	"flush_queue":    {},
+	"reload_config":  {},
+	"list_domains":   {},
 }
 
 // Handle tool call
