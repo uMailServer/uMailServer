@@ -11,10 +11,12 @@ func TestSetLoginResultHandler_StoresCallback(t *testing.T) {
 	srv := NewServer("127.0.0.1:0", newMockMailstore(), nil)
 	called := false
 	srv.SetLoginResultHandler(func(string, bool, string, string) { called = true })
-	if srv.onLoginResult == nil {
+	// onLoginResult is now an atomic.Pointer[func(...)] (PR #3 migration).
+	// Use Load() to read it and dereference the function-pointer.
+	if srv.onLoginResult.Load() == nil {
 		t.Fatal("handler not stored")
 	}
-	srv.onLoginResult("u", true, "1.1.1.1", "")
+	(*srv.onLoginResult.Load())("u", true, "1.1.1.1", "")
 	if !called {
 		t.Error("handler not invoked")
 	}
