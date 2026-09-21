@@ -186,7 +186,8 @@ func (l *RedisLeaderElection) Close() error {
 
 // RedisDistributedLock implements DistributedLock using Redlock algorithm
 type RedisDistributedLock struct {
-	client *redis.Client
+	client    *redis.Client
+	lockValue string // value used for ownership verification on Release/Extend
 }
 
 // NewRedisDistributedLock creates a new Redis distributed lock
@@ -212,12 +213,12 @@ func lockKey(lockName string) string {
 
 // Acquire attempts to acquire the lock with TTL
 func (l *RedisDistributedLock) Acquire(ctx context.Context, lockName string, ttl time.Duration) (bool, error) {
-	// Generate a unique lock value
+	// Generate a unique lock value for ownership verification
 	b := make([]byte, 16)
 	rand.Read(b)
-	lockValue := hex.EncodeToString(b)
+	l.lockValue = hex.EncodeToString(b)
 
-	result, err := l.client.SetNX(ctx, lockKey(lockName), lockValue, ttl).Result()
+	result, err := l.client.SetNX(ctx, lockKey(lockName), l.lockValue, ttl).Result()
 	if err != nil {
 		return false, err
 	}
@@ -227,15 +228,28 @@ func (l *RedisDistributedLock) Acquire(ctx context.Context, lockName string, ttl
 
 // Release releases the lock
 func (l *RedisDistributedLock) Release(ctx context.Context, lockName string) error {
-	// Note: In a real implementation, we'd use a Lua script to atomically
-	// delete only if we own the lock. For simplicity, this is a basic implementation.
-	_, err := l.client.Del(ctx, lockKey(lockName)).Result()
+	script := redis.NewScript(`
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		else
+			return 0
+		end
+	`)
+	_, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValue).Result()
 	return err
 }
 
 // Extend extends the lock TTL
 func (l *RedisDistributedLock) Extend(ctx context.Context, lockName string, ttl time.Duration) error {
-	return l.client.Expire(ctx, lockKey(lockName), ttl).Err()
+	script := redis.NewScript(`
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("EXPIRE", KEYS[1], ARGV[2])
+		else
+			return 0
+		end
+	`)
+	_, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValue, int(ttl.Seconds())).Result()
+	return err
 }
 
 // Close closes the Redis connection

@@ -47,7 +47,13 @@ func (s *Server) handleGetVacation(w http.ResponseWriter, r *http.Request) {
 	// Get vacation manager from server (we need to add this field)
 	config, err := s.getVacationConfig(user)
 	if err != nil {
-		s.logger.Error("Failed to get vacation config", "error", err, "user", user)
+		if s.logger != nil {
+			s.logger.Error("Failed to get vacation config", "error", err, "user", user)
+		}
+		s.sendError(w, http.StatusInternalServerError, "failed to get vacation config")
+		return
+	}
+	if config == nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to get vacation config")
 		return
 	}
@@ -120,6 +126,18 @@ func (s *Server) handleSetVacation(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "subject is required when vacation is enabled")
 		return
 	}
+	if !config.StartDate.IsZero() && !config.EndDate.IsZero() && config.EndDate.Before(config.StartDate) {
+		s.sendError(w, http.StatusBadRequest, "end_date cannot be before start_date")
+		return
+	}
+	if config.SendInterval <= 0 {
+		s.sendError(w, http.StatusBadRequest, "send_interval cannot be negative")
+		return
+	}
+	if config.SendInterval > 365*24*time.Hour {
+		s.sendError(w, http.StatusBadRequest, "send_interval exceeds maximum allowed value")
+		return
+	}
 	if config.Enabled && config.Message == "" {
 		s.sendError(w, http.StatusBadRequest, "message is required when vacation is enabled")
 		return
@@ -127,7 +145,9 @@ func (s *Server) handleSetVacation(w http.ResponseWriter, r *http.Request) {
 
 	// Save config
 	if err := s.setVacationConfig(user, config); err != nil {
-		s.logger.Error("Failed to set vacation config", "error", err, "user", user)
+		if s.logger != nil {
+			s.logger.Error("Failed to set vacation config", "error", err, "user", user)
+		}
 		s.sendError(w, http.StatusInternalServerError, "failed to set vacation config")
 		return
 	}
@@ -148,7 +168,9 @@ func (s *Server) handleDeleteVacation(w http.ResponseWriter, r *http.Request) {
 
 	// Delete config
 	if err := s.deleteVacationConfig(user); err != nil {
-		s.logger.Error("Failed to delete vacation config", "error", err, "user", user)
+		if s.logger != nil {
+			s.logger.Error("Failed to delete vacation config", "error", err, "user", user)
+		}
 		s.sendError(w, http.StatusInternalServerError, "failed to delete vacation config")
 		return
 	}

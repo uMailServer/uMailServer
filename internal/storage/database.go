@@ -165,6 +165,8 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 	})
 	if err == nil && existed {
 		_ = db.RecordChange(user, ChangeTypeMailbox, ChangeKindDestroyed, mailbox, "")
+		// Clean up ACL entries for this mailbox
+		_ = db.DeleteACL(user, mailbox, "")
 	}
 	return err
 }
@@ -231,6 +233,26 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 		// Delete old buckets
 		_ = tx.DeleteBucket([]byte(oldKey))  // bucket may not exist in partial state
 		_ = tx.DeleteBucket([]byte(oldMsgs)) // bucket may not exist in partial state
+
+		// Migrate ACL entries to the new mailbox name
+		aclB := tx.Bucket([]byte("acl"))
+		if aclB != nil {
+			prefix := fmt.Sprintf("acl:%s:%s:", user, oldName)
+			c := aclB.Cursor()
+			for k, v := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, v = c.Next() {
+				parts := strings.SplitN(string(k), ":", 4)
+				if len(parts) == 4 {
+					newKey := fmt.Sprintf("acl:%s:%s:%s", user, newName, parts[3])
+					if err := aclB.Put([]byte(newKey), v); err != nil {
+						return err
+					}
+					if err := aclB.Delete(k); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 		return nil
 	})
 	if err == nil {

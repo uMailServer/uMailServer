@@ -217,7 +217,12 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		slog.Error("mcp handler error", "method", req.Method, "error", err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
+		// Admin access errors return 403; all other errors return 500
+		if req.Method == "tools/call" && strings.Contains(err.Error(), "admin access required") {
+			s.writeError(w, http.StatusForbidden, err.Error())
+		} else {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		if span := otrace.SpanFromContext(ctx); span != nil {
 			tracing.SetStatus(span, tracing.StatusError, err.Error())
 		}
@@ -475,7 +480,17 @@ func (s *Server) handleToolsList() map[string]interface{} {
 
 // adminTools is the set of tools that require admin privileges.
 var adminTools = map[string]struct{}{
-	"add_domain":    {},
+	// Read/admin tools (round 20 fix)
+	"list_accounts":    {},
+	"get_account_info": {},
+	"get_queue_status": {},
+	"get_server_stats": {},
+	"get_system_status": {},
+	"list_domains":     {},
+	"check_dns":        {},
+	"check_tls":        {},
+	// Write/admin tools
+	"add_domain":     {},
 	"delete_domain": {},
 	"add_account":   {},
 	"delete_account": {},
@@ -893,14 +908,15 @@ func (s *Server) toolReloadConfig() (map[string]interface{}, error) {
 
 // Write error response
 func (s *Server) writeError(w http.ResponseWriter, code int, message string) {
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(MCPResponse{
+	resp := MCPResponse{
 		JSONRPC: "2.0",
 		Error: &MCPError{
 			Code:    code,
 			Message: message,
 		},
-	})
+	}
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // Resource types

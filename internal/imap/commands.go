@@ -1232,6 +1232,12 @@ func (s *Session) handleIdle() error {
 		}
 	}()
 
+	// Reject IDLE if no mailbox is selected (RFC 2177 §3)
+	if s.selected == nil {
+		s.WriteResponse(s.tag, "BAD no mailbox selected")
+		return nil
+	}
+
 	// Send continuation response
 	s.WriteContinuation("idling")
 

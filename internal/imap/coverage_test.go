@@ -494,8 +494,9 @@ func TestCoverageHandleIdleNoSelectedMailbox(t *testing.T) {
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "idling", 2*time.Second); !ok {
-		t.Fatal("timeout")
+	// IDLE returns BAD immediately without a selected mailbox (RFC 2177)
+	if _, ok := waitForLine(lines, "BAD no mailbox selected", 2*time.Second); !ok {
+		t.Fatal("timeout waiting for BAD response")
 	}
 
 	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
@@ -518,8 +519,9 @@ func TestCoverageHandleIdleReadError(t *testing.T) {
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "idling", 2*time.Second); !ok {
-		t.Fatal("timeout")
+	// IDLE returns BAD immediately without a selected mailbox (RFC 2177)
+	if _, ok := waitForLine(lines, "BAD no mailbox selected", 2*time.Second); !ok {
+		t.Fatal("timeout waiting for BAD response")
 	}
 
 	// Close the notification channel first to exit IDLE via the
@@ -575,16 +577,12 @@ func TestCoverageAuthenticatedIdleViaHandleCommand(t *testing.T) {
 	}()
 
 	lines := scanLines(client)
-	if _, ok := waitForLine(lines, "idling", 2*time.Second); !ok {
-		t.Fatal("timeout")
+	// IDLE via handleCommand returns BAD immediately without a selected mailbox (RFC 2177)
+	if _, ok := waitForLine(lines, "BAD no mailbox selected", 2*time.Second); !ok {
+		t.Fatal("timeout waiting for BAD response")
 	}
 
-	client.Write([]byte("DONE\r\n"))
-
-	if _, ok := waitForLine(lines, "OK", 2*time.Second); !ok {
-		t.Log("timeout waiting for OK after DONE")
-	}
-
+	// No DONE needed — IDLE returns immediately
 	<-done
 }
 
