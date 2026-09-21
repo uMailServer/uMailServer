@@ -1617,10 +1617,10 @@ func (s *Session) handleThread(args []string, line string) error {
 	// Parse thread algorithm
 	algo := ThreadReferences
 	if len(args) > 0 {
-		arg := strings.ToUpper(args[0])
-		if arg == "ORDEREDSUBJECT" {
+		switch strings.ToUpper(args[0]) {
+		case "ORDEREDSUBJECT":
 			algo = ThreadOrderedSubject
-		} else if arg == "REFERENCES" {
+		case "REFERENCES":
 			algo = ThreadReferences
 		}
 	}
@@ -1764,10 +1764,10 @@ func (s *Session) handleUIDThread(args []string, line string) error {
 	// Parse thread algorithm
 	algo := ThreadReferences
 	if len(args) > 0 {
-		arg := strings.ToUpper(args[0])
-		if arg == "ORDEREDSUBJECT" {
+		switch strings.ToUpper(args[0]) {
+		case "ORDEREDSUBJECT":
 			algo = ThreadOrderedSubject
-		} else if arg == "REFERENCES" {
+		case "REFERENCES":
 			algo = ThreadReferences
 		}
 	}

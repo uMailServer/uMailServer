@@ -499,7 +499,10 @@ func TestCoverageHandleIdleNoSelectedMailbox(t *testing.T) {
 		t.Fatal("timeout waiting for BAD response")
 	}
 
+	// Hold s.mu to prevent race with handleIdle writing idleNotifyChan
+	session.mu.Lock()
 	GetNotificationHub().Unsubscribe("testuser", session.idleNotifyChan)
+	session.mu.Unlock()
 
 	select {
 	case <-idleDone:
@@ -528,7 +531,10 @@ func TestCoverageHandleIdleReadError(t *testing.T) {
 	// notification path, then close the client to clean up the pipe.
 	// This ordering ensures idleCleanup can unblock the DONE-reading
 	// goroutine via SetReadDeadline instead of hitting the 5-second timeout.
+	// Hold s.mu to prevent race with handleIdle writing idleNotifyChan.
+	session.mu.Lock()
 	GetNotificationHub().Unsubscribe("test", session.idleNotifyChan)
+	session.mu.Unlock()
 	client.Close()
 
 	select {

@@ -489,10 +489,8 @@ var adminTools = map[string]struct{}{
 	"list_domains":     {},
 	"check_dns":        {},
 	"check_tls":        {},
-	// Write/admin tools
-	"add_domain":     {},
+	// Write/admin tools (add_domain and add_account self-validate — no double-gate)
 	"delete_domain": {},
-	"add_account":   {},
 	"delete_account": {},
 	"flush_queue":   {},
 	"reload_config": {},
@@ -796,7 +794,7 @@ func (s *Server) toolGetAccountInfo(email string) (map[string]interface{}, error
 		slog.Error("mcp tool error", "tool", "get_account_info", "error", err); return nil, fmt.Errorf("account not found")
 	}
 
-	text := fmt.Sprintf("Account Information:\n")
+	text := "Account Information:\n"
 	text += fmt.Sprintf("- Email: %s\n", account.Email)
 	text += fmt.Sprintf("- Domain: %s\n", account.Domain)
 	text += fmt.Sprintf("- Admin: %t\n", account.IsAdmin)
