@@ -30,6 +30,20 @@ type AdminConfig struct {
 	AuditLog          AuditLogConfig
 }
 
+// CtxKey is a typed key for context.WithValue used by the admin auth/middleware
+// chain. Using a typed key (rather than bare strings) avoids collisions with
+// other packages that use the same string and lets staticcheck flag mismatches
+// at compile time (SA1029).
+type CtxKey int
+
+const (
+	// CtxKeyUser is the context key for the authenticated subject (sub claim).
+	CtxKeyUser CtxKey = iota + 1
+	// CtxKeyIsAdmin is the context key for the boolean isAdmin flag set by
+	// withAuth and read by adminMiddleware.
+	CtxKeyIsAdmin
+)
+
 // AdminServer is a lightweight HTTP server for admin panel access.
 // It serves on a separate port bound to localhost only.
 // It embeds the main Server to reuse its handlers.
@@ -184,8 +198,8 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "user", user)
-		ctx = context.WithValue(ctx, "isAdmin", isAdmin)
+		ctx := context.WithValue(r.Context(), CtxKeyUser, user)
+		ctx = context.WithValue(ctx, CtxKeyIsAdmin, isAdmin)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -193,7 +207,7 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 // adminMiddleware ensures user is an admin
 func (s *AdminServer) adminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		isAdmin, ok := r.Context().Value("isAdmin").(bool)
+		isAdmin, ok := r.Context().Value(CtxKeyIsAdmin).(bool)
 		if !ok || !isAdmin {
 			writeError(w, "forbidden", "Admin access required", http.StatusForbidden)
 			return
