@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1009,15 +1011,16 @@ func TestWebhookDelivery(t *testing.T) {
 	webhookMgr.SetAllowPrivateIP(true) // Allow localhost for testing
 
 	t.Run("webhook_event_delivery", func(t *testing.T) {
-		// Create test server to receive webhook
-		var receivedEvent string
-		var receivedData string
+		// Create test server to receive webhook. Captured variables are
+		// written by the handler goroutine and read by the test goroutine
+		// after time.Sleep; use atomic.Value so -race does not flag them.
+		var receivedEvent atomic.Value // string
+		var receivedData atomic.Value // string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedEvent = r.Header.Get("X-Webhook-Event")
-			// Read body
+			receivedEvent.Store(r.Header.Get("X-Webhook-Event"))
 			buf := make([]byte, 1024)
 			n, _ := r.Body.Read(buf)
-			receivedData = string(buf[:n])
+			receivedData.Store(string(buf[:n]))
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer server.Close()
@@ -1041,19 +1044,22 @@ func TestWebhookDelivery(t *testing.T) {
 		// Wait for delivery
 		time.Sleep(300 * time.Millisecond)
 
-		if receivedEvent != "mail.received" {
-			t.Errorf("expected event 'mail.received', got '%s'", receivedEvent)
+		if got := receivedEvent.Load().(string); got != "mail.received" {
+			t.Errorf("expected event 'mail.received', got '%s'", got)
 		}
-		if !strings.Contains(receivedData, "sender@example.com") {
+		if got := receivedData.Load().(string); !strings.Contains(got, "sender@example.com") {
 			t.Error("webhook data doesn't contain sender")
 		}
 	})
 
 	t.Run("webhook_event_filtering", func(t *testing.T) {
+		var receivedEventsMu sync.Mutex
 		receivedEvents := make(map[string]bool)
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			event := r.Header.Get("X-Webhook-Event")
+			receivedEventsMu.Lock()
 			receivedEvents[event] = true
+			receivedEventsMu.Unlock()
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer server.Close()
@@ -1075,6 +1081,8 @@ func TestWebhookDelivery(t *testing.T) {
 
 		time.Sleep(300 * time.Millisecond)
 
+		receivedEventsMu.Lock()
+		defer receivedEventsMu.Unlock()
 		if receivedEvents["mail.received"] {
 			t.Error("should not have received mail.received event")
 		}
@@ -1087,9 +1095,9 @@ func TestWebhookDelivery(t *testing.T) {
 	})
 
 	t.Run("webhook_signature_with_secret", func(t *testing.T) {
-		var receivedSig string
+		var receivedSig atomic.Value // string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			receivedSig = r.Header.Get("X-Webhook-Signature")
+			receivedSig.Store(r.Header.Get("X-Webhook-Signature"))
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer server.Close()
@@ -1103,7 +1111,7 @@ func TestWebhookDelivery(t *testing.T) {
 
 		time.Sleep(300 * time.Millisecond)
 
-		if receivedSig == "" {
+		if got := receivedSig.Load().(string); got == "" {
 			t.Error("expected X-Webhook-Signature header when secret is configured")
 		}
 	})
@@ -1370,19 +1378,22 @@ func TestFullMailFlow(t *testing.T) {
 		fmt.Fprintf(imapWriter, "A2 SELECT INBOX\r\n")
 		imapWriter.Flush()
 
-		var msgCount int
+		var msgCount atomic.Int32
 		for {
 			line, _ := imapReader.ReadString('\n')
 			if strings.Contains(line, "EXISTS") {
-				// Parse message count
-				fmt.Sscanf(line, "* %d EXISTS", &msgCount)
+				// Parse message count. ImapReader reads from the IMAP
+				// server goroutine, so capture under atomic.
+				var n int
+				fmt.Sscanf(line, "* %d EXISTS", &n)
+				msgCount.Store(int32(n))
 			}
 			if strings.HasPrefix(line, "A2 OK") {
 				break
 			}
 		}
 
-		if msgCount == 0 {
+		if msgCount.Load() == 0 {
 			t.Error("no messages found in INBOX after SMTP delivery")
 		}
 

@@ -13,6 +13,19 @@ import (
 	"github.com/umailserver/umailserver/internal/db"
 )
 
+// adminTestContextKey is a typed key for context.WithValue so this test
+// file doesn't collide with any other package that uses the bare string
+// "isAdmin" as a context key (staticcheck SA1029). Using a typed key also
+// makes the intent self-documenting and catches wrong-key bugs at compile
+// time when the type is exported, or at lint time when it's unexported.
+type adminTestContextKey int
+
+const (
+	// adminTestKeyIsAdmin is the context key for the boolean isAdmin flag
+	// set by withAuth and read by adminMiddleware.
+	adminTestKeyIsAdmin adminTestContextKey = iota + 1
+)
+
 // setupAdminTestServer creates a test server with database for admin tests
 func setupAdminTestServer(t *testing.T) (*AdminServer, *db.DB, func()) {
 	database, err := db.Open(t.TempDir() + "/test.db")
@@ -123,7 +136,7 @@ func TestAdminServer_withAuth_ValidAdminToken(t *testing.T) {
 	// Create handler that checks context values
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := r.Context().Value("user")
-		isAdmin := r.Context().Value("isAdmin")
+		isAdmin := r.Context().Value(adminTestKeyIsAdmin)
 
 		if user != "admin@example.com" {
 			t.Errorf("expected user admin@example.com, got %v", user)
@@ -162,7 +175,7 @@ func TestAdminServer_withAuth_ValidTokenWithKID(t *testing.T) {
 
 	// Create token with kid header pointing to default key
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	token := createAdminToken(adminServer.Server.jwtSecrets[adminServer.Server.currentKid], "default")
+	token := createAdminToken(adminServer.jwtSecrets[adminServer.currentKid], "default")
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 
@@ -327,7 +340,7 @@ func TestAdminServer_withAuth_LegacyJWTDisabled(t *testing.T) {
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	})
 	token.Header["kid"] = "nonexistent-kid"
-	adminServer.Server.currentKid = "also-nonexistent"
+	adminServer.currentKid = "also-nonexistent"
 	tokenStr, _ := token.SignedString([]byte(adminServer.config.JWTSecret))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -354,7 +367,7 @@ func TestAdminServer_adminMiddleware_AdminUser(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	ctx := req.Context()
-	ctx = context.WithValue(ctx, "isAdmin", true)
+	ctx = context.WithValue(ctx, adminTestKeyIsAdmin, true)
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 
@@ -378,7 +391,7 @@ func TestAdminServer_adminMiddleware_NonAdminUser(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	ctx := req.Context()
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx = context.WithValue(ctx, adminTestKeyIsAdmin, false)
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 

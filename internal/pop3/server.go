@@ -53,7 +53,12 @@ type Server struct {
 	// onLoginResult fires after every USER+PASS exchange (success or failure).
 	// Consumers wire it for audit logging, webhooks, and metrics. reason is
 	// only populated on failure.
-	onLoginResult func(username string, success bool, ip, reason string)
+	//
+	// atomic.Pointer so SetLoginResultHandler can swap the callback without
+	// racing the session goroutine that reads it on every auth attempt
+	// (caught by `go test -race`: SetLoginResultHandler vs
+	// Session.handleAuthorizationCommand).
+	onLoginResult atomic.Pointer[func(username string, success bool, ip, reason string)]
 
 	// tracingProvider wraps command dispatch and authentication when set.
 	tracingProvider *tracing.Provider
@@ -147,7 +152,7 @@ func (s *Server) SetAuthLimits(maxAttempts int, lockoutDuration time.Duration) {
 // The reason argument is only populated on failure ("lockout" or
 // "invalid_credentials").
 func (s *Server) SetLoginResultHandler(fn func(username string, success bool, ip, reason string)) {
-	s.onLoginResult = fn
+	s.onLoginResult.Store(&fn)
 }
 
 // SetTracingProvider wires an OpenTelemetry provider into the POP3 server.
@@ -565,8 +570,8 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		}
 		if s.server.isAuthLockedOut(host) {
 			s.WriteResponse("-ERR Too many failed authentication attempts")
-			if s.server.onLoginResult != nil {
-				s.server.onLoginResult(s.user, false, host, "lockout")
+			if cb := s.server.onLoginResult.Load(); cb != nil {
+				(*cb)(s.user, false, host, "lockout")
 			}
 			tracing.SetBoolAttribute(span, "auth.success", false)
 			tracing.SetStatus(span, tracing.StatusError, "auth lockout")
@@ -591,8 +596,8 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		if !authenticated {
 			s.server.recordAuthFailure(host)
 			s.WriteResponse("-ERR Authentication failed")
-			if s.server.onLoginResult != nil {
-				s.server.onLoginResult(s.user, false, host, "invalid_credentials")
+			if cb := s.server.onLoginResult.Load(); cb != nil {
+				(*cb)(s.user, false, host, "invalid_credentials")
 			}
 			tracing.SetBoolAttribute(span, "auth.success", false)
 			tracing.SetStatus(span, tracing.StatusError, "authentication failed")
@@ -611,8 +616,8 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 
 		s.messages = messages
 		s.state = StateTransaction
-		if s.server.onLoginResult != nil {
-			s.server.onLoginResult(s.user, true, host, "")
+		if cb := s.server.onLoginResult.Load(); cb != nil {
+			(*cb)(s.user, true, host, "")
 		}
 		tracing.SetBoolAttribute(span, "auth.success", true)
 		tracing.SetStatus(span, tracing.StatusOk, "")

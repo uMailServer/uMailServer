@@ -165,7 +165,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	if len(config.JWTSecretVersions) > 0 {
 		// Use configured versions
 		for kid, secret := range config.JWTSecretVersions {
-			jwtSecrets[kid] = secret
+			jwtSecrets[kid] = string(secret) // explicit conversion: JWTSecretValue -> string
 		}
 		// Set currentKid to first key in map if not set
 		for kid := range config.JWTSecretVersions {
@@ -272,7 +272,7 @@ func NewServerWithInterfaces(
 	currentKid := "default"
 	if len(config.JWTSecretVersions) > 0 {
 		for kid, secret := range config.JWTSecretVersions {
-			jwtSecrets[kid] = secret
+			jwtSecrets[kid] = string(secret) // explicit conversion: JWTSecretValue -> string
 		}
 		for kid := range config.JWTSecretVersions {
 			currentKid = kid

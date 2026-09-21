@@ -57,8 +57,8 @@ func (s *Server) handleAutoconfig(w http.ResponseWriter, r *http.Request) {
 
 	// Write response
 	if err := xml.NewEncoder(w).Encode(config); err != nil {
-		// Log to stderr as fallback - encoder error is serious
-		// response is already being written with headers sent
+		// nolint:staticcheck // SA9003: encoder error intentionally discarded — response is already being written with headers sent, no recovery possible.
+		_ = err
 	}
 }
 

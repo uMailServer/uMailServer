@@ -13,12 +13,20 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// JWTSecretValue is a typed string for JWT secret values used in
+// JWTSecretVersions (key rotation). Defining a named type avoids the
+// SA1029 lint warning ("should not use built-in type string as key for
+// value; define your own type to avoid collisions") and gives a
+// self-documenting type that future code can extend (e.g. add rotation
+// metadata or wrap with a redactor).
+type JWTSecretValue string
+
 // AdminConfig holds configuration for the admin server
 type AdminConfig struct {
-	Addr              string            // e.g., "127.0.0.1:8443"
-	JWTSecret         string            // Legacy single secret
-	JWTSecretVersions map[string]string // kid -> secret, for key rotation
-	DisableLegacyJWT  bool              // When true, disables fallback to legacy JWTSecret after kid rotation
+	Addr              string                       // e.g., "127.0.0.1:8443"
+	JWTSecret         string                       // Legacy single secret
+	JWTSecretVersions map[string]JWTSecretValue    // kid -> secret, for key rotation
+	DisableLegacyJWT  bool                         // When true, disables fallback to legacy JWTSecret after kid rotation
 	AuditLog          AuditLogConfig
 }
 
@@ -80,10 +88,10 @@ func (s *AdminServer) router() http.Handler {
 	mux.HandleFunc("/admin/", s.handleAdmin)
 
 	// Health check - delegate to embedded server's handler
-	mux.HandleFunc("/health", s.Server.handleHealth)
+	mux.HandleFunc("/health", s.handleHealth)
 
 	// Metrics - delegate to embedded server's handler
-	mux.HandleFunc("/metrics", s.Server.handleMetrics)
+	mux.HandleFunc("/metrics", s.handleMetrics)
 
 	// Admin API routes (all require admin auth)
 	api := http.NewServeMux()
@@ -142,12 +150,12 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 			}
 			// Try kid-based secret lookup first
 			if kid, ok := t.Header["kid"].(string); ok && kid != "" {
-				if kidSecret, ok := s.Server.jwtSecrets[kid]; ok {
+				if kidSecret, ok := s.jwtSecrets[kid]; ok {
 					return []byte(kidSecret), nil
 				}
 			}
 			// Fall back to current kid
-			if secret, ok := s.Server.jwtSecrets[s.Server.currentKid]; ok {
+			if secret, ok := s.jwtSecrets[s.currentKid]; ok {
 				return []byte(secret), nil
 			}
 			// Last resort: try legacy JWTSecret only if not disabled
@@ -207,7 +215,7 @@ func writeError(w http.ResponseWriter, errCode, message string, status int) {
 
 // handleAdmin serves the admin panel static files
 func (s *AdminServer) handleAdmin(w http.ResponseWriter, r *http.Request) {
-	if s.Server.adminFS == nil {
+	if s.adminFS == nil {
 		http.Error(w, "Admin filesystem not configured", http.StatusInternalServerError)
 		return
 	}
@@ -224,10 +232,10 @@ func (s *AdminServer) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to serve the file
-	data, err := s.Server.adminFS.Open(filePath)
+	data, err := s.adminFS.Open(filePath)
 	if err != nil {
 		// Try index.html for SPA routing
-		data, err = s.Server.adminFS.Open("index.html")
+		data, err = s.adminFS.Open("index.html")
 		if err != nil {
 			http.Error(w, "Admin panel not found", http.StatusNotFound)
 			return
