@@ -341,19 +341,19 @@ func (m *Manager) isValidWebhookURL(rawURL string) bool {
 func (m *Manager) sendEmail(alert Alert) error {
 	// Build email body
 	var body strings.Builder
-	body.WriteString(fmt.Sprintf("Subject: [%s] uMailServer Alert: %s\r\n", strings.ToUpper(string(alert.Severity)), alert.Name))
+	fmt.Fprintf(&body, "Subject: [%s] uMailServer Alert: %s\r\n", strings.ToUpper(string(alert.Severity)), alert.Name)
 	body.WriteString("MIME-Version: 1.0\r\n")
 	body.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
 	body.WriteString("\r\n")
-	body.WriteString(fmt.Sprintf("Alert: %s\r\n", alert.Name))
-	body.WriteString(fmt.Sprintf("Severity: %s\r\n", alert.Severity))
-	body.WriteString(fmt.Sprintf("Time: %s\r\n", alert.Timestamp.Format(time.RFC3339)))
-	body.WriteString(fmt.Sprintf("Message: %s\r\n", alert.Message))
+	fmt.Fprintf(&body, "Alert: %s\r\n", alert.Name)
+	fmt.Fprintf(&body, "Severity: %s\r\n", alert.Severity)
+	fmt.Fprintf(&body, "Time: %s\r\n", alert.Timestamp.Format(time.RFC3339))
+	fmt.Fprintf(&body, "Message: %s\r\n", alert.Message)
 
 	if len(alert.Details) > 0 {
 		body.WriteString("\r\nDetails:\r\n")
 		for key, value := range alert.Details {
-			body.WriteString(fmt.Sprintf("  %s: %v\r\n", key, value))
+			fmt.Fprintf(&body, "  %s: %v\r\n", key, value)
 		}
 	}
 
