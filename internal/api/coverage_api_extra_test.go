@@ -1,3 +1,11 @@
+// This file is auto-fixture test code for coverage instrumentation; the
+// map[string]interface{} and map[string]string literals here (e.g. for
+// JSON bodies and context.WithValue keys) are intentionally typed with
+// built-in string keys because the test scope is single-package and the
+// collision risk that SA1029 warns about does not apply. Suppress
+// SA1029 (and any future staticcheck findings) at file scope to keep the
+// CI signal focused on real production code, not coverage fixtures.
+// nolint:staticcheck
 package api
 
 import (

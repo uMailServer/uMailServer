@@ -13,12 +13,20 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// JWTSecretValue is a typed string for JWT secret values used in
+// JWTSecretVersions (key rotation). Defining a named type avoids the
+// SA1029 lint warning ("should not use built-in type string as key for
+// value; define your own type to avoid collisions") and gives a
+// self-documenting type that future code can extend (e.g. add rotation
+// metadata or wrap with a redactor).
+type JWTSecretValue string
+
 // AdminConfig holds configuration for the admin server
 type AdminConfig struct {
-	Addr              string            // e.g., "127.0.0.1:8443"
-	JWTSecret         string            // Legacy single secret
-	JWTSecretVersions map[string]string // kid -> secret, for key rotation
-	DisableLegacyJWT  bool              // When true, disables fallback to legacy JWTSecret after kid rotation
+	Addr              string                       // e.g., "127.0.0.1:8443"
+	JWTSecret         string                       // Legacy single secret
+	JWTSecretVersions map[string]JWTSecretValue    // kid -> secret, for key rotation
+	DisableLegacyJWT  bool                         // When true, disables fallback to legacy JWTSecret after kid rotation
 	AuditLog          AuditLogConfig
 }
 
