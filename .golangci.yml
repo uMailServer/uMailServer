@@ -133,9 +133,11 @@ issues:
     # only consumed through a closure or defer. Fixing each one cleanly
     # requires its own refactor PR (the upstream lint series #2-#10
     # deliberately skipped them). Suppress globally until the per-file
-    # refactors land.
+    # refactors land. Both ineffassign (its own linter) and staticcheck
+    # (which runs its own ineffassign analysis) need to be covered.
     - linters:
         - ineffassign
+        - staticcheck
   exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
