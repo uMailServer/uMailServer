@@ -1103,7 +1103,6 @@ func TestHandleEmailSet_CreateNotSupported(t *testing.T) {
 		}
 	}
 
-}
 
 // Test handleEmailImport error cases
 func TestHandleEmailImport_InvalidData(t *testing.T) {
