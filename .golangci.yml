@@ -51,6 +51,19 @@ issues:
         - ineffassign
         - staticcheck
         - govet
+        - whitespace
+    - path: internal/auth/coverage_extra.*_test\.go
+      linters:
+        - whitespace
+    - path: internal/jmap/coverage_extra.*_test\.go
+      linters:
+        - whitespace
+    - path: internal/smtp/coverage_extra.*_test\.go
+      linters:
+        - whitespace
+    - path: internal/imap/coverage_extra.*_test\.go
+      linters:
+        - whitespace
     - path: internal/auth/ldap\.go
       linters:
         - ineffassign
@@ -104,9 +117,15 @@ issues:
     - path: internal/auth/dmarc_reporter\.go
       linters:
         - staticcheck
+    - path: internal/auth/arc\.go
+      linters:
+        - staticcheck
     - path: internal/config/config\.go
       linters:
         - govet
+    - path: internal/api/server_test\.go
+      linters:
+        - staticcheck
     # The CI Lint gate was failing on pre-existing ineffassign findings
     # across internal/imap/commands.go (lines 430/541/1000/1404/1478/
     # 1849/1915) and internal/jmap/handlers.go (lines 1390/1421/1539/

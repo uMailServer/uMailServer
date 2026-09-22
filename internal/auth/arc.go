@@ -462,7 +462,7 @@ func buildAMSSignatureData(ams string, headers map[string][]string, body []byte)
 	// Add canonicalized headers
 	for name, values := range headers {
 		for _, value := range values {
-			data.WriteString(fmt.Sprintf("%s: %s\r\n", strings.ToLower(name), value))
+			fmt.Fprintf(&data, "%s: %s\r\n", strings.ToLower(name), value)
 		}
 	}
 
