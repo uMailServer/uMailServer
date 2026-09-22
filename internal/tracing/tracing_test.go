@@ -106,7 +106,7 @@ func TestProvider_StartSpanWithKind(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	ctx, span := provider.StartSpanWithKind(ctx, "test-span", SpanKindServer,
+	_, span := provider.StartSpanWithKind(ctx, "test-span", SpanKindServer,
 		attribute.String("key", "value"),
 	)
 	defer span.End()

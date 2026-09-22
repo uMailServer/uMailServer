@@ -34,7 +34,7 @@ type mockConnReader struct {
 	readErr error
 }
 
-func (mr *mockConnReader) Read(b []byte) (n int, err error) {
+func (mr *mockConnReader) Read(b []byte) (n int, err error) { //nolint:revive // SA1019: intentionally unused type, see lint tracker
 	if mr.readErr != nil {
 		return 0, mr.readErr
 	}

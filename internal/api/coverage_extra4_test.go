@@ -612,7 +612,7 @@ func TestGetEmailFromStorage_GetMessageUIDsError(t *testing.T) {
 	// Create mailbox but no messages - GetMessageUIDs returns empty
 	_ = mailDB.CreateMailbox("user@example.com", "INBOX")
 
-	email, err := h.getEmailFromStorage("user@example.com", "INBOX", "non-existent-id")
+	email, _ := h.getEmailFromStorage("user@example.com", "INBOX", "non-existent-id")
 	// email should be nil for non-existent message, error may vary
 	if email != nil {
 		t.Error("Expected nil email for non-existent message")

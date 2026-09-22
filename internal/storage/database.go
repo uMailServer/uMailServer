@@ -623,8 +623,8 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 		return b.Put(itob(uid), newData)
 	})
 	if err == nil && preexisting {
-		// We don't have MessageID here, so we can't record changes.
-		// This is acceptable for flag updates which don't change message content.
+		// MessageID is not available here, so change recording is skipped.
+		// This is acceptable for flag updates which don't alter message content.
 	}
 	return err
 }

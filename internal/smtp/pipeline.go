@@ -393,9 +393,10 @@ func (s *SPFStage) Process(ctx *MessageContext) PipelineResult {
 	ctx.SPFResult = result
 
 	// Add to spam score if failed
-	if result.Result == "fail" {
+	switch result.Result {
+	case "fail":
 		ctx.SpamScore += 2.0
-	} else if result.Result == "softfail" {
+	case "softfail":
 		ctx.SpamScore += 1.0
 	}
 
@@ -662,7 +663,7 @@ func reverseIP(ip string) string {
 		low := ipv6[i] & 0x0F
 		// RFC 3596: nibble N+1 is high nibble, nibble N is low nibble
 		// When building reverse, we go byte-by-byte: low nibble first, then high
-		reversed.WriteString(fmt.Sprintf("%d.%d.", low, high))
+		fmt.Fprintf(&reversed, "%d.%d.", low, high)
 	}
 	reversed.WriteString("ip6.arpa")
 	return reversed.String()
@@ -719,7 +720,7 @@ func defaultHeuristicRules() []HeuristicRule {
 			Description: "Message has no subject",
 			Score:       1.0,
 			Check: func(ctx *MessageContext) bool {
-				return ctx.Headers["Subject"] == nil || len(ctx.Headers["Subject"]) == 0
+				return len(ctx.Headers["Subject"]) == 0
 			},
 		},
 		{
@@ -743,7 +744,7 @@ func defaultHeuristicRules() []HeuristicRule {
 			Description: "No Date header",
 			Score:       1.0,
 			Check: func(ctx *MessageContext) bool {
-				return ctx.Headers["Date"] == nil || len(ctx.Headers["Date"]) == 0
+				return ctx.Headers["Date"] == nil
 			},
 		},
 		{

@@ -100,15 +100,16 @@ type Server struct {
 func New(cfg *config.Config) (*Server, error) {
 	// Setup log output
 	var logHandler slog.Handler
-	if cfg.Logging.Output == "stdout" || cfg.Logging.Output == "" {
+	switch cfg.Logging.Output {
+	case "stdout", "":
 		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			Level: parseLogLevel(cfg.Logging.Level),
 		})
-	} else if cfg.Logging.Output == "stderr" {
+	case "stderr":
 		logHandler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 			Level: parseLogLevel(cfg.Logging.Level),
 		})
-	} else {
+	default:
 		// File output with rotation
 		writer, err := logging.NewRotatingWriter(
 			cfg.Logging.Output,
