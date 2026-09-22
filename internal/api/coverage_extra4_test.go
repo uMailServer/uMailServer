@@ -360,7 +360,7 @@ func TestHandleMailDelete_Success(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mail/delete?id="+msgID, strings.NewReader("{}"))
-	req = req.WithContext(context.WithValue(req.Context(), "user", "user@mailtest.com"))
+	req = req.WithContext(context.WithValue(req.Context() //nolint:staticcheck, "user", "user@mailtest.com")) //nolint:staticcheck
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -393,7 +393,7 @@ func TestHandleMailDelete_MissingID(t *testing.T) {
 	token := helperLogin(t, server, "user@mailtest.com", "password123")
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mail/delete", nil)
-	req = req.WithContext(context.WithValue(req.Context(), "user", "user@mailtest.com"))
+	req = req.WithContext(context.WithValue(req.Context() //nolint:staticcheck, "user", "user@mailtest.com")) //nolint:staticcheck
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 

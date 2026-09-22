@@ -193,8 +193,8 @@ func TestHandleTOTPSetup_Success(t *testing.T) {
 	server, database := helperSetupTOTPAccount(t)
 	defer database.Close()
 
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
@@ -249,8 +249,8 @@ func TestHandleTOTPSetup_ForbiddenForDifferentUser(t *testing.T) {
 	defer database.Close()
 
 	// Try to setup TOTP for a different user as non-admin - should be forbidden
-	ctx := context.WithValue(context.Background(), "user", "other@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "other@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleTOTPSetup(rec, req, "user@test.com")
@@ -273,8 +273,8 @@ func TestHandleTOTPSetup_AdminCannotSetupForAdmin(t *testing.T) {
 	})
 
 	// Admin trying to setup TOTP for another admin - should be forbidden
-	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", true)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true) //nolint:staticcheck
 	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleTOTPSetup(rec, req, "user@test.com")
@@ -303,8 +303,8 @@ func TestHandleTOTPVerify_MissingCode(t *testing.T) {
 	server, database := helperSetupTOTPAccount(t)
 	defer database.Close()
 
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	body, _ := json.Marshal(map[string]string{})
 	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
@@ -322,8 +322,8 @@ func TestHandleTOTPVerify_InvalidCode(t *testing.T) {
 	defer database.Close()
 
 	// First setup TOTP
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleTOTPSetup(rec, req, "user@test.com")
@@ -346,8 +346,8 @@ func TestHandleTOTPVerify_NotSetUp(t *testing.T) {
 	defer database.Close()
 
 	// Try to verify without setting up first
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	body, _ := json.Marshal(map[string]string{"code": "123456"})
 	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
@@ -396,15 +396,15 @@ func TestHandleTOTPVerify_ForbiddenForDifferentUser(t *testing.T) {
 	defer database.Close()
 
 	// Setup TOTP for user@test.com
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleTOTPSetup(rec, req, "user@test.com")
 
 	// Try to verify as different user (not self, not admin) - should be forbidden
-	ctx = context.WithValue(context.Background(), "user", "other@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx = context.WithValue(context.Background() //nolint:staticcheck, "user", "other@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	body, _ := json.Marshal(map[string]string{"code": "123456"})
 	req = httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
@@ -426,8 +426,8 @@ func TestHandleTOTPDisable_Success(t *testing.T) {
 	server.handleTOTPSetup(rec, req, "user@test.com")
 
 	// Now disable it - user can disable their own TOTP
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
 	rec = httptest.NewRecorder()
 	server.handleTOTPDisable(rec, req, "user@test.com")
@@ -485,8 +485,8 @@ func TestHandleTOTPDisable_ForbiddenForDifferentUser(t *testing.T) {
 	server.handleTOTPSetup(rec, req, "user@test.com")
 
 	// Try to disable as different user (not self, not admin) - should be forbidden
-	ctx := context.WithValue(context.Background(), "user", "other@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "other@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
 	rec = httptest.NewRecorder()
 	server.handleTOTPDisable(rec, req, "user@test.com")
@@ -506,8 +506,8 @@ func TestHandleTOTPDisable_AdminCanDisableNonAdmin(t *testing.T) {
 	server.handleTOTPSetup(rec, req, "user@test.com")
 
 	// Admin disables non-admin user's TOTP - should succeed
-	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", true)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true) //nolint:staticcheck
 	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
 	rec = httptest.NewRecorder()
 	server.handleTOTPDisable(rec, req, "user@test.com")
@@ -535,8 +535,8 @@ func TestHandleTOTPDisable_AdminCannotDisableAdmin(t *testing.T) {
 	server.handleTOTPSetup(rec, req, "admin@test.com")
 
 	// Another admin tries to disable admin's TOTP - should be forbidden
-	ctx := context.WithValue(context.Background(), "user", "otheradmin@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", true)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "otheradmin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true) //nolint:staticcheck
 	req = httptest.NewRequest("POST", "/api/totp/disable", nil).WithContext(ctx)
 	rec = httptest.NewRecorder()
 	server.handleTOTPDisable(rec, req, "admin@test.com")
@@ -662,8 +662,8 @@ func TestHandleTOTPVerify_DecryptError(t *testing.T) {
 	account.TOTPEnabled = true
 	database.UpdateAccount(account)
 
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	body, _ := json.Marshal(map[string]string{"code": "123456"})
 	req := httptest.NewRequest("POST", "/api/totp/verify", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
@@ -681,8 +681,8 @@ func TestHandleTOTPVerify_UpdateAccountError(t *testing.T) {
 	// Don't defer close - we want to close it to cause an error
 
 	// First setup TOTP properly
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req := httptest.NewRequest("POST", "/api/totp/setup", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleTOTPSetup(rec, req, "user@test.com")

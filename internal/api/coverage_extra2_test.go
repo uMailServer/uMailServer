@@ -134,7 +134,7 @@ func TestUpdateAccount_WithPasswordChange(t *testing.T) {
 		"password": "newpassword", "is_admin": false, "is_active": true,
 	})
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@pwchg.com", bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), "user", "u@pwchg.com"))
+	req = req.WithContext(context.WithValue(req.Context() //nolint:staticcheck, "user", "u@pwchg.com"))
 	rec := httptest.NewRecorder()
 	server.updateAccount(rec, req, "u@pwchg.com")
 
@@ -174,7 +174,7 @@ func TestUpdateAccount_InvalidBody(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@inv.com", bytes.NewReader([]byte("invalid json")))
-	req = req.WithContext(context.WithValue(req.Context(), "user", "u@inv.com"))
+	req = req.WithContext(context.WithValue(req.Context() //nolint:staticcheck, "user", "u@inv.com"))
 	rec := httptest.NewRecorder()
 	server.updateAccount(rec, req, "u@inv.com")
 
@@ -193,8 +193,8 @@ func TestHandleSearch_WithLimitOffset(t *testing.T) {
 	server := NewServer(database, nil, Config{JWTSecret: "secret"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=hello&folder=INBOX&limit=5&offset=10", nil)
-	ctx := context.WithValue(req.Context(), "user", "test@example.com")
-	ctx = context.WithValue(ctx, "isAdmin", true)
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "test@example.com")
+	ctx = context.WithValue(ctx, "isAdmin", true) //nolint:staticcheck
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)
@@ -336,7 +336,7 @@ func TestHandleSearch_InvalidLimit(t *testing.T) {
 	server := NewServer(database, nil, Config{JWTSecret: "secret"})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=abc&offset=xyz", nil)
-	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "test@example.com")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)
@@ -358,7 +358,7 @@ func TestHandleSearch_NegativeLimit(t *testing.T) {
 
 	// Negative limit should be ignored and default used
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=-5", nil)
-	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "test@example.com")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)
@@ -380,7 +380,7 @@ func TestHandleSearch_NegativeOffset(t *testing.T) {
 
 	// Negative offset should be ignored and 0 used
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&offset=-10", nil)
-	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "test@example.com")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)
@@ -403,7 +403,7 @@ func TestHandleSearch_QueryTooLong(t *testing.T) {
 	// Query too long (>500 chars)
 	longQuery := strings.Repeat("a", 501)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q="+longQuery, nil)
-	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "test@example.com")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)
@@ -424,7 +424,7 @@ func TestHandleSearch_LimitCappedAt100(t *testing.T) {
 
 	// Limit > 100 should be capped to 100
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=200", nil)
-	ctx := context.WithValue(req.Context(), "user", "test@example.com")
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "test@example.com")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	server.handleSearch(rec, req)

@@ -203,8 +203,8 @@ func TestHandleRefresh_TokenGenerationError_Cov3(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 	// Set context values that handleRefresh reads
-	ctx := context.WithValue(req.Context(), "user", "test@example.com")
-	ctx = context.WithValue(ctx, "isAdmin", true)
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "test@example.com")
+	ctx = context.WithValue(ctx, "isAdmin", true) //nolint:staticcheck
 	req = req.WithContext(ctx)
 
 	rec := httptest.NewRecorder()
@@ -243,8 +243,8 @@ func TestHandleRefresh_WithAuthorization(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
 	req.Header.Set("Authorization", "Bearer "+oldTokenStr)
-	ctx := context.WithValue(req.Context(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
+	ctx := context.WithValue(req.Context() //nolint:staticcheck, "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
