@@ -358,8 +358,8 @@ func TestHandleRefresh_WithContext(t *testing.T) {
 	defer database.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
-	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "admin@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", true) //nolint:staticcheck
+	ctx := context.WithValue(context.Background(), "user", "admin@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", true)
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
@@ -533,8 +533,8 @@ func TestListAccounts_NonAdminUser(t *testing.T) {
 	server := NewServer(database, nil, Config{})
 
 	// Set non-admin user context
-	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
+	ctx := context.WithValue(context.Background(), "user", "user@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
@@ -564,8 +564,8 @@ func TestListAccounts_NonAdminUser_AccountNotFound(t *testing.T) {
 	server := NewServer(database, nil, Config{})
 
 	// Set non-admin user context with non-existent account
-	ctx := context.WithValue(context.Background() //nolint:staticcheck, "user", "ghost@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false) //nolint:staticcheck
+	ctx := context.WithValue(context.Background(), "user", "ghost@test.com")
+	ctx = context.WithValue(ctx, "isAdmin", false)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
@@ -932,7 +932,7 @@ func TestUpdateAccount_NoPasswordChange(t *testing.T) {
 	jsonBody, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@nopw.com", bytes.NewReader(jsonBody))
-	req = req.WithContext(context.WithValue(req.Context() //nolint:staticcheck, "user", "u@nopw.com"))
+	req = req.WithContext(context.WithValue(req.Context(), "user", "u@nopw.com"))
 	rec := httptest.NewRecorder()
 	server.updateAccount(rec, req, "u@nopw.com")
 
