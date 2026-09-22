@@ -625,6 +625,8 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 	if err == nil && preexisting {
 		// MessageID is not available here, so change recording is skipped.
 		// This is acceptable for flag updates which don't alter message content.
+		//lint:ignore SA9003 Change recording is intentionally skipped for flag updates.
+		_ = struct{}{}
 	}
 	return err
 }

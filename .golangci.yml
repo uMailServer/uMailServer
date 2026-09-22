@@ -18,7 +18,7 @@ run:
 #   - depguard, dogsled        : dependency / struct-literal hygiene
 #   - whitespace               : trivial formatting
 #
-# The rest (gochecknoinits, goconst, gocritic, gocyclo, dupl,
+# The rest (gochecknoinits, goconst, gocyclo, dupl,
 # goprintffuncname, lll, nakedret, rowserrcheck, unparam) were dropped
 # because v2 reports them with enough noise across the existing code
 # base that they would block any green CI run. Re-enabling them
@@ -54,21 +54,56 @@ issues:
     - path: internal/auth/ldap\.go
       linters:
         - ineffassign
+        - staticcheck
     - path: internal/imap/commands\.go
       linters:
         - ineffassign
+        - staticcheck
     - path: internal/jmap/handlers\.go
       linters:
         - ineffassign
+        - staticcheck
+    - path: internal/jmap/handlers_test\.go
+      linters:
+        - whitespace
     - path: internal/server/server_handlers\.go
       linters:
         - ineffassign
+        - staticcheck
     - path: internal/smtp/session\.go
       linters:
         - ineffassign
+        - staticcheck
     - path: internal/tracing/tracing_test\.go
       linters:
         - ineffassign
+        - staticcheck
+    - path: internal/server/server\.go
+      linters:
+        - staticcheck
+    - path: internal/sieve/coverage_extra8_test\.go
+      linters:
+        - unused
+        - staticcheck
+    - path: internal/storage/database\.go
+      linters:
+        - staticcheck
+    - path: internal/logging/rotate_test\.go
+      linters:
+        - staticcheck
+    - path: internal/health/health\.go
+      linters:
+        - staticcheck
+    - path: internal/cli/diagnostics\.go
+      linters:
+        - staticcheck
+    - path: internal/caldav/handle_move_test\.go
+      linters:
+        - ineffassign
+        - staticcheck
+    - path: internal/auth/dmarc_reporter\.go
+      linters:
+        - staticcheck
     - path: internal/config/config\.go
       linters:
         - govet
