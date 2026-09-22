@@ -18,6 +18,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// adminCtxKey is the typed context key for admin privilege propagation.
+// Using an unexported custom type prevents collisions with other packages.
+type adminCtxKey struct{}
+
+// adminCtxKeyVal is the singleton key value used in context.WithValue calls.
+// Satisfying the context.Key interface makes the type safe to use as a
+// context key (staticcheck SA1029).
+var adminCtxKeyVal any = adminCtxKey{}
+
 // Server implements MCP (Model Context Protocol)
 type Server struct {
 	db             *db.DB
@@ -154,7 +163,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if s.adminAuthToken != "" && token == s.adminAuthToken {
 			valid = true
-			ctx = context.WithValue(ctx, "isAdmin", true)
+			ctx = context.WithValue(ctx, adminCtxKeyVal, true)
 		}
 		if !valid {
 			s.writeError(w, http.StatusUnauthorized, "Unauthorized")
@@ -498,7 +507,7 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 
 	// Enforce RBAC: admin tools require isAdmin in context
 	if _, isAdminTool := adminTools[req.Name]; isAdminTool {
-		isAdmin, ok := ctx.Value("isAdmin").(bool)
+		isAdmin, ok := ctx.Value(adminCtxKeyVal).(bool)
 		if !ok || !isAdmin {
 			return nil, fmt.Errorf("admin access required")
 		}
