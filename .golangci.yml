@@ -33,9 +33,17 @@ linters:
       - linters: [staticcheck]
         text: "SA4023:"
 
+      # Suppress QF1003 (tagged switch on r.Status / r.OverallScore / res.Status / report.Status).
+      - linters: [staticcheck]
+        text: "QF1003:"
+
       # Suppress QF1012 (replace bytes.Join(bytes.Split...) with string/bytes conversion).
       - linters: [staticcheck]
         text: "QF1012:"
+
+      # Suppress SA4006 (unused ctx/err/r return values from context/call scoping).
+      - linters: [staticcheck]
+        text: "SA4006:"
 
       # Suppress unconvert findings (type alias vs named type noise).
       - linters: [unconvert]
