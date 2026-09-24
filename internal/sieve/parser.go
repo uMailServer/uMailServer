@@ -517,7 +517,7 @@ func (s *Script) String() string {
 		}
 		for _, arg := range cmd.Arguments {
 			sb.WriteString(" ")
-			sb.WriteString(fmt.Sprintf("%v", arg))
+			fmt.Fprintf(&sb, "%v", arg)
 		}
 		if cmd.Block != nil {
 			sb.WriteString(" { ")

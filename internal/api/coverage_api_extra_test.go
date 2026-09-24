@@ -1477,9 +1477,9 @@ func TestHandleSetVacation_WithMockError(t *testing.T) {
 	server.vacationSetError = fmt.Errorf("mock vacation set error")
 
 	body := map[string]interface{}{
-		"enabled": true,
-		"subject": "Test Subject",
-		"message": "Test Message",
+		"enabled":       true,
+		"subject":       "Test Subject",
+		"message":       "Test Message",
 		"send_interval": 1,
 	}
 	jsonBody, _ := json.Marshal(body)

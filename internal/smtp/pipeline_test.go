@@ -693,7 +693,7 @@ func TestAVStage_VirusDetected_Tag(t *testing.T) {
 	if result != ResultAccept {
 		t.Errorf("Expected ResultAccept for tag action, got %v", result)
 	}
-	if ctx.Headers["X-Virus"] == nil || len(ctx.Headers["X-Virus"]) == 0 {
+	if ctx.Headers["X-Virus"] == nil {
 		t.Error("Expected X-Virus header to be set")
 	} else if ctx.Headers["X-Virus"][0] != "EICAR-Test" {
 		t.Errorf("Expected X-Virus header 'EICAR-Test', got %q", ctx.Headers["X-Virus"][0])

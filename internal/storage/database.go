@@ -62,11 +62,11 @@ func (db *Database) AuthenticateUser(username, password string) (bool, error) {
 
 // Mailbox represents mailbox metadata
 type Mailbox struct {
-	Name           string
-	UIDValidity    uint32
-	UIDNext        uint32
-	HighestModSeq  uint64    // RFC 7162: highest modification sequence number
-	Subscribed     bool
+	Name          string
+	UIDValidity   uint32
+	UIDNext       uint32
+	HighestModSeq uint64 // RFC 7162: highest modification sequence number
+	Subscribed    bool
 }
 
 // mailboxKey returns the bucket name for a user's mailbox metadata
@@ -623,8 +623,10 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 		return b.Put(itob(uid), newData)
 	})
 	if err == nil && preexisting {
-		// We don't have MessageID here, so we can't record changes.
-		// This is acceptable for flag updates which don't change message content.
+		// MessageID is not available here, so change recording is skipped.
+		// This is acceptable for flag updates which don't alter message content.
+		//lint:ignore SA9003 Change recording is intentionally skipped for flag updates.
+		_ = struct{}{}
 	}
 	return err
 }

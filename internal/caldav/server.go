@@ -511,7 +511,7 @@ func (s *Server) buildPrincipalResponse(username string) Response {
 		Href: fmt.Sprintf("/dav/principals/%s/", username),
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <collection/>\n        <principal/>\n      "},
+				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <D:collection/>\n        <D:principal/>\n      "},
 				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: username},
 				{XMLName: xml.Name{Space: "CALDAV:", Local: "calendar-home-set"}, Value: fmt.Sprintf("<href>/dav/calendars/%s/</href>", username)},
 			},
@@ -543,7 +543,7 @@ func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response 
 		Href: href,
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <collection/>\n        <calendar xmlns=\"urn:ietf:params:xml:ns:caldav\"/>\n      "},
+				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <D:collection/>\n        <C:calendar xmlns:C=\"urn:ietf:params:xml:ns:caldav\"/>\n      "},
 				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: cal.Name},
 				{XMLName: xml.Name{Space: "DAV:", Local: "getetag"}, Value: etag},
 				{XMLName: xml.Name{Space: "CALDAV:", Local: "calendar-description"}, Value: cal.Description},

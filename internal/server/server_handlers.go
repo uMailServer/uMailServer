@@ -128,10 +128,10 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 // deliverMessageWithSieve delivers an incoming message with optional Sieve filtering actions
 func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, sieveActions []string) error {
 	// Create tracing span if tracing is enabled
-	var ctx context.Context = context.Background()
+	ctx := context.Background()
 	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
 		var span trace.Span
-		ctx, span = s.tracingProvider.StartSpanWithKind(ctx, "deliverMessage", tracing.SpanKindServer,
+		_, span = s.tracingProvider.StartSpanWithKind(ctx, "deliverMessage", tracing.SpanKindServer,
 			attribute.String("mail.from", from),
 			attribute.Int("mail.recipients", len(to)),
 			attribute.Int("mail.size", len(data)),

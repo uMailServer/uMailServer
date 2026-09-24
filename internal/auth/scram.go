@@ -22,25 +22,25 @@ type SCRAMClientInitialMessage struct {
 
 // SCRAMServerFirstMessage contains the parsed server first message
 type SCRAMServerFirstMessage struct {
-	Salt         []byte // Base64-decoded salt
-	Nonce        string // Server nonce (client + server nonce)
-	Iterations   int    // Number of iterations
+	Salt           []byte // Base64-decoded salt
+	Nonce          string // Server nonce (client + server nonce)
+	Iterations     int    // Number of iterations
 	SaltedPassword []byte // SaltedPassword = Hi(Normalize(password), salt, i)
 }
 
 // SCRAMClientFinalMessage contains the client final message
 type SCRAMClientFinalMessage struct {
-	ChannelBind  string // Channel binding data
-	Nonce         string // Nonce
-	ClientProof  []byte // HMAC-based proof
+	ChannelBind string // Channel binding data
+	Nonce       string // Nonce
+	ClientProof []byte // HMAC-based proof
 }
 
 // SCRAMSHA256 implements SCRAM-SHA-256 mechanism (RFC 7677)
 type SCRAMSHA256 struct {
-	salt       []byte
+	salt           []byte
 	saltedPassword []byte
-	storedKey  []byte
-	serverKey  []byte
+	storedKey      []byte
+	serverKey      []byte
 }
 
 // NewSCRAMSHA256 creates a new SCRAM-SHA-256 authenticator with the password
@@ -61,10 +61,10 @@ func NewSCRAMSHA256(password string, salt []byte, iterations int) (*SCRAMSHA256,
 	serverKey.Write([]byte("Server Key"))
 
 	return &SCRAMSHA256{
-		salt:       salt,
+		salt:           salt,
 		saltedPassword: saltedPassword,
-		storedKey:  storedKey,
-		serverKey:  serverKey.Sum(nil),
+		storedKey:      storedKey,
+		serverKey:      serverKey.Sum(nil),
 	}, nil
 }
 

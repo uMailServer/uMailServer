@@ -28,13 +28,15 @@ func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 
 // mockConnReader implements io.Reader for testing ReadLine
+//
+//nolint:unused,staticcheck
 type mockConnReader struct {
 	lines   []string
 	pos     int
 	readErr error
 }
 
-func (mr *mockConnReader) Read(b []byte) (n int, err error) {
+func (mr *mockConnReader) Read(b []byte) (n int, err error) { //nolint:unused
 	if mr.readErr != nil {
 		return 0, mr.readErr
 	}
