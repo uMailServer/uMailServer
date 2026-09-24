@@ -30,6 +30,28 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 		}
 	}
 
+	// Deduplicate: don't spam the same sender with multiple replies.
+	// Use the same key format and pipe-delimiter safety as sendVacationReply.
+	safeRecipient := strings.ReplaceAll(recipient, "|", "__")
+	safeSender := strings.ReplaceAll(sender, "|", "__")
+	key := safeRecipient + "|" + safeSender
+
+	// Use the same 24-hour minimum dedup interval as sendVacationReply.
+	// TODO: plumb :seconds from the Sieve vacation action when interpreter.go
+	// adds a Seconds field to VacationAction.
+	const sendInterval = 24 * time.Hour
+
+	s.vacationRepliesMu.Lock()
+	if s.vacationReplies == nil {
+		s.vacationReplies = make(map[string]time.Time)
+	}
+	if lastSent, ok := s.vacationReplies[key]; ok && time.Since(lastSent) < sendInterval {
+		s.vacationRepliesMu.Unlock()
+		return
+	}
+	s.vacationReplies[key] = time.Now()
+	s.vacationRepliesMu.Unlock()
+
 	// Build vacation message content
 	subject := vacation.Subject
 	if subject == "" {
