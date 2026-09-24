@@ -366,6 +366,7 @@ type Session struct {
 	writer   *bufio.Writer
 	server   *Server
 	state    State
+	stateMu  sync.RWMutex // protects state
 	user     string
 	selected *Mailbox
 
@@ -422,8 +423,10 @@ func (s *Session) ID() string {
 	return s.id
 }
 
-// State returns the current session state
+// State returns the current session state (caller must not hold stateMu).
 func (s *Session) State() State {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
 	return s.state
 }
 
@@ -439,19 +442,30 @@ func (s *Session) Selected() *Mailbox {
 
 // Close closes the session
 func (s *Session) Close() {
+	s.stateMu.Lock()
 	s.state = StateLoggedOut
+	s.stateMu.Unlock()
 	_ = s.conn.Close() // Best-effort close
 }
 
 // Handle processes commands from the client
 func (s *Session) Handle() {
-	for s.state != StateLoggedOut {
+	for {
+		s.stateMu.RLock()
+		done := s.state == StateLoggedOut
+		s.stateMu.RUnlock()
+		if done {
+			return
+		}
 		if s.server.readTimeout > 0 && !s.idleActive {
 			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout)) // Best-effort deadline
 		}
 		line, err := s.readLine()
 		if err != nil {
-			if s.state != StateLoggedOut {
+			s.stateMu.RLock()
+			stillActive := s.state != StateLoggedOut
+			s.stateMu.RUnlock()
+			if stillActive {
 				s.server.logger.Error("Failed to read command", "error", err)
 			}
 			return
