@@ -953,7 +953,9 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 
 	// Enqueue bounce as a new message back to the sender
 	if m.db != nil {
-		if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, bounceMsg); enqueueErr != nil {
+		if entry.From == "" {
+			m.logger.Warn("cannot send bounce: original message had null sender (MAIL FROM:<>), message lost", "entry_id", entry.ID)
+		} else if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, bounceMsg); enqueueErr != nil {
 			m.logger.Error("failed to enqueue bounce message", "error", enqueueErr)
 		}
 	}
