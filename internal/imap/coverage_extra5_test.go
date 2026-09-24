@@ -356,4 +356,5 @@ func TestCheckAndSendMDN_SemaphoreFull(t *testing.T) {
 	ms.checkAndSendMDN("user", "msg6", "from@example.com", "to@example.com", msg)
 	// Semaphore full - should drop MDN without blocking
 }
+
 // because it blocks waiting for gzip headers from the pipe

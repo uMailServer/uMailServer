@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -51,17 +50,6 @@ func createAdminToken(secret string, kid string) string {
 	if kid != "" {
 		token.Header["kid"] = kid
 	}
-	tokenStr, _ := token.SignedString([]byte(secret))
-	return tokenStr
-}
-
-// createUserToken creates a valid non-admin JWT token for testing
-func createUserToken(secret string) string {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":   "user@example.com",
-		"admin": false,
-		"exp":   time.Now().Add(time.Hour).Unix(),
-	})
 	tokenStr, _ := token.SignedString([]byte(secret))
 	return tokenStr
 }
@@ -568,15 +556,6 @@ func TestAdminServer_handleAdmin_WithFS(t *testing.T) {
 			t.Errorf("getContentType(%q) = %q, want %q", file, result, expected)
 		}
 	}
-}
-
-// mockFileSystem implements the FileSystem interface for testing
-type mockFileSystem struct {
-	files map[string]string
-}
-
-func (m *mockFileSystem) Open(name string) (http.File, error) {
-	return nil, io.EOF // Simplified mock
 }
 
 // TestAdminServer_Routes_Health tests health check route

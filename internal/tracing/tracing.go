@@ -109,12 +109,15 @@ func createExporter(config Config) (sdktrace.SpanExporter, error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		conn, err := grpc.DialContext(ctx, config.OTLPEndpoint,
+		conn, err := grpc.NewClient(config.OTLPEndpoint,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithBlock(),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to OTLP endpoint: %w", err)
+		}
+		if !conn.WaitForStateChange(ctx, conn.GetState()) {
+			conn.Close()
+			return nil, fmt.Errorf("timeout connecting to OTLP endpoint")
 		}
 		return otlptracegrpc.New(context.Background(), otlptracegrpc.WithGRPCConn(conn))
 

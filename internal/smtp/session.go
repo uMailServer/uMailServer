@@ -333,7 +333,7 @@ func (s *Session) handleDATA() error {
 	// Create tracing span if provider is available
 	var span trace.Span
 	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
-		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "smtp.data", tracing.SpanKindServer,
+		_, span = s.server.tracingProvider.StartSpanWithKind(ctx, "smtp.data", tracing.SpanKindServer,
 			attribute.String("session.id", s.id),
 			attribute.String("mail.from", s.mailFrom),
 			attribute.Int("mail.recipients", len(s.rcptTo)),
@@ -742,7 +742,7 @@ func (s *Session) handleAUTH(arg string) error {
 	// Create tracing span if provider is available
 	var span trace.Span
 	if s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
-		ctx, span = s.server.tracingProvider.StartSpanWithKind(ctx, "smtp.auth", tracing.SpanKindServer,
+		_, span = s.server.tracingProvider.StartSpanWithKind(ctx, "smtp.auth", tracing.SpanKindServer,
 			attribute.String("session.id", s.id),
 			attribute.String("session.ip", getIPFromAddr(s.conn.RemoteAddr().String())),
 		)

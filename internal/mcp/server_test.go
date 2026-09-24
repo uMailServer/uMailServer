@@ -256,7 +256,9 @@ func TestMCPServerListDomains(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true))
+	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -603,7 +605,7 @@ func TestMCPServer_AdminTool_WithAdminContext(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
-	ctx := context.WithValue(req.Context(), "isAdmin", true)
+	ctx := context.WithValue(req.Context(), adminCtxKeyVal, true)
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, req.WithContext(ctx))
 

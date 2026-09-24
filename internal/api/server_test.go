@@ -979,7 +979,7 @@ func TestHandleSearchDefaultLimitOffset(t *testing.T) {
 // TestHandleSearchInvalidLimitOffset tests search without search service returns 503
 func TestHandleSearchInvalidLimitOffset(t *testing.T) {
 	server := NewServer(nil, nil, Config{})
-
+	//nolint:staticcheck // SA1029: test-only context key, intentionally bare string
 	ctx := context.WithValue(context.Background(), "user", "test@example.com")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=test&limit=invalid&offset=invalid", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()

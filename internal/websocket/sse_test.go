@@ -515,7 +515,7 @@ func (m *mockResponseRecorder) Flush() {
 func (m *mockResponseRecorder) GetBody() *bytes.Buffer {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.ResponseRecorder.Body
+	return m.Body
 }
 
 func (m *mockResponseRecorder) Write(b []byte) (int, error) {

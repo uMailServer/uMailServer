@@ -324,8 +324,7 @@ func TestDKIMVerify_SignatureVerificationFailurePath_Cov4(t *testing.T) {
 		t.Errorf("Should verify with correct data: %v", err)
 	}
 
-}
-
+} //lint:ignore whitespace Trailing newline in coverage fixture file
 // =======================================================================
 // DKIM fetchPublicKey (77.8%) - uses net.LookupTXT directly.
 // We can't mock it, but we can test the function exists and handles

@@ -12,8 +12,8 @@ type fakeConn struct {
 	closeCount atomic.Int32
 }
 
-func (f *fakeConn) Close() error              { f.closeCount.Add(1); return nil }
-func (f *fakeConn) IsClosing() bool           { return false }
+func (f *fakeConn) Close() error                  { f.closeCount.Add(1); return nil }
+func (f *fakeConn) IsClosing() bool               { return false }
 func (f *fakeConn) Dial() (pooledLDAPConn, error) { return f, nil }
 
 // TestLDAPPool_ReleaseAfterClose verifies that release() of a connection

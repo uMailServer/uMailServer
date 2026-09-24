@@ -15,12 +15,12 @@ import (
 // itself is re-consumed as a string on the next iteration.
 func TestExecuteVacation_TagParsing(t *testing.T) {
 	tests := []struct {
-		name         string
-		script       string
-		wantDays     int
-		wantSubject  string
-		wantBody     string
-		wantFail     bool
+		name        string
+		script      string
+		wantDays    int
+		wantSubject string
+		wantBody    string
+		wantFail    bool
 	}{
 		{
 			// This is the canonical failing case: :days 5 is a tag+value pair.
@@ -48,10 +48,10 @@ func TestExecuteVacation_TagParsing(t *testing.T) {
 			wantBody:    "Back soon",
 		},
 		{
-			name:        "days tag with mime flag",
-			script:      `vacation :mime :days 1 "On vacation";`,
-			wantDays:    1,
-			wantBody:    "On vacation",
+			name:     "days tag with mime flag",
+			script:   `vacation :mime :days 1 "On vacation";`,
+			wantDays: 1,
+			wantBody: "On vacation",
 		},
 	}
 

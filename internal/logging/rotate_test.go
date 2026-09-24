@@ -485,6 +485,8 @@ func TestRotate_CloseError(t *testing.T) {
 	if w.file != nil {
 		// This is tricky to test - close errors on regular files are rare
 		// The actual error path would require a mock or filesystem-level injection
+		//lint:ignore SA9003 Empty branch intentionally documents untested edge case.
+		_ = struct{}{}
 	}
 	w.mu.Unlock()
 
