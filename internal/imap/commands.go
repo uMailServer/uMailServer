@@ -1695,6 +1695,11 @@ func (s *Session) handleThread(args []string, line string) error {
 
 // UID SORT command
 func (s *Session) handleUIDSort(args []string, line string) error {
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
 	// Add UID prefix to results
 	// Parse criteria from args
 	var criteriaArgs []string
@@ -1761,6 +1766,11 @@ func (s *Session) handleUIDSort(args []string, line string) error {
 
 // UID THREAD command
 func (s *Session) handleUIDThread(args []string, line string) error {
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+
 	// Parse thread algorithm
 	algo := ThreadReferences
 	if len(args) > 0 {
