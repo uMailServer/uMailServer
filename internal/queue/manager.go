@@ -829,7 +829,7 @@ func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
 		OriginalTo:     entry.To[0],
 		Recipient: DSNRecipient{
 			Original: entry.To[0],
-			Notify:   DSNNotify(entry.Notify),
+			Notify:   DSNNotifyNever,
 			Ret:      DSNRet(entry.Ret),
 		},
 		Action:    "delivered",
@@ -932,7 +932,7 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 		OriginalTo:     entry.To[0],
 		Recipient: DSNRecipient{
 			Original: entry.To[0],
-			Notify:   DSNNotify(entry.Notify),
+			Notify:   DSNNotifyNever,
 			Ret:      ret,
 		},
 		Action:         "failed",
