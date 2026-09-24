@@ -7,9 +7,8 @@ import (
 	"testing"
 )
 
-// TestHandleSetVacation_EndBeforeStart reproduces the date-inversion bug:
-// handleSetVacation accepts and stores a vacation config where end_date is
-// chronologically before start_date. No validation rejects this.
+// TestHandleSetVacation_EndBeforeStart verifies that handleSetVacation rejects
+// a vacation config where end_date is chronologically before start_date.
 func TestHandleSetVacation_EndBeforeStart(t *testing.T) {
 	tmpDir := t.TempDir()
 	s := NewTestServer(t, tmpDir)
@@ -26,9 +25,8 @@ func TestHandleSetVacation_EndBeforeStart(t *testing.T) {
 
 	s.handleSetVacation(w, req)
 
-	if w.Code == http.StatusOK {
-		t.Error("handleSetVacation accepted end_date before start_date — date inversion should be rejected")
-	} else {
-		t.Logf("Correctly rejected: status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("handleSetVacation rejected end_date before start_date: got status %d, want %d", w.Code, http.StatusBadRequest)
 	}
+	t.Logf("Correctly rejected end before start: status=%d body=%s", w.Code, w.Body.String())
 }

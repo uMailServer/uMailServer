@@ -103,9 +103,14 @@ type DSNRecipient struct {
 func GenerateMessageID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback: use timestamp + PID if crypto/rand fails (extremely rare)
-		b[0] = byte(time.Now().UnixNano() & 0xff)
-		b[1] = byte((time.Now().UnixNano() >> 8) & 0xff)
+		// Fallback: fill all 8 bytes from timestamp bits when crypto/rand fails.
+		// crypto/rand failures are extremely rare (ENOMEM, EIO), but the
+		// previous fallback only filled 2 bytes, leaking 0x000000000000 into
+		// the Message-ID and making it collision-prone.
+		ts := time.Now().UnixNano()
+		for i := 0; i < 8; i++ {
+			b[i] = byte(ts >> (i * 8))
+		}
 	}
 	return fmt.Sprintf("<%d.%s@umailserver>", time.Now().UnixNano(), hex.EncodeToString(b))
 }

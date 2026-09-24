@@ -677,6 +677,7 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 					}
 				}
 			}
+			break // prevent fallthrough to NumberValue case which would overwrite Days
 		case *StringValue:
 			// Per RFC 5230 §4.1: when :subject is absent, the first positional
 			// string is the body. Only an explicit :subject tag or ":subject"

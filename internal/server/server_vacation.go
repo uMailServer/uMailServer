@@ -169,26 +169,19 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 }
 
 // cleanupVacationReplies removes entries older than 48 hours from vacationReplies map.
-// It acquires the lock only for the minimum time needed: marking keys, then releases
-// before deletion to avoid blocking sendVacationReply during long cleanup runs.
+// Single-phase scan+delete under lock: the two-phase pattern (snapshot then delete outside
+// the lock) introduced a correctness flaw where a fresh entry added between phases 1 and 2
+// with the same key would be silently deleted, breaking deduplication and causing a second
+// vacation reply to be sent to the sender.
 func (s *Server) cleanupVacationReplies() {
 	cutoff := time.Now().Add(-48 * time.Hour)
 
-	// Phase 1: Mark keys to delete while holding lock briefly
 	s.vacationRepliesMu.Lock()
-	var toDelete []string
+	defer s.vacationRepliesMu.Unlock()
 	for key, lastSent := range s.vacationReplies {
 		if lastSent.Before(cutoff) {
-			toDelete = append(toDelete, key)
+			delete(s.vacationReplies, key)
 		}
-	}
-	s.vacationRepliesMu.Unlock()
-
-	// Phase 2: Delete outside the lock to avoid blocking sendVacationReply
-	for _, key := range toDelete {
-		s.vacationRepliesMu.Lock()
-		delete(s.vacationReplies, key)
-		s.vacationRepliesMu.Unlock()
 	}
 }
 
