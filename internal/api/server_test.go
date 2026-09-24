@@ -975,6 +975,7 @@ func TestHandleSearchDefaultLimitOffset(t *testing.T) {
 		t.Errorf("Expected status 503, got %d", rec.Code)
 	}
 }
+
 // TestHandleSearchInvalidLimitOffset tests search without search service returns 503
 func TestHandleSearchInvalidLimitOffset(t *testing.T) {
 	server := NewServer(nil, nil, Config{})

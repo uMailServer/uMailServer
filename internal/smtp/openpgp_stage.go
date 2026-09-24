@@ -102,7 +102,7 @@ func (s *OpenPGPStage) verifyOpenPGP(ctx *MessageContext) PipelineResult {
 
 	// Verify the signature
 	verified, err := verifier.VerifyMessage(ctx.Data) //nolint:staticcheck
-	if err == nil && verified { //nolint:staticcheck
+	if err == nil && verified {                       //nolint:staticcheck
 		ctx.SPFResult.Explanation = "OpenPGP signature verified"
 	}
 

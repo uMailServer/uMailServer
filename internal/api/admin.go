@@ -23,10 +23,10 @@ type JWTSecretValue string
 
 // AdminConfig holds configuration for the admin server
 type AdminConfig struct {
-	Addr              string                       // e.g., "127.0.0.1:8443"
-	JWTSecret         string                       // Legacy single secret
-	JWTSecretVersions map[string]JWTSecretValue    // kid -> secret, for key rotation
-	DisableLegacyJWT  bool                         // When true, disables fallback to legacy JWTSecret after kid rotation
+	Addr              string                    // e.g., "127.0.0.1:8443"
+	JWTSecret         string                    // Legacy single secret
+	JWTSecretVersions map[string]JWTSecretValue // kid -> secret, for key rotation
+	DisableLegacyJWT  bool                      // When true, disables fallback to legacy JWTSecret after kid rotation
 	AuditLog          AuditLogConfig
 }
 

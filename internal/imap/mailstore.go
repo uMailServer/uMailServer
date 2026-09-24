@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
 	"time"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/storage"
 )

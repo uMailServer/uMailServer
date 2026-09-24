@@ -62,11 +62,11 @@ func (db *Database) AuthenticateUser(username, password string) (bool, error) {
 
 // Mailbox represents mailbox metadata
 type Mailbox struct {
-	Name           string
-	UIDValidity    uint32
-	UIDNext        uint32
-	HighestModSeq  uint64    // RFC 7162: highest modification sequence number
-	Subscribed     bool
+	Name          string
+	UIDValidity   uint32
+	UIDNext       uint32
+	HighestModSeq uint64 // RFC 7162: highest modification sequence number
+	Subscribed    bool
 }
 
 // mailboxKey returns the bucket name for a user's mailbox metadata

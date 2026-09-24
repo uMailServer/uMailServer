@@ -187,7 +187,7 @@ type SecurityConfig struct {
 	RateLimit        RateLimitConfig `yaml:"rate_limit"`
 	JWTSecret        string          `yaml:"jwt_secret"`
 	DisableLegacyJWT bool            `yaml:"disable_legacy_jwt"` // When true, disables fallback to legacy JWTSecret after kid rotation
-	TOTPKey          string          `yaml:"totp_key"` // Separate encryption key for TOTP secrets (default: JWTSecret if empty)
+	TOTPKey          string          `yaml:"totp_key"`           // Separate encryption key for TOTP secrets (default: JWTSecret if empty)
 	AuditLog         AuditLogConfig  `yaml:"audit_log"`
 	SPFCacheTTL      Duration        `yaml:"spf_cache_ttl"` // TTL for cached SPF lookups (default 5m)
 }

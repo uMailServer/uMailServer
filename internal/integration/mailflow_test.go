@@ -1015,7 +1015,7 @@ func TestWebhookDelivery(t *testing.T) {
 		// written by the handler goroutine and read by the test goroutine
 		// after time.Sleep; use atomic.Value so -race does not flag them.
 		var receivedEvent atomic.Value // string
-		var receivedData atomic.Value // string
+		var receivedData atomic.Value  // string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			receivedEvent.Store(r.Header.Get("X-Webhook-Event"))
 			buf := make([]byte, 1024)
