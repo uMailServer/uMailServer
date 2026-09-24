@@ -937,7 +937,7 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 		},
 		Action:         "failed",
 		Status:         "5.0.0",
-		DiagnosticCode: "smtp; " + entry.LastError,
+		DiagnosticCode: entry.LastError,
 		RemoteMTA:      "unknown",
 		FinalMTA:       "umailserver",
 		MessageID:      GenerateMessageID(),
