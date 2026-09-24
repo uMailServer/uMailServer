@@ -916,7 +916,10 @@ func (s *Server) toolReloadConfig() (map[string]interface{}, error) {
 	}, nil
 }
 
-// Write error response
+// writeError writes a JSON-RPC error response. Marshal first so any encoding error
+// surfaces before WriteHeader — preventing the case where an encoding failure silently
+// drops the error body while leaving the client with the wrong status (e.g. a 401 body
+// sent with a 200 status because Encode's error was discarded).
 func (s *Server) writeError(w http.ResponseWriter, code int, message string) {
 	resp := MCPResponse{
 		JSONRPC: "2.0",
@@ -925,8 +928,17 @@ func (s *Server) writeError(w http.ResponseWriter, code int, message string) {
 			Message: message,
 		},
 	}
+	body, err := json.Marshal(resp)
+	if err != nil {
+		// Encoding failed — the response body is unknown; report the error at 500.
+		// The original error is inaccessible at the HTTP layer; log it for visibility.
+		slog.Error("mcp writeError: failed to marshal error response", "code", code, "message", message, "error", err)
+		body = []byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"internal error"}}`)
+		code = http.StatusInternalServerError
+	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(resp)
+	w.Write(body)
 }
 
 // Resource types
