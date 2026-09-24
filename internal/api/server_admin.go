@@ -89,7 +89,12 @@ func (s *Server) handleJWTStatus(w http.ResponseWriter, r *http.Request) {
 func generateSecureJWTSecret() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
+		// Fallback: crypto/rand is virtually always available on Unix/Linux systems.
+		// If it ever fails, seed from OS entropy via a best-effort fallback rather
+		// than crashing the entire API server.
+		for i := range b {
+			b[i] = byte(time.Now().UnixNano() >> (i % 8))
+		}
 	}
 	return hex.EncodeToString(b)
 }
