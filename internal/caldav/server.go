@@ -434,9 +434,11 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
-	// Delete from source
+	// Delete from source — failure here means the event exists at both source and destination
 	if err := s.storage.DeleteEvent(username, sourceCalendarID, sourceEventUID); err != nil {
-		s.logger.Error("Failed to delete source event", "error", err)
+		s.logger.Error("Failed to delete source event after move", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to delete source event")
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)

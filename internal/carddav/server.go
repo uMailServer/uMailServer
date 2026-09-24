@@ -500,9 +500,11 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
-	// Delete source contact
+	// Delete source contact — failure here means the contact exists at both source and destination
 	if err := s.storage.DeleteContact(username, srcAddressbookID, srcContactUID); err != nil {
-		s.logger.Error("Failed to delete source contact", "error", err)
+		s.logger.Error("Failed to delete source contact after move", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to delete source contact")
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
