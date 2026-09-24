@@ -526,7 +526,7 @@ func (s *Server) buildCalendarHomeResponse(username string) Response {
 		Href: fmt.Sprintf("/dav/calendars/%s/", username),
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<collection/>"},
+				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<D:collection/>"},
 				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: "Calendars"},
 			},
 			Status: "HTTP/1.1 200 OK",

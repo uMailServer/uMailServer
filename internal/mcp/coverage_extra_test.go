@@ -239,11 +239,7 @@ func TestToolAddAccount_InvalidEmail(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
 	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
-<<<<<<< HEAD
-	req = req.WithContext(context.WithValue(req.Context(), "isAdmin", true))
-=======
 	req = req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true))
->>>>>>> origin/main
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusInternalServerError {
