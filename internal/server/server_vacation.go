@@ -30,6 +30,28 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 		}
 	}
 
+	// Deduplicate: don't spam the same sender with multiple replies.
+	// Use the same key format and pipe-delimiter safety as sendVacationReply.
+	safeRecipient := strings.ReplaceAll(recipient, "|", "__")
+	safeSender := strings.ReplaceAll(sender, "|", "__")
+	key := safeRecipient + "|" + safeSender
+
+	// Use the same 24-hour minimum dedup interval as sendVacationReply.
+	// TODO: plumb :seconds from the Sieve vacation action when interpreter.go
+	// adds a Seconds field to VacationAction.
+	const sendInterval = 24 * time.Hour
+
+	s.vacationRepliesMu.Lock()
+	if s.vacationReplies == nil {
+		s.vacationReplies = make(map[string]time.Time)
+	}
+	if lastSent, ok := s.vacationReplies[key]; ok && time.Since(lastSent) < sendInterval {
+		s.vacationRepliesMu.Unlock()
+		return
+	}
+	s.vacationReplies[key] = time.Now()
+	s.vacationRepliesMu.Unlock()
+
 	// Build vacation message content
 	subject := vacation.Subject
 	if subject == "" {
@@ -147,26 +169,19 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 }
 
 // cleanupVacationReplies removes entries older than 48 hours from vacationReplies map.
-// It acquires the lock only for the minimum time needed: marking keys, then releases
-// before deletion to avoid blocking sendVacationReply during long cleanup runs.
+// Single-phase scan+delete under lock: the two-phase pattern (snapshot then delete outside
+// the lock) introduced a correctness flaw where a fresh entry added between phases 1 and 2
+// with the same key would be silently deleted, breaking deduplication and causing a second
+// vacation reply to be sent to the sender.
 func (s *Server) cleanupVacationReplies() {
 	cutoff := time.Now().Add(-48 * time.Hour)
 
-	// Phase 1: Mark keys to delete while holding lock briefly
 	s.vacationRepliesMu.Lock()
-	var toDelete []string
+	defer s.vacationRepliesMu.Unlock()
 	for key, lastSent := range s.vacationReplies {
 		if lastSent.Before(cutoff) {
-			toDelete = append(toDelete, key)
+			delete(s.vacationReplies, key)
 		}
-	}
-	s.vacationRepliesMu.Unlock()
-
-	// Phase 2: Delete outside the lock to avoid blocking sendVacationReply
-	for _, key := range toDelete {
-		s.vacationRepliesMu.Lock()
-		delete(s.vacationReplies, key)
-		s.vacationRepliesMu.Unlock()
 	}
 }
 

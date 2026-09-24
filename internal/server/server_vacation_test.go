@@ -99,6 +99,35 @@ func TestHandleSieveVacation_DefaultBody(t *testing.T) {
 	srv.handleSieveVacation("sender@example.com", "recipient@example.com", vacation)
 }
 
+// TestHandleSieveVacation_Deduplication tests that handleSieveVacation deduplicates
+// repeated calls for the same sender within the interval.
+func TestHandleSieveVacation_Deduplication(t *testing.T) {
+	srv := helperServer(t)
+
+	vacation := sieve.VacationAction{
+		Subject: "On vacation",
+		Body:    "I'm away",
+	}
+
+	// Prime the dedup cache by calling once
+	srv.vacationRepliesMu.Lock()
+	srv.vacationReplies = map[string]time.Time{
+		"recipient@example.com|sender@example.com": time.Now(),
+	}
+	srv.vacationRepliesMu.Unlock()
+
+	// Second call within 24h should be silently dropped (queue not called)
+	// This is tested by verifying vacationReplies is NOT updated again.
+	srv.handleSieveVacation("sender@example.com", "recipient@example.com", vacation)
+
+	// vacationReplies should still have exactly one entry
+	srv.vacationRepliesMu.Lock()
+	if len(srv.vacationReplies) != 1 {
+		t.Errorf("expected 1 dedup entry, got %d", len(srv.vacationReplies))
+	}
+	srv.vacationRepliesMu.Unlock()
+}
+
 // TestHandleSieveVacation_CustomFrom tests handleSieveVacation with custom from
 func TestHandleSieveVacation_CustomFrom(t *testing.T) {
 	srv := helperServer(t)

@@ -829,7 +829,7 @@ func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
 		OriginalTo:     entry.To[0],
 		Recipient: DSNRecipient{
 			Original: entry.To[0],
-			Notify:   DSNNotify(entry.Notify),
+			Notify:   DSNNotifyNever,
 			Ret:      DSNRet(entry.Ret),
 		},
 		Action:    "delivered",
@@ -932,12 +932,12 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 		OriginalTo:     entry.To[0],
 		Recipient: DSNRecipient{
 			Original: entry.To[0],
-			Notify:   DSNNotify(entry.Notify),
+			Notify:   DSNNotifyNever,
 			Ret:      ret,
 		},
 		Action:         "failed",
 		Status:         "5.0.0",
-		DiagnosticCode: "smtp; " + entry.LastError,
+		DiagnosticCode: entry.LastError,
 		RemoteMTA:      "unknown",
 		FinalMTA:       "umailserver",
 		MessageID:      GenerateMessageID(),
@@ -953,7 +953,9 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 
 	// Enqueue bounce as a new message back to the sender
 	if m.db != nil {
-		if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, bounceMsg); enqueueErr != nil {
+		if entry.From == "" {
+			m.logger.Warn("cannot send bounce: original message had null sender (MAIL FROM:<>), message lost", "entry_id", entry.ID)
+		} else if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, bounceMsg); enqueueErr != nil {
 			m.logger.Error("failed to enqueue bounce message", "error", enqueueErr)
 		}
 	}

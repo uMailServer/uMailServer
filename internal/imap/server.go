@@ -112,15 +112,25 @@ type Mailstore interface {
 
 // Config holds server configuration
 type Config struct {
-	Addr      string
-	TLSConfig *tls.Config
-	Logger    *slog.Logger
+	Addr         string
+	TLSConfig    *tls.Config
+	Logger       *slog.Logger
+	ReadTimeout  time.Duration // Zero = no timeout (blocks forever on quiet conn); use 30s for tests
+	WriteTimeout time.Duration // Zero = no timeout; use 60s for tests
 }
 
 // NewServer creates a new IMAP server
 func NewServer(config *Config, mailstore Mailstore) *Server {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
+	}
+	readTimeout := config.ReadTimeout
+	if readTimeout == 0 {
+		readTimeout = 30 * time.Second
+	}
+	writeTimeout := config.WriteTimeout
+	if writeTimeout == 0 {
+		writeTimeout = 60 * time.Second
 	}
 
 	return &Server{
@@ -131,6 +141,8 @@ func NewServer(config *Config, mailstore Mailstore) *Server {
 		shutdown:     make(chan struct{}),
 		mailstore:    mailstore,
 		authFailures: make(map[string][]time.Time),
+		readTimeout:  readTimeout,
+		writeTimeout: writeTimeout,
 	}
 }
 

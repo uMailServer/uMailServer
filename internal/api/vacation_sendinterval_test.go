@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-// TestHandleSetVacation_ZeroSendInterval reproduces the zero interval bug:
-// handleSetVacation accepts send_interval=0, which bypasses the interval check
-// in ShouldSendAutoReply (time.Since(lastSend) < 0 is never true).
-// Result: vacation auto-reply fires on EVERY email from each sender.
+// TestHandleSetVacation_ZeroSendInterval verifies that handleSetVacation rejects
+// send_interval=0, which would otherwise bypass the interval check in
+// ShouldSendAutoReply and fire vacation replies on every incoming email.
 func TestHandleSetVacation_ZeroSendInterval(t *testing.T) {
 	tmpDir := t.TempDir()
 	s := NewTestServer(t, tmpDir)
@@ -23,9 +22,8 @@ func TestHandleSetVacation_ZeroSendInterval(t *testing.T) {
 
 	s.handleSetVacation(w, req)
 
-	if w.Code == http.StatusOK {
-		t.Error("handleSetVacation accepted send_interval=0 — vacation fires on every email")
-	} else {
-		t.Logf("Correctly rejected zero interval: status=%d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("handleSetVacation rejected zero interval: got status %d, want %d", w.Code, http.StatusBadRequest)
 	}
+	t.Logf("Correctly rejected send_interval=0: status=%d body=%s", w.Code, w.Body.String())
 }

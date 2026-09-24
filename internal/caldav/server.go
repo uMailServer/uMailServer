@@ -434,9 +434,11 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
-	// Delete from source
+	// Delete from source — failure here means the event exists at both source and destination
 	if err := s.storage.DeleteEvent(username, sourceCalendarID, sourceEventUID); err != nil {
-		s.logger.Error("Failed to delete source event", "error", err)
+		s.logger.Error("Failed to delete source event after move", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to delete source event")
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -526,7 +528,7 @@ func (s *Server) buildCalendarHomeResponse(username string) Response {
 		Href: fmt.Sprintf("/dav/calendars/%s/", username),
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<collection/>"},
+				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<D:collection/>"},
 				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: "Calendars"},
 			},
 			Status: "HTTP/1.1 200 OK",
