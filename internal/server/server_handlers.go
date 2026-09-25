@@ -126,6 +126,71 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 }
 
 // deliverMessageWithSieve delivers an incoming message with optional Sieve filtering actions
+// deliverMessageWithNotify is like deliverMessageWithSieve but also forwards per-recipient
+// DSN NOTIFY preferences so that queue entries carry the correct bounce-suppression flags.
+func (s *Server) deliverMessageWithNotify(from string, to []string, notify []string, data []byte) error {
+	ctx := context.Background()
+	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
+		var span trace.Span
+		_, span = s.tracingProvider.StartSpanWithKind(ctx, "deliverMessage", tracing.SpanKindServer,
+			attribute.String("mail.from", from),
+			attribute.Int("mail.recipients", len(to)),
+			attribute.Int("mail.size", len(data)),
+		)
+		defer span.End()
+	}
+
+	var errs []error
+	for _, recipient := range to {
+		user, domain := parseEmail(recipient)
+
+		domainData, err := s.database.GetDomain(domain)
+		if err != nil || domainData == nil || !domainData.IsActive {
+			if relayErr := s.relayMessageWithNotify(from, recipient, notify, data); relayErr != nil {
+				s.logger.Error("Failed to relay message", "to", recipient, "error", relayErr)
+				errs = append(errs, fmt.Errorf("relay %s: %w", recipient, relayErr))
+			}
+			continue
+		}
+
+		target, aliasErr := s.database.ResolveAlias(domain, user)
+		if aliasErr != nil {
+			s.logger.Debug("Alias resolution failed, trying direct delivery", "domain", domain, "user", user, "error", aliasErr)
+		}
+		if target != "" {
+			tUser, tDomain := parseEmail(target)
+			if tUser != "" && tDomain != "" {
+				user = tUser
+				domain = tDomain
+			}
+		}
+
+		if err := s.deliverLocal(user, domain, from, data, ""); err != nil {
+			s.logger.Error("Failed to deliver locally", "user", user, "domain", domain, "error", err)
+			errs = append(errs, fmt.Errorf("deliver %s: %w", recipient, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("delivery had %d failure(s): %w", len(errs), errors.Join(errs...))
+	}
+	return nil
+}
+
+// relayMessageWithNotify relays a message with per-recipient DSN notify preferences.
+func (s *Server) relayMessageWithNotify(from, to string, notify []string, data []byte) error {
+	if s.queue != nil {
+		_, err := s.queue.EnqueueWithNotify(from, []string{to}, notify, data)
+		if err != nil {
+			s.logger.Error("Failed to enqueue relay message with notify", "error", err)
+			return fmt.Errorf("failed to queue message: %w", err)
+		}
+		s.logger.Debug("Message queued for relay with notify", "from", from, "to", to)
+		return nil
+	}
+	return nil
+}
+
 func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, sieveActions []string) error {
 	// Create tracing span if tracing is enabled
 	ctx := context.Background()

@@ -19,6 +19,30 @@ const (
 	DSNNotifyDelay                         // DELAY - notify if delivery is delayed
 )
 
+// ParseDSNNotify converts an SMTP NOTIFY parameter value (NEVER, SUCCESS,
+// FAILURE, DELAY) into a DSNNotify bitmask. Multiple values can be OR'd
+// together. Empty or unrecognized tokens are silently ignored.
+func ParseDSNNotify(value string) DSNNotify {
+	if value == "" {
+		return 0
+	}
+	var notify DSNNotify
+	for _, token := range strings.Split(strings.ToUpper(value), ",") {
+		token = strings.TrimSpace(token)
+		switch token {
+		case "NEVER":
+			notify |= DSNNotifyNever
+		case "SUCCESS":
+			notify |= DSNNotifySuccess
+		case "FAILURE":
+			notify |= DSNNotifyFailure
+		case "DELAY":
+			notify |= DSNNotifyDelay
+		}
+	}
+	return notify
+}
+
 // DSNRet represents what to return in DSN
 type DSNRet int
 

@@ -27,7 +27,7 @@ func (s *Server) startSMTP() {
 
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
 	smtpServer.SetAuthHandler(s.authenticate)
-	smtpServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
+	smtpServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken (CVE-2022-37454, etc.)
 	// smtpServer.SetUserSecretHandler(s.getUserSecret)
 	smtpServer.SetLoginResultHandler(s.protoLoginHandler("smtp"))
@@ -148,7 +148,7 @@ func (s *Server) startSMTP() {
 
 		submissionServer := smtp.NewServer(submissionCfg, s.logger)
 		submissionServer.SetAuthHandler(s.authenticate)
-		submissionServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
+		submissionServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
 		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
 		// submissionServer.SetUserSecretHandler(s.getUserSecret)
 		submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
@@ -181,7 +181,7 @@ func (s *Server) startSMTP() {
 
 		submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
 		submissionTLSServer.SetAuthHandler(s.authenticate)
-		submissionTLSServer.SetDeliveryHandlerWithSieve(s.deliverMessageWithSieve)
+		submissionTLSServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
 		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
 		// submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
 		submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
