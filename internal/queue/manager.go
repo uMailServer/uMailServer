@@ -47,6 +47,7 @@ type Manager struct {
 	db           *db.DB
 	store        *store.MaildirStore
 	dataDir      string
+	queueDir     string // directory for queue message files; defaults to dataDir
 	resolver     DNSResolver
 	running      atomic.Bool
 	shutdown     chan struct{}
@@ -178,6 +179,7 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		db:              db,
 		store:           store,
 		dataDir:         dataDir,
+		queueDir:        dataDir,
 		resolver:        &realDNSResolver{},
 		shutdown:        make(chan struct{}),
 		metrics:         metrics.Get(),
@@ -274,7 +276,7 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 			NextRetry:   time.Now(),
 			RetryCount:  0,
 			Status:      "pending",
-			Notify:      dsnNotify,
+			Notify:      db.DSNNotify(dsnNotify),
 		}
 	}
 

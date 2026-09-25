@@ -59,31 +59,7 @@ type DSNAddress struct {
 
 // ParseDSNNotify parses the NOTIFY parameter from RCPT TO
 // Format: NOTIFY=NEVER|SUCCESS|FAILURE|DELAY[,...]
-func ParseDSNNotify(notify string) DSNNotify {
-	notify = strings.ToUpper(notify)
-	var result DSNNotify
-
-	if notify == "NEVER" {
-		return DSNNotifyNever
-	}
-
-	parts := strings.Split(notify, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		switch part {
-		case "SUCCESS":
-			result |= DSNNotifySuccess
-		case "FAILURE":
-			result |= DSNNotifyFailure
-		case "DELAY":
-			result |= DSNNotifyDelay
-		}
-	}
-
-	return result
-}
-
-// HasNotify checks if the DSNNotify contains the given notification type
+// (deduplicated — canonical implementation is at line 25)
 func (n DSNNotify) HasNotify(notify DSNNotify) bool {
 	return n&notify != 0
 }
