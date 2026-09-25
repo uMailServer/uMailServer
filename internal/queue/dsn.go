@@ -240,8 +240,10 @@ func generateBoundary() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
 		// Fallback: use timestamp if crypto/rand fails (extremely rare)
-		b[0] = byte(time.Now().UnixNano() & 0xff)
-		b[1] = byte((time.Now().UnixNano() >> 8) & 0xff)
+		ts := time.Now().UnixNano()
+		for i := 0; i < 8; i++ {
+			b[i] = byte(ts >> (i * 8))
+		}
 	}
 	return hex.EncodeToString(b)
 }

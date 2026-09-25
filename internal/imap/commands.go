@@ -1219,6 +1219,13 @@ func (s *Session) handleIdle() error {
 		return nil
 	}
 
+	// Stop any active IDLE session before starting a new one.
+	// Without this, a second IDLE arriving before the first has returned
+	// (re-entrant call to handleIdle in the same goroutine) would overwrite
+	// s.idleStop and s.idleNotifyChan, leaking the first DONE goroutine
+	// (blocking forever on s.readLine()) and the first notification subscription.
+	s.stopIdle()
+
 	// Subscribe to notifications for this user
 	s.idleActive = true
 	s.idleStop = make(chan struct{})
