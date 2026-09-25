@@ -41,6 +41,9 @@ jobs:
           (cd web/admin && npm ci --legacy-peer-deps && npm run build) &&
           (cd web/account && npm install --legacy-peer-deps && npm run build)
 
+      - name: Tidy modules
+        run: go mod tidy
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@aaa42aa0628b4ae2578232a66b541047968fac86 # v6.1.0
         with:
@@ -94,6 +97,9 @@ jobs:
 
       - name: Download dependencies
         run: go mod download
+
+      - name: Tidy modules
+        run: go mod tidy
 
       - name: Run tests
         # Scope ./internal/... ./cmd/... to avoid pulling in
