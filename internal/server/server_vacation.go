@@ -36,10 +36,13 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 	safeSender := strings.ReplaceAll(sender, "|", "__")
 	key := safeRecipient + "|" + safeSender
 
-	// Use the same 24-hour minimum dedup interval as sendVacationReply.
-	// TODO: plumb :seconds from the Sieve vacation action when interpreter.go
-	// adds a Seconds field to VacationAction.
-	const sendInterval = 24 * time.Hour
+	// Use the :seconds interval from the Sieve vacation action, with a 24h floor
+	// (same minimum as sendVacationReply). The :seconds tag allows sieve scripts
+	// to request sub-24h intervals per RFC 5230 §4.1.
+	sendInterval := time.Duration(vacation.Seconds) * time.Second
+	if sendInterval < 24*time.Hour {
+		sendInterval = 24 * time.Hour
+	}
 
 	s.vacationRepliesMu.Lock()
 	if s.vacationReplies == nil {
