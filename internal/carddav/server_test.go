@@ -211,6 +211,10 @@ func TestCardDAVHandlePut(t *testing.T) {
 		return true, nil
 	})
 
+	// Create addressbook first — ownership check requires it
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
+
 	vcardData := `BEGIN:VCARD
 VERSION:3.0
 UID:test-contact-123
@@ -259,7 +263,10 @@ func TestCardDAVHandleGet(t *testing.T) {
 		return true, nil
 	})
 
-	// Create addressbook and contact
+	// Create addressbook and contact — ownership check requires addressbook first
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
+
 	vcardData := `BEGIN:VCARD
 UID:test-contact-123
 FN:John Doe
@@ -294,6 +301,10 @@ func TestCardDAVHandleGet_NotFound(t *testing.T) {
 		return true, nil
 	})
 
+	// Create addressbook so ownership check passes; contact does not exist -> 404
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
+
 	req := httptest.NewRequest("GET", "/dav/addressbooks/test-ab/nonexistent.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	w := httptest.NewRecorder()
@@ -311,7 +322,10 @@ func TestCardDAVHandleDelete(t *testing.T) {
 		return true, nil
 	})
 
-	// Create addressbook and contact
+	// Create addressbook and contact — ownership check requires addressbook first
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
+
 	vcardData := `BEGIN:VCARD
 UID:test-contact-123
 FN:John Doe
@@ -453,6 +467,10 @@ func TestCardDAVHandleMove_MissingDestination(t *testing.T) {
 	server.SetAuthFunc(func(username, password string) (bool, error) {
 		return true, nil
 	})
+
+	// Create addressbook so ownership check passes (then Destination check returns 400)
+	ab := &Addressbook{ID: "test-ab", Name: "Test"}
+	_ = server.storage.CreateAddressbook("user@example.com", ab)
 
 	req := httptest.NewRequest("MOVE", "/dav/addressbooks/test-ab/contact.vcf", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
@@ -1438,8 +1456,9 @@ func TestCardDAVHandleReport_NonExistentAddressbook(t *testing.T) {
 	server.ServeHTTP(w, req)
 
 	// Should still return multistatus (empty) rather than error
-	if w.Code != http.StatusMultiStatus {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
+	// Addressbook does not exist for this user -> 403
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 

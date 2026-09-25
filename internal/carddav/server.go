@@ -207,6 +207,14 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) > 0 {
 		addressbookID := parts[0]
+
+		// Verify the address book belongs to this user
+		ab, err := s.storage.GetAddressbook(username, addressbookID)
+		if err != nil || ab == nil {
+			s.sendError(w, http.StatusForbidden, "address book not found")
+			return
+		}
+
 		contacts, err := s.storage.GetContacts(username, addressbookID)
 		if err == nil {
 			for _, contact := range contacts {
@@ -258,6 +266,13 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	}
 	addressbookID := parts[0]
 
+	// Verify the address book belongs to this user
+	ab, err := s.storage.GetAddressbook(username, addressbookID)
+	if err != nil || ab == nil {
+		s.sendError(w, http.StatusForbidden, "address book not found")
+		return
+	}
+
 	// Parse vCard to create contact object
 	contact := &Contact{
 		UID:      uid,
@@ -289,6 +304,13 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 	addressbookID := parts[0]
 	contactUID := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
 
+	// Verify the address book belongs to this user
+	ab, err := s.storage.GetAddressbook(username, addressbookID)
+	if err != nil || ab == nil {
+		s.sendError(w, http.StatusForbidden, "address book not found")
+		return
+	}
+
 	// Retrieve contact from storage
 	vcardData, err := s.storage.GetContact(username, addressbookID, contactUID)
 	if err != nil || vcardData == "" {
@@ -314,6 +336,13 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 
 	addressbookID := parts[0]
 	contactUID := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+
+	// Verify the address book belongs to this user
+	ab, err := s.storage.GetAddressbook(username, addressbookID)
+	if err != nil || ab == nil {
+		s.sendError(w, http.StatusForbidden, "address book not found")
+		return
+	}
 
 	// Delete contact from storage
 	if err := s.storage.DeleteContact(username, addressbookID, contactUID); err != nil {
@@ -457,6 +486,13 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	srcAddressbookID := srcParts[0]
 	srcContactUID := strings.TrimSuffix(srcParts[1], filepath.Ext(srcParts[1]))
 
+	// Verify the source address book belongs to this user
+	ab, err := s.storage.GetAddressbook(username, srcAddressbookID)
+	if err != nil || ab == nil {
+		s.sendError(w, http.StatusForbidden, "address book not found")
+		return
+	}
+
 	// Get destination from Destination header
 	dest := r.Header.Get("Destination")
 	if dest == "" {
@@ -474,6 +510,13 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 
 	destAddressbookID := destParts[0]
 	destContactUID := strings.TrimSuffix(destParts[1], filepath.Ext(destParts[1]))
+
+	// Verify the destination address book belongs to this user
+	ab, err = s.storage.GetAddressbook(username, destAddressbookID)
+	if err != nil || ab == nil {
+		s.sendError(w, http.StatusForbidden, "destination address book not found")
+		return
+	}
 
 	// Get contact data
 	vcardData, err := s.storage.GetContact(username, srcAddressbookID, srcContactUID)
@@ -523,6 +566,13 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	srcAddressbookID := srcParts[0]
 	srcContactUID := strings.TrimSuffix(srcParts[1], filepath.Ext(srcParts[1]))
 
+	// Verify the source address book belongs to this user
+	ab, err := s.storage.GetAddressbook(username, srcAddressbookID)
+	if err != nil || ab == nil {
+		s.sendError(w, http.StatusForbidden, "address book not found")
+		return
+	}
+
 	// Get destination from Destination header
 	dest := r.Header.Get("Destination")
 	if dest == "" {
@@ -540,6 +590,13 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 
 	destAddressbookID := destParts[0]
 	destContactUID := strings.TrimSuffix(destParts[1], filepath.Ext(destParts[1]))
+
+	// Verify the destination address book belongs to this user
+	ab, err = s.storage.GetAddressbook(username, destAddressbookID)
+	if err != nil || ab == nil {
+		s.sendError(w, http.StatusForbidden, "destination address book not found")
+		return
+	}
 
 	// Get contact data
 	vcardData, err := s.storage.GetContact(username, srcAddressbookID, srcContactUID)
