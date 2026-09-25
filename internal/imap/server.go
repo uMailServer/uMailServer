@@ -460,6 +460,28 @@ func (s *Session) Close() {
 	_ = s.conn.Close() // Best-effort close
 }
 
+// stopIdle safely stops any active IDLE session, closing the stop channel
+// and unsubscribing from the notification hub. Idempotent: safe to call
+// even when no IDLE session is active. Called on re-entrant handleIdle()
+// to prevent goroutine leaks when a second IDLE arrives before the first
+// has returned.
+func (s *Session) stopIdle() {
+	if !s.idleActive {
+		return
+	}
+	select {
+	case <-s.idleStop:
+		// already closed
+	default:
+		close(s.idleStop)
+	}
+	if s.idleNotifyChan != nil {
+		GetNotificationHub().Unsubscribe(s.user, s.idleNotifyChan)
+		s.idleNotifyChan = nil
+	}
+	s.idleActive = false
+}
+
 // Handle processes commands from the client
 func (s *Session) Handle() {
 	for {

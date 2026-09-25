@@ -55,6 +55,7 @@ type VacationAction struct {
 	Subject   string
 	Body      string
 	Days      int
+	Seconds   int
 	Addresses []string
 	From      string
 	Mime      bool
@@ -619,12 +620,19 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 				vacation.Days = int(nv.Value)
 			}
 		}
+	case "seconds":
+		// Next arg is the seconds number (RFC 5230 §4.1).
+		if len(cmd.Arguments) > 0 {
+			if nv, ok := cmd.Arguments[0].(*NumberValue); ok {
+				vacation.Seconds = int(nv.Value)
+			}
+		}
 	case "mime":
 		vacation.Mime = true
 	}
 
 	// Process remaining arguments.
-	// cmd.Tag consumes: nothing for non-string tags (:days, :mime),
+	// cmd.Tag consumes: nothing for non-string tags (:days, :seconds, :mime),
 	// 1 positional slot for :subject (its value).
 	// When cmd.Tag is :subject, first positional = subject; else all positional = body.
 	argsStart := 0
@@ -676,6 +684,14 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 						vacation.Handle = sv.Value
 					}
 				}
+			case "seconds":
+				// Next arg is the seconds number.
+				if argIdx+1 < len(cmd.Arguments) {
+					argIdx++
+					if nv, ok := cmd.Arguments[argIdx].(*NumberValue); ok {
+						vacation.Seconds = int(nv.Value)
+					}
+				}
 			}
 			break // prevent fallthrough to NumberValue case which would overwrite Days
 		case *StringValue:
@@ -690,7 +706,7 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 				if vacation.Body == "" {
 					vacation.Body = a.Value
 				}
-			} else if cmd.Tag == "mime" || cmd.Tag == "days" || cmd.Tag == "addresses" || cmd.Tag == "handle" {
+			} else if cmd.Tag == "mime" || cmd.Tag == "days" || cmd.Tag == "seconds" || cmd.Tag == "addresses" || cmd.Tag == "handle" {
 				// Non-string tags consume no positional slot; all strings = body
 				if vacation.Body == "" {
 					vacation.Body = a.Value

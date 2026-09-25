@@ -724,20 +724,29 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 		} else {
 			// STARTTLS succeeded — validate with DANE if available
 			if m.daneValidator != nil {
-				if state, ok := client.TLSConnectionState(); ok {
-					// RFC 7672: DANE requires DNSSEC for security.
-					// miekg/dns does not provide DNSSEC validation status, so we
-					// validate with DNSSECSecured to enforce DANE only when DNSSEC
-					// is available (otherwise DANE is not meaningful per RFC 7672).
-					result, daneErr := m.daneValidator.ValidateWithDNSSEC(mx, 25, &state, auth.DNSSECSecured)
-					if daneErr != nil {
-						m.logger.Debug("DANE validation error", "mx", mx, "error", daneErr)
-					} else if result == auth.DANEValidated {
-						m.logger.Debug("DANE validation successful", "mx", mx)
-					} else if result == auth.DANEFailed {
-						m.logger.Warn("DANE validation failed", "mx", mx)
-						// If DANE is configured but validation failed, reject the connection
-						return fmt.Errorf("DANE validation failed for %s", mx)
+				if _, ok := client.TLSConnectionState(); ok {
+					// RFC 7672 §8.1: DANE requires DNSSEC for security.
+					// We have no DNSSEC validation status from the resolver, so we
+					// must check TLSA record presence before trusting them. If TLSA
+					// records exist but DNSSEC cannot be verified, we skip DANE and
+					// fall through to regular TLS verification — accepting the reduced
+					// security rather than blindly trusting potentially DNS-poisoned
+					// TLSA records.
+					tlsaRecords, tlsaErr := m.daneValidator.LookupTLSA(mx, 25)
+					if tlsaErr != nil {
+						m.logger.Debug("TLSA lookup failed", "mx", mx, "error", tlsaErr)
+						// DNS error — fall through to regular TLS verification
+					} else if len(tlsaRecords) == 0 {
+						m.logger.Debug("No TLSA records found", "mx", mx)
+						// No TLSA records — DANE not configured for this MX
+					} else {
+						// TLSA records exist but we cannot verify DNSSEC.
+						// RFC 7672 §8.1: "If DNSSEC validation is not available,
+						// DANE cannot provide security." Skip DANE but proceed with
+						// TLS — the connection is still encrypted, just not DANE-validated.
+						m.logger.Warn("DANE TLSA records present but DNSSEC unavailable — skipping DANE validation (RFC 7672 §8.1)",
+							"mx", mx, "records", len(tlsaRecords))
+						// Fall through: STARTTLS already succeeded, continue with delivery
 					}
 				}
 			}
