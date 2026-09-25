@@ -452,11 +452,9 @@ func (s *Session) Selected() *Mailbox {
 	return s.selected
 }
 
-// Close closes the session
+// Close closes the session. Caller must hold s.stateMu for writing s.state.
 func (s *Session) Close() {
-	s.stateMu.Lock()
 	s.state = StateLoggedOut
-	s.stateMu.Unlock()
 	_ = s.conn.Close() // Best-effort close
 }
 
