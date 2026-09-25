@@ -96,10 +96,11 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        # Scope ./internal/... ./cmd/... ./api/... to avoid pulling in
+        # Scope ./internal/... ./cmd/... to avoid pulling in
         # web/admin/node_modules/flatted and webmail/node_modules/flatted
         # (Go test glob ./... would otherwise try to compile those).
-        run: go test -v -race -coverprofile=coverage.out ./internal/... ./cmd/... ./api/...
+        # Note: api/ at the repository root contains only OpenAPI docs, no Go packages.
+        run: go test -v -race -coverprofile=coverage.out ./internal/... ./cmd/...
 
       - name: Run webmail tests
         run: |
