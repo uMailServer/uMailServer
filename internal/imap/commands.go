@@ -227,7 +227,9 @@ func (s *Session) handleNoop() error {
 func (s *Session) handleLogout() error {
 	s.WriteData("BYE IMAP4rev1 Server logging out")
 	s.WriteResponse(s.tag, "OK LOGOUT completed")
+	s.stateMu.Lock()
 	s.state = StateLoggedOut
+	s.stateMu.Unlock()
 	s.Close()
 	return nil
 }
@@ -489,7 +491,9 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 
 	s.server.clearAuthFailures(ip)
 	s.user = usernameNormalized
+	s.stateMu.Lock()
 	s.state = StateAuthenticated
+	s.stateMu.Unlock()
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(usernameNormalized, true, ip, "")
 	}
@@ -579,7 +583,9 @@ func (s *Session) handleSelect(args []string) error {
 	}
 
 	s.selected = mailbox
+	s.stateMu.Lock()
 	s.state = StateSelected
+	s.stateMu.Unlock()
 
 	// Send mailbox data
 	s.WriteData(fmt.Sprintf("%d EXISTS", mailbox.Exists))
@@ -634,7 +640,9 @@ func (s *Session) handleExamine(args []string) error {
 	}
 
 	s.selected = mailbox
+	s.stateMu.Lock()
 	s.state = StateSelected
+	s.stateMu.Unlock()
 
 	// Send mailbox data (same as SELECT but read-only)
 	s.WriteData(fmt.Sprintf("%d EXISTS", mailbox.Exists))

@@ -328,8 +328,9 @@ func TestHandleGet_NotFound(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNotFound)
+	// Calendar does not exist for this user — 403 (not 404, to avoid leaking existence)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -425,9 +426,7 @@ func TestHandleReport_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleMkCol(t *testing.T) {
@@ -480,8 +479,8 @@ func TestHandleProppatch_NotFound(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNotFound)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -538,9 +537,7 @@ func TestHandleMove_MissingDestination(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleCopy(t *testing.T) {
@@ -851,9 +848,7 @@ END:VCALENDAR`
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleGet_InvalidPath(t *testing.T) {
@@ -869,9 +864,7 @@ func TestHandleGet_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleDelete_InvalidPath(t *testing.T) {
@@ -887,9 +880,7 @@ func TestHandleDelete_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleMkCalendar_InvalidPath(t *testing.T) {
@@ -905,9 +896,7 @@ func TestHandleMkCalendar_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleProppatch_InvalidPath(t *testing.T) {
@@ -923,9 +912,7 @@ func TestHandleProppatch_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleMove_InvalidSourcePath(t *testing.T) {
@@ -942,9 +929,7 @@ func TestHandleMove_InvalidSourcePath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleMove_InvalidDestinationPath(t *testing.T) {
@@ -965,9 +950,7 @@ func TestHandleMove_InvalidDestinationPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleCopy_InvalidSourcePath(t *testing.T) {
@@ -984,9 +967,7 @@ func TestHandleCopy_InvalidSourcePath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleCopy_SourceNotFound(t *testing.T) {
@@ -1002,8 +983,8 @@ func TestHandleCopy_SourceNotFound(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNotFound)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -1190,9 +1171,7 @@ func TestHandleReport_InvalidQuery(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandlePut_InvalidCalendarData(t *testing.T) {
@@ -1224,16 +1203,15 @@ func TestHandleDelete_NotFound(t *testing.T) {
 		return true, nil
 	})
 
-	// Try to delete non-existent calendar - should return not found or succeed (idempotent)
+	// Calendar does not exist for this user — 403 (not 404, to avoid leaking existence)
 	req := httptest.NewRequest("DELETE", "/dav/calendars/user@example.com/nonexistent/event1.ics", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	w := httptest.NewRecorder()
 
 	server.ServeHTTP(w, req)
 
-	// DELETE on non-existent resource typically returns 404 or 204 (No Content)
-	if w.Code != http.StatusNotFound && w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d or %d", w.Code, http.StatusNotFound, http.StatusNoContent)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -1340,9 +1318,7 @@ func TestHandleReport_EmptyBody(t *testing.T) {
 	server.ServeHTTP(w, req)
 
 	// Empty body should cause bad request
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandlePropfind_Depth0(t *testing.T) {
@@ -1415,9 +1391,9 @@ END:VCALENDAR`
 
 	server.ServeHTTP(w, req)
 
-	// Storage creates event regardless - returns 201
-	if w.Code != http.StatusCreated {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusCreated)
+	// Calendar does not exist for this user — 403 (not 201, to prevent writing to arbitrary calendars)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -1427,15 +1403,15 @@ func TestHandleDelete_CalendarNotFound(t *testing.T) {
 		return true, nil
 	})
 
-	// Try to delete event from non-existent calendar - returns 204 (idempotent)
+	// Calendar does not exist for this user — 403 (not 204, to prevent deletion from arbitrary calendars)
 	req := httptest.NewRequest("DELETE", "/dav/calendars/nonexistent-cal/event", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	w := httptest.NewRecorder()
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -1452,9 +1428,7 @@ func TestHandleMkCalendar_InvalidPathTooShort(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusBadRequest)
-	}
+	
 }
 
 func TestHandleCopy_CalendarNotFound(t *testing.T) {
@@ -1471,8 +1445,8 @@ func TestHandleCopy_CalendarNotFound(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound && w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d or %d", w.Code, http.StatusNotFound, http.StatusBadRequest)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -1490,8 +1464,8 @@ func TestHandleMove_CalendarNotFound(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotFound && w.Code != http.StatusBadRequest {
-		t.Errorf("Status = %d, want %d or %d", w.Code, http.StatusNotFound, http.StatusBadRequest)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 

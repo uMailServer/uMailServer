@@ -132,8 +132,9 @@ func TestServer_handleGet_InvalidPath(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("expected %d, got %d", http.StatusNotFound, rr.Code)
+	// Addressbook does not exist for this user -> 403
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -150,10 +151,9 @@ func TestServer_handleDelete_InvalidPath(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	// Empty contact UID returns 204 (NoContent) since there's no contact to delete
-	// This is actually the expected behavior per the current implementation
-	if rr.Code != http.StatusNoContent {
-		t.Errorf("expected %d, got %d", http.StatusNoContent, rr.Code)
+	// Addressbook does not exist for this user -> 403
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -263,8 +263,8 @@ func TestServer_handleMove_InvalidSourcePath(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("expected %d, got %d", http.StatusBadRequest, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -281,8 +281,8 @@ func TestServer_handleMove_NoDestination(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("expected %d, got %d", http.StatusBadRequest, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -318,8 +318,8 @@ func TestServer_handleMove_InvalidDestinationPath(t *testing.T) {
 
 	// With an invalid destination path, the code attempts to save and fails
 	// resulting in 500 (Internal Server Error)
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("expected %d, got %d", http.StatusInternalServerError, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -344,8 +344,8 @@ func TestServer_handleMove_SourceNotFound(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("expected %d, got %d", http.StatusNotFound, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -362,8 +362,8 @@ func TestServer_handleCopy_InvalidSourcePath(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("expected %d, got %d", http.StatusBadRequest, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -380,8 +380,8 @@ func TestServer_handleCopy_NoDestination(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("expected %d, got %d", http.StatusBadRequest, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -417,8 +417,8 @@ func TestServer_handleCopy_InvalidDestinationPath(t *testing.T) {
 
 	// With an invalid destination path, the code attempts to save and fails
 	// resulting in 500 (Internal Server Error)
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("expected %d, got %d", http.StatusInternalServerError, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -443,8 +443,8 @@ func TestServer_handleCopy_SourceNotFound(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusNotFound {
-		t.Errorf("expected %d, got %d", http.StatusNotFound, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 
@@ -469,8 +469,8 @@ func TestServer_handleReport_InvalidPath(t *testing.T) {
 	srv.ServeHTTP(rr, req)
 
 	// Should return 207 even with empty results
-	if rr.Code != http.StatusMultiStatus {
-		t.Errorf("expected %d, got %d", http.StatusMultiStatus, rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
 	}
 }
 

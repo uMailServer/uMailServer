@@ -124,7 +124,12 @@ func (s *Session) WriteResponse(code int, message string) error {
 		_ = s.conn.SetWriteDeadline(time.Now().Add(s.server.config.WriteTimeout))
 	}
 
-	_, err := fmt.Fprintf(s.conn, "%d %s\r\n", code, message)
+	// Strip any CRLF in the message to prevent response splitting (RFC 5321 §4.1.1.1
+	// requires response text to not contain bare CR or LF; user input can reach here
+	// via Sieve reject actions and other dynamic messages).
+	safe := strings.ReplaceAll(strings.ReplaceAll(message, "\r", ""), "\n", "")
+
+	_, err := fmt.Fprintf(s.conn, "%d %s\r\n", code, safe)
 	return err
 }
 
@@ -136,11 +141,13 @@ func (s *Session) WriteMultiLineResponse(code int, lines []string) error {
 
 	var firstErr error
 	for i, line := range lines {
+		// Strip CRLF from each line to prevent response splitting.
+		safe := strings.ReplaceAll(strings.ReplaceAll(line, "\r", ""), "\n", "")
 		var err error
 		if i < len(lines)-1 {
-			_, err = fmt.Fprintf(s.conn, "%d-%s\r\n", code, line)
+			_, err = fmt.Fprintf(s.conn, "%d-%s\r\n", code, safe)
 		} else {
-			_, err = fmt.Fprintf(s.conn, "%d %s\r\n", code, line)
+			_, err = fmt.Fprintf(s.conn, "%d %s\r\n", code, safe)
 		}
 		if err != nil && firstErr == nil {
 			firstErr = err
@@ -499,7 +506,12 @@ func (s *Session) handleDATA() error {
 	}
 
 	// Deliver message
-	if s.server.onDeliverWithSieve != nil {
+	if s.server.onDeliverWithNotify != nil {
+		if err := s.server.onDeliverWithNotify(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data); err != nil {
+			s.resetTransaction()
+			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+		}
+	} else if s.server.onDeliverWithSieve != nil {
 		if err := s.server.onDeliverWithSieve(s.mailFrom, s.rcptTo, s.data, s.sieveActions); err != nil {
 			s.resetTransaction()
 			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
@@ -1155,6 +1167,7 @@ func (s *Session) handleSTARTTLS() error {
 func (s *Session) resetTransaction() {
 	s.mailFrom = ""
 	s.rcptTo = make([]string, 0)
+	s.rcptToNotify = make([]string, 0) // Clear per-recipient DSN NOTIFY preferences
 	s.data = nil
 	if s.state > StateGreeted {
 		s.state = StateGreeted

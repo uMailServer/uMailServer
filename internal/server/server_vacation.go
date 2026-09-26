@@ -37,12 +37,8 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 	key := safeRecipient + "|" + safeSender
 
 	// Use the :seconds interval from the Sieve vacation action, with a 24h floor
-	// (same minimum as sendVacationReply). The :seconds tag allows sieve scripts
-	// to request sub-24h intervals per RFC 5230 §4.1.
+	// RFC 5230 §4.1: minimum interval is 1 second. No artificial floor.
 	sendInterval := time.Duration(vacation.Seconds) * time.Second
-	if sendInterval < 24*time.Hour {
-		sendInterval = 24 * time.Hour
-	}
 
 	s.vacationRepliesMu.Lock()
 	if s.vacationReplies == nil {

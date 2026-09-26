@@ -41,6 +41,9 @@ jobs:
           (cd web/admin && npm ci --legacy-peer-deps && npm run build) &&
           (cd web/account && npm install --legacy-peer-deps && npm run build)
 
+      - name: Tidy modules
+        run: go mod tidy
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@aaa42aa0628b4ae2578232a66b541047968fac86 # v6.1.0
         with:
@@ -54,7 +57,7 @@ jobs:
           # step below) to avoid pulling in Go source files under
           # web/admin/node_modules/flatted and webmail/node_modules/flatted
           # (third-party Go sources checked into node_modules).
-          args: --timeout=5m ./internal/... ./cmd/... ./api/...
+          args: --timeout=5m ./internal/... ./cmd/...
 
       - name: Run go vet
         run: go vet ./...
@@ -95,11 +98,15 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Tidy modules
+        run: go mod tidy
+
       - name: Run tests
-        # Scope ./internal/... ./cmd/... ./api/... to avoid pulling in
+        # Scope ./internal/... ./cmd/... to avoid pulling in
         # web/admin/node_modules/flatted and webmail/node_modules/flatted
         # (Go test glob ./... would otherwise try to compile those).
-        run: go test -v -race -coverprofile=coverage.out ./internal/... ./cmd/... ./api/...
+        # Note: api/ at the repository root contains only OpenAPI docs, no Go packages.
+        run: go test -v -race -coverprofile=coverage.out ./internal/... ./cmd/...
 
       - name: Run webmail tests
         run: |

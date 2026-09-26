@@ -8,12 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// mockHubForStopIdle replaces the global hub to track Subscribe/Unsubscribe calls.
-type mockHubForStopIdle struct {
-	orig *NotificationHub
-	mock *mockNotificationHubForStopIdle
-}
-
+// mockNotificationHubForStopIdle is used by replaceHub to track Subscribe/Unsubscribe calls.
 type mockNotificationHubForStopIdle struct {
 	subscribeCount   *atomic.Int32
 	unsubscribeCount *atomic.Int32

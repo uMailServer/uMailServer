@@ -241,6 +241,13 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	calendarID := parts[2]
 	eventUID := parts[3]
 
+	// Verify the calendar belongs to this user
+	cal, err := s.storage.GetCalendar(username, calendarID)
+	if err != nil || cal == nil {
+		s.sendError(w, http.StatusForbidden, "calendar not found")
+		return
+	}
+
 	// Extract UID from ICS if available, otherwise use path
 	uid := extractUIDFromICS(icsData)
 	if uid == "" {
@@ -279,6 +286,13 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 	calendarID := parts[2]
 	eventUID := parts[3]
 
+	// Verify the calendar belongs to this user
+	cal, err := s.storage.GetCalendar(username, calendarID)
+	if err != nil || cal == nil {
+		s.sendError(w, http.StatusForbidden, "calendar not found")
+		return
+	}
+
 	// Get event
 	eventData, err := s.storage.GetEvent(username, calendarID, eventUID)
 	if err != nil || eventData == "" {
@@ -307,6 +321,13 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 
 	calendarID := parts[2]
 	eventUID := parts[3]
+
+	// Verify the calendar belongs to this user
+	cal, err := s.storage.GetCalendar(username, calendarID)
+	if err != nil || cal == nil {
+		s.sendError(w, http.StatusForbidden, "calendar not found")
+		return
+	}
 
 	// Delete event
 	if err := s.storage.DeleteEvent(username, calendarID, eventUID); err != nil {
@@ -363,10 +384,10 @@ func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, usernam
 
 	calendarID := parts[2]
 
-	// Get calendar
+	// Verify calendar belongs to this user (ownership check)
 	cal, err := s.storage.GetCalendar(username, calendarID)
 	if err != nil || cal == nil {
-		s.sendError(w, http.StatusNotFound, "calendar not found")
+		s.sendError(w, http.StatusForbidden, "calendar not found")
 		return
 	}
 
@@ -385,6 +406,13 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 
 	sourceCalendarID := sourceParts[2]
 	sourceEventUID := sourceParts[3]
+
+	// Verify source calendar belongs to this user
+	sourceCal, err := s.storage.GetCalendar(username, sourceCalendarID)
+	if err != nil || sourceCal == nil {
+		s.sendError(w, http.StatusForbidden, "calendar not found")
+		return
+	}
 
 	// Get destination from header
 	destination := r.Header.Get("Destination")
@@ -455,6 +483,13 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 
 	sourceCalendarID := sourceParts[2]
 	sourceEventUID := sourceParts[3]
+
+	// Verify source calendar belongs to this user
+	sourceCal, err := s.storage.GetCalendar(username, sourceCalendarID)
+	if err != nil || sourceCal == nil {
+		s.sendError(w, http.StatusForbidden, "calendar not found")
+		return
+	}
 
 	// Get destination from header
 	destination := r.Header.Get("Destination")

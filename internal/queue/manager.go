@@ -47,6 +47,7 @@ type Manager struct {
 	db           *db.DB
 	store        *store.MaildirStore
 	dataDir      string
+	queueDir     string // directory for queue message files; defaults to dataDir
 	resolver     DNSResolver
 	running      atomic.Bool
 	shutdown     chan struct{}
@@ -178,6 +179,7 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		db:              db,
 		store:           store,
 		dataDir:         dataDir,
+		queueDir:        dataDir,
 		resolver:        &realDNSResolver{},
 		shutdown:        make(chan struct{}),
 		metrics:         metrics.Get(),
@@ -242,6 +244,64 @@ func (m *Manager) SetWebhookTrigger(w WebhookTrigger) {
 }
 
 // Enqueue adds a message to the outbound queue
+// EnqueueWithNotify enqueues a message with per-recipient DSN notify preferences.
+// Each element of notify corresponds to the same index in to. An empty string
+// means the sender has no preference (bounce on permanent failure per RFC 3461).
+func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, message []byte) (string, error) {
+	id := generateID()
+	queueDir := m.queueDir
+	if queueDir == "" {
+		queueDir = "."
+	}
+	messagePath := filepath.Join(queueDir, id+".msg")
+	if err := os.WriteFile(messagePath, message, 0600); err != nil {
+		return "", fmt.Errorf("failed to write message file: %w", err)
+	}
+	baseID := id
+
+	// Build per-recipient entries with their notify flags.
+	// If notify is shorter than to, missing entries default to 0 (sender has no preference).
+	entries := make([]*db.QueueEntry, len(to))
+	for i, recipient := range to {
+		dsnNotify := DSNNotifyNever
+		if i < len(notify) && notify[i] != "" {
+			dsnNotify = ParseDSNNotify(notify[i])
+		}
+		entries[i] = &db.QueueEntry{
+			ID:          fmt.Sprintf("%s-%d", baseID, i),
+			From:        from,
+			To:          []string{recipient},
+			MessagePath: messagePath,
+			CreatedAt:   time.Now(),
+			NextRetry:   time.Now(),
+			RetryCount:  0,
+			Status:      "pending",
+			Notify:      db.DSNNotify(dsnNotify),
+		}
+	}
+
+	now := time.Now()
+	for i, entry := range entries {
+		entry.CreatedAt = now
+		entry.NextRetry = now
+		if err := m.db.EnqueueWithLimit(entry, m.maxQueueSize); err != nil {
+			for j := 0; j < i; j++ {
+				rollbackID := fmt.Sprintf("%s-%d", baseID, j)
+				_ = m.db.Dequeue(rollbackID)
+			}
+			deleteFile(messagePath)
+			return "", fmt.Errorf("failed to enqueue: %w", err)
+		}
+		select {
+		case m.deliveryChan <- entry:
+		default:
+			m.logger.Warn("delivery channel full, entry will be retried by sweeper", "id", entry.ID, "to", entry.To)
+		}
+	}
+
+	return baseID, nil
+}
+
 func (m *Manager) Enqueue(from string, to []string, message []byte) (string, error) {
 	// Generate unique message ID and write to disk outside the lock
 	id := generateID()

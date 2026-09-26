@@ -37,6 +37,7 @@ type Server struct {
 	// Hooks for message processing
 	onAuth             func(username, password string) (bool, error)
 	onValidate         func(from string, to []string) error
+	onDeliverWithNotify func(from string, to []string, notify []string, data []byte) error
 	onDeliver          func(from string, to []string, data []byte) error
 	onDeliverWithSieve func(from string, to []string, data []byte, sieveActions []string) error
 	onGetUserSecret    func(username string) (string, error) // Get user's shared secret for CRAM-MD5
@@ -173,6 +174,13 @@ func (s *Server) SetAuthHandler(handler func(username, password string) (bool, e
 // SetValidateHandler sets the message validation handler
 func (s *Server) SetValidateHandler(handler func(from string, to []string) error) {
 	s.onValidate = handler
+}
+
+// SetDeliveryHandlerWithNotify sets the message delivery handler with per-recipient
+// DSN notify preferences. This is the preferred handler when DSN NOTIFY support
+// is required.
+func (s *Server) SetDeliveryHandlerWithNotify(handler func(from string, to []string, notify []string, data []byte) error) {
+	s.onDeliverWithNotify = handler
 }
 
 // SetDeliveryHandler sets the message delivery handler

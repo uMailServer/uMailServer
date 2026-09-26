@@ -930,10 +930,16 @@ func (s *Server) writeError(w http.ResponseWriter, code int, message string) {
 	}
 	body, err := json.Marshal(resp)
 	if err != nil {
-		// Encoding failed — the response body is unknown; report the error at 500.
-		// The original error is inaccessible at the HTTP layer; log it for visibility.
+		// Encoding failed — the response body is unknown; log it for visibility.
+		// Set code to 500 and marshal a fixed internal-error body before writing headers.
 		slog.Error("mcp writeError: failed to marshal error response", "code", code, "message", message, "error", err)
-		body = []byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"internal error"}}`)
+		resp.Error = &MCPError{Code: -32603, Message: "internal error"}
+		resp.Result = nil
+		body, err = json.Marshal(resp)
+		if err != nil {
+			// Even the fallback marshal failed — write a raw JSON literal.
+			body = []byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"internal error"}}`)
+		}
 		code = http.StatusInternalServerError
 	}
 	w.Header().Set("Content-Type", "application/json")
