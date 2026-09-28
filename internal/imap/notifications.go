@@ -72,13 +72,17 @@ func (h *NotificationHub) Unsubscribe(user string, ch chan MailboxNotification) 
 
 // Notify sends a notification to all subscribers for a user
 func (h *NotificationHub) Notify(user string, notification MailboxNotification) {
-	h.mu.RLock()
-	channels := h.subscribers[user]
-	h.mu.RUnlock()
-
 	notification.Timestamp = time.Now()
 
-	for _, ch := range channels {
+	// Hold the read lock across the sends. Unsubscribe takes the write lock
+	// and close()s the channel, so copying the slice and then sending outside
+	// the lock lets a concurrent Unsubscribe close a channel that this loop is
+	// about to send on, panicking with "send on closed channel". Sends are
+	// non-blocking (select/default), so holding the lock here cannot deadlock.
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	for _, ch := range h.subscribers[user] {
 		// Non-blocking send; drop if subscriber is slow
 		select {
 		case ch <- notification:
