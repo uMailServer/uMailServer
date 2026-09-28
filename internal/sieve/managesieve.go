@@ -451,8 +451,9 @@ func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []str
 		totalRead += n
 	}
 
-	_, _ = session.reader.ReadLine() // Best-effort, trailing newline
-
+	// RFC 5804 §2.3: the script is sent as exactly script-size octets; there is
+	// no trailing newline to consume. Reading one here would block on (or swallow)
+	// the client's next command, desynchronizing the connection.
 	scriptContent := string(scriptBytes)
 
 	// Validate script
@@ -608,9 +609,9 @@ func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []s
 		totalRead += n
 	}
 
-	// Consume trailing newline
-	_, _ = session.reader.ReadLine() // Best-effort, trailing newline
-
+	// RFC 5804 §2.3: the script is sent as exactly script-size octets; there is
+	// no trailing newline to consume. Reading one here would block on (or swallow)
+	// the client's next command, desynchronizing the connection.
 	scriptContent := string(scriptBytes)
 
 	// Validate script
