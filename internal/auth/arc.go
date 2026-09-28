@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -109,8 +110,20 @@ func (v *ARCValidator) Validate(ctx context.Context, headers map[string][]string
 	arcSets := groupARCHeaders(arcHeaders)
 	chain.ChainLength = len(arcSets)
 
+	// Validate each ARC set in order. arcSets is keyed by the ARC instance
+	// number, which is not guaranteed to be the contiguous range 1..N: a
+	// chain may legitimately have gaps. Collect and sort the actual instance
+	// keys so every real set is validated exactly once, instead of treating
+	// len(arcSets) as the highest instance (which would fabricate empty sets
+	// for missing instances and skip the real higher ones).
+	instances := make([]int, 0, len(arcSets))
+	for inst := range arcSets {
+		instances = append(instances, inst)
+	}
+	sort.Ints(instances)
+
 	// Validate each ARC set in order
-	for i := 1; i <= len(arcSets); i++ {
+	for _, i := range instances {
 		arcSet := arcSets[i]
 		arcSet.Instance = i
 
