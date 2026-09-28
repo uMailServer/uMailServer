@@ -761,10 +761,14 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 		}
 	}
 
-	// Check flag criteria
-	if criteria.All {
-		return true
-	}
+	// Check flag criteria.
+	//
+	// The ALL criterion (and an empty search) matches every message, so it is a
+	// no-op here: it is honoured by simply falling through, because with no
+	// other criterion set nothing rejects the message (the function returns
+	// true at the end). We must NOT short-circuit on All here — parseSearchCriteria
+	// seeds All:true for every parsed search, so an early `return true` on All
+	// would make every SEARCH (UNSEEN, SEEN, FROM ...) match every message.
 	if criteria.Answered && !hasFlag(meta.Flags, "\\Answered") {
 		return false
 	}
