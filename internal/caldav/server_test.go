@@ -426,7 +426,6 @@ func TestHandleReport_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleMkCol(t *testing.T) {
@@ -537,7 +536,6 @@ func TestHandleMove_MissingDestination(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleCopy(t *testing.T) {
@@ -848,7 +846,6 @@ END:VCALENDAR`
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleGet_InvalidPath(t *testing.T) {
@@ -864,7 +861,6 @@ func TestHandleGet_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleDelete_InvalidPath(t *testing.T) {
@@ -880,7 +876,6 @@ func TestHandleDelete_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleMkCalendar_InvalidPath(t *testing.T) {
@@ -896,7 +891,6 @@ func TestHandleMkCalendar_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleProppatch_InvalidPath(t *testing.T) {
@@ -912,7 +906,6 @@ func TestHandleProppatch_InvalidPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleMove_InvalidSourcePath(t *testing.T) {
@@ -929,7 +922,6 @@ func TestHandleMove_InvalidSourcePath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleMove_InvalidDestinationPath(t *testing.T) {
@@ -950,7 +942,6 @@ func TestHandleMove_InvalidDestinationPath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleCopy_InvalidSourcePath(t *testing.T) {
@@ -967,7 +958,6 @@ func TestHandleCopy_InvalidSourcePath(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleCopy_SourceNotFound(t *testing.T) {
@@ -1171,7 +1161,6 @@ func TestHandleReport_InvalidQuery(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandlePut_InvalidCalendarData(t *testing.T) {
@@ -1318,7 +1307,7 @@ func TestHandleReport_EmptyBody(t *testing.T) {
 	server.ServeHTTP(w, req)
 
 	// Empty body should cause bad request
-	
+
 }
 
 func TestHandlePropfind_Depth0(t *testing.T) {
@@ -1428,7 +1417,6 @@ func TestHandleMkCalendar_InvalidPathTooShort(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	
 }
 
 func TestHandleCopy_CalendarNotFound(t *testing.T) {

@@ -74,7 +74,7 @@ func TestHandleMove_NoOverwrite_Coverage(t *testing.T) {
 
 	// Accept any valid response (success or not found due to different implementations)
 	if rr.Code != http.StatusForbidden {
-		t.Errorf("expected 403 (ownership fires first), got %d", rr.Code)  // PASS  // PASS
+		t.Errorf("expected 403 (ownership fires first), got %d", rr.Code) // PASS  // PASS
 	}
 }
 
