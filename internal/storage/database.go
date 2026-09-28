@@ -892,36 +892,30 @@ func (db *Database) findThreadBySubject(user, mailbox, normalizedSubject string)
 func NormalizeSubject(subject string) string {
 	subject = strings.TrimSpace(subject)
 
-	// Remove Re: prefixes (case insensitive)
+	// Strip leading Re:/Re[n]:/Fwd:/FW: prefixes in a single loop so that any
+	// interleaving is removed (e.g. "Fwd: Re: Topic"), not just all Re then all
+	// Fwd. Every same-conversation subject must normalize identically for thread
+	// matching, otherwise a conversation fragments across thread IDs.
 	for {
 		upper := strings.ToUpper(subject)
-		if strings.HasPrefix(upper, "RE:") {
+		switch {
+		case strings.HasPrefix(upper, "RE:"):
 			subject = strings.TrimSpace(subject[3:])
-		} else if strings.HasPrefix(upper, "RE[") {
+		case strings.HasPrefix(upper, "RE["):
 			// Handle Re[n]: format
-			if idx := strings.Index(subject, "]:"); idx != -1 {
-				subject = strings.TrimSpace(subject[idx+2:])
-			} else {
-				break
+			idx := strings.Index(subject, "]:")
+			if idx == -1 {
+				return strings.TrimSpace(subject)
 			}
-		} else {
-			break
-		}
-	}
-
-	// Remove Fwd: prefixes
-	for {
-		upper := strings.ToUpper(subject)
-		if strings.HasPrefix(upper, "FWD:") {
+			subject = strings.TrimSpace(subject[idx+2:])
+		case strings.HasPrefix(upper, "FWD:"):
 			subject = strings.TrimSpace(subject[4:])
-		} else if strings.HasPrefix(upper, "FW:") {
+		case strings.HasPrefix(upper, "FW:"):
 			subject = strings.TrimSpace(subject[3:])
-		} else {
-			break
+		default:
+			return strings.TrimSpace(subject)
 		}
 	}
-
-	return strings.TrimSpace(subject)
 }
 
 // generateThreadID creates a unique thread ID based on subject and timestamp
