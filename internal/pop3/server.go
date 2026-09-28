@@ -2,6 +2,7 @@ package pop3
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -469,6 +470,37 @@ func (s *Session) WriteDataLine(line string) {
 	}
 }
 
+// dotStuffData applies RFC 1939 §3.1 dot-stuffing to a raw message body: every
+// line whose first octet is a period is prefixed with an extra period. Without
+// this, a body line that is exactly "." is transmitted verbatim and a POP3
+// client reads it as the end-of-message marker, silently truncating the
+// message. Line terminators in the input are preserved.
+func dotStuffData(data []byte) []byte {
+	// Fast path: nothing to stuff when no line begins with a period.
+	if !bytes.HasPrefix(bytes.TrimLeft(data, "\r\n"), []byte(".")) &&
+		!bytes.Contains(data, []byte("\n.")) &&
+		!bytes.Contains(data, []byte("\r.")) {
+		return data
+	}
+
+	var out bytes.Buffer
+	out.Grow(len(data) + 16)
+	atLineStart := true
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if atLineStart && c == '.' {
+			out.WriteByte('.')
+		}
+		out.WriteByte(c)
+		if c == '\n' {
+			atLineStart = true
+		} else if c != '\r' {
+			atLineStart = false
+		}
+	}
+	return out.Bytes()
+}
+
 // WriteDataEnd writes the end of data marker
 func (s *Session) WriteDataEnd() {
 	s.setWriteDeadline()
@@ -750,10 +782,15 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 			}
 		}
 
-		s.WriteResponse(fmt.Sprintf("+OK %d octets", len(msg.Data)))
+		// Transmit the message with RFC 1939 §3.1 dot-stuffing: every line that
+		// begins with a period is written with an extra period prepended, so a
+		// body line that is exactly "." cannot be mistaken for the terminating
+		// "." line. The announced octet count must match the stuffed length.
+		stuffed := dotStuffData(msg.Data)
+		s.WriteResponse(fmt.Sprintf("+OK %d octets", len(stuffed)))
 		s.setWriteDeadline()
-		_, _ = s.writer.Write(msg.Data)
-		if !strings.HasSuffix(string(msg.Data), "\n") {
+		_, _ = s.writer.Write(stuffed)
+		if !strings.HasSuffix(string(stuffed), "\n") {
 			_, _ = s.writer.WriteString("\r\n")
 		}
 		s.WriteDataEnd()
@@ -895,11 +932,15 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 // sendTop sends headers + specified number of lines
 func (s *Session) sendTop(data []byte, lines int) {
 	s.setWriteDeadline()
-	// Find end of headers
+	// Find end of headers. Prefer a CRLF blank line, but fall back to a bare-LF
+	// blank line; the body starts after whichever separator was found, so its
+	// byte length must be tracked (a bare "\n\n" is 2 bytes, not 4).
 	content := string(data)
 	headerEnd := strings.Index(content, "\r\n\r\n")
+	sepLen := 4
 	if headerEnd == -1 {
 		headerEnd = strings.Index(content, "\n\n")
+		sepLen = 2
 	}
 
 	if headerEnd == -1 {
@@ -914,7 +955,7 @@ func (s *Session) sendTop(data []byte, lines int) {
 	_, _ = s.writer.WriteString("\r\n\r\n")
 
 	// Send specified number of lines
-	body := content[headerEnd+4:]
+	body := content[headerEnd+sepLen:]
 	bodyLines := strings.Split(body, "\n")
 	for i, line := range bodyLines {
 		if i >= lines {
