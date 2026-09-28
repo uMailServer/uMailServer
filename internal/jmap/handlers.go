@@ -559,10 +559,12 @@ func sortMessages(messages []struct {
 		comp.Property = "receivedAt"
 	}
 
+	// Honor the comparator's isAscending exactly as the client requested.
+	// The Go zero value (false) is already descending, so a date sort with an
+	// omitted isAscending naturally defaults to descending without inverting an
+	// explicit ascending request. RFC 8620 §2.7.1 requires the sort order in
+	// the request to be honored.
 	ascending := comp.IsAscending
-	if comp.Property == "receivedAt" || comp.Property == "sentAt" {
-		ascending = !ascending // Default is descending for dates
-	}
 
 	sort.Slice(messages, func(i, j int) bool {
 		a, b := messages[i].meta, messages[j].meta
@@ -713,6 +715,13 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 				// Delete from old mailbox
 				_ = s.db.DeleteMessage(user, targetMbox, targetUID)
 				targetMbox = newMbox
+				// The message now lives in the new mailbox under newUID. Point
+				// targetUID (and the stored UID) at newUID so the metadata save
+				// below updates the moved message instead of writing to the
+				// stale UID, which would clobber an unrelated message that
+				// already occupies that UID in the destination mailbox.
+				targetUID = newUID
+				meta.UID = newUID
 			}
 		}
 
