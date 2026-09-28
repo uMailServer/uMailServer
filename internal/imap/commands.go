@@ -733,6 +733,14 @@ func (s *Session) handleRename(args []string) error {
 	oldName := strings.Trim(args[0], "\"'")
 	newName := strings.Trim(args[1], "\"'")
 
+	// Cannot rename INBOX. INBOX is the mandatory, reserved mailbox: renaming
+	// it away would destroy the user's INBOX and its messages, exactly what
+	// the DELETE handler already refuses to allow.
+	if strings.EqualFold(oldName, "INBOX") {
+		s.WriteResponse(s.tag, "NO Cannot rename INBOX")
+		return nil
+	}
+
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
 		return nil
