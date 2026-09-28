@@ -55,11 +55,11 @@ func TestNormalizeSubject_PreservesNonPrefixes(t *testing.T) {
 		want string
 	}{
 		{"Topic", "Topic"},
-		{"RE meeting notes", "RE meeting notes"},           // "RE" without ':' is not a prefix
-		{"report: re: review", "report: re: review"},       // prefix not at start
-		{"Re[broken Topic", "Re[broken Topic"},             // malformed Re[n] (no "]:")
-		{"My Fwd: notes", "My Fwd: notes"},                // not at start
-		{"", ""},                                           // empty
+		{"RE meeting notes", "RE meeting notes"},     // "RE" without ':' is not a prefix
+		{"report: re: review", "report: re: review"}, // prefix not at start
+		{"Re[broken Topic", "Re[broken Topic"},       // malformed Re[n] (no "]:")
+		{"My Fwd: notes", "My Fwd: notes"},           // not at start
+		{"", ""},                                     // empty
 	}
 	for _, tt := range tests {
 		if got := NormalizeSubject(tt.in); got != tt.want {

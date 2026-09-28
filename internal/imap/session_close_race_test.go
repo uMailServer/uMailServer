@@ -83,9 +83,9 @@ func (c *discardConn) Read([]byte) (int, error) { return 0, io.EOF }
 func (c *discardConn) Write(p []byte) (int, error) {
 	return len(p), nil
 }
-func (c *discardConn) Close() error                { c.closed.Store(true); return nil }
-func (c *discardConn) LocalAddr() net.Addr         { return dummyAddr{} }
-func (c *discardConn) RemoteAddr() net.Addr        { return dummyAddr{} }
+func (c *discardConn) Close() error                     { c.closed.Store(true); return nil }
+func (c *discardConn) LocalAddr() net.Addr              { return dummyAddr{} }
+func (c *discardConn) RemoteAddr() net.Addr             { return dummyAddr{} }
 func (c *discardConn) SetDeadline(time.Time) error      { return nil }
 func (c *discardConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *discardConn) SetWriteDeadline(time.Time) error { return nil }
