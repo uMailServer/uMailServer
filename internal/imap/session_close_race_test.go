@@ -1,8 +1,10 @@
 package imap
 
 import (
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -71,4 +73,50 @@ func TestSessionClose_SynchronizedWithHandle(t *testing.T) {
 		s.Close()
 	}
 	<-done
+}
+
+// discardConn is a net.Conn whose Write never blocks, so handleCommand can be
+// driven in a tight loop without a reader draining the pipe.
+type discardConn struct{ closed atomic.Bool }
+
+func (c *discardConn) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *discardConn) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+func (c *discardConn) Close() error                { c.closed.Store(true); return nil }
+func (c *discardConn) LocalAddr() net.Addr         { return dummyAddr{} }
+func (c *discardConn) RemoteAddr() net.Addr        { return dummyAddr{} }
+func (c *discardConn) SetDeadline(time.Time) error      { return nil }
+func (c *discardConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *discardConn) SetWriteDeadline(time.Time) error { return nil }
+
+type dummyAddr struct{}
+
+func (dummyAddr) Network() string { return "test" }
+func (dummyAddr) String() string  { return "test" }
+
+// TestSessionClose_SynchronizedWithHandleCommand is the deterministic guard
+// for the other half of the original race: handleCommand() read s.state with a
+// bare `switch s.state` while Close() wrote it from Server.Stop's goroutine.
+// It now reads through State() (RLock). Reverting that to a bare read makes
+// this loop trip -race deterministically.
+func TestSessionClose_SynchronizedWithHandleCommand(t *testing.T) {
+	conn := &discardConn{}
+	s := NewSession(conn, NewServer(&Config{Addr: ":0"}, &mockMailstore{}))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { // reader: handleCommand dispatches on s.State()
+		defer wg.Done()
+		for i := 0; i < 3000; i++ {
+			_ = s.handleCommand("a1 CAPABILITY")
+		}
+	}()
+	go func() { // writer: Close()
+		defer wg.Done()
+		for i := 0; i < 3000; i++ {
+			s.Close()
+		}
+	}()
+	wg.Wait()
 }

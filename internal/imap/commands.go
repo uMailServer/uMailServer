@@ -34,8 +34,11 @@ func (s *Session) handleCommand(line string) error {
 	command := strings.ToUpper(parts[1])
 	args := parts[2:]
 
-	// Handle the command based on current state
-	switch s.state {
+	// Handle the command based on current state.
+	// Use the State() accessor (RLock) rather than s.state directly: Close()
+	// runs on a different goroutine (Server.Stop), and a bare read here is
+	// what -race flagged against it in TestFullMailFlow.
+	switch s.State() {
 	case StateNotAuthenticated:
 		return s.handleNotAuthenticated(command, args, line)
 	case StateAuthenticated:
@@ -1229,8 +1232,10 @@ func (s *Session) handleNamespace() error {
 
 // IDLE command (RFC 2177)
 func (s *Session) handleIdle() error {
-	// IDLE is only valid in Authenticated or Selected state
-	if s.state != StateAuthenticated && s.state != StateSelected {
+	// IDLE is only valid in Authenticated or Selected state.
+	// Use the State() accessor (RLock) rather than s.state directly, for the
+	// same reason as handleCommand: Close() writes s.state from another goroutine.
+	if st := s.State(); st != StateAuthenticated && st != StateSelected {
 		s.WriteResponse(s.tag, "BAD Command not allowed in this state")
 		return nil
 	}
