@@ -452,9 +452,18 @@ func (s *Session) Selected() *Mailbox {
 	return s.selected
 }
 
-// Close closes the session. Caller must hold s.stateMu for writing s.state.
+// Close closes the session, marking it logged out.
+//
+// Close takes s.stateMu itself rather than relying on the caller: the only
+// production caller is Server.Stop(), which holds the *server's* sessionsMu
+// and not this session's stateMu, so an "caller must hold stateMu" contract
+// was violated by every real call site. Locking here also removes the
+// unlocked write that raced the RLock-protected readers in State() and
+// Handle() (flagged by -race on TestFullMailFlow).
 func (s *Session) Close() {
+	s.stateMu.Lock()
 	s.state = StateLoggedOut
+	s.stateMu.Unlock()
 	_ = s.conn.Close() // Best-effort close
 }
 
