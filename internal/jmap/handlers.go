@@ -1503,7 +1503,13 @@ func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
 	}
 
 	total := len(threadIDs)
+	// position is a client-supplied offset and may arrive negative. Clamping
+	// only the upper bound would leave start negative and make
+	// threadIDs[start:end] a slice-bounds panic, so floor it at 0 first.
 	start := int(position)
+	if start < 0 {
+		start = 0
+	}
 	if start > total {
 		start = total
 	}
