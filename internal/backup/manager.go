@@ -333,6 +333,25 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 
 		targetPath := filepath.Join(targetDir, header.Name)
 
+		// A tar entry must never resolve outside the target directory. Without
+		// this check an entry named "../escape.txt" is written outside it, which
+		// lets a crafted archive overwrite arbitrary files during restore. The
+		// CLI restore (internal/cli/backup.go) enforces the same rule.
+		absTargetPath, err := filepath.Abs(targetPath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve target path: %w", err)
+		}
+		absTargetDir, err := filepath.Abs(targetDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve target directory: %w", err)
+		}
+		absTargetPath = filepath.Clean(absTargetPath)
+		absTargetDir = filepath.Clean(absTargetDir)
+		if absTargetPath != absTargetDir &&
+			!strings.HasPrefix(absTargetPath, absTargetDir+string(filepath.Separator)) {
+			return fmt.Errorf("invalid entry in backup: %s - would extract outside target directory", header.Name)
+		}
+
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
@@ -437,22 +456,25 @@ func (m *Manager) Decrypt(srcPath, destPath, password string) error {
 		return err
 	}
 
-	nonce := make([]byte, 16)
-	if _, err := f.Read(nonce); err != nil {
-		return err
-	}
-
-	ciphertext, err := io.ReadAll(f)
-	if err != nil {
-		return err
-	}
-
 	block, err := aes.NewCipher(key[:])
 	if err != nil {
 		return err
 	}
 
 	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return err
+	}
+
+	// Encrypt writes gcm.NonceSize() bytes of nonce, so Decrypt must read
+	// exactly that many. A hardcoded length desynchronises the ciphertext and
+	// makes every encrypted backup unrecoverable.
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(f, nonce); err != nil {
+		return err
+	}
+
+	ciphertext, err := io.ReadAll(f)
 	if err != nil {
 		return err
 	}
