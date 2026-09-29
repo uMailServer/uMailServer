@@ -498,8 +498,15 @@ func (s *Session) handleDATA() error {
 		s.data = data
 	}
 
-	// Add Message-ID if not present
-	if !bytes.Contains(bytes.ToLower(data), []byte("message-id:")) {
+	// Add Message-ID if not present. The search must be scoped to the header
+	// block: a "message-id:" occurring in the body is quoted text (ordinary
+	// in forwards and replies), not this message's identifier, and must not
+	// suppress the header. RFC 5322 §3.6.4.
+	headerScope := data
+	if idx := bytes.Index(data, []byte("\r\n\r\n")); idx >= 0 {
+		headerScope = data[:idx]
+	}
+	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
 		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", s.id, s.server.config.Hostname)
 		data = append([]byte(msgID), data...)
 		s.data = data
@@ -611,8 +618,13 @@ func (s *Session) handleBDAT(arg string) error {
 		s.bdatBuffer = &bytes.Buffer{}
 	}
 
-	// Check cumulative size against limit
-	if int64(s.bdatBuffer.Len()+size) > s.server.config.MaxMessageSize {
+	// Check cumulative size against limit. Compare by subtraction rather than by
+	// adding bufLen+size: a large declared chunk size would overflow that sum
+	// (in int or in int64) to a negative value and defeat the guard, letting the
+	// make() below run with an attacker-chosen length. bdatBuffer.Len() is always
+	// <= MaxMessageSize because every previous chunk passed this same check, so
+	// the subtraction cannot underflow.
+	if int64(size) > s.server.config.MaxMessageSize-int64(s.bdatBuffer.Len()) {
 		s.bdatBuffer = nil
 		s.resetTransaction()
 		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
