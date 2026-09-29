@@ -69,15 +69,29 @@ const (
 
 // NewManager creates webhook manager
 func NewManager(database *db.DB, secret string) *Manager {
-	return &Manager{
+	m := &Manager{
 		db:             database,
-		client:         &http.Client{Timeout: 30 * time.Second},
 		secret:         secret,
 		hooks:          make([]*Webhook, 0),
 		allowPrivateIP: false, // Default: block private IPs for security
 		cbManager:      circuitbreaker.NewManager(),
 		sem:            make(chan struct{}, 50), // Limit concurrent webhook deliveries
 	}
+	m.client = &http.Client{
+		Timeout: 30 * time.Second,
+		// The SSRF guard in send() only validates the operator-configured URL.
+		// A redirect could otherwise bounce the signed payload at an internal
+		// host that isValidWebhookURL never saw, so every hop is re-checked
+		// with the same guard. Returning nil leaves Go's own 10-redirect cap
+		// in force.
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if valid, _ := m.isValidWebhookURL(req.URL.String()); !valid {
+				return fmt.Errorf("redirect target rejected by SSRF check: %s", req.URL.Redacted())
+			}
+			return nil
+		},
+	}
+	return m
 }
 
 // SetAllowPrivateIP allows private IP addresses for webhooks (use with caution, mainly for testing)
