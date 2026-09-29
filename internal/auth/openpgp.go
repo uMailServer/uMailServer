@@ -157,9 +157,15 @@ func (e *OpenPGPEncryptor) encryptContent(content []byte) ([]byte, error) {
 
 	e.lastNonce = nonce
 
-	// Prepend nonce to ciphertext (nonce is NOT included in Seal output with dst=nil)
+	// Prepend nonce to ciphertext (nonce is NOT included in Seal output with dst=nil).
+	// DecryptMessage reads the nonce from exactly this offset, so dropping it here
+	// made every encrypted message undecryptable. Build a fresh slice rather than
+	// appending onto `nonce`, which e.lastNonce still aliases.
 	ciphertext := gcm.Seal(nil, nonce, content, nil)
-	return ciphertext, nil
+	out := make([]byte, 0, len(nonce)+len(ciphertext))
+	out = append(out, nonce...)
+	out = append(out, ciphertext...)
+	return out, nil
 }
 
 // GetLastSessionKey returns the session key from the last encryption (for test interop)
@@ -198,11 +204,15 @@ func (d *OpenPGPDecryptor) DecryptMessage(msg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to parse multipart message: %w", err)
 	}
 
-	if len(parts) < 1 {
+	if len(parts) < 2 {
 		return nil, fmt.Errorf("no encrypted content found")
 	}
 
-	encryptedContent := parts[0].Content
+	// RFC 3156 multipart/encrypted has two parts: part 1 is the
+	// application/pgp-encrypted control part (its body is "Version: 1"), and
+	// part 2 is the application/octet-stream part holding the base64 of the
+	// ciphertext. The ciphertext is therefore parts[1], not parts[0].
+	encryptedContent := parts[1].Content
 
 	// Decode base64
 	decoded, err := base64.StdEncoding.DecodeString(string(encryptedContent))

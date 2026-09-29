@@ -323,12 +323,37 @@ func parseMultipart(msg []byte) ([]*MultipartPart, error) {
 	headers := parts[0]
 	content := parts[1]
 
-	// Find boundary
+	// Find the MIME boundary. Per RFC 2045 the boundary is a parameter of the
+	// Content-Type header, e.g.
+	//   Content-Type: multipart/encrypted; boundary=abc; protocol="..."
+	// so it does not necessarily start a line. Only fall back to a line that
+	// begins with "boundary=" when no Content-Type parameter supplied one.
 	var boundary string
 	for _, line := range strings.Split(headers, "\r\n") {
-		if strings.HasPrefix(line, "boundary=") {
-			boundary = strings.Trim(strings.TrimPrefix(line, "boundary="), "\"")
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "content-type:") {
+			continue
+		}
+		for _, param := range strings.Split(line[len("content-type:"):], ";") {
+			param = strings.TrimSpace(param)
+			if !strings.HasPrefix(strings.ToLower(param), "boundary=") {
+				continue
+			}
+			boundary = strings.Trim(strings.TrimSpace(param[len("boundary="):]), "\"")
 			break
+		}
+		if boundary != "" {
+			break
+		}
+	}
+	if boundary == "" {
+		// Legacy shape: a bare "boundary=..." line in the header block. The
+		// parameter name is matched case-insensitively, but the value must be
+		// taken verbatim -- MIME boundaries are case-sensitive.
+		for _, line := range strings.Split(headers, "\r\n") {
+			if len(line) >= len("boundary=") && strings.EqualFold(line[:len("boundary=")], "boundary=") {
+				boundary = strings.Trim(strings.TrimSpace(line[len("boundary="):]), "\"")
+				break
+			}
 		}
 	}
 
