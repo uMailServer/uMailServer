@@ -403,6 +403,11 @@ func (p *Parser) parseStringList() (*ListValue, error) {
 
 	for p.pos < p.length && p.input[p.pos] != ']' {
 		p.skipWhitespaceAndComments()
+		// skipWhitespaceAndComments can consume the rest of the input, so the
+		// bound must be re-checked before indexing p.input again.
+		if p.pos >= p.length {
+			break
+		}
 		if p.input[p.pos] == '"' {
 			str, err := p.parseString()
 			if err != nil {
