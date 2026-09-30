@@ -41,7 +41,7 @@ func TestSSESendEventIsSafeForConcurrentWriters(t *testing.T) {
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("X-Auth-Token", "tok")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:bodyclose // closed via defer below; the body is read by the pump goroutine
 	if err != nil {
 		t.Fatalf("SSE connect: %v", err)
 	}
