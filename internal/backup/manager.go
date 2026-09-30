@@ -3,6 +3,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/aes"
 	"crypto/cipher"
@@ -14,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -34,8 +37,24 @@ func NewManager(dataDir string, db *storage.Database, msgStore *storage.MessageS
 	}
 }
 
+// validatePathPart rejects empty names, "..", and any path separator in
+// caller-supplied user/mailbox identifiers, matching
+// storage.MessageStore.validatePathComponent. These values are joined into
+// filesystem paths, so without this check "../victim" reads or writes
+// another user's mail.
+func validatePathPart(part string) error {
+	if part == "" || part == ".." || strings.ContainsAny(part, "/\\") {
+		return fmt.Errorf("invalid path component: %q", part)
+	}
+	return nil
+}
+
 // BackupUser creates a backup of a specific user's data
 func (m *Manager) BackupUser(user string, destPath string, opts BackupOptions) error {
+	if err := validatePathPart(user); err != nil {
+		return fmt.Errorf("invalid user: %w", err)
+	}
+
 	userPath := filepath.Join(m.dataDir, "messages", user)
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
 		return fmt.Errorf("user %s does not exist", user)
@@ -112,6 +131,13 @@ func (m *Manager) addDirToTar(basePath, relPath string, tw *tar.Writer) error {
 
 // BackupMailbox creates a backup of a specific mailbox
 func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptions) error {
+	if err := validatePathPart(user); err != nil {
+		return fmt.Errorf("invalid user: %w", err)
+	}
+	if err := validatePathPart(mailbox); err != nil {
+		return fmt.Errorf("invalid mailbox: %w", err)
+	}
+
 	mailboxPath := filepath.Join(m.dataDir, "messages", user, mailbox)
 	if _, err := os.Stat(mailboxPath); os.IsNotExist(err) {
 		return fmt.Errorf("mailbox %s for user %s does not exist", mailbox, user)
@@ -161,6 +187,10 @@ func (m *Manager) BackupFull(destPath string, opts BackupOptions) error {
 
 // ListUserBackups returns available backups for a specific user
 func (m *Manager) ListUserBackups(user string) ([]BackupInfo, error) {
+	if err := validatePathPart(user); err != nil {
+		return nil, fmt.Errorf("invalid user: %w", err)
+	}
+
 	backupDir := filepath.Join(m.dataDir, "backups", "per-user", user)
 
 	if _, err := os.Stat(backupDir); os.IsNotExist(err) {
@@ -311,6 +341,9 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 	var targetDir string
 	switch opts.Mode {
 	case RestoreModeDifferent:
+		if err := validatePathPart(opts.TargetUser); err != nil {
+			return fmt.Errorf("invalid target user: %w", err)
+		}
 		targetDir = filepath.Join(m.dataDir, "messages", opts.TargetUser)
 	case RestoreModeMerge:
 		targetDir = filepath.Join(m.dataDir, "messages")
@@ -385,22 +418,38 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 	return nil
 }
 
-// Encrypt encrypts a file using AES-GCM
-func (m *Manager) Encrypt(srcPath, destPath, password string) error {
-	key := sha256.Sum256([]byte(password))
+// backupKDFIterations is the PBKDF2-HMAC-SHA256 iteration count for backup
+// envelope encryption (OWASP guidance for PBKDF2-HMAC-SHA256). Backup
+// encryption is a rare, user-initiated operation, so the ~0.5s derive cost is
+// acceptable for the precomputation resistance it buys.
+const backupKDFIterations = 600000
 
-	block, err := aes.NewCipher(key[:])
+// backupEnvelopeMagic prefixes v2 envelopes: "BK" + version byte.
+var backupEnvelopeMagic = []byte{'B', 'K'}
+
+const backupEnvelopeVersion2 = byte(0x02)
+
+// Encrypt encrypts a file using AES-256-GCM with a per-file salt. The key is
+// derived with PBKDF2-HMAC-SHA256 over the password and a fresh 16-byte salt,
+// so two backups sharing a password never share a key. Envelope format v2:
+// "BK" | 0x02 | salt(16) | nonce | ciphertext. Files written by the previous
+// format (salt | nonce | ciphertext, unsalted SHA-256 key) remain decryptable
+// via Decrypt's legacy path.
+func (m *Manager) Encrypt(srcPath, destPath, password string) error {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
+
+	key := pbkdf2.Key([]byte(password), salt, backupKDFIterations, 32, sha256.New)
+
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return err
-	}
-
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
 		return err
 	}
 
@@ -415,6 +464,12 @@ func (m *Manager) Encrypt(srcPath, destPath, password string) error {
 	}
 	defer f.Close()
 
+	if _, err := f.Write(backupEnvelopeMagic); err != nil {
+		return err
+	}
+	if _, err := f.Write([]byte{backupEnvelopeVersion2}); err != nil {
+		return err
+	}
 	if _, err := f.Write(salt); err != nil {
 		return err
 	}
@@ -441,29 +496,71 @@ func (m *Manager) Encrypt(srcPath, destPath, password string) error {
 	return nil
 }
 
-// Decrypt decrypts an AES-GCM encrypted file
+// Decrypt decrypts an AES-GCM encrypted file. It auto-detects the envelope
+// version: v2 files (prefixed "BK" + 0x02) derive their key with PBKDF2 over
+// the stored per-file salt; legacy files (salt | nonce | ciphertext) keep the
+// historical unsalted SHA-256(password) derivation so old backups stay
+// recoverable.
 func (m *Manager) Decrypt(srcPath, destPath, password string) error {
-	key := sha256.Sum256([]byte(password))
-
 	f, err := os.Open(srcPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	salt := make([]byte, 16)
-	if _, err := f.Read(salt); err != nil {
+	// Peek the envelope magic. Legacy v1 files begin with the 16-byte salt,
+	// which is random; a legacy salt whose first two bytes happen to be "BK"
+	// (probability 1/65536) is rejected by GCM authentication and fails
+	// closed, so mis-detection cannot produce corrupted plaintext.
+	magic := make([]byte, len(backupEnvelopeMagic))
+	if _, err := io.ReadFull(f, magic); err != nil {
 		return err
 	}
 
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return err
-	}
+	var key []byte
+	var gcm cipher.AEAD
 
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return err
+	if bytes.Equal(magic, backupEnvelopeMagic) {
+		versionBuf := make([]byte, 1)
+		if _, err := io.ReadFull(f, versionBuf); err != nil {
+			return err
+		}
+		version := versionBuf[0]
+		if version != backupEnvelopeVersion2 {
+			return fmt.Errorf("unsupported backup envelope version %d", version)
+		}
+		salt := make([]byte, 16)
+		if _, err := io.ReadFull(f, salt); err != nil {
+			return err
+		}
+		key = pbkdf2.Key([]byte(password), salt, backupKDFIterations, 32, sha256.New)
+
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return err
+		}
+		gcm, err = cipher.NewGCM(block)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Legacy v1 framing: salt(16) [unused] | nonce | ciphertext, with the
+		// historical unsalted SHA-256(password) key.
+		legacySalt := make([]byte, 16)
+		copy(legacySalt, magic)
+		if _, err := io.ReadFull(f, legacySalt[len(magic):]); err != nil {
+			return err
+		}
+		legacyKey := sha256.Sum256([]byte(password))
+
+		block, err := aes.NewCipher(legacyKey[:])
+		if err != nil {
+			return err
+		}
+		gcm, err = cipher.NewGCM(block)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Encrypt writes gcm.NonceSize() bytes of nonce, so Decrypt must read

@@ -2470,10 +2470,9 @@ func (s *Session) handleListRights(args []string) error {
 		return nil
 	}
 
-	// RFC 4314 specifies the standard rights that can be granted
-	// l (lookup), r (read), s (seen), w (write), i (insert), p (post),
-	// k (create), x (delete), t (delete seen), e (expunge), c (create mailbox), d (delete mailbox)
-	standardRights := "l r s w i p k x t e c d a"
+	// RFC 4314 §2.2.1 rights this server grants, in the same vocabulary
+	// storage.ParseACLRights accepts (must stay in sync with it).
+	standardRights := "l r s w i t e k"
 
 	s.WriteData(fmt.Sprintf("LISTRIGHTS %s %s %s", mailbox, grantee, standardRights))
 	s.WriteResponse(s.tag, "OK LISTRIGHTS completed")

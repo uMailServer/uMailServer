@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -122,18 +123,38 @@ func (s *MaildirStore) ensureFolder(domain, user, folder string) error {
 	return nil
 }
 
-// generateUniqueName generates a unique Maildir filename
-// Format: {timestamp}.{pid}.{hostname}:2,{flags}
+// maildirNameSeq is the per-process delivery counter that makes maildir
+// filenames unique and lexicographically monotonic.
+var maildirNameSeq atomic.Uint64
+
+// formatMaildirName renders a maildir unique filename from its components.
+// It is a pure function so the ordering and uniqueness properties of the
+// format can be tested with adversarial inputs. Fixed-width fields keep
+// lexicographic order identical to delivery order across digit-width
+// transitions (micros is zero-padded to 6, the per-process counter to 20).
+func formatMaildirName(timestamp int64, micros int64, pid int, seq uint64, hostname string) string {
+	return fmt.Sprintf("%d.M%06dP%dQ%020d.%s", timestamp, micros, pid, seq, hostname)
+}
+
+// generateUniqueName generates a unique Maildir filename. The format is
+// owned by formatMaildirName: "%d.M%06dP%dQ%020d.%s" — zero-padded micros and
+// per-process counter keep lexicographic filename order equal to delivery
+// order, and the counter makes same-process collisions impossible.
 func (s *MaildirStore) generateUniqueName() string {
 	timestamp := time.Now().Unix()
 	pid := os.Getpid()
-	hostname, _ := os.Hostname() // Best-effort, fallback to localhost if error
+	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "localhost"
 	}
-	// Add microseconds and random component for uniqueness
+	// The per-process counter guarantees uniqueness (no two deliveries in
+	// this process can share a name, so rename cannot overwrite a message),
+	// and the fixed-width zero-padded fields keep lexicographic filename
+	// order identical to delivery order — maildir listings are
+	// filename-sorted and message order must match delivery order.
+	seq := maildirNameSeq.Add(1)
 	micros := time.Now().UnixMicro() % 1000000
-	return fmt.Sprintf("%d.%d%d.%s", timestamp, pid, micros, hostname)
+	return formatMaildirName(timestamp, micros, pid, seq, hostname)
 }
 
 // Deliver stores a message in the specified folder

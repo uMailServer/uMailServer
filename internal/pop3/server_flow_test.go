@@ -241,9 +241,10 @@ func TestFullSessionFlow(t *testing.T) {
 		t.Errorf("QUIT: expected +OK, got %s", quitResp)
 	}
 
-	// Verify delete was called for index 1 (0-based)
-	if len(store.deleteLog) != 1 || store.deleteLog[0] != 1 {
-		t.Errorf("expected delete for index 1, got %v", store.deleteLog)
+	// Verify delete was called for the deleted message's 1-based index in the
+	// fresh UPDATE listing (uid-002 sits at index 2 of [uid-001 uid-002 uid-003]).
+	if len(store.deleteLog) != 1 || store.deleteLog[0] != 2 {
+		t.Errorf("expected delete for resolved index 2, got %v", store.deleteLog)
 	}
 }
 
@@ -680,11 +681,13 @@ func TestRSETCommandError(t *testing.T) {
 	sendCmd(t, conn, reader, "USER test")
 	sendCmd(t, conn, reader, "PASS pass")
 
-	// Now make ListMessages fail for RSET
+	// Now make ListMessages fail; RSET must still succeed because it only
+	// unmarks deletions and does not consult the store (RFC 1939 §3: RSET does
+	// not re-list the maildrop; in-session LIST serves the login snapshot).
 	store.listErr = fmt.Errorf("db error")
 	resp := sendCmd(t, conn, reader, "RSET")
-	if !strings.HasPrefix(resp, "-ERR") {
-		t.Errorf("RSET with error: expected -ERR, got %s", resp)
+	if !strings.HasPrefix(resp, "+OK") {
+		t.Errorf("RSET with failing store: expected +OK (RSET does not re-list), got %s", resp)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,10 @@ import (
 
 // idCounter is used to ensure unique IDs even when called rapidly
 var idCounter uint64
+
+// maxJMAPAPIRequestBodySize bounds the JSON method-call request body,
+// mirroring handleUpload's upload budget.
+const maxJMAPAPIRequestBodySize = 32 << 20 // 32 MiB
 
 // Server represents a JMAP server
 type Server struct {
@@ -233,9 +238,17 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse request body
-	body, err := io.ReadAll(r.Body)
+	// Parse request body. The API endpoint must enforce the same class of
+	// budget as handleUpload: without a cap, any authenticated user can make
+	// the server buffer an unbounded request body (memory exhaustion).
+	limitedBody := http.MaxBytesReader(w, r.Body, maxJMAPAPIRequestBodySize)
+	body, err := io.ReadAll(limitedBody)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			s.sendError(w, http.StatusRequestEntityTooLarge, "requestTooLarge", nil)
+			return
+		}
 		s.sendError(w, http.StatusBadRequest, "invalidArguments", nil)
 		return
 	}

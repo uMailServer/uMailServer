@@ -101,19 +101,23 @@ func (d *Diagnostics) checkMX(domain string) ([]DNSCheckResult, error) {
 		return results, nil
 	}
 
-	// Check the primary MX record
+	// Check the primary MX record. net.LookupMX returns fully-qualified names
+	// ending in a dot ("mail.example.com."); normalize before comparing or a
+	// compliant MX record is misreported as pointing at a foreign host.
+	// (checkPTR does the same for its PTR names.)
 	primaryMX := mxRecords[0]
+	mxHost := strings.TrimSuffix(primaryMX.Host, ".")
 	expectedHost := ""
 	if d.config != nil {
 		expectedHost = d.config.Server.Hostname
 	}
 
-	if strings.EqualFold(primaryMX.Host, expectedHost) {
+	if strings.EqualFold(mxHost, expectedHost) {
 		results = append(results, DNSCheckResult{
 			RecordType: "MX",
 			RecordName: domain,
 			Expected:   expectedHost,
-			Found:      primaryMX.Host,
+			Found:      mxHost,
 			Status:     "pass",
 			Message:    fmt.Sprintf("MX record points to this server (priority: %d)", primaryMX.Pref),
 		})
@@ -122,9 +126,9 @@ func (d *Diagnostics) checkMX(domain string) ([]DNSCheckResult, error) {
 			RecordType: "MX",
 			RecordName: domain,
 			Expected:   expectedHost,
-			Found:      primaryMX.Host,
+			Found:      mxHost,
 			Status:     "warning",
-			Message:    fmt.Sprintf("MX record points to different host: %s", primaryMX.Host),
+			Message:    fmt.Sprintf("MX record points to different host: %s", mxHost),
 		})
 	}
 

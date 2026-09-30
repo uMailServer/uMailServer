@@ -78,7 +78,7 @@ func TestDecryptRejectsWrongPassword(t *testing.T) {
 
 // TestEncryptOnDiskLayout pins the wire layout Encrypt produces, so the two
 // halves of the pair cannot silently drift apart again:
-// salt(16) + nonce(gcm.NonceSize()) + ciphertext(len + GCM tag).
+// "BK"(2) + version(1) + salt(16) + nonce(gcm.NonceSize()) + ciphertext(len + GCM tag).
 func TestEncryptOnDiskLayout(t *testing.T) {
 	dir := t.TempDir()
 	plaintext := []byte("layout probe")
@@ -88,10 +88,10 @@ func TestEncryptOnDiskLayout(t *testing.T) {
 		t.Fatalf("stat encrypted file: %v", err)
 	}
 
-	// AES-256-GCM: 12-byte nonce, 16-byte tag.
-	const want = 16 /*salt*/ + 12 /*nonce*/ + 16 /*tag*/
+	// v2 envelope: "BK" magic + version byte; AES-256-GCM: 12-byte nonce, 16-byte tag.
+	const want = 2 /*magic*/ + 1 /*version*/ + 16 /*salt*/ + 12 /*nonce*/ + 16 /*tag*/
 	if got := int(info.Size()); got != len(plaintext)+want {
-		t.Fatalf("encrypted size = %d, want %d (salt 16 + nonce 12 + ciphertext %d)",
+		t.Fatalf("encrypted size = %d, want %d (magic 2 + version 1 + salt 16 + nonce 12 + ciphertext %d)",
 			got, len(plaintext)+want, len(plaintext))
 	}
 }

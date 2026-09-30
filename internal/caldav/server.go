@@ -248,11 +248,14 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		return
 	}
 
-	// Extract UID from ICS if available, otherwise use path
-	uid := extractUIDFromICS(icsData)
-	if uid == "" {
-		uid = eventUID
+	// RFC 4791 §5.3.2: the request-URI names the resource, so its UID is
+	// authoritative. A body UID that differs would store the event at an
+	// address the client cannot address back, so reject the mismatch.
+	if bodyUID := extractUIDFromICS(icsData); bodyUID != "" && bodyUID != eventUID {
+		s.sendError(w, http.StatusForbidden, "UID in request URL does not match UID in calendar data")
+		return
 	}
+	uid := eventUID
 
 	// Create event
 	event := &CalendarEvent{
@@ -550,7 +553,7 @@ func (s *Server) buildPrincipalResponse(username string) Response {
 			Prop: []Property{
 				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <D:collection/>\n        <D:principal/>\n      "},
 				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: username},
-				{XMLName: xml.Name{Space: "CALDAV:", Local: "calendar-home-set"}, Value: fmt.Sprintf("<href>/dav/calendars/%s/</href>", username)},
+				{XMLName: xml.Name{Space: "CALDAV:", Local: "calendar-home-set"}, Value: "<href>/dav/calendars/</href>"},
 			},
 			Status: "HTTP/1.1 200 OK",
 		}},
@@ -560,7 +563,7 @@ func (s *Server) buildPrincipalResponse(username string) Response {
 // buildCalendarHomeResponse builds a response for the calendar home resource
 func (s *Server) buildCalendarHomeResponse(username string) Response {
 	return Response{
-		Href: fmt.Sprintf("/dav/calendars/%s/", username),
+		Href: "/dav/calendars/",
 		Propstat: []Propstat{{
 			Prop: []Property{
 				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<D:collection/>"},
@@ -573,7 +576,10 @@ func (s *Server) buildCalendarHomeResponse(username string) Response {
 
 // buildCalendarResponse builds a response for a calendar resource
 func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response {
-	href := fmt.Sprintf("/dav/calendars/%s/%s/", username, cal.ID)
+	// Hrefs follow the server's request convention "/dav/calendars/{calendarID}/"
+	// (the authenticated username scopes storage and is not part of the URL), so
+	// clients operating on these hrefs (RFC 4918 §8.3) reach the item handlers.
+	href := fmt.Sprintf("/dav/calendars/%s/", cal.ID)
 	etag := s.storage.GetCalendarETag(username, cal.ID)
 
 	return Response{
@@ -593,14 +599,16 @@ func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response 
 
 // handleCalendarPropfind handles PROPFIND for specific calendar paths
 func (s *Server) handleCalendarPropfind(path string, username string, multistatus *Multistatus) {
-	// Parse path: /dav/calendars/{username}/{calendarID}/{eventUID?}
+	// Parse path: /dav/calendars/{calendarID}/{eventUID?}
+	// Request convention matches the item handlers: the authenticated username
+	// scopes storage and is not part of the URL.
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	// Minimum path: /dav/calendars/{username}/{calendarID} = 4 parts
-	if len(parts) < 4 {
+	// Minimum path: /dav/calendars/{calendarID} = 3 parts
+	if len(parts) < 3 {
 		return
 	}
 
-	calendarID := parts[3]
+	calendarID := parts[2]
 	if calendarID == "" {
 		return
 	}
@@ -612,7 +620,7 @@ func (s *Server) handleCalendarPropfind(path string, username string, multistatu
 	}
 
 	// If it's just the calendar, return calendar info
-	if len(parts) == 4 || (len(parts) == 5 && parts[4] == "") {
+	if len(parts) == 3 || (len(parts) == 4 && parts[3] == "") {
 		multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
 
 		// Also include events
@@ -627,18 +635,20 @@ func (s *Server) handleCalendarPropfind(path string, username string, multistatu
 	}
 
 	// Specific event
-	if len(parts) >= 5 {
-		eventUID := parts[4]
-		eventData, err := s.storage.GetEvent(username, calendarID, eventUID)
-		if err == nil && eventData != "" {
-			multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, eventUID, eventData))
-		}
+	eventUID := parts[3]
+	if eventUID == "" {
+		return
+	}
+	eventData, err := s.storage.GetEvent(username, calendarID, eventUID)
+	if err == nil && eventData != "" {
+		multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, eventUID, eventData))
 	}
 }
 
 // buildEventResponse builds a response for a calendar event
 func (s *Server) buildEventResponse(username, calendarID, eventUID, eventData string) Response {
-	href := fmt.Sprintf("/dav/calendars/%s/%s/%s", username, calendarID, eventUID)
+	// Request convention: "/dav/calendars/{calendarID}/{eventUID}" (no username segment).
+	href := fmt.Sprintf("/dav/calendars/%s/%s", calendarID, eventUID)
 	etag := s.storage.GetETag(username, calendarID, eventUID)
 
 	return Response{
@@ -662,7 +672,9 @@ func extractUIDFromICS(icsData string) string {
 	lines := strings.Split(icsData, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "UID:") {
-			return strings.TrimPrefix(line, "UID:")
+			// RFC 5545 §3.1 lines end with CRLF; strip the carriage return so
+			// the UID matches the request-URL identifier (RFC 4791 §5.3.2).
+			return strings.TrimSuffix(strings.TrimPrefix(line, "UID:"), "\r")
 		}
 	}
 	return ""

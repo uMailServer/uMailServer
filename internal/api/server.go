@@ -498,11 +498,11 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/send", http.HandlerFunc(s.mailHandler.handleMailSend).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/delete", http.HandlerFunc(s.mailHandler.handleMailDelete).ServeHTTP)
 
-	// Cluster management (HA)
-	api.HandleFunc("/api/v1/cluster/status", s.handleClusterStatus)
-	api.HandleFunc("/api/v1/cluster/instances", s.handleClusterInstances)
-	api.HandleFunc("/api/v1/cluster/failover", s.handleClusterFailover)
-	api.HandleFunc("/api/v1/cluster/heartbeat", s.handleClusterHeartbeat)
+	// Cluster management (HA) — administrative operations, admin only
+	api.HandleFunc("/api/v1/cluster/status", s.adminMiddleware(http.HandlerFunc(s.handleClusterStatus)).ServeHTTP)
+	api.HandleFunc("/api/v1/cluster/instances", s.adminMiddleware(http.HandlerFunc(s.handleClusterInstances)).ServeHTTP)
+	api.HandleFunc("/api/v1/cluster/failover", s.adminMiddleware(http.HandlerFunc(s.handleClusterFailover)).ServeHTTP)
+	api.HandleFunc("/api/v1/cluster/heartbeat", s.adminMiddleware(http.HandlerFunc(s.handleClusterHeartbeat)).ServeHTTP)
 
 	// Wrap API with auth middleware and mount to main mux
 	apiHandler := s.rateLimitMiddleware(s.limitBodyMiddleware(s.securityHeadersMiddleware(s.csrfMiddleware(s.corsMiddleware(s.authMiddleware(api))))))
@@ -949,9 +949,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.sendJSON(w, http.StatusOK, stats)
 }
 
-// SetQueueManager injects the queue manager for stats
+// SetQueueManager injects the queue manager for stats and wires it into the
+// mail handler so webmail sends are queued for delivery (idempotent; safe in
+// any setter order).
 func (s *Server) SetQueueManager(qm *queue.Manager) {
 	s.queueMgr = qm
+	s.initMailHandler()
 }
 
 // SetHealthMonitor sets the health monitor for health endpoints
@@ -978,6 +981,9 @@ func (s *Server) initMailHandler() {
 		s.mailHandler.SetStorage(s.msgStore, s.mailDB)
 	} else if s.mailHandler != nil {
 		s.mailHandler.SetStorage(s.msgStore, s.mailDB)
+	}
+	if s.mailHandler != nil && s.queueMgr != nil {
+		s.mailHandler.SetQueueManager(s.queueMgr)
 	}
 }
 

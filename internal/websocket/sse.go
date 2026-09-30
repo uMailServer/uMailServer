@@ -29,6 +29,11 @@ type SSEClient struct {
 	flusher   http.Flusher
 	stop      chan struct{}
 	subscribe chan imap.MailboxNotification
+
+	// writeMu serializes every writer (the handler goroutine's heartbeats and
+	// notification events, plus Broadcast/SendToUser/SendToAdmins callers):
+	// http.ResponseWriter is not safe for concurrent use.
+	writeMu sync.Mutex
 }
 
 // NewSSEServer creates a new SSE server
@@ -211,6 +216,12 @@ func (s *SSEServer) sendEvent(client *SSEClient, event string, data interface{})
 		s.logger.Error("Failed to marshal SSE event", "error", err)
 		return
 	}
+
+	// Serialize concurrent writers (the handler goroutine vs Broadcast/
+	// SendToUser/SendToAdmins callers): http.ResponseWriter is not safe for
+	// concurrent use, and interleaved writes tear SSE frames.
+	client.writeMu.Lock()
+	defer client.writeMu.Unlock()
 
 	if _, err := fmt.Fprintf(client.writer, "event: %s\n", event); err != nil {
 		s.logger.Debug("failed to write SSE event", "error", err)

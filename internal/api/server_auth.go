@@ -439,8 +439,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 			return
 		}
-		// Replay protection: reject reuse of the same or older time step
-		if step < account.TOTPLastUsedStep {
+		// Replay protection: reject reuse of the same or older time step.
+		// RFC 6238 §5.2: an OTP must be accepted only once.
+		if step <= account.TOTPLastUsedStep {
 			s.recordTOTPFailure(req.Email)
 			s.recordAccountLoginFailure(emailKey)
 			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_replay")

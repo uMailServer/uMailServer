@@ -105,6 +105,7 @@ type Session struct {
 	state             State
 	user              string
 	messages          []*Message
+	deletedUIDs       map[string]bool // UIDs marked DELE this session (RFC 1939 §3)
 	isTLS             bool
 	greetingTimestamp string // Timestamp from greeting banner
 
@@ -388,6 +389,7 @@ func NewSession(conn net.Conn, server *Server) *Session {
 		server:            server,
 		greetingTimestamp: fmt.Sprintf("%d.%s", timestamp, secret),
 		state:             StateAuthorization,
+		deletedUIDs:       make(map[string]bool),
 	}
 }
 
@@ -723,7 +725,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		var count int
 		var totalSize int64
 		for _, msg := range s.messages {
-			if msg != nil {
+			if msg != nil && !s.deletedUIDs[msg.UID] {
 				count++
 				totalSize += msg.Size
 			}
@@ -735,7 +737,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 			// List all messages
 			s.WriteResponse("+OK")
 			for i, msg := range s.messages {
-				if msg != nil {
+				if msg != nil && !s.deletedUIDs[msg.UID] {
 					s.WriteDataLine(fmt.Sprintf("%d %d", i+1, msg.Size))
 				}
 			}
@@ -748,7 +750,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 				return nil
 			}
 			msg := s.messages[index-1]
-			if msg == nil {
+			if msg == nil || s.deletedUIDs[msg.UID] {
 				s.WriteResponse("-ERR Message deleted")
 				return nil
 			}
@@ -767,7 +769,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		}
 
 		msg := s.messages[index-1]
-		if msg == nil {
+		if msg == nil || s.deletedUIDs[msg.UID] {
 			s.WriteResponse("-ERR Message deleted")
 			return nil
 		}
@@ -806,26 +808,24 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 			return nil
 		}
 
-		if s.messages[index-1] == nil {
+		msg := s.messages[index-1]
+		if s.deletedUIDs[msg.UID] {
 			s.WriteResponse("-ERR Message already deleted")
 			return nil
 		}
 
-		// Mark for deletion (will be deleted in UPDATE state)
-		s.messages[index-1] = nil
+		// Mark for deletion by UID (applied to the maildrop in UPDATE state;
+		// RFC 1939 §3 — the message number stays valid for the session).
+		s.deletedUIDs[msg.UID] = true
 		s.WriteResponse("+OK")
 
 	case "NOOP":
 		s.WriteResponse("+OK")
 
 	case "RSET":
-		// Unmark all deleted messages
-		messages, err := s.server.mailstore.ListMessages(s.user)
-		if err != nil {
-			s.WriteResponse("-ERR Unable to reset")
-			return nil
-		}
-		s.messages = messages
+		// Unmark all deleted messages (RFC 1939 §4: RSET only unmarks; the
+		// session's message numbers and maildrop snapshot stay unchanged).
+		s.deletedUIDs = make(map[string]bool)
 		s.WriteResponse("+OK")
 
 	case "UIDL":
@@ -833,7 +833,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 			// List all UIDs
 			s.WriteResponse("+OK")
 			for i, msg := range s.messages {
-				if msg != nil {
+				if msg != nil && !s.deletedUIDs[msg.UID] {
 					s.WriteDataLine(fmt.Sprintf("%d %s", i+1, msg.UID))
 				}
 			}
@@ -846,7 +846,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 				return nil
 			}
 			msg := s.messages[index-1]
-			if msg == nil {
+			if msg == nil || s.deletedUIDs[msg.UID] {
 				s.WriteResponse("-ERR Message deleted")
 				return nil
 			}
@@ -871,7 +871,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		}
 
 		msg := s.messages[index-1]
-		if msg == nil {
+		if msg == nil || s.deletedUIDs[msg.UID] {
 			s.WriteResponse("-ERR Message deleted")
 			return nil
 		}
@@ -918,10 +918,17 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 
 // handleUpdateCommand handles commands in UPDATE state
 func (s *Session) handleUpdateCommand(command string, args []string) error {
-	// Delete all marked messages
-	for i, msg := range s.messages {
-		if msg == nil {
-			_ = s.server.mailstore.DeleteMessage(s.user, i)
+	// RFC 1939 §4: remove the messages marked with DELE. Resolve against a
+	// FRESH listing so indexes match the current maildrop — the login-time
+	// snapshot's indexes go stale as the maildrop changes.
+	current, err := s.server.mailstore.ListMessages(s.user)
+	if err != nil {
+		s.WriteResponse("-ERR Unable to update maildrop")
+		return nil
+	}
+	for i, msg := range current {
+		if msg != nil && s.deletedUIDs[msg.UID] {
+			_ = s.server.mailstore.DeleteMessage(s.user, i+1) // 1-based
 		}
 	}
 

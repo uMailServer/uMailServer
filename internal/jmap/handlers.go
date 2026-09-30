@@ -443,9 +443,15 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 		sortMessages(allMessages, comp)
 	}
 
-	// Apply position and limit
+	// Apply position and limit. position is a client-supplied offset and may
+	// arrive negative. Clamping only the upper bound would leave start
+	// negative and make the ids loop a negative-index panic, so floor it at
+	// 0 first.
 	total := len(allMessages)
 	start := int(position)
+	if start < 0 {
+		start = 0
+	}
 	if start > total {
 		start = total
 	}
@@ -594,6 +600,44 @@ func sortMessages(messages []struct {
 	})
 }
 
+// jmapKeywordToIMAPFlag maps a JMAP keyword to its IMAP system flag.
+// Keywords without a system-flag equivalent (and keywords this server does
+// not model) are reported as unmapped.
+func jmapKeywordToIMAPFlag(keyword string) (string, bool) {
+	switch keyword {
+	case "$seen":
+		return "\\Seen", true
+	case "$answered":
+		return "\\Answered", true
+	case "$flagged":
+		return "\\Flagged", true
+	case "$draft":
+		return "\\Draft", true
+	}
+	return "", false
+}
+
+// hasIMAPFlag reports whether flags already contains want.
+func hasIMAPFlag(flags []string, want string) bool {
+	for _, f := range flags {
+		if f == want {
+			return true
+		}
+	}
+	return false
+}
+
+// removeIMAPFlag returns flags without want, preserving order.
+func removeIMAPFlag(flags []string, want string) []string {
+	out := flags[:0]
+	for _, f := range flags {
+		if f != want {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // handleEmailSet handles Email/set method
 func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 	args := call.Args
@@ -668,25 +712,54 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			continue
 		}
 
-		// Update keywords (flags)
+		// Update keywords (flags). RFC 8620 §4.3 patches the Email with a
+		// PatchObject: the "keywords" property form is a full property set
+		// (replace), while the "keywords/$name" path form adds or removes a
+		// single keyword and preserves the rest. Both forms are honoured; the
+		// path form alone used to be silently ignored.
 		if keywords, ok := updateData["keywords"].(map[string]interface{}); ok {
 			// Convert JMAP keywords to IMAP flags
 			newFlags := []string{}
 			for kw, val := range keywords {
 				if b, ok := val.(bool); ok && b {
-					switch kw {
-					case "$seen":
-						newFlags = append(newFlags, "\\Seen")
-					case "$answered":
-						newFlags = append(newFlags, "\\Answered")
-					case "$flagged":
-						newFlags = append(newFlags, "\\Flagged")
-					case "$draft":
-						newFlags = append(newFlags, "\\Draft")
+					if flag, ok := jmapKeywordToIMAPFlag(kw); ok {
+						newFlags = append(newFlags, flag)
 					}
 				}
 			}
 			meta.Flags = newFlags
+		}
+		for key, val := range updateData {
+			const keywordPathPrefix = "keywords/"
+			if !strings.HasPrefix(key, keywordPathPrefix) {
+				continue
+			}
+			flag, ok := jmapKeywordToIMAPFlag(strings.TrimPrefix(key, keywordPathPrefix))
+			if !ok {
+				continue
+			}
+			// null (JSON null) or false removes the keyword; true adds it.
+			// Anything else is an invalid patch value — RFC 8620 §4.3 requires
+			// such an update to be rejected with invalidPatch instead of being
+			// silently treated as a removal.
+			if val == nil {
+				meta.Flags = removeIMAPFlag(meta.Flags, flag)
+				continue
+			}
+			if set, isBool := val.(bool); isBool {
+				if set {
+					if !hasIMAPFlag(meta.Flags, flag) {
+						meta.Flags = append(meta.Flags, flag)
+					}
+				} else {
+					meta.Flags = removeIMAPFlag(meta.Flags, flag)
+				}
+				continue
+			}
+			notUpdated[emailID] = map[string]interface{}{
+				"type": "invalidPatch",
+			}
+			continue
 		}
 
 		// Update mailboxIds (move message)
@@ -701,6 +774,18 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			}
 
 			if newMbox != "" && newMbox != targetMbox {
+				// RFC 8620 §2.3: the destination mailbox must exist; RFC 8621
+				// §4.4 requires such moves to fail with "mailboxNotFound".
+				// getMailboxNameFromID passes unknown ids through verbatim,
+				// so without this check the storage layer would silently
+				// materialize a phantom mailbox (CreateBucketIfNotExists).
+				if !s.mailboxExists(user, newMbox) {
+					notUpdated[emailID] = map[string]interface{}{
+						"type": "mailboxNotFound",
+					}
+					continue
+				}
+
 				// Move message to new mailbox
 				// Store in new mailbox
 				newUID, _ := s.db.GetNextUID(user, newMbox)
@@ -792,6 +877,22 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 	}
 }
 
+// mailboxExists reports whether the user's account has a mailbox with this
+// name. GetMailbox cannot answer this — it synthesizes a default Mailbox for
+// missing buckets — so existence is checked against ListMailboxes.
+func (s *Server) mailboxExists(user, name string) bool {
+	mailboxes, err := s.db.ListMailboxes(user)
+	if err != nil {
+		return false
+	}
+	for _, m := range mailboxes {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
 // handleEmailImport handles Email/import method
 func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 	args := call.Args
@@ -843,6 +944,19 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 		if targetMbox == "" {
 			targetMbox = "INBOX"
 			mboxIDs["inbox"] = true
+		}
+
+		// RFC 8620 §2.3: mailboxIds reference existing Mailbox objects, and
+		// RFC 8621 §4.4 requires the import to fail with "mailboxNotFound"
+		// otherwise. getMailboxNameFromID passes unknown ids through
+		// verbatim, so without this check the storage layer would silently
+		// materialize a phantom mailbox (CreateBucketIfNotExists).
+		if !s.mailboxExists(user, targetMbox) {
+			notCreated[key] = map[string]interface{}{
+				"type":        "mailboxNotFound",
+				"description": fmt.Sprintf("Mailbox %s not found", targetMbox),
+			}
+			continue
 		}
 
 		// Retrieve blob data from message store
@@ -1203,13 +1317,15 @@ func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 
 	notDestroyed := make(map[string]interface{})
 	for _, id := range destroy {
+		// Identities are read-only (derived from account settings), so every
+		// destroy is rejected — and RFC 8620 §5.3 requires EVERY requested id
+		// to be reported in destroyed or notDestroyed. The old code reported
+		// only the literal "default" id and dropped all others from the
+		// response entirely.
 		if idStr, ok := id.(string); ok {
-			// Allow deleting only if it's not the default identity
-			if idStr == "default" {
-				notDestroyed[idStr] = map[string]interface{}{
-					"type":    "notSupported",
-					"message": "Cannot delete the default identity.",
-				}
+			notDestroyed[idStr] = map[string]interface{}{
+				"type":    "notSupported",
+				"message": "Identity deletion is not supported. Identities are derived from account settings.",
 			}
 		}
 	}

@@ -220,11 +220,13 @@ func (m *Manager) Stop() {
 	}
 	m.running.Store(false)
 	m.stopOnce.Do(func() {
+		// Signal workers to stop. deliveryChan is intentionally NOT closed:
+		// Enqueue (called by generateBounce on workers and by mail acceptance)
+		// and sweepPendingEntries may still send — a send on a closed channel
+		// panics even inside select-with-default, crashing the process during
+		// graceful shutdown. Entries sent around shutdown simply stay pending
+		// in the database and are retried on the next Start.
 		close(m.shutdown)
-		// Close delivery channel to signal workers to stop
-		if m.deliveryChan != nil {
-			close(m.deliveryChan)
-		}
 	})
 }
 
@@ -1024,7 +1026,10 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 	if m.db != nil {
 		if entry.From == "" {
 			m.logger.Warn("cannot send bounce: original message had null sender (MAIL FROM:<>), message lost", "entry_id", entry.ID)
-		} else if _, enqueueErr := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, bounceMsg); enqueueErr != nil {
+		} else if _, enqueueErr := m.Enqueue("", []string{entry.From}, bounceMsg); enqueueErr != nil {
+			// RFC 5321 §4.5.5: failure notifications MUST use a null return
+			// path. A failing bounce is then dropped by the null-sender guard
+			// above instead of generating another bounce to ourselves.
 			m.logger.Error("failed to enqueue bounce message", "error", enqueueErr)
 		}
 	}
