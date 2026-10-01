@@ -127,6 +127,7 @@ type Server struct {
 type Config struct {
 	Addr              string
 	JWTSecret         string            // Legacy single secret (used if JWTSecretVersions not set)
+	MaxLoginAttempts  int               // Max login attempts per IP before exponential lockout (0 = default 5)
 	JWTSecretVersions map[string]string // kid -> secret, for key rotation
 	DisableLegacyJWT  bool              // When true, disables fallback to legacy JWTSecret after kid rotation
 	TokenExpiry       time.Duration

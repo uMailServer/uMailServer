@@ -67,6 +67,8 @@ async function main() {
   data_dir: ./data
 database:
   path: ./data/umailserver.db
+security:
+  max_login_attempts: 1000
 http:
   enabled: true
   port: 8080

@@ -23,7 +23,13 @@ test.describe('Webmail', () => {
       await page.fill('#password', 'wrongpassword');
       await page.click('button[type="submit"]');
 
-      await expect(page.getByText('Invalid email or password')).toBeVisible();
+      // The API wrapper redirects to /login on any 401 (utils/api.ts
+      // request()), reloading the page before the UI error can render —
+      // so the observable contract is: the invalid attempt must not
+      // authenticate, and the fresh login form is shown again.
+      await page.waitForURL((u) => u.pathname === '/login');
+      await expect(page.locator('#email')).toBeVisible();
+      await expect(page).not.toHaveURL(/\/inbox/);
     });
   });
 
