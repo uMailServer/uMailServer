@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/umailserver/umailserver/internal/auth"
@@ -498,8 +497,15 @@ func (s *Session) handleDATA() error {
 		s.data = data
 	}
 
-	// Add Message-ID if not present
-	if !bytes.Contains(bytes.ToLower(data), []byte("message-id:")) {
+	// Add Message-ID if not present. The search must be scoped to the header
+	// block: a "message-id:" occurring in the body is quoted text (ordinary
+	// in forwards and replies), not this message's identifier, and must not
+	// suppress the header. RFC 5322 §3.6.4.
+	headerScope := data
+	if idx := bytes.Index(data, []byte("\r\n\r\n")); idx >= 0 {
+		headerScope = data[:idx]
+	}
+	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
 		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", s.id, s.server.config.Hostname)
 		data = append([]byte(msgID), data...)
 		s.data = data
@@ -556,12 +562,6 @@ func (s *Session) readData() ([]byte, error) {
 			return nil, fmt.Errorf("message contains null bytes")
 		}
 
-		// RFC 3629: validate UTF-8 well-formedness in message data
-		// Lines that are not valid UTF-8 should be rejected per RFC 6532
-		if !utf8.Valid(line) {
-			return nil, fmt.Errorf("message contains invalid UTF-8 sequence")
-		}
-
 		// Check for end of data marker
 		if len(line) >= 3 && line[0] == '.' && line[1] == '\r' && line[2] == '\n' {
 			break
@@ -611,8 +611,13 @@ func (s *Session) handleBDAT(arg string) error {
 		s.bdatBuffer = &bytes.Buffer{}
 	}
 
-	// Check cumulative size against limit
-	if int64(s.bdatBuffer.Len()+size) > s.server.config.MaxMessageSize {
+	// Check cumulative size against limit. Compare by subtraction rather than by
+	// adding bufLen+size: a large declared chunk size would overflow that sum
+	// (in int or in int64) to a negative value and defeat the guard, letting the
+	// make() below run with an attacker-chosen length. bdatBuffer.Len() is always
+	// <= MaxMessageSize because every previous chunk passed this same check, so
+	// the subtraction cannot underflow.
+	if int64(size) > s.server.config.MaxMessageSize-int64(s.bdatBuffer.Len()) {
 		s.bdatBuffer = nil
 		s.resetTransaction()
 		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
@@ -877,17 +882,17 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 				m.SMTPAuthFailure()
 			}
 			if s.server.onLoginResult != nil {
-				s.server.onLoginResult(username, false, getIPFromAddr(s.conn.RemoteAddr().String()), "invalid_credentials")
+				s.server.onLoginResult(usernameNormalized, false, getIPFromAddr(s.conn.RemoteAddr().String()), "invalid_credentials")
 			}
 			return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 		}
 	}
 
 	s.isAuth = true
-	s.username = username
+	s.username = usernameNormalized
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 	if s.server.onLoginResult != nil {
-		s.server.onLoginResult(username, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
+		s.server.onLoginResult(usernameNormalized, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
 	}
 
 	return s.WriteResponse(235, "Authentication successful")
@@ -958,7 +963,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	s.username = usernameNormalized
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 	if s.server.onLoginResult != nil {
-		s.server.onLoginResult(username, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
+		s.server.onLoginResult(usernameNormalized, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
 	}
 
 	return s.WriteResponse(235, "Authentication successful")
@@ -1006,6 +1011,9 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		return s.WriteResponse(501, "5.5.4 Missing username in SCRAM-SHA-256")
 	}
+	// Canonical identity for lookups, session state, and audit callbacks —
+	// the same UsernameCaseMapped normalization PLAIN and LOGIN apply.
+	usernameNormalized := strings.ToLower(username)
 
 	// Generate server nonce and salt
 	serverNonce, err := auth.GenerateNonce()
@@ -1062,7 +1070,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	// Get user password for SCRAM
 	var password string
 	if s.server.onGetPassword != nil {
-		password, err = s.server.onGetPassword(username)
+		password, err = s.server.onGetPassword(usernameNormalized)
 		if err != nil {
 			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 			return s.WriteResponse(535, "5.5.4 Authentication failed")
@@ -1090,7 +1098,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	if !hmac.Equal(clientFinalMsg.ClientProof, expectedProof) {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		if s.server.onLoginResult != nil {
-			s.server.onLoginResult(username, false, getIPFromAddr(s.conn.RemoteAddr().String()), "invalid_credentials")
+			s.server.onLoginResult(usernameNormalized, false, getIPFromAddr(s.conn.RemoteAddr().String()), "invalid_credentials")
 		}
 		return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 	}
@@ -1105,7 +1113,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 
 	// Authentication successful
 	s.isAuth = true
-	s.username = strings.ToLower(username)
+	s.username = usernameNormalized
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(s.username, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")

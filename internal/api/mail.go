@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/storage"
 )
 
@@ -40,6 +41,14 @@ type SendMailRequest struct {
 type MailHandler struct {
 	msgStore *storage.MessageStore
 	mailDB   *storage.Database
+	queueMgr *queue.Manager
+}
+
+// SetQueueManager wires the outbound delivery queue so sent messages are
+// actually delivered. When unset, handleMailSend keeps the legacy
+// store-to-Sent-only behavior.
+func (h *MailHandler) SetQueueManager(qm *queue.Manager) {
+	h.queueMgr = qm
 }
 
 // NewMailHandler creates a new mail handler
@@ -417,6 +426,7 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	safeSubject := sanitizeHeaderValue(req.Subject)
 	safeTo := sanitizeHeaderValues(req.To)
 	safeCC := sanitizeHeaderValues(req.CC)
+	safeBCC := sanitizeHeaderValues(req.BCC)
 
 	// Build headers
 	var sb strings.Builder
@@ -433,6 +443,18 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString(req.Body)
 
 	rawEmail := sb.String()
+
+	// Queue the message for outbound delivery to all envelope recipients
+	// (To, Cc, Bcc). Bcc addresses must not appear in the message headers
+	// but still receive the mail. Without a wired queue (direct-handler
+	// tests), keep the legacy store-to-Sent-only behavior.
+	if h.queueMgr != nil {
+		recipients := append(append(append([]string{}, safeTo...), safeCC...), safeBCC...)
+		if _, err := h.queueMgr.Enqueue(userEmail, recipients, []byte(rawEmail)); err != nil {
+			h.sendError(w, http.StatusInternalServerError, "Failed to queue message for delivery")
+			return
+		}
+	}
 
 	// Store the message
 	var msgID string

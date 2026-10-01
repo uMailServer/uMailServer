@@ -14,6 +14,7 @@ func (s *Server) startAPI() {
 		JWTSecret:        s.config.Security.JWTSecret,
 		DisableLegacyJWT: s.config.Security.DisableLegacyJWT,
 		TOTPKey:          s.config.Security.TOTPKey,
+		MaxLoginAttempts: s.config.Security.MaxLoginAttempts,
 		CorsOrigins:      s.config.HTTP.CorsOrigins,
 		PasswordHasher:   "bcrypt", // or "argon2id" (OWASP recommended)
 		AuditLog: api.AuditLogConfig{

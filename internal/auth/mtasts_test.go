@@ -130,7 +130,10 @@ func TestMatchMX(t *testing.T) {
 		{"*.example.com", "mail.example.com", true},
 		{"*.example.com", "mx.example.com", true},
 		{"*.example.com", "mail.other.com", false},
-		{"*.example.com", "example.com", true}, // *.example.com matches example.com too
+		// RFC 8461 section 4.1: a wildcard matches only the entire left-most
+		// label, so it does NOT match the apex or any deeper name.
+		{"*.example.com", "example.com", false},
+		{"*.example.com", "foo.bar.example.com", false},
 
 		// Case insensitivity
 		{"MAIL.EXAMPLE.COM", "mail.example.com", true},

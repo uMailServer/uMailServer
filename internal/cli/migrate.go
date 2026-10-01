@@ -242,7 +242,12 @@ func extractIMAPMessageData(msg *extimap.Message) ([]byte, error) {
 	body := msg.GetBody(section)
 	if body != nil {
 		data := make([]byte, body.Len())
-		_, _ = body.Read(data)
+		// io.Reader.Read may return fewer bytes than requested (network
+		// segmentation); ReadFull loops until the buffer is full, so the
+		// migrated message is stored complete rather than truncated.
+		if _, err := io.ReadFull(body, data); err != nil {
+			return nil, fmt.Errorf("failed to read message body: %w", err)
+		}
 		return data, nil
 	}
 	return nil, fmt.Errorf("no body found in message")

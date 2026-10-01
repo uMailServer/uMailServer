@@ -41,6 +41,19 @@ func (s *BboltStore) ListMessages(user string) ([]*Message, error) {
 			continue
 		}
 
+		// RFC 1939 §4: messages flagged \Deleted (via POP3 DELE+UPDATE or an
+		// IMAP client) are no longer part of the POP3 maildrop view.
+		hasDeleted := false
+		for _, f := range meta.Flags {
+			if strings.EqualFold(f, "\\Deleted") || strings.EqualFold(f, "Deleted") {
+				hasDeleted = true
+				break
+			}
+		}
+		if hasDeleted {
+			continue
+		}
+
 		msg := &Message{
 			Index: i + 1, // 1-based index for POP3
 			UID:   fmt.Sprintf("%d", uid),

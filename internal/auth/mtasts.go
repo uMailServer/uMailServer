@@ -334,9 +334,21 @@ func matchMX(pattern, mx string) bool {
 	}
 
 	// Handle wildcard patterns (*.example.com)
+	//
+	// RFC 8461 section 4.1: "the wildcard character '*' may only be used to
+	// match the entire left-most label", so "*.example.com" matches
+	// "mail.example.com" but NOT "example.com" and NOT
+	// "foo.bar.example.com". Matching the apex or any deeper name would
+	// authorize MX hosts the receiving domain deliberately excluded from its
+	// policy.
 	if strings.HasPrefix(pattern, "*.") {
 		suffix := pattern[2:] // Remove "*."
-		return strings.HasSuffix(mx, "."+suffix) || mx == suffix
+		if !strings.HasSuffix(mx, "."+suffix) {
+			return false
+		}
+		// The remaining prefix must be exactly one label, non-empty.
+		label := strings.TrimSuffix(mx, "."+suffix)
+		return label != "" && !strings.Contains(label, ".")
 	}
 
 	return false

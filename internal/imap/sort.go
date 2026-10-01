@@ -116,25 +116,30 @@ func sortMessagesByCriteria(messages []*storage.MessageMetadata, criteria []Sort
 	// Sort by primary criterion
 	sort.SliceStable(sortable, func(i, j int) bool {
 		c := criteria[0]
-		var less bool
-		switch c.Field {
-		case "ARRIVAL":
-			less = sortable[i].arrival.Before(sortable[j].arrival)
-		case "DATE":
-			less = sortable[i].date.Before(sortable[j].date)
-		case "FROM":
-			less = strings.ToLower(sortable[i].from) < strings.ToLower(sortable[j].from)
-		case "SUBJECT":
-			less = strings.ToLower(sortable[i].subject) < strings.ToLower(sortable[j].subject)
-		case "SIZE":
-			less = sortable[i].size < sortable[j].size
-		case "UID":
-			less = sortable[i].uid < sortable[j].uid
+		ascending := func(a, b int) bool {
+			switch c.Field {
+			case "ARRIVAL":
+				return sortable[a].arrival.Before(sortable[b].arrival)
+			case "DATE":
+				return sortable[a].date.Before(sortable[b].date)
+			case "FROM":
+				return strings.ToLower(sortable[a].from) < strings.ToLower(sortable[b].from)
+			case "SUBJECT":
+				return strings.ToLower(sortable[a].subject) < strings.ToLower(sortable[b].subject)
+			case "SIZE":
+				return sortable[a].size < sortable[b].size
+			case "UID":
+				return sortable[a].uid < sortable[b].uid
+			}
+			return false
 		}
 		if c.Descending {
-			return !less
+			// Compare with the operands swapped rather than negating the result.
+			// Negating reports true for messages that compare equal, which is not
+			// a strict weak ordering and makes SliceStable reverse tied messages.
+			return ascending(j, i)
 		}
-		return less
+		return ascending(i, j)
 	})
 
 	// Extract sequence numbers

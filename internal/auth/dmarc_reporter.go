@@ -9,6 +9,24 @@ import (
 	"time"
 )
 
+// maxRetainedPerSourceIP bounds the per-source-IP detail retained for one
+// domain. RecordResult appends one element per message, and the only drain
+// (GenerateAndSendReport) has no production caller, so an unbounded slice grows
+// for the life of the process. Entry.Count already carries the message volume,
+// so retaining a small window of recent values is sufficient for reporting.
+const maxRetainedPerSourceIP = 10
+
+// appendBounded appends v to s, retaining only the most recent max elements.
+// It never reorders and keeps the newest value last, which is what BuildReport
+// consumes.
+func appendBounded(s []string, v string, max int) []string {
+	s = append(s, v)
+	if len(s) > max {
+		s = s[len(s)-max:]
+	}
+	return s
+}
+
 // DMARCReporter collects DMARC evaluation results and sends aggregate reports
 type DMARCReporter struct {
 	resolver  DNSResolver
@@ -91,9 +109,14 @@ func (r *DMARCReporter) RecordResult(domain string, eval *DMARCEvaluation, sourc
 	}
 
 	entry.Count++
-	entry.Dispositions = append(entry.Dispositions, eval.Disposition)
-	entry.SPFResults = append(entry.SPFResults, spfResult)
-	entry.DKIMResults = append(entry.DKIMResults, dkimResult)
+	// These slices are appended once per message, but they only ever feed
+	// BuildReport, which takes the most recent value of each. Without a bound
+	// the reporter retains one element per message forever: GenerateAndSendReport
+	// is the only drain and has no production caller, so memory grows with every
+	// message the server accepts. Entry.Count already carries the volume.
+	entry.Dispositions = appendBounded(entry.Dispositions, eval.Disposition, maxRetainedPerSourceIP)
+	entry.SPFResults = appendBounded(entry.SPFResults, spfResult, maxRetainedPerSourceIP)
+	entry.DKIMResults = appendBounded(entry.DKIMResults, dkimResult, maxRetainedPerSourceIP)
 	entry.HeaderFrom = domain
 }
 

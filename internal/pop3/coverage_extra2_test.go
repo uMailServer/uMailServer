@@ -44,7 +44,9 @@ func TestBboltStore_GetMessageDataBothFail(t *testing.T) {
 }
 
 func TestBboltStore_DeleteMessageWithPlainDeletedFlag(t *testing.T) {
-	// Test the branch where the message has "Deleted" (without backslash) flag
+	// Test the branch where the message has "Deleted" (without backslash) flag.
+	// Since the RFC 1939 §4 fix, messages flagged \Deleted (either spelling) are
+	// excluded from the POP3 maildrop view; an unflagged message stays visible.
 	tmpDir := t.TempDir()
 	db, err := storage.OpenDatabase(tmpDir + "/test.db")
 	if err != nil {
@@ -64,14 +66,24 @@ func TestBboltStore_DeleteMessageWithPlainDeletedFlag(t *testing.T) {
 		Size:      50,
 	}
 	db.StoreMessageMetadata(user, "INBOX", uid, meta)
+	kept := &storage.MessageMetadata{
+		MessageID: "keptmessage123456",
+		UID:       7,
+		Flags:     []string{"\\Seen"},
+		Size:      60,
+	}
+	db.StoreMessageMetadata(user, "INBOX", kept.UID, kept)
 
 	store := NewBboltStore(db, msgStore)
 	defer db.Close()
 	defer msgStore.Close()
 
-	err = store.DeleteMessage(user, 1)
+	messages, err := store.ListMessages(user)
 	if err != nil {
-		t.Fatalf("DeleteMessage with 'Deleted' flag failed: %v", err)
+		t.Fatalf("ListMessages failed: %v", err)
+	}
+	if len(messages) != 1 || messages[0].UID != "7" {
+		t.Fatalf("DeleteMessage-flag spelling filter: expected only UID 7 visible, got %v", messages)
 	}
 }
 

@@ -9,6 +9,11 @@ import (
 
 // startIMAP creates and starts the IMAP server.
 func (s *Server) startIMAP(mailstore *imap.BboltMailstore) error {
+	if !s.config.IMAP.Enabled {
+		s.logger.Info("IMAP disabled; skipping listener")
+		return nil
+	}
+
 	imapAddr := fmt.Sprintf("%s:%d", s.config.IMAP.Bind, s.config.IMAP.Port)
 	imapCfg := &imap.Config{
 		Addr:      imapAddr,

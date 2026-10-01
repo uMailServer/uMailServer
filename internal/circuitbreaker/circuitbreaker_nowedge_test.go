@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var noWedgeFail = fmt.Errorf("no-wedge probe failure")
+var errNoWedgeProbe = fmt.Errorf("no-wedge probe failure")
 
 // noWedgeBuild drives the breaker to open through the production Execute path,
 // expires the cooldown deterministically, then feeds a result sequence (bit 1 =
@@ -14,7 +14,7 @@ var noWedgeFail = fmt.Errorf("no-wedge probe failure")
 // it exercises exactly what production callers (e.g. queue's mxBreaker) use.
 func noWedgeBuild(n int, bits []int) *CircuitBreaker {
 	cb := New(Config{MaxFailures: 1, Timeout: time.Hour, SuccessThreshold: n, FailureThreshold: n})
-	_ = cb.Execute(func() error { return noWedgeFail }) // MaxFailures=1 -> open
+	_ = cb.Execute(func() error { return errNoWedgeProbe }) // MaxFailures=1 -> open
 	cb.mutex.Lock()
 	cb.lastFailure = time.Now().Add(-2 * time.Hour) // expire cooldown
 	cb.mutex.Unlock()
@@ -24,7 +24,7 @@ func noWedgeBuild(n int, bits []int) *CircuitBreaker {
 			if ok {
 				return nil
 			}
-			return noWedgeFail
+			return errNoWedgeProbe
 		})
 	}
 	return cb

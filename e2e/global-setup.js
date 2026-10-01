@@ -58,10 +58,17 @@ async function main() {
   // Run quickstart with retry
   await runQuickstartWithRetry(serverBin);
 
+  // Provision the fixture users the specs log in as
+  await provisionFixtureUsers(serverBin);
+
   // Create test config
   const testConfig = `server:
   hostname: localhost
   data_dir: ./data
+database:
+  path: ./data/umailserver.db
+security:
+  max_login_attempts: 1000
 http:
   enabled: true
   port: 8080
@@ -107,6 +114,48 @@ tls:
   await waitForServer(120000);
 
   console.log('=== E2E Setup Complete ===');
+
+  // Playwright runs this script as its webServer command, so the process
+  // must stay alive while the tests run — Playwright waits for BASE_URL,
+  // then terminates us when done. Expose the same behaviour if the server
+  // dies on its own, so a broken boot surfaces as "exited early".
+  await new Promise((resolve) => {
+    const shutdown = () => {
+      console.log('Shutting down server...');
+      try {
+        serverProc.kill('SIGTERM');
+      } catch (e) {
+        // Already exited
+      }
+      resolve();
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    serverProc.once('exit', (code) => {
+      console.log('Server process exited early (code ' + code + '); stopping webServer command.');
+      resolve();
+    });
+  });
+}
+
+const users = require('./fixtures/users.json');
+
+// The E2E specs log in as the fixture accounts; quickstart only creates the
+// admin, so provision the remaining users here (single password prompt).
+async function provisionFixtureUsers(serverBin) {
+  const isWindows = process.platform === 'win32';
+  const u = users.user;
+  console.log('Provisioning ' + u.email + '...');
+  await new Promise((resolve, reject) => {
+    const proc = spawn(serverBin, ['account', 'add', u.email, '-data-dir', './data'], {
+      cwd: E2E_DIR,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      shell: isWindows ? 'cmd' : false
+    });
+    proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error('account add ' + u.email + ' exited ' + code))));
+    proc.on('error', reject);
+    proc.stdin.write(u.password + '\n');
+  });
 }
 
 async function runQuickstartWithRetry(serverBin) {
@@ -122,7 +171,11 @@ async function runQuickstartWithRetry(serverBin) {
     }
 
     const result = await new Promise((resolve) => {
-      const proc = spawn(serverBin, ['quickstart', 'admin@example.com'], {
+      // Point quickstart at the same writable data dir the test config uses,
+      // so DKIM keys and state land in e2e/data instead of /var/lib/umailserver
+      // (hardcoded default; nonexistent and unwritable on CI runners), and at
+      // a writable -config path (the /etc default doesn't exist either).
+      const proc = spawn(serverBin, ['quickstart', '-config', './umailserver.yaml', '-data-dir', './data', 'admin@example.com'], {
         cwd: E2E_DIR,
         stdio: 'pipe',
         shell: isWindows ? 'cmd' : false
@@ -137,7 +190,7 @@ async function runQuickstartWithRetry(serverBin) {
           if (output.includes('Overwrite')) {
             proc.stdin.write('y\n');
           } else if (output.includes('Enter admin password')) {
-            proc.stdin.write('Admin123!\nAdmin123!\n');
+            proc.stdin.write(users.admin.password + '\n' + users.admin.password + '\n');
             passwordSent = true;
           }
         }

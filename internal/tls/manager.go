@@ -119,11 +119,23 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	return m.getManualCertificate(hello.ServerName)
 }
 
+// defaultCertCacheKey is the single cache slot holding the fallback
+// certificate (the one loaded from Config.CertFile/KeyFile). Serving it from
+// one fixed key instead of one key per requested SNI keeps the cache from
+// growing with every name an attacker sends in the ClientHello: SNI is
+// attacker-controlled and arrives before any authentication.
+const defaultCertCacheKey = "\x00default-cert"
+
 // getManualCertificate loads a certificate from file
 func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, error) {
 	// Check cache first (read lock)
 	m.certMu.RLock()
 	if cert, ok := m.certCache[serverName]; ok {
+		m.certMu.RUnlock()
+		return cert, nil
+	}
+	// Names without their own certificate share the fallback slot.
+	if cert, ok := m.certCache[defaultCertCacheKey]; ok {
 		m.certMu.RUnlock()
 		return cert, nil
 	}
@@ -134,6 +146,7 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 	keyPath := m.config.KeyFile
 
 	// If server-specific certs exist, use those
+	specific := false
 	if serverName != "" {
 		specificCert := filepath.Join(m.certDir, serverName+".crt")
 		specificKey := filepath.Join(m.certDir, serverName+".key")
@@ -142,6 +155,7 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 			if _, err := os.Stat(specificKey); err == nil {
 				certPath = specificCert
 				keyPath = specificKey
+				specific = true
 			}
 		}
 	}
@@ -156,9 +170,16 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 		return nil, fmt.Errorf("failed to load certificate: %w", err)
 	}
 
-	// Cache certificate (write lock)
+	// Cache certificate (write lock). Only per-domain certificates are cached
+	// under their own name; the fallback certificate gets one shared slot, so
+	// the cache is bounded by the number of domains that actually have a
+	// certificate plus one, and cannot be flooded with attacker-chosen names.
 	m.certMu.Lock()
-	m.certCache[serverName] = &cert
+	if specific {
+		m.certCache[serverName] = &cert
+	} else {
+		m.certCache[defaultCertCacheKey] = &cert
+	}
 	m.certMu.Unlock()
 
 	return &cert, nil

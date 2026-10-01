@@ -161,6 +161,18 @@ func (rl *RateLimiter) SetConfig(cfg *Config) {
 	rl.config = cfg
 }
 
+// configLocked returns the current config for reading.
+//
+// rl.config is swapped by SetConfig under configMu, so every reader has to take
+// configMu to obtain the pointer. SetConfig installs a freshly built *Config and
+// never mutates one in place, so once the pointer has been read under the lock
+// the value behind it is immutable and safe to read without holding the lock.
+func (rl *RateLimiter) configLocked() *Config {
+	rl.configMu.RLock()
+	defer rl.configMu.RUnlock()
+	return rl.config
+}
+
 // CheckIP checks rate limits for an IP address (inbound)
 func (rl *RateLimiter) CheckIP(ip string) Result {
 	rl.ipMu.Lock()
@@ -196,38 +208,39 @@ func (rl *RateLimiter) CheckIP(ip string) Result {
 }
 
 func (rl *RateLimiter) checkIPBucket(bucket *ipBucket) Result {
-	if rl.config.IPPerMinute > 0 && bucket.minuteCount >= rl.config.IPPerMinute {
+	cfg := rl.configLocked()
+	if cfg.IPPerMinute > 0 && bucket.minuteCount >= cfg.IPPerMinute {
 		retrySecs := int(time.Until(bucket.minuteReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 1
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("IP rate limit exceeded: %d/min", rl.config.IPPerMinute),
+			Reason:     fmt.Sprintf("IP rate limit exceeded: %d/min", cfg.IPPerMinute),
 			RetryAfter: retrySecs,
 		}
 	}
 
-	if rl.config.IPPerHour > 0 && bucket.hourCount >= rl.config.IPPerHour {
+	if cfg.IPPerHour > 0 && bucket.hourCount >= cfg.IPPerHour {
 		retrySecs := int(time.Until(bucket.hourReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 60
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("IP rate limit exceeded: %d/hour", rl.config.IPPerHour),
+			Reason:     fmt.Sprintf("IP rate limit exceeded: %d/hour", cfg.IPPerHour),
 			RetryAfter: retrySecs,
 		}
 	}
 
-	if rl.config.IPPerDay > 0 && bucket.dayCount >= rl.config.IPPerDay {
+	if cfg.IPPerDay > 0 && bucket.dayCount >= cfg.IPPerDay {
 		retrySecs := int(time.Until(bucket.dayReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 3600
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("IP rate limit exceeded: %d/day", rl.config.IPPerDay),
+			Reason:     fmt.Sprintf("IP rate limit exceeded: %d/day", cfg.IPPerDay),
 			RetryAfter: retrySecs,
 		}
 	}
@@ -282,39 +295,40 @@ func (rl *RateLimiter) CheckUser(user string) Result {
 }
 
 func (rl *RateLimiter) checkUserBucket(user string, bucket *userBucket) Result {
-	if rl.config.UserPerMinute > 0 && bucket.minuteCount >= rl.config.UserPerMinute {
+	cfg := rl.configLocked()
+	if cfg.UserPerMinute > 0 && bucket.minuteCount >= cfg.UserPerMinute {
 		retrySecs := int(time.Until(bucket.minuteReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 1
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("User rate limit exceeded: %d/min", rl.config.UserPerMinute),
+			Reason:     fmt.Sprintf("User rate limit exceeded: %d/min", cfg.UserPerMinute),
 			RetryAfter: retrySecs,
 		}
 	}
 
-	if rl.config.UserPerHour > 0 && bucket.hourCount >= rl.config.UserPerHour {
+	if cfg.UserPerHour > 0 && bucket.hourCount >= cfg.UserPerHour {
 		retrySecs := int(time.Until(bucket.hourReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 60
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("User rate limit exceeded: %d/hour", rl.config.UserPerHour),
+			Reason:     fmt.Sprintf("User rate limit exceeded: %d/hour", cfg.UserPerHour),
 			RetryAfter: retrySecs,
 		}
 	}
 
 	// Check daily quota (persisted)
-	if rl.config.UserPerDay > 0 && bucket.sentToday >= int64(rl.config.UserPerDay) {
+	if cfg.UserPerDay > 0 && bucket.sentToday >= int64(cfg.UserPerDay) {
 		retrySecs := int(time.Until(bucket.dayReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 3600
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("Daily sending quota exceeded: %d/day", rl.config.UserPerDay),
+			Reason:     fmt.Sprintf("Daily sending quota exceeded: %d/day", cfg.UserPerDay),
 			RetryAfter: retrySecs,
 		}
 	}
@@ -347,26 +361,27 @@ func (rl *RateLimiter) CheckGlobal() Result {
 	}
 
 	// Check global limits
-	if rl.config.GlobalPerMinute > 0 && rl.globalBucket.minuteCount >= int64(rl.config.GlobalPerMinute) {
+	cfg := rl.configLocked()
+	if cfg.GlobalPerMinute > 0 && rl.globalBucket.minuteCount >= int64(cfg.GlobalPerMinute) {
 		retrySecs := int(time.Until(rl.globalBucket.minuteReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 1
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("Global rate limit exceeded: %d/min", rl.config.GlobalPerMinute),
+			Reason:     fmt.Sprintf("Global rate limit exceeded: %d/min", cfg.GlobalPerMinute),
 			RetryAfter: retrySecs,
 		}
 	}
 
-	if rl.config.GlobalPerHour > 0 && rl.globalBucket.hourCount >= int64(rl.config.GlobalPerHour) {
+	if cfg.GlobalPerHour > 0 && rl.globalBucket.hourCount >= int64(cfg.GlobalPerHour) {
 		retrySecs := int(time.Until(rl.globalBucket.hourReset).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 60
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("Global rate limit exceeded: %d/hour", rl.config.GlobalPerHour),
+			Reason:     fmt.Sprintf("Global rate limit exceeded: %d/hour", cfg.GlobalPerHour),
 			RetryAfter: retrySecs,
 		}
 	}
@@ -380,10 +395,11 @@ func (rl *RateLimiter) CheckGlobal() Result {
 
 // CheckRecipients checks if too many recipients for a user
 func (rl *RateLimiter) CheckRecipients(user string, count int) Result {
-	if rl.config.UserMaxRecipients > 0 && count > rl.config.UserMaxRecipients {
+	cfg := rl.configLocked()
+	if cfg.UserMaxRecipients > 0 && count > cfg.UserMaxRecipients {
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("Too many recipients: %d (max: %d)", count, rl.config.UserMaxRecipients),
+			Reason:     fmt.Sprintf("Too many recipients: %d (max: %d)", count, cfg.UserMaxRecipients),
 			RetryAfter: 0,
 		}
 	}
@@ -412,14 +428,15 @@ func (rl *RateLimiter) CheckConnection(ip string) Result {
 	}
 
 	// Check limit
-	if rl.config.IPConnections > 0 && counter.count >= rl.config.IPConnections {
+	cfg := rl.configLocked()
+	if cfg.IPConnections > 0 && counter.count >= cfg.IPConnections {
 		retrySecs := int(counter.until.Sub(now).Seconds())
 		if retrySecs < 1 {
 			retrySecs = 10
 		}
 		return Result{
 			Allowed:    false,
-			Reason:     fmt.Sprintf("Too many connections: %d (max: %d)", counter.count, rl.config.IPConnections),
+			Reason:     fmt.Sprintf("Too many connections: %d (max: %d)", counter.count, cfg.IPConnections),
 			RetryAfter: retrySecs,
 		}
 	}
@@ -464,6 +481,7 @@ func (rl *RateLimiter) GetIPStats(ip string) map[string]any {
 func (rl *RateLimiter) GetUserStats(user string) map[string]any {
 	rl.userMu.RLock()
 	defer rl.userMu.RUnlock()
+	cfg := rl.configLocked()
 
 	stats := make(map[string]any)
 	if bucket, exists := rl.userCounters[user]; exists {
@@ -471,7 +489,7 @@ func (rl *RateLimiter) GetUserStats(user string) map[string]any {
 		stats["hour_count"] = bucket.hourCount
 		stats["day_count"] = bucket.dayCount
 		stats["sent_today"] = bucket.sentToday
-		stats["daily_limit"] = rl.config.UserPerDay
+		stats["daily_limit"] = cfg.UserPerDay
 		stats["minute_reset"] = bucket.minuteReset
 		stats["hour_reset"] = bucket.hourReset
 		stats["day_reset"] = bucket.dayReset
@@ -480,7 +498,7 @@ func (rl *RateLimiter) GetUserStats(user string) map[string]any {
 		stats["hour_count"] = 0
 		stats["day_count"] = 0
 		stats["sent_today"] = 0
-		stats["daily_limit"] = rl.config.UserPerDay
+		stats["daily_limit"] = cfg.UserPerDay
 	}
 	return stats
 }

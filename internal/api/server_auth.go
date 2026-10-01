@@ -242,7 +242,11 @@ func (s *Server) checkLoginRateLimit(ip string) bool {
 		return true
 	}
 
-	if attempt.count >= 5 {
+	maxAttempts := 5 // Default; configurable via security.max_login_attempts
+	if s.config.MaxLoginAttempts > 0 {
+		maxAttempts = s.config.MaxLoginAttempts
+	}
+	if attempt.count >= maxAttempts {
 		// Apply exponential backoff: 5min * 2^(attempts-5)
 		// attempts=5: 5min, attempts=6: 10min, attempts=7: 20min, etc.
 		backoffMinutes := 5 * (1 << (attempt.count - 5))
@@ -439,8 +443,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 			return
 		}
-		// Replay protection: reject reuse of the same or older time step
-		if step < account.TOTPLastUsedStep {
+		// Replay protection: reject reuse of the same or older time step.
+		// RFC 6238 §5.2: an OTP must be accepted only once.
+		if step <= account.TOTPLastUsedStep {
 			s.recordTOTPFailure(req.Email)
 			s.recordAccountLoginFailure(emailKey)
 			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_replay")

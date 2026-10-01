@@ -39,7 +39,11 @@ type ACLEntry struct {
 	GrantedBy string    `json:"granted_by"` // who granted this access
 }
 
-// String returns human-readable rights (e.g., "lrswipkxtecda")
+// String renders the RFC 4314 rights vocabulary for the modeled bits:
+// l (lookup), r (read), s (seen), w (write: flags other than \Seen/\Deleted),
+// i (insert: APPEND/COPY into), t (delete-messages: \Deleted), e (expunge),
+// k (create-mailboxes). Rights the model does not represent (p post, x
+// delete-mailbox, a admin) render as nothing.
 func (r ACLRights) String() string {
 	var b strings.Builder
 	if r&ACLLookup != 0 {
@@ -51,20 +55,20 @@ func (r ACLRights) String() string {
 	if r&ACLSeen != 0 {
 		b.WriteByte('s')
 	}
-	if r&ACLWrite != 0 {
+	if r&ACLWriteSeen != 0 {
 		b.WriteByte('w')
 	}
-	if r&ACLWriteSeen != 0 {
+	if r&ACLWrite != 0 {
 		b.WriteByte('i')
 	}
 	if r&ACLDelete != 0 {
-		b.WriteByte('p')
+		b.WriteByte('t')
 	}
 	if r&ACLExpunge != 0 {
-		b.WriteByte('x')
+		b.WriteByte('e')
 	}
 	if r&ACLCreate != 0 {
-		b.WriteByte('c')
+		b.WriteByte('k')
 	}
 	return b.String()
 }
@@ -80,10 +84,26 @@ func aclOwnerMailboxPrefix(owner, mailbox string) string {
 	return fmt.Sprintf("acl:%s:%s:", owner, mailbox)
 }
 
-// ParseACLRights parses rights string (e.g., "lrswipkxtecda" or "-lrswipkxtecda" or empty) into ACLRights bitmask
-func ParseACLRights(s string) (ACLRights, error) {
+// ParseACLRights parses an RFC 4314 rights string (e.g. "lrs", "-e") into an
+// ACLRights bitmask, and reports whether a leading '-' marked the rights for
+// removal.
+//
+// The accepted letters follow RFC 4314 §2.2.1 as mapped onto the modeled
+// bits: l lookup, r read, s seen, w write (flags other than \Seen/\Deleted),
+// i insert (APPEND/COPY into), t delete-messages (\Deleted), e expunge,
+// k create-mailboxes. Letters for rights this model does not represent
+// (p post, x delete-mailbox, a admin, and the deprecated c/d) are rejected
+// rather than silently mis-mapped.
+//
+// RFC 4314 section 3.1: a '-' prefix means the listed rights are REMOVED from
+// the grantee's EXISTING set. This function cannot compute that on its own --
+// it does not know what the grantee already holds -- so it returns the parsed
+// mask together with the negative flag and the caller must apply it against the
+// current rights with &^. Complementing the mask is not equivalent: it yields
+// every right the caller did NOT list, turning a revocation into a grant.
+func ParseACLRights(s string) (ACLRights, bool, error) {
 	if s == "" {
-		return 0, nil
+		return 0, false, nil
 	}
 
 	// Negative indicator removes rights
@@ -103,24 +123,21 @@ func ParseACLRights(s string) (ACLRights, error) {
 		case 's':
 			rights |= ACLSeen
 		case 'w':
-			rights |= ACLWrite
-		case 'i':
 			rights |= ACLWriteSeen
-		case 'p':
+		case 'i':
+			rights |= ACLWrite
+		case 't':
 			rights |= ACLDelete
-		case 'k':
+		case 'e':
 			rights |= ACLExpunge
-		case 'x':
+		case 'k':
 			rights |= ACLCreate
 		default:
-			return 0, fmt.Errorf("invalid right character: %c", c)
+			return 0, false, fmt.Errorf("invalid right character: %c", c)
 		}
 	}
 
-	if negative {
-		return ^rights, nil
-	}
-	return rights, nil
+	return rights, negative, nil
 }
 
 // GetACL retrieves the rights a grantee has on a specific mailbox.

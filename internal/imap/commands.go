@@ -34,8 +34,11 @@ func (s *Session) handleCommand(line string) error {
 	command := strings.ToUpper(parts[1])
 	args := parts[2:]
 
-	// Handle the command based on current state
-	switch s.state {
+	// Handle the command based on current state.
+	// Use the State() accessor (RLock) rather than s.state directly: Close()
+	// runs on a different goroutine (Server.Stop), and a bare read here is
+	// what -race flagged against it in TestFullMailFlow.
+	switch s.State() {
 	case StateNotAuthenticated:
 		return s.handleNotAuthenticated(command, args, line)
 	case StateAuthenticated:
@@ -1229,8 +1232,10 @@ func (s *Session) handleNamespace() error {
 
 // IDLE command (RFC 2177)
 func (s *Session) handleIdle() error {
-	// IDLE is only valid in Authenticated or Selected state
-	if s.state != StateAuthenticated && s.state != StateSelected {
+	// IDLE is only valid in Authenticated or Selected state.
+	// Use the State() accessor (RLock) rather than s.state directly, for the
+	// same reason as handleCommand: Close() writes s.state from another goroutine.
+	if st := s.State(); st != StateAuthenticated && st != StateSelected {
 		s.WriteResponse(s.tag, "BAD Command not allowed in this state")
 		return nil
 	}
@@ -2115,24 +2120,98 @@ func (s *Session) handleUID(args []string, line string) error {
 	}
 }
 
+// uidSetToSeqSet translates a UID sequence-set into the equivalent
+// message-sequence-number set for the selected mailbox. RFC 3501 §6.4.8: a UID
+// command's sequence-set is interpreted as UIDs, which are stable, whereas
+// sequence numbers are positional and shift after an expunge. The Mailstore
+// primitives address by sequence number, so the UID variants resolve UIDs to
+// positions here, at the command layer where that distinction is known.
+func (s *Session) uidSetToSeqSet(uidSet string) (string, error) {
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
+	if err != nil {
+		return "", err
+	}
+	ranges, err := ParseSequenceSet(uidSet)
+	if err != nil {
+		return "", err
+	}
+
+	// "*" in a UID set denotes the highest UID, so resolve the 0 sentinel
+	// against the largest UID present rather than the message count.
+	var maxUID uint32
+	for _, m := range messages {
+		if m.UID > maxUID {
+			maxUID = m.UID
+		}
+	}
+
+	var seqNums []string
+	for _, m := range messages {
+		for _, r := range ranges {
+			if r.Contains(m.UID, maxUID) {
+				seqNums = append(seqNums, fmt.Sprintf("%d", m.SeqNum))
+				break
+			}
+		}
+	}
+	return strings.Join(seqNums, ","), nil
+}
+
 func (s *Session) handleUIDFetch(args []string, line string) error {
-	// Same as FETCH but with UIDs
-	return s.handleFetch(args, line)
+	// Same as FETCH but with UIDs: resolve the UID set to sequence numbers
+	// first, since FetchMessages addresses by sequence number.
+	if len(args) == 0 {
+		return s.handleFetch(args, line)
+	}
+	seqSet, err := s.uidSetToSeqSet(args[0])
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Invalid sequence set")
+		return nil
+	}
+	rest := append([]string{seqSet}, args[1:]...)
+	return s.handleFetch(rest, line)
 }
 
 func (s *Session) handleUIDStore(args []string) error {
-	// Same as STORE but with UIDs
-	return s.handleStore(args)
+	// Same as STORE but with UIDs.
+	if len(args) == 0 {
+		return s.handleStore(args)
+	}
+	seqSet, err := s.uidSetToSeqSet(args[0])
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Invalid sequence set")
+		return nil
+	}
+	rest := append([]string{seqSet}, args[1:]...)
+	return s.handleStore(rest)
 }
 
 func (s *Session) handleUIDCopy(args []string) error {
-	// Same as COPY but with UIDs
-	return s.handleCopy(args)
+	// Same as COPY but with UIDs.
+	if len(args) == 0 {
+		return s.handleCopy(args)
+	}
+	seqSet, err := s.uidSetToSeqSet(args[0])
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Invalid sequence set")
+		return nil
+	}
+	rest := append([]string{seqSet}, args[1:]...)
+	return s.handleCopy(rest)
 }
 
 func (s *Session) handleUIDMove(args []string) error {
-	// Same as MOVE but with UIDs
-	return s.handleMove(args)
+	// Same as MOVE but with UIDs.
+	if len(args) == 0 {
+		return s.handleMove(args)
+	}
+	seqSet, err := s.uidSetToSeqSet(args[0])
+	if err != nil {
+		s.WriteResponse(s.tag, "NO Invalid sequence set")
+		return nil
+	}
+	rest := append([]string{seqSet}, args[1:]...)
+	return s.handleMove(rest)
 }
 
 func (s *Session) handleUIDSearch(args []string, line string) error {
@@ -2214,10 +2293,23 @@ func (s *Session) handleSetACL(args []string) error {
 	}
 
 	// Parse rights string (e.g., "lrswipkxtecda" or "-lrswipkxtecda" or numeric)
-	rights, err := storage.ParseACLRights(rightsStr)
+	rights, negative, err := storage.ParseACLRights(rightsStr)
 	if err != nil {
 		s.WriteResponse(s.tag, "BAD Invalid rights format")
 		return nil
+	}
+
+	// RFC 4314 section 3.1: a leading '-' removes the listed rights from the
+	// grantee's EXISTING set, so the mask must be applied with &^ against what
+	// they already hold. Storing the complement would grant every unlisted
+	// right instead, turning a revocation into an expansion.
+	if negative {
+		existing, err := s.server.mailstore.GetACL(owner, mb, grantee)
+		if err != nil {
+			s.WriteResponse(s.tag, "NO Failed to read current ACL")
+			return nil
+		}
+		rights = storage.ACLRights(existing) &^ rights
 	}
 
 	err = s.server.mailstore.SetACL(owner, mb, grantee, uint8(rights), s.user)
@@ -2378,10 +2470,9 @@ func (s *Session) handleListRights(args []string) error {
 		return nil
 	}
 
-	// RFC 4314 specifies the standard rights that can be granted
-	// l (lookup), r (read), s (seen), w (write), i (insert), p (post),
-	// k (create), x (delete), t (delete seen), e (expunge), c (create mailbox), d (delete mailbox)
-	standardRights := "l r s w i p k x t e c d a"
+	// RFC 4314 §2.2.1 rights this server grants, in the same vocabulary
+	// storage.ParseACLRights accepts (must stay in sync with it).
+	standardRights := "l r s w i t e k"
 
 	s.WriteData(fmt.Sprintf("LISTRIGHTS %s %s %s", mailbox, grantee, standardRights))
 	s.WriteResponse(s.tag, "OK LISTRIGHTS completed")

@@ -249,15 +249,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		return
 	}
 
-	// Extract UID from vCard
-	uid := s.extractUIDFromVCard(string(body))
-	if uid == "" {
-		uid = uuid.New().String()
-		// Add UID to vCard if missing
-		body = []byte(strings.Replace(string(body), "BEGIN:VCARD\r\n", fmt.Sprintf("BEGIN:VCARD\r\nUID:%s\r\n", uid), 1))
-	}
-
-	// Extract address book ID from URL path
+	// Extract address book ID and contact UID from URL path (same convention
+	// as handleGet, including extension trimming).
 	path := strings.TrimPrefix(r.URL.Path, "/dav/addressbooks/")
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 1 || parts[0] == "" {
@@ -265,11 +258,34 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		return
 	}
 	addressbookID := parts[0]
+	urlUID := ""
+	if len(parts) == 2 {
+		urlUID = strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+	}
 
 	// Verify the address book belongs to this user
 	ab, err := s.storage.GetAddressbook(username, addressbookID)
 	if err != nil || ab == nil {
 		s.sendError(w, http.StatusForbidden, "address book not found")
+		return
+	}
+
+	// RFC 6352 §6.3.2: the request-URI names the resource, so its UID is
+	// authoritative. A body UID that differs would store the contact at an
+	// address the client cannot address back, so reject the mismatch. A
+	// UID-less vCard adopts the URL UID (and is made self-describing) rather
+	// than an unreachable random UUID.
+	uid := s.extractUIDFromVCard(string(body))
+	if uid == "" {
+		if urlUID == "" {
+			uid = uuid.New().String()
+		} else {
+			uid = urlUID
+		}
+		// Add UID to vCard if missing
+		body = []byte(strings.Replace(string(body), "BEGIN:VCARD\r\n", fmt.Sprintf("BEGIN:VCARD\r\nUID:%s\r\n", uid), 1))
+	} else if urlUID != "" && uid != urlUID {
+		s.sendError(w, http.StatusForbidden, "UID in request URL does not match UID in vCard data")
 		return
 	}
 
@@ -634,7 +650,7 @@ func (s *Server) buildPrincipalResponse(username string) Response {
 			Prop: []Property{
 				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        \u003ccollection/\u003e\n        \u003cprincipal/\u003e\n      "},
 				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: username},
-				{XMLName: xml.Name{Space: "CARDDAV:", Local: "addressbook-home-set"}, Value: fmt.Sprintf("<href>/dav/addressbooks/%s/</href>", username)},
+				{XMLName: xml.Name{Space: "CARDDAV:", Local: "addressbook-home-set"}, Value: "<href>/dav/addressbooks/</href>"},
 			},
 			Status: "HTTP/1.1 200 OK",
 		}},
@@ -644,7 +660,9 @@ func (s *Server) buildPrincipalResponse(username string) Response {
 // buildAddressbookHomeResponse builds a response for the addressbook home resource
 func (s *Server) buildAddressbookHomeResponse(username string) Response {
 	return Response{
-		Href: fmt.Sprintf("/dav/addressbooks/%s/", username),
+		// Request convention: "/dav/addressbooks/{addressbookID}/..." — the
+		// authenticated username scopes storage and is not part of the URL.
+		Href: "/dav/addressbooks/",
 		Propstat: []Propstat{{
 			Prop: []Property{
 				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<collection/>"},
@@ -664,8 +682,11 @@ func (s *Server) sendError(w http.ResponseWriter, code int, message string) {
 
 // buildAddressbookResponse builds a PROPFIND response for an address book
 func (s *Server) buildAddressbookResponse(username string, ab *Addressbook) Response {
+	// Hrefs follow the server's request convention "/dav/addressbooks/{addressbookID}/"
+	// (the authenticated username scopes storage and is not part of the URL), so
+	// clients operating on these hrefs (RFC 4918 §8.3) reach the item handlers.
 	return Response{
-		Href: fmt.Sprintf("/dav/addressbooks/%s/%s/", username, ab.ID),
+		Href: fmt.Sprintf("/dav/addressbooks/%s/", ab.ID),
 		Propstat: []Propstat{{
 			Prop: []Property{
 				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <collection/>\n        <addressbook xmlns=\"urn:ietf:params:xml:ns:carddav\"/>\n      "},
@@ -680,8 +701,9 @@ func (s *Server) buildAddressbookResponse(username string, ab *Addressbook) Resp
 
 // buildContactResponse builds a PROPFIND/REPORT response for a contact
 func (s *Server) buildContactResponse(username, addressbookID, uid, vcardData string) Response {
+	// Request convention: "/dav/addressbooks/{addressbookID}/{uid}.vcf" (no username segment).
 	return Response{
-		Href: fmt.Sprintf("/dav/addressbooks/%s/%s/%s.vcf", username, addressbookID, uid),
+		Href: fmt.Sprintf("/dav/addressbooks/%s/%s.vcf", addressbookID, uid),
 		Propstat: []Propstat{{
 			Prop: []Property{
 				{XMLName: xml.Name{Space: "DAV:", Local: "getcontenttype"}, Value: "text/vcard; charset=utf-8"},

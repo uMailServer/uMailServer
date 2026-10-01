@@ -2,38 +2,10 @@ package imap
 
 import (
 	"log/slog"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
-
-// mockNotificationHubForStopIdle is used by replaceHub to track Subscribe/Unsubscribe calls.
-type mockNotificationHubForStopIdle struct {
-	subscribeCount   *atomic.Int32
-	unsubscribeCount *atomic.Int32
-	notifyChan       chan MailboxNotification
-}
-
-func (m *mockNotificationHubForStopIdle) Subscribe(user string) chan MailboxNotification {
-	m.subscribeCount.Add(1)
-	return m.notifyChan
-}
-
-func (m *mockNotificationHubForStopIdle) Unsubscribe(user string, ch chan MailboxNotification) {
-	m.unsubscribeCount.Add(1)
-}
-
-// replaceHub swaps the global hub for the duration of fn.
-func replaceHub(t testing.TB, mock *mockNotificationHubForStopIdle) func() {
-	orig := globalHub
-	// We can't replace the package var, so instead we test that Unsubscribe
-	// is called on the real hub when idleNotifyChan is non-nil. Since the real
-	// hub is a singleton, we accept that Unsubscribe is exercised on it.
-	_ = mock
-	_ = orig
-	return func() { /* no restore needed — globalHub is not replaced */ }
-}
 
 // TestHandleIdle_ReentrantCallDocumentsFix verifies that handleIdle calls
 // stopIdle() before starting a new IDLE session. This prevents a re-entrant
