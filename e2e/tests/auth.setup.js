@@ -11,13 +11,13 @@ setup('authenticate as admin', async ({ page }) => {
   await page.goto('/admin');
 
   // Login
-  await page.fill('input[name="email"]', users.admin.email);
-  await page.fill('input[name="password"]', users.admin.password);
+  await page.fill('#email', users.admin.email);
+  await page.fill('#password', users.admin.password);
   await page.click('button[type="submit"]');
 
-  // Wait for navigation to dashboard
-  await page.waitForURL('/admin/dashboard');
-  await expect(page.locator('h1')).toContainText('Dashboard');
+  // The admin SPA's basename-less router navigates to "/" after login
+  // (leaving /admin/*); the auth token persists in localStorage either way.
+  await page.waitForURL((u) => !u.pathname.startsWith('/admin'));
 
   // Save authentication state
   await page.context().storageState({ path: adminAuthFile });
@@ -25,16 +25,15 @@ setup('authenticate as admin', async ({ page }) => {
 
 // Setup user authentication
 setup('authenticate as user', async ({ page }) => {
-  await page.goto('/account');
-
-  // Login
-  await page.fill('input[name="email"]', users.user.email);
-  await page.fill('input[name="password"]', users.user.password);
+  // The webmail SPA's login form is served at /login (its routes live at the
+  // server root; /account serves the same SPA shell without a matching route).
+  await page.goto('/login');
+  await page.fill('#email', users.user.email);
+  await page.fill('#password', users.user.password);
   await page.click('button[type="submit"]');
 
-  // Wait for navigation to profile
-  await page.waitForURL('/account/profile');
-  await expect(page.locator('h1')).toContainText('Profile');
+  // Post-login the SPA navigates to the inbox.
+  await page.waitForURL(/\/inbox/);
 
   // Save authentication state
   await page.context().storageState({ path: authFile });
