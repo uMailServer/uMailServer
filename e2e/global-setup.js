@@ -62,6 +62,8 @@ async function main() {
   const testConfig = `server:
   hostname: localhost
   data_dir: ./data
+database:
+  path: ./data/umailserver.db
 http:
   enabled: true
   port: 8080
@@ -107,6 +109,28 @@ tls:
   await waitForServer(120000);
 
   console.log('=== E2E Setup Complete ===');
+
+  // Playwright runs this script as its webServer command, so the process
+  // must stay alive while the tests run — Playwright waits for BASE_URL,
+  // then terminates us when done. Expose the same behaviour if the server
+  // dies on its own, so a broken boot surfaces as "exited early".
+  await new Promise((resolve) => {
+    const shutdown = () => {
+      console.log('Shutting down server...');
+      try {
+        serverProc.kill('SIGTERM');
+      } catch (e) {
+        // Already exited
+      }
+      resolve();
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+    serverProc.once('exit', (code) => {
+      console.log('Server process exited early (code ' + code + '); stopping webServer command.');
+      resolve();
+    });
+  });
 }
 
 async function runQuickstartWithRetry(serverBin) {
@@ -122,7 +146,11 @@ async function runQuickstartWithRetry(serverBin) {
     }
 
     const result = await new Promise((resolve) => {
-      const proc = spawn(serverBin, ['quickstart', 'admin@example.com'], {
+      // Point quickstart at the same writable data dir the test config uses,
+      // so DKIM keys and state land in e2e/data instead of /var/lib/umailserver
+      // (hardcoded default; nonexistent and unwritable on CI runners), and at
+      // a writable -config path (the /etc default doesn't exist either).
+      const proc = spawn(serverBin, ['quickstart', '-config', './umailserver.yaml', '-data-dir', './data', 'admin@example.com'], {
         cwd: E2E_DIR,
         stdio: 'pipe',
         shell: isWindows ? 'cmd' : false

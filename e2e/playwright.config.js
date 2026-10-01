@@ -1,6 +1,5 @@
 // @ts-check
 const { defineConfig, devices } = require('@playwright/test');
-const path = require('path');
 
 /**
  * @see https://playwright.dev/docs/test-configuration
@@ -22,12 +21,6 @@ module.exports = defineConfig({
 
   /* Reporter to use */
   reporter: 'html',
-
-  /* Global setup - runs before any test */
-  globalSetup: path.join(__dirname, 'global-setup.js'),
-
-  /* Global teardown - runs after all tests */
-  globalTeardown: path.join(__dirname, 'global-teardown.js'),
 
   /* Shared settings for all the projects below */
   use: {
@@ -69,12 +62,18 @@ module.exports = defineConfig({
     },
   ],
 
-  /* Run local dev server before starting the tests */
+  /* Run the server before starting the tests */
   webServer: {
-    // global-setup.js starts the server, Playwright just connects to it
-    command: 'echo "Server started by globalSetup"',
+    // global-setup.js bootstraps the environment (cleans the data dir, runs
+    // quickstart to create the admin user, writes config/test.yaml, starts
+    // the server and waits for /health) and STAYS ALIVE until Playwright
+    // stops it. The command must keep running — a fast-exiting command makes
+    // Playwright abort with "config.webServer exited early" (webServer runs
+    // BEFORE globalSetup, so the old echo placeholder aborted the run before
+    // the bootstrap ever executed).
+    command: 'node global-setup.js',
     url: process.env.BASE_URL || 'http://localhost:8080',
     reuseExistingServer: true,
-    timeout: 0,
+    timeout: 180000,
   },
 });

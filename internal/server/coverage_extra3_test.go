@@ -34,6 +34,7 @@ func helperFullServerConfig(t *testing.T) *config.Config {
 		},
 		SMTP: config.SMTPConfig{
 			Inbound: config.InboundSMTPConfig{
+				Enabled:        true,
 				Bind:           "127.0.0.1",
 				Port:           0,
 				MaxMessageSize: 10485760,
@@ -51,8 +52,9 @@ func helperFullServerConfig(t *testing.T) *config.Config {
 			},
 		},
 		IMAP: config.IMAPConfig{
-			Bind: "127.0.0.1",
-			Port: 0,
+			Enabled: true,
+			Bind:    "127.0.0.1",
+			Port:    0,
 		},
 		POP3: config.POP3Config{
 			Enabled: true,

@@ -11,6 +11,7 @@ import (
 // startPOP3 creates and starts the POP3 server (if enabled).
 func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	if !s.config.POP3.Enabled {
+		s.logger.Info("POP3 disabled; skipping listener")
 		return nil
 	}
 

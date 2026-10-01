@@ -113,8 +113,9 @@ func TestCovExtra_Start_IMAPListenError(t *testing.T) {
 			},
 		},
 		IMAP: config.IMAPConfig{
-			Bind: "127.0.0.1",
-			Port: port, // Already taken.
+			Enabled: true,
+			Bind:    "127.0.0.1",
+			Port:    port, // Already taken.
 		},
 		Admin: config.AdminConfig{
 			Bind: "127.0.0.1",

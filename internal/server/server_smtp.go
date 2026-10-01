@@ -10,10 +10,30 @@ import (
 	"github.com/umailserver/umailserver/internal/spam"
 )
 
-// startSMTP creates and starts the inbound SMTP server with the message
-// processing pipeline, plus the optional submission (587) and
-// submission-TLS (465) servers.
+// startSMTP starts the configured SMTP listeners: the inbound MX server,
+// plus the optional submission (587) and submission-TLS (465) servers.
+// Each honours its own Enabled toggle.
 func (s *Server) startSMTP() {
+	if s.config.SMTP.Inbound.Enabled {
+		s.startInboundSMTP()
+	} else {
+		s.logger.Info("Inbound SMTP disabled; skipping listener")
+	}
+
+	// Submission SMTP server (port 587, STARTTLS)
+	if s.config.SMTP.Submission.Enabled {
+		s.startSubmissionSMTP()
+	}
+
+	// Submission TLS SMTP server (port 465, implicit TLS)
+	if s.config.SMTP.SubmissionTLS.Enabled {
+		s.startSubmissionTLSSMTP()
+	}
+}
+
+// startInboundSMTP creates and starts the inbound SMTP server with the
+// message processing pipeline.
+func (s *Server) startInboundSMTP() {
 	smtpAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Inbound.Bind, s.config.SMTP.Inbound.Port)
 	smtpCfg := &smtp.Config{
 		Hostname:       s.config.Server.Hostname,
@@ -129,71 +149,71 @@ func (s *Server) startSMTP() {
 	}()
 	s.smtpServer = smtpServer
 	s.logger.Info("SMTP server started", "addr", smtpAddr)
+}
 
-	// Submission SMTP server (port 587, STARTTLS)
-	if s.config.SMTP.Submission.Enabled {
-		submissionAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Submission.Bind, s.config.SMTP.Submission.Port)
-		submissionCfg := &smtp.Config{
-			Hostname:       s.config.Server.Hostname,
-			MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
-			MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
-			MaxConnections: s.config.SMTP.Submission.MaxConnections,
-			ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
-			WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-			TLSConfig:      s.tlsManager.GetTLSConfig(),
-			RequireAuth:    true,
-			RequireTLS:     true,
-			IsSubmission:   true,
-		}
-
-		submissionServer := smtp.NewServer(submissionCfg, s.logger)
-		submissionServer.SetAuthHandler(s.authenticate)
-		submissionServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
-		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
-		// submissionServer.SetUserSecretHandler(s.getUserSecret)
-		submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
-		submissionServer.SetTracingProvider(s.tracingProvider)
-
-		go func() {
-			if err := submissionServer.ListenAndServe(submissionAddr); err != nil {
-				s.logger.Error("Submission server error", "error", err)
-			}
-		}()
-		s.submissionServer = submissionServer
-		s.logger.Info("Submission server started", "addr", submissionAddr)
+// startSubmissionSMTP creates and starts the submission (587) server.
+func (s *Server) startSubmissionSMTP() {
+	submissionAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Submission.Bind, s.config.SMTP.Submission.Port)
+	submissionCfg := &smtp.Config{
+		Hostname:       s.config.Server.Hostname,
+		MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
+		MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
+		MaxConnections: s.config.SMTP.Submission.MaxConnections,
+		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
+		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+		TLSConfig:      s.tlsManager.GetTLSConfig(),
+		RequireAuth:    true,
+		RequireTLS:     true,
+		IsSubmission:   true,
 	}
 
-	// Submission TLS SMTP server (port 465, implicit TLS)
-	if s.config.SMTP.SubmissionTLS.Enabled {
-		submissionTLSAddr := fmt.Sprintf("%s:%d", s.config.SMTP.SubmissionTLS.Bind, s.config.SMTP.SubmissionTLS.Port)
-		submissionTLSCfg := &smtp.Config{
-			Hostname:       s.config.Server.Hostname,
-			MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
-			MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
-			MaxConnections: s.config.SMTP.SubmissionTLS.MaxConnections,
-			ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
-			WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-			TLSConfig:      s.tlsManager.GetTLSConfig(),
-			RequireAuth:    true,
-			RequireTLS:     false, // Already on TLS
-			IsSubmission:   true,
+	submissionServer := smtp.NewServer(submissionCfg, s.logger)
+	submissionServer.SetAuthHandler(s.authenticate)
+	submissionServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
+	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
+	// submissionServer.SetUserSecretHandler(s.getUserSecret)
+	submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+	submissionServer.SetTracingProvider(s.tracingProvider)
+
+	go func() {
+		if err := submissionServer.ListenAndServe(submissionAddr); err != nil {
+			s.logger.Error("Submission server error", "error", err)
 		}
+	}()
+	s.submissionServer = submissionServer
+	s.logger.Info("Submission server started", "addr", submissionAddr)
+}
 
-		submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
-		submissionTLSServer.SetAuthHandler(s.authenticate)
-		submissionTLSServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
-		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
-		// submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
-		submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
-		submissionTLSServer.SetTracingProvider(s.tracingProvider)
-
-		tlsConfig := s.tlsManager.GetTLSConfig()
-		go func() {
-			if err := submissionTLSServer.ListenAndServeTLS(submissionTLSAddr, tlsConfig); err != nil {
-				s.logger.Error("Submission TLS server error", "error", err)
-			}
-		}()
-		s.submissionTLSServer = submissionTLSServer
-		s.logger.Info("Submission TLS server started", "addr", submissionTLSAddr)
+// startSubmissionTLSSMTP creates and starts the implicit-TLS (465) server.
+func (s *Server) startSubmissionTLSSMTP() {
+	submissionTLSAddr := fmt.Sprintf("%s:%d", s.config.SMTP.SubmissionTLS.Bind, s.config.SMTP.SubmissionTLS.Port)
+	submissionTLSCfg := &smtp.Config{
+		Hostname:       s.config.Server.Hostname,
+		MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
+		MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
+		MaxConnections: s.config.SMTP.SubmissionTLS.MaxConnections,
+		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
+		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+		TLSConfig:      s.tlsManager.GetTLSConfig(),
+		RequireAuth:    true,
+		RequireTLS:     false, // Already on TLS
+		IsSubmission:   true,
 	}
+
+	submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
+	submissionTLSServer.SetAuthHandler(s.authenticate)
+	submissionTLSServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
+	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
+	// submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
+	submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+	submissionTLSServer.SetTracingProvider(s.tracingProvider)
+
+	tlsConfig := s.tlsManager.GetTLSConfig()
+	go func() {
+		if err := submissionTLSServer.ListenAndServeTLS(submissionTLSAddr, tlsConfig); err != nil {
+			s.logger.Error("Submission TLS server error", "error", err)
+		}
+	}()
+	s.submissionTLSServer = submissionTLSServer
+	s.logger.Info("Submission TLS server started", "addr", submissionTLSAddr)
 }
