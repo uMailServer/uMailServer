@@ -58,6 +58,9 @@ async function main() {
   // Run quickstart with retry
   await runQuickstartWithRetry(serverBin);
 
+  // Provision the fixture users the specs log in as
+  await provisionFixtureUsers(serverBin);
+
   // Create test config
   const testConfig = `server:
   hostname: localhost
@@ -133,6 +136,26 @@ tls:
   });
 }
 
+const users = require('./fixtures/users.json');
+
+// The E2E specs log in as the fixture accounts; quickstart only creates the
+// admin, so provision the remaining users here (single password prompt).
+async function provisionFixtureUsers(serverBin) {
+  const isWindows = process.platform === 'win32';
+  const u = users.user;
+  console.log('Provisioning ' + u.email + '...');
+  await new Promise((resolve, reject) => {
+    const proc = spawn(serverBin, ['account', 'add', u.email, '-data-dir', './data'], {
+      cwd: E2E_DIR,
+      stdio: ['pipe', 'inherit', 'inherit'],
+      shell: isWindows ? 'cmd' : false
+    });
+    proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error('account add ' + u.email + ' exited ' + code))));
+    proc.on('error', reject);
+    proc.stdin.write(u.password + '\n');
+  });
+}
+
 async function runQuickstartWithRetry(serverBin) {
   const isWindows = process.platform === 'win32';
 
@@ -165,7 +188,7 @@ async function runQuickstartWithRetry(serverBin) {
           if (output.includes('Overwrite')) {
             proc.stdin.write('y\n');
           } else if (output.includes('Enter admin password')) {
-            proc.stdin.write('Admin123!\nAdmin123!\n');
+            proc.stdin.write(users.admin.password + '\n' + users.admin.password + '\n');
             passwordSent = true;
           }
         }
