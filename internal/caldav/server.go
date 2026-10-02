@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -210,6 +211,27 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 		return
 	}
 
+	// CALDAV:expand / CALDAV:limit (RFC 4791 §9.6.4/§9.6.5): recurrence
+	// expansion and a result cap for the returned component data.
+	var expandStart, expandEnd time.Time
+	expandSet := false
+	limitN := 0
+	if query.Prop != nil && query.Prop.CalendarData != nil {
+		calData := query.Prop.CalendarData
+		if calData.Expand != nil {
+			s0, ok1 := parseICSTime(calData.Expand.Start)
+			e0, ok2 := parseICSTime(calData.Expand.End)
+			if !ok1 || !ok2 {
+				s.sendError(w, http.StatusBadRequest, "invalid expand window")
+				return
+			}
+			expandStart, expandEnd, expandSet = s0, e0, true
+		}
+		if calData.Limit != nil && calData.Limit.NResults > 0 {
+			limitN = calData.Limit.NResults
+		}
+	}
+
 	// Build response
 	multistatus := &Multistatus{}
 
@@ -221,9 +243,34 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 				continue
 			}
 			uid := extractUIDFromICS(eventData)
-			if uid != "" {
-				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
+			if uid == "" {
+				continue
 			}
+			if expandSet {
+				var instances []time.Time
+				var duration time.Duration
+				blocks := extractComponentBlocks(eventData, "VEVENT")
+				if len(blocks) > 0 {
+					start, end, ok := componentTimeRange(blocks[0])
+					if ok {
+						duration = end.Sub(start)
+						if r := parseRRULEBlock(blocks[0]); r != nil {
+							instances = rruleInstances(start, end, r, expandStart, expandEnd)
+						} else if !start.Before(expandStart) && start.Before(expandEnd) {
+							instances = []time.Time{start}
+						}
+					}
+				}
+				if limitN > 0 && len(instances) > limitN {
+					instances = instances[:limitN]
+				}
+				if len(instances) == 0 {
+					continue
+				}
+				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, buildExpandedICS(eventData, instances, duration)))
+				continue
+			}
+			multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
 		}
 	}
 
@@ -426,6 +473,17 @@ func compFilterMatches(cf *CompFilter, icsData string) bool {
 		for _, body := range blocks {
 			start, end, ok := componentTimeRange(body)
 			if !ok {
+				continue
+			}
+			if r := parseRRULEBlock(body); r != nil {
+				// RFC 4791 §9.9.1: a recurring component matches when ANY
+				// generated instance intersects the range; the base DTSTART
+				// alone is not decisive. Unsupported RRULE parts degrade to
+				// base-only matching (the documented subset).
+				if len(rruleInstances(start, end, r, rStart, rEnd)) > 0 {
+					matched = true
+					break
+				}
 				continue
 			}
 			// RFC 4791 §9.9.1: intervals intersect when the component start
@@ -955,6 +1013,179 @@ func (s *Server) handleCalendarPropfind(path string, username string, multistatu
 	}
 }
 
+// maxRRULEInstances bounds recurrence expansion so a malformed or
+// pathological RRULE cannot loop unbounded.
+const maxRRULEInstances = 5000
+
+// rruleSpec is the supported RRULE subset: FREQ=DAILY|WEEKLY|MONTHLY|YEARLY,
+// INTERVAL, COUNT, UNTIL. Other parts (BYDAY, BYMONTH, BYSETPOS, ...) are
+// unsupported: the event degrades to base-only matching and unexpanded
+// responses (documented behavior).
+type rruleSpec struct {
+	freq     string
+	interval int
+	count    int
+	until    time.Time
+}
+
+// parseRRULEValue parses an RRULE value ("FREQ=DAILY;COUNT=10"). It returns
+// nil when the rule is absent or uses unsupported parts.
+func parseRRULEValue(value string) *rruleSpec {
+	var r rruleSpec
+	seenFreq := false
+	for _, part := range strings.Split(strings.TrimSpace(value), ";") {
+		k, v, found := strings.Cut(part, "=")
+		if !found {
+			return nil
+		}
+		switch strings.ToUpper(strings.TrimSpace(k)) {
+		case "FREQ":
+			freq := strings.ToUpper(strings.TrimSpace(v))
+			if freq != "DAILY" && freq != "WEEKLY" && freq != "MONTHLY" && freq != "YEARLY" {
+				return nil
+			}
+			r.freq = freq
+			seenFreq = true
+		case "INTERVAL":
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil || n < 1 {
+				return nil
+			}
+			r.interval = n
+		case "COUNT":
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil || n < 1 {
+				return nil
+			}
+			r.count = n
+		case "UNTIL":
+			t, ok := parseICSTime(strings.TrimSpace(v))
+			if !ok {
+				return nil
+			}
+			r.until = t
+		default:
+			return nil
+		}
+	}
+	if !seenFreq {
+		return nil
+	}
+	if r.interval == 0 {
+		r.interval = 1
+	}
+	return &r
+}
+
+// parseRRULEBlock extracts the RRULE property line from a component block
+// and parses it; nil when the block has no supported RRULE.
+func parseRRULEBlock(body string) *rruleSpec {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if strings.HasPrefix(strings.ToUpper(line), "RRULE:") {
+			return parseRRULEValue(line[len("RRULE:"):])
+		}
+	}
+	return nil
+}
+
+// icsTimeFormat mirrors the shape of an existing iCalendar time value so
+// generated instances look like the source data.
+func icsTimeFormat(value string) string {
+	v := strings.TrimSpace(value)
+	switch {
+	case len(v) == 8:
+		return "20060102"
+	case strings.HasSuffix(v, "Z"):
+		return "20060102T150405Z"
+	default:
+		return "20060102T150405"
+	}
+}
+
+// rruleInstances generates the recurrence instances of a component whose
+// base interval is [baseStart, baseEnd) and returns those intersecting
+// [windowStart, windowEnd). Zero-length instances match points inside the
+// window (RFC 4791 §9.9.1).
+func rruleInstances(baseStart, baseEnd time.Time, r *rruleSpec, windowStart, windowEnd time.Time) []time.Time {
+	dur := baseEnd.Sub(baseStart)
+	var out []time.Time
+	for i := 0; i < maxRRULEInstances; i++ {
+		var inst time.Time
+		switch r.freq {
+		case "DAILY":
+			inst = baseStart.Add(time.Duration(i*r.interval) * 24 * time.Hour)
+		case "WEEKLY":
+			inst = baseStart.Add(time.Duration(i*r.interval) * 7 * 24 * time.Hour)
+		case "MONTHLY":
+			inst = baseStart.AddDate(0, i*r.interval, 0)
+		case "YEARLY":
+			inst = baseStart.AddDate(i*r.interval, 0, 0)
+		}
+		if !r.until.IsZero() && inst.After(r.until) {
+			break
+		}
+		if r.count > 0 && i >= r.count {
+			break
+		}
+		if !inst.Before(windowEnd) {
+			break
+		}
+		instEnd := inst.Add(dur)
+		intersects := instEnd.After(windowStart) && inst.Before(windowEnd)
+		if dur == 0 {
+			intersects = !inst.Before(windowStart) && inst.Before(windowEnd)
+		}
+		if intersects {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// buildExpandedICS renders the recurrence set as one VEVENT per instance
+// (RECURRENCE-ID set) inside a VCALENDAR wrapper.
+func buildExpandedICS(eventData string, instances []time.Time, duration time.Duration) string {
+	blocks := extractComponentBlocks(eventData, "VEVENT")
+	if len(blocks) == 0 {
+		return eventData
+	}
+	block := blocks[0]
+	dtstartVal, _ := extractPropertyValue(block, "DTSTART")
+	layout := icsTimeFormat(strings.TrimSpace(dtstartVal))
+	var out []string
+	for _, line := range strings.Split(eventData, "\n") {
+		trimmed := strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(trimmed, "BEGIN:VEVENT") {
+			break
+		}
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	for _, inst := range instances {
+		out = append(out, "BEGIN:VEVENT")
+		for _, line := range strings.Split(block, "\n") {
+			trimmed := strings.TrimSuffix(line, "\r")
+			upper := strings.ToUpper(trimmed)
+			switch {
+			case strings.HasPrefix(upper, "DTSTART"):
+				out = append(out, "DTSTART:"+inst.UTC().Format(layout))
+				out = append(out, "RECURRENCE-ID:"+inst.UTC().Format(layout))
+			case strings.HasPrefix(upper, "DTEND"):
+				out = append(out, "DTEND:"+inst.Add(duration).UTC().Format(layout))
+			case strings.HasPrefix(upper, "RRULE"):
+				// expanded instances carry RECURRENCE-ID, not RRULE
+			default:
+				out = append(out, trimmed)
+			}
+		}
+		out = append(out, "END:VEVENT")
+	}
+	out = append(out, "END:VCALENDAR")
+	return strings.Join(out, "\r\n") + "\r\n"
+}
+
 // buildEventResponse builds a response for a calendar event
 func (s *Server) buildEventResponse(username, calendarID, eventUID, eventData string) Response {
 	// Request convention: "/dav/calendars/{calendarID}/{eventUID}" (no username segment).
@@ -1008,8 +1239,9 @@ type Propfind struct {
 
 // Prop represents properties
 type Prop struct {
-	XMLName xml.Name `xml:"prop"`
-	Inner   []byte   `xml:",innerxml"`
+	XMLName      xml.Name      `xml:"prop"`
+	Inner        []byte        `xml:",innerxml"`
+	CalendarData *CalendarData `xml:"calendar-data"`
 }
 
 // Multistatus represents a 207 Multi-Status response
@@ -1046,6 +1278,27 @@ type CalendarQuery struct {
 	Filter     *FilterWrap `xml:"filter,omitempty"`
 	CompFilter *CompFilter `xml:"comp-filter,omitempty"` // tolerated direct form
 	Prop       *Prop       `xml:"prop,omitempty"`
+}
+
+// CalendarData represents the RFC 4791 §9.6 calendar-data element of a
+// calendar-query REPORT: the requested recurrence expansion and result cap
+// for the returned component data.
+type CalendarData struct {
+	Expand *Expand `xml:"expand,omitempty"`
+	Limit  *Limit  `xml:"limit,omitempty"`
+}
+
+// Expand represents the RFC 4791 §9.6.5 expand element: the recurrence set
+// is expanded and only instances overlapping [start, end) are returned.
+type Expand struct {
+	Start string `xml:"start,attr"`
+	End   string `xml:"end,attr"`
+}
+
+// Limit represents the RFC 4791 §9.6.4 limit element: the maximum number of
+// recurrence instances returned in the expanded data.
+type Limit struct {
+	NResults int `xml:"nresults"`
 }
 
 // FilterWrap wraps the RFC 4791 §9.9 filter element.
