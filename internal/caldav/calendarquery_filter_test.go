@@ -138,3 +138,51 @@ func TestCalendarQueryUnsupportedPropFilterRejected(t *testing.T) {
 		t.Fatalf("FAIL: 403 response lacks the CALDAV:supported-filter precondition")
 	}
 }
+
+// TestCalendarQueryZeroLengthComponentMatchesInsideRange: a DTSTART-only
+// (point) event matches a time-range whose interval contains the point
+// (RFC 4791 §9.9.1 zero-length rule); a point outside the range is excluded.
+func TestCalendarQueryZeroLengthComponentMatchesInsideRange(t *testing.T) {
+	server := NewServer(t.TempDir(), nil)
+	mk := httptest.NewRequest("MKCALENDAR", "/dav/calendars/cal-1", nil)
+	mk.SetBasicAuth("alice", "pw")
+	mkw := httptest.NewRecorder()
+	server.ServeHTTP(mkw, mk)
+	if mkw.Code != http.StatusCreated {
+		t.Fatalf("CONTROL FAILED (harness): MKCALENDAR = %d, want 201", mkw.Code)
+	}
+
+	put := func(path, body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(body))
+		req.SetBasicAuth("alice", "pw")
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, req)
+		if w.Code < 200 || w.Code >= 300 {
+			t.Fatalf("CONTROL FAILED (harness): PUT %s = %d, want 2xx", path, w.Code)
+		}
+	}
+
+	// Point events: DTSTART only (DTEND absent = zero-length).
+	put("/dav/calendars/cal-1/point-in",
+		"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//proof//EN\r\nBEGIN:VEVENT\r\nUID:point-in\r\nSUMMARY:point inside\r\nDTSTART:20260315T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+	put("/dav/calendars/cal-1/point-out",
+		"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//proof//EN\r\nBEGIN:VEVENT\r\nUID:point-out\r\nSUMMARY:point outside\r\nDTSTART:20260515T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+
+	body := eventQueryXML(`<c:comp-filter name="VEVENT">` +
+		`<c:time-range start="20260301T000000Z" end="20260401T000000Z"/>` +
+		`</c:comp-filter>`)
+	req := httptest.NewRequest("REPORT", "/dav/calendars/cal-1", strings.NewReader(body))
+	req.SetBasicAuth("alice", "pw")
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	if w.Code != http.StatusMultiStatus {
+		t.Fatalf("FAIL: REPORT = %d, want 207", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "point-in") {
+		t.Fatalf("FAIL: the zero-length event inside the range was not matched (RFC 4791 §9.9.1)")
+	}
+	if strings.Contains(w.Body.String(), "point-out") {
+		t.Fatalf("FAIL: the zero-length event outside the range was matched")
+	}
+}

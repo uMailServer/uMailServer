@@ -432,9 +432,14 @@ func compFilterMatches(cf *CompFilter, icsData string) bool {
 			// is before the range end and the component end is after the
 			// range start; a zero-length component matches points inside.
 			if end.Equal(start) {
-				if !start.Before(rEnd) || start.Before(rStart) {
+				// RFC 4791 §9.9.1: a zero-length component matches when its
+				// point lies inside the range (rStart <= start < rEnd).
+				pointInRange := start.Before(rEnd) && !start.Before(rStart)
+				if !pointInRange {
 					continue
 				}
+				matched = true
+				break
 			} else if start.Before(rEnd) && end.After(rStart) {
 				matched = true
 				break
