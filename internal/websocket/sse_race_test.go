@@ -13,6 +13,17 @@ package websocket
 // ResponseWriter — httptest.NewRecorder is single-goroutine by design) and is
 // meant to run under -race (Makefile test-race): any unsynchronized overlap
 // trips the detector. Frame integrity is asserted functionally as well.
+//
+// Delivery-count note (CI flake, fixed): the original version fired the
+// 300-send storm without waiting for it, slept a blind 400ms, closed the
+// stream and asserted >= 50 frames. The IMAP notification hub deliberately
+// DROPS notifications when a subscriber's 100-slot buffer is full
+// (internal/imap/notifications.go — select/default, "buffer to prevent
+// blocking"): under CI runner load the handler falls behind, drops occur and
+// the received count fell below the threshold. The hub path is best-effort by
+// design, so the count assertion now rests on the guaranteed path only: the
+// 150 SendToUser ticks bypass the hub (direct writes, no drop path), the
+// storm is awaited, and the drain polls with a deadline before closing.
 
 import (
 	"bufio"
@@ -20,6 +31,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,8 +64,15 @@ func TestSSESendEventIsSafeForConcurrentWriters(t *testing.T) {
 		datas  int
 		data   string
 	}
+
 	frames := make(chan sseFrame, 4096)
 	readerDone := make(chan struct{})
+	var mu sync.Mutex
+	var collected []sseFrame
+	received := 0
+	connectedOnce := false
+	connected := make(chan struct{})
+
 	go func() {
 		defer close(readerDone)
 		defer close(frames)
@@ -80,25 +99,35 @@ func TestSSESendEventIsSafeForConcurrentWriters(t *testing.T) {
 		}
 	}()
 
-	// Wait for the connected event (bounded).
-	connected := make(chan struct{})
+	// The single consumer: collects every frame (the only reader of the
+	// channel), counts deliveries and signals the connected event once.
 	go func() {
 		for f := range frames {
-			if strings.Contains(f.data, "\"user\":\"alice\"") {
+			mu.Lock()
+			collected = append(collected, f)
+			received++
+			if !connectedOnce && strings.Contains(f.data, "\"user\":\"alice\"") {
+				connectedOnce = true
 				close(connected)
-				return
 			}
+			mu.Unlock()
 		}
 	}()
+
+	// Wait for the connected event (bounded).
 	select {
 	case <-connected:
-	case <-time.After(5 * time.Second):
-		t.Fatal("no connected event within 5s")
+	case <-time.After(10 * time.Second):
+		t.Fatal("no connected event within 10s")
 	}
 
 	// Two concurrent writers on the same client: the handler goroutine (via
-	// notification-hub traffic) and a foreign goroutine (SendToUser).
+	// notification-hub traffic — best-effort, may drop under backpressure)
+	// and a foreign goroutine (SendToUser — direct writes, no drop path).
+	var storm sync.WaitGroup
+	storm.Add(1)
 	go func() {
+		defer storm.Done()
 		for i := 0; i < 150; i++ {
 			imap.GetNotificationHub().NotifyNewMessage("alice", "INBOX", uint32(i+1), uint32(i+1))
 			time.Sleep(time.Millisecond)
@@ -110,15 +139,39 @@ func TestSSESendEventIsSafeForConcurrentWriters(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	// The notification goroutine's sends must complete before any counting:
+	// the original test never waited on it and closed the stream mid-storm.
+	storm.Wait()
 
-	// Drain, then close the stream and validate every frame received.
-	time.Sleep(400 * time.Millisecond)
+	// Bounded drain: the 150 direct-write ticks cannot be dropped, so they
+	// must all be delivered once the sends are done and the handler catches
+	// up. Wait for them (or fail on the deadline) instead of guessing with a
+	// blind sleep that breaks under CI runner load.
+	deadline := time.After(10 * time.Second)
+	for {
+		mu.Lock()
+		n := received
+		mu.Unlock()
+		if n >= 150 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("only %d frames delivered within the drain deadline — the 150 guaranteed SendToUser ticks did not arrive", n)
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+
+	// Close the stream and validate every frame received.
 	resp.Body.Close()
 	<-readerDone
 
-	checked := 0
-	for f := range frames {
-		checked++
+	mu.Lock()
+	defer mu.Unlock()
+	if len(collected) < 150 {
+		t.Fatalf("only %d frames collected — the 150 direct-write ticks alone should be present", len(collected))
+	}
+	for _, f := range collected {
 		if f.events != 1 {
 			t.Fatalf("torn SSE frame: %d event lines in one frame (want exactly 1): %+v", f.events, f)
 		}
@@ -128,8 +181,5 @@ func TestSSESendEventIsSafeForConcurrentWriters(t *testing.T) {
 		if !json.Valid([]byte(f.data)) {
 			t.Fatalf("SSE frame data is not valid JSON (torn write): %q", f.data)
 		}
-	}
-	if checked < 50 {
-		t.Fatalf("only %d frames observed — expected dozens during the storm", checked)
 	}
 }
