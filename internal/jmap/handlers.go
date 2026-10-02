@@ -1719,17 +1719,6 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 	}
 }
 
-// queryChangesState implements the RFC 8620 §5.6 contract shared by the
-// /queryChanges handlers: the server keeps no query snapshots, so it cannot
-// compute the delta for any sinceQueryState other than the current one and
-// MUST answer stateMismatch instead of an (empty, silently misleading)
-// delta. Returns the current query state token and whether the request may
-// proceed.
-func (s *Server) queryChangesState(user, sinceQueryState string) (string, bool) {
-	current := s.stateToken(user)
-	return current, sinceQueryState != "" && sinceQueryState == current
-}
-
 // handleMailboxQueryChanges handles Mailbox/queryChanges method (RFC 8620)
 func (s *Server) handleMailboxQueryChanges(user string, call MethodCall) Response {
 	args := call.Args
