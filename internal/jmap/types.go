@@ -1,5 +1,10 @@
 package jmap
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 // Core JMAP types per RFC 8620
 
 // Request represents a JMAP request
@@ -10,17 +15,77 @@ type Request struct {
 }
 
 // MethodCall represents a single method call
+//
+// RFC 8620 §3.3: on the wire a method call is a 3-element array
+// ["Name", {arguments}, "callId"]. Decoding also accepts the legacy
+// object form {"name","args","id"} for backward compatibility with
+// clients written against this server's pre-RFC wire format.
 type MethodCall struct {
 	Name string                 `json:"name"`
 	Args map[string]interface{} `json:"args"`
 	ID   string                 `json:"id"`
 }
 
+// UnmarshalJSON accepts the RFC 8620 §3.3 array form and the legacy object form.
+func (c *MethodCall) UnmarshalJSON(data []byte) error {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(data, &arr); err == nil {
+		if len(arr) != 3 {
+			return fmt.Errorf("jmap: method call must be [name, arguments, callId], got %d elements", len(arr))
+		}
+		if err := json.Unmarshal(arr[0], &c.Name); err != nil {
+			return fmt.Errorf("jmap: method call name: %w", err)
+		}
+		if err := json.Unmarshal(arr[1], &c.Args); err != nil {
+			return fmt.Errorf("jmap: method call arguments: %w", err)
+		}
+		if err := json.Unmarshal(arr[2], &c.ID); err != nil {
+			return fmt.Errorf("jmap: method call id: %w", err)
+		}
+		return nil
+	}
+	// Legacy object form {"name","args","id"}.
+	type methodCallAlias MethodCall
+	return json.Unmarshal(data, (*methodCallAlias)(c))
+}
+
 // Response represents a method response
+//
+// RFC 8620 §3.4: on the wire a method response is a 3-element array
+// ["Name", {arguments}, "callId"]; it is emitted in that form. Decoding
+// also accepts the legacy object form {"name","args","id"}.
 type Response struct {
 	Name string                 `json:"name"`
 	Args map[string]interface{} `json:"args"`
 	ID   string                 `json:"id"`
+}
+
+// MarshalJSON emits the RFC 8620 §3.4 array form.
+func (r Response) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]interface{}{r.Name, r.Args, r.ID})
+}
+
+// UnmarshalJSON accepts the RFC 8620 §3.4 array form and the legacy object form.
+func (r *Response) UnmarshalJSON(data []byte) error {
+	var arr []json.RawMessage
+	if err := json.Unmarshal(data, &arr); err == nil {
+		if len(arr) != 3 {
+			return fmt.Errorf("jmap: method response must be [name, arguments, callId], got %d elements", len(arr))
+		}
+		if err := json.Unmarshal(arr[0], &r.Name); err != nil {
+			return fmt.Errorf("jmap: method response name: %w", err)
+		}
+		if err := json.Unmarshal(arr[1], &r.Args); err != nil {
+			return fmt.Errorf("jmap: method response arguments: %w", err)
+		}
+		if err := json.Unmarshal(arr[2], &r.ID); err != nil {
+			return fmt.Errorf("jmap: method response id: %w", err)
+		}
+		return nil
+	}
+	// Legacy object form {"name","args","id"}.
+	type responseAlias Response
+	return json.Unmarshal(data, (*responseAlias)(r))
 }
 
 // ResponseObject represents the top-level response

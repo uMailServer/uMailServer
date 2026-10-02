@@ -495,6 +495,7 @@ func (s *Server) dispatchMethodCall(user string, call MethodCall) Response {
 		return Response{
 			Name: "error",
 			Args: map[string]interface{}{"type": "unknownMethod"},
+			ID:   call.ID,
 		}
 	}
 }

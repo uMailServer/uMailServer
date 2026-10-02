@@ -106,11 +106,9 @@ func emailQueryPost(t *testing.T, ts *httptest.Server, position float64) (int, m
 	if resp.StatusCode != 200 {
 		t.Fatalf("position %v: status %d, want 200", position, resp.StatusCode)
 	}
+	// RFC 8620 §3.4: method responses are ["Name", {arguments}, "callId"].
 	var parsed struct {
-		MethodResponses []struct {
-			Name string                 `json:"name"`
-			Args map[string]interface{} `json:"args"`
-		} `json:"methodResponses"`
+		MethodResponses []json.RawMessage `json:"methodResponses"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -118,7 +116,14 @@ func emailQueryPost(t *testing.T, ts *httptest.Server, position float64) (int, m
 	if len(parsed.MethodResponses) == 0 {
 		t.Fatalf("no method responses")
 	}
-	args := parsed.MethodResponses[0].Args
+	var entry []json.RawMessage
+	if err := json.Unmarshal(parsed.MethodResponses[0], &entry); err != nil {
+		t.Fatalf("methodResponses[0] is not RFC 8620 array form: %v (%s)", err, parsed.MethodResponses[0])
+	}
+	var args map[string]interface{}
+	if err := json.Unmarshal(entry[1], &args); err != nil {
+		t.Fatalf("methodResponses[0] arguments: %v", err)
+	}
 	idsRaw, _ := args["ids"].([]interface{})
 	var ids []string
 	for _, id := range idsRaw {

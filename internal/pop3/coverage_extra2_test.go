@@ -1,10 +1,10 @@
 package pop3
 
 import (
-	"github.com/umailserver/umailserver/internal/storage"
-	"os"
-	"path/filepath"
+	"bytes"
 	"testing"
+
+	"github.com/umailserver/umailserver/internal/storage"
 )
 
 func TestBboltStore_GetMessageDataBothFail(t *testing.T) {
@@ -119,7 +119,7 @@ func TestBboltStore_ListMessagesZeroSize(t *testing.T) {
 	}
 }
 
-func TestBboltStore_GetMessageDataINBOXFallback(t *testing.T) {
+func TestBboltStore_GetMessageDataReadsBlobAddressedData(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := storage.OpenDatabase(tmpDir + "/test.db")
 	if err != nil {
@@ -131,25 +131,23 @@ func TestBboltStore_GetMessageDataINBOXFallback(t *testing.T) {
 	}
 
 	user := "user@example.com"
-	uid := uint32(1000) // UID string "1000" has >= 4 chars for ReadMessage
+	uid := uint32(1000)
 
-	// Store metadata
+	// Raw octets are content-hash-addressed in the MessageStore; the blob id
+	// lives in the message metadata (MessageID) and GetMessageData resolves
+	// through it.
+	testData := []byte("blob addressed message data")
+	blobID, err := msgStore.StoreMessage(user, testData)
+	if err != nil {
+		t.Fatalf("StoreMessage failed: %v", err)
+	}
 	meta := &storage.MessageMetadata{
-		MessageID: "test1000",
+		MessageID: blobID,
 		UID:       uid,
 		Flags:     []string{},
-		Size:      20,
+		Size:      int64(len(testData)),
 	}
 	db.StoreMessageMetadata(user, "INBOX", uid, meta)
-
-	// The direct ReadMessage(user, "1000") will fail (no file there).
-	// The fallback ReadMessage(user, "INBOX/1000") looks at:
-	//   basePath/user/IN/BO/INBOX/1000
-	// (first 2 chars of "INBOX/1000" = "IN", next 2 = "BO")
-	inboxDir := filepath.Join(tmpDir, "messages", user, "IN", "BO", "INBOX")
-	os.MkdirAll(inboxDir, 0o755)
-	testData := []byte("INBOX fallback data!!")
-	os.WriteFile(filepath.Join(inboxDir, "1000"), testData, 0o644)
 
 	store := NewBboltStore(db, msgStore)
 	defer db.Close()
@@ -157,9 +155,9 @@ func TestBboltStore_GetMessageDataINBOXFallback(t *testing.T) {
 
 	data, err := store.GetMessageData(user, 1)
 	if err != nil {
-		t.Fatalf("GetMessageData with INBOX fallback failed: %v", err)
+		t.Fatalf("GetMessageData failed: %v", err)
 	}
-	if string(data) != string(testData) {
-		t.Errorf("Expected %q, got %q", string(testData), string(data))
+	if !bytes.Equal(data, testData) {
+		t.Fatalf("GetMessageData returned %q, want %q", string(data), string(testData))
 	}
 }

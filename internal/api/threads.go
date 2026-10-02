@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -322,33 +323,77 @@ func (s *Server) handleThreadDelete(w http.ResponseWriter, r *http.Request) {
 
 // getThreadsForMailbox retrieves threads for a user's mailbox
 func (s *Server) getThreadsForMailbox(user, mailbox string, limit, offset int) ([]*storage.Thread, error) {
-	// This is a placeholder - in a real implementation, we would query the database
-	// For now, return an empty list
-	return []*storage.Thread{}, nil
+	if s.mailDB == nil {
+		return nil, fmt.Errorf("mail storage unavailable")
+	}
+	// Threads are keyed per user in storage, so the mailbox filter does not
+	// participate in this query.
+	return s.mailDB.GetThreads(user, limit, offset)
 }
 
 // getThreadMessages retrieves messages for a specific thread
 func (s *Server) getThreadMessages(user, mailbox, threadID string) ([]*storage.ThreadMessage, error) {
-	// This is a placeholder - in a real implementation, we would query the database
-	// For now, return an empty list
-	return []*storage.ThreadMessage{}, nil
+	if s.mailDB == nil {
+		return nil, fmt.Errorf("mail storage unavailable")
+	}
+	return s.mailDB.GetThreadMessages(user, mailbox, threadID)
 }
 
 // searchThreads searches for threads matching a query
 func (s *Server) searchThreads(user, query string) ([]*storage.Thread, error) {
-	// This is a placeholder - in a real implementation, we would search the database
-	// For now, return an empty list
-	return []*storage.Thread{}, nil
+	if s.mailDB == nil {
+		return nil, fmt.Errorf("mail storage unavailable")
+	}
+	return s.mailDB.SearchThreads(user, query)
 }
 
 // markThreadAsRead marks all messages in a thread as read
 func (s *Server) markThreadAsRead(user, mailbox, threadID string) error {
-	// This is a placeholder - in a real implementation, we would update the database
+	if s.mailDB == nil {
+		return fmt.Errorf("mail storage unavailable")
+	}
+	msgs, err := s.mailDB.GetThreadMessages(user, mailbox, threadID)
+	if err != nil {
+		return err
+	}
+	// Same read convention as mail.go: a message is read when the \Seen
+	// flag is set. UpdateMessageMetadataFunc applies the flag atomically
+	// per message (no read-modify-write race).
+	for _, m := range msgs {
+		err := s.mailDB.UpdateMessageMetadataFunc(user, mailbox, m.UID, func(meta *storage.MessageMetadata) error {
+			if !storage.HasFlag(meta.Flags, "\\Seen") {
+				meta.Flags = append(meta.Flags, "\\Seen")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	// Best-effort aggregate refresh: the Thread row exists only when the
+	// IMAP delivery path has written one; a missing row is not an error.
+	if thread, err := s.mailDB.GetThread(user, threadID); err == nil {
+		thread.UnreadCount = 0
+		if err := s.mailDB.UpdateThread(user, thread); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // deleteThread deletes all messages in a thread
 func (s *Server) deleteThread(user, mailbox, threadID string) error {
-	// This is a placeholder - in a real implementation, we would delete from the database
-	return nil
+	if s.mailDB == nil {
+		return fmt.Errorf("mail storage unavailable")
+	}
+	msgs, err := s.mailDB.GetThreadMessages(user, mailbox, threadID)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
+		if err := s.mailDB.DeleteMessage(user, mailbox, m.UID); err != nil {
+			return err
+		}
+	}
+	return s.mailDB.DeleteThread(user, threadID)
 }

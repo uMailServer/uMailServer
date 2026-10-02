@@ -1309,6 +1309,15 @@ func TestHandleThreadDetail_NotFound(t *testing.T) {
 	server, database, token := helperSetupAccount(t)
 	defer database.Close()
 
+	// Wire real (empty) mail storage so the detail handler reads storage
+	// instead of failing on a missing backend.
+	mailDB, err := storage.OpenDatabase(t.TempDir() + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail storage: %v", err)
+	}
+	defer mailDB.Close()
+	server.SetMailDB(mailDB)
+
 	// Get non-existent thread
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/threads/nonexistent", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

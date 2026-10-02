@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -754,6 +755,9 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 		IsAdmin:      false,
 	}
 	if err := s.db.CreateAccount(account); err != nil {
+		if errors.Is(err, db.ErrAccountExists) {
+			return nil, fmt.Errorf("account already exists")
+		}
 		slog.Error("mcp tool error", "tool", "add_account", "error", err)
 		return nil, fmt.Errorf("internal server error")
 	}

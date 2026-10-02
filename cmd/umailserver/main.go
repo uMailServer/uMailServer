@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -363,10 +364,15 @@ domains:
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create account: %v\n", err)
-		os.Exit(1)
+		if errors.Is(err, db.ErrAccountExists) {
+			fmt.Printf("✓ Admin account already exists: %s\n", email)
+		} else {
+			fmt.Fprintf(os.Stderr, "Failed to create account: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Printf("✓ Admin account created: %s\n", email)
 	}
-	fmt.Printf("✓ Admin account created: %s\n", email)
 
 	// Print DNS records
 	fmt.Println("\n=== Required DNS Records ===")
@@ -690,6 +696,10 @@ func cmdAccount(args []string) {
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
 		}); err != nil {
+			if errors.Is(err, db.ErrAccountExists) {
+				fmt.Fprintf(os.Stderr, "Account already exists: %s\n", email)
+				os.Exit(1)
+			}
 			fmt.Fprintf(os.Stderr, "Failed to create account: %v\n", err)
 			os.Exit(1)
 		}

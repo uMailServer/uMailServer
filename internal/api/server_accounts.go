@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -185,6 +186,10 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.db.CreateAccount(account); err != nil {
+		if errors.Is(err, db.ErrAccountExists) {
+			s.sendError(w, http.StatusConflict, "account already exists")
+			return
+		}
 		s.sendError(w, http.StatusInternalServerError, "failed to create account")
 		return
 	}

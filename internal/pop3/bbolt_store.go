@@ -55,9 +55,10 @@ func (s *BboltStore) ListMessages(user string) ([]*Message, error) {
 		}
 
 		msg := &Message{
-			Index: i + 1, // 1-based index for POP3
-			UID:   fmt.Sprintf("%d", uid),
-			Size:  meta.Size,
+			Index:  i + 1, // 1-based index for POP3
+			UID:    fmt.Sprintf("%d", uid),
+			BlobID: meta.MessageID,
+			Size:   meta.Size,
 		}
 		messages = append(messages, msg)
 	}
@@ -86,15 +87,15 @@ func (s *BboltStore) GetMessageData(user string, index int) ([]byte, error) {
 		return nil, err
 	}
 
-	// Try to read from message store using UID as message ID
-	messageID := msg.UID
-	data, err := s.msgStore.ReadMessage(user, messageID)
+	if msg.BlobID == "" {
+		return nil, fmt.Errorf("message data unavailable: no blob id in metadata")
+	}
+
+	// Raw octets are content-hash-addressed; the blob id comes from the
+	// message metadata (MessageID), not the POP3 index or numeric UID.
+	data, err := s.msgStore.ReadMessage(user, msg.BlobID)
 	if err != nil {
-		// Fallback: try with INBOX prefix
-		data, err = s.msgStore.ReadMessage(user, "INBOX/"+messageID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read message data: %w", err)
-		}
+		return nil, fmt.Errorf("failed to read message data: %w", err)
 	}
 
 	return data, nil

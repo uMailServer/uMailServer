@@ -191,6 +191,25 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 
 	calendarID := parts[2]
 
+	// Apply the calendar-query filter (RFC 4791 §9.9). The filter element is
+	// the RFC shape; a direct comp-filter child is tolerated as a legacy
+	// form. Shapes the server cannot honor (property filters, unparseable or
+	// misplaced time ranges, a non-VCALENDAR root) are rejected explicitly
+	// with the CALDAV:supported-filter precondition (RFC 4791 §3.11) instead
+	// of silently ignoring the filter.
+	var compFilter *CompFilter
+	switch {
+	case query.Filter != nil:
+		compFilter = query.Filter.CompFilter
+	case query.CompFilter != nil:
+		compFilter = query.CompFilter
+	}
+
+	if compFilter != nil && (compFilter.Name != "VCALENDAR" || !supportedCompFilter(compFilter)) {
+		s.sendUnsupportedFilter(w)
+		return
+	}
+
 	// Build response
 	multistatus := &Multistatus{}
 
@@ -198,6 +217,9 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 	events, err := s.storage.GetEvents(username, calendarID)
 	if err == nil {
 		for _, eventData := range events {
+			if !compFilterMatches(compFilter, eventData) {
+				continue
+			}
 			uid := extractUIDFromICS(eventData)
 			if uid != "" {
 				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
@@ -211,6 +233,289 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 	output, _ := xml.MarshalIndent(multistatus, "", "  ")
 	_, _ = w.Write([]byte(xml.Header))
 	_, _ = w.Write(output)
+}
+
+// extractComponentBlocks returns the bodies of all BEGIN:<name>...END:<name>
+// blocks in the iCalendar data.
+func extractComponentBlocks(icsData, name string) []string {
+	var blocks []string
+	inBlock := false
+	var current []string
+	for _, line := range strings.Split(icsData, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if strings.HasPrefix(line, "BEGIN:"+name) {
+			inBlock = true
+			current = nil
+			continue
+		}
+		if inBlock && strings.HasPrefix(line, "END:"+name) {
+			blocks = append(blocks, strings.Join(current, "\n"))
+			inBlock = false
+			continue
+		}
+		if inBlock {
+			current = append(current, line)
+		}
+	}
+	return blocks
+}
+
+// parseICSTime parses an iCalendar DATE-TIME (optionally UTC-suffixed) or
+// DATE value into a time.Time.
+// extractPropertyValue returns the value of the first property named name in
+// a component body, with RFC 5545 folded continuation lines (leading space or
+// tab) unfolded into the value.
+func extractPropertyValue(block, name string) (string, bool) {
+	want := strings.ToUpper(name)
+	value := ""
+	found := false
+	for _, raw := range strings.Split(block, "\n") {
+		line := strings.TrimSuffix(raw, "\r")
+		if line == "" {
+			continue
+		}
+		if line[0] == ' ' || line[0] == '\t' {
+			if found {
+				value += strings.TrimPrefix(strings.TrimPrefix(line, " "), "\t")
+			}
+			continue
+		}
+		if found {
+			break
+		}
+		colon := strings.Index(line, ":")
+		if colon < 0 {
+			continue
+		}
+		namePart := line[:colon]
+		if semi := strings.Index(namePart, ";"); semi >= 0 {
+			namePart = namePart[:semi]
+		}
+		if strings.ToUpper(namePart) != want {
+			continue
+		}
+		value = line[colon+1:]
+		found = true
+	}
+	return strings.TrimSpace(value), found
+}
+
+// propFilterMatches applies one RFC 4791 §9.9.2 prop-filter to a component
+// body: property presence (or absence with is-not-defined), then the §9.9.4
+// text-match substring test with negation and collation (i;octet is
+// case-sensitive; the casemap collations and no collation are
+// case-insensitive). Unknown collations fail closed; supportedCompFilter
+// answers them with a 403 upstream.
+func propFilterMatches(pf *PropFilter, block string) bool {
+	value, found := extractPropertyValue(block, pf.Name)
+	if pf.IsNotDefined != nil {
+		return !found
+	}
+	if !found {
+		return false
+	}
+	if pf.TextMatch == nil {
+		return true
+	}
+	var matched bool
+	switch pf.TextMatch.Collation {
+	case "i;octet":
+		matched = strings.Contains(value, pf.TextMatch.Value)
+	case "", "i;ascii-casemap", "i;unicode-casemap":
+		matched = strings.Contains(strings.ToLower(value), strings.ToLower(pf.TextMatch.Value))
+	default:
+		return false
+	}
+	if pf.TextMatch.NegateCondition == "yes" {
+		return !matched
+	}
+	return matched
+}
+
+func parseICSTime(value string) (time.Time, bool) {
+	value = strings.TrimSuffix(value, "\r")
+	if t, err := time.Parse("20060102T150405Z", value); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse("20060102T150405", value); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse("20060102", value); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+// componentTimeRange returns the interval covered by a component body from
+// its DTSTART/DTEND properties; ok is false when DTSTART is absent or
+// unparseable. A component without DTEND is a zero-length interval.
+func componentTimeRange(body string) (start, end time.Time, ok bool) {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if start.IsZero() && strings.HasPrefix(line, "DTSTART") {
+			if idx := strings.Index(line, ":"); idx >= 0 {
+				if t, parsed := parseICSTime(line[idx+1:]); parsed {
+					start = t
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "DTEND") {
+			if idx := strings.Index(line, ":"); idx >= 0 {
+				if t, parsed := parseICSTime(line[idx+1:]); parsed {
+					end = t
+				}
+			}
+		}
+	}
+	if start.IsZero() {
+		return time.Time{}, time.Time{}, false
+	}
+	if end.IsZero() {
+		end = start
+	}
+	return start, end, true
+}
+
+// parseTimeRange parses the RFC 4791 §9.9.3 start/end attributes.
+func parseTimeRange(tr *TimeRange) (time.Time, time.Time, bool) {
+	if tr == nil {
+		return time.Time{}, time.Time{}, false
+	}
+	start, okStart := parseICSTime(tr.Start)
+	end, okEnd := parseICSTime(tr.End)
+	if !okStart || !okEnd {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, end, true
+}
+
+// compFilterMatches reports whether the iCalendar data satisfies the
+// component filter: the named component must be present, any time-range must
+// intersect its interval, and every nested comp-filter must match within it.
+// A nil filter matches everything.
+func compFilterMatches(cf *CompFilter, icsData string) bool {
+	if cf == nil {
+		return true
+	}
+
+	blocks := extractComponentBlocks(icsData, cf.Name)
+	if len(blocks) == 0 {
+		return false
+	}
+
+	for _, pf := range cf.PropFilters {
+		matched := false
+		for _, body := range blocks {
+			if propFilterMatches(&pf, body) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	if cf.TimeRange != nil {
+		rStart, rEnd, ok := parseTimeRange(cf.TimeRange)
+		if !ok {
+			return false
+		}
+		matched := false
+		for _, body := range blocks {
+			start, end, ok := componentTimeRange(body)
+			if !ok {
+				continue
+			}
+			// RFC 4791 §9.9.1: intervals intersect when the component start
+			// is before the range end and the component end is after the
+			// range start; a zero-length component matches points inside.
+			if end.Equal(start) {
+				if !start.Before(rEnd) || start.Before(rStart) {
+					continue
+				}
+			} else if start.Before(rEnd) && end.After(rStart) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	for _, nested := range cf.CompFilters {
+		matched := false
+		for _, body := range blocks {
+			wrapped := "BEGIN:" + cf.Name + "\n" + body + "\nEND:" + cf.Name
+			if compFilterMatches(nested, wrapped) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	return true
+}
+
+// supportedCompFilter reports whether the filter tree only uses implemented
+// features: component presence matching, time-range on temporal components,
+// property filters with text-match/is-not-defined, and nested comp-filters.
+// Param-filters, mutually exclusive is-not-defined and text-match, unknown
+// collations, and unparseable time ranges are unsupported (RFC 4791 §3.11).
+func supportedCompFilter(cf *CompFilter) bool {
+	if cf == nil {
+		return true
+	}
+	if cf.Name == "" {
+		return false
+	}
+	for _, pf := range cf.PropFilters {
+		if pf.IsNotDefined != nil && pf.TextMatch != nil {
+			return false
+		}
+		if len(pf.ParamFilters) > 0 {
+			return false
+		}
+		if pf.TextMatch != nil {
+			switch pf.TextMatch.Collation {
+			case "", "i;ascii-casemap", "i;unicode-casemap", "i;octet":
+			default:
+				return false
+			}
+		}
+	}
+	if cf.TimeRange != nil {
+		if _, _, ok := parseTimeRange(cf.TimeRange); !ok {
+			return false
+		}
+		switch cf.Name {
+		case "VEVENT", "VTODO", "VJOURNAL":
+		default:
+			return false
+		}
+	}
+	for _, nested := range cf.CompFilters {
+		if !supportedCompFilter(nested) {
+			return false
+		}
+	}
+	return true
+}
+
+// sendUnsupportedFilter answers a REPORT whose filter the server cannot
+// honor with the CALDAV:supported-filter precondition (RFC 4791 §3.11).
+func (s *Server) sendUnsupportedFilter(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(xml.Header))
+	_, _ = w.Write([]byte(`<d:error xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">` +
+		`<c:supported-filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"/><c:comp-filter name="VTODO"/></c:supported-filter>` +
+		`</d:error>`))
 }
 
 // handlePut handles PUT requests for creating/updating events
@@ -733,14 +1038,58 @@ type Property struct {
 // CalendarQuery represents a calendar-query REPORT
 type CalendarQuery struct {
 	XMLName    xml.Name    `xml:"calendar-query"`
-	CompFilter *CompFilter `xml:"comp-filter,omitempty"`
+	Filter     *FilterWrap `xml:"filter,omitempty"`
+	CompFilter *CompFilter `xml:"comp-filter,omitempty"` // tolerated direct form
 	Prop       *Prop       `xml:"prop,omitempty"`
 }
 
-// CompFilter represents a component filter
+// FilterWrap wraps the RFC 4791 §9.9 filter element.
+type FilterWrap struct {
+	XMLName    xml.Name    `xml:"filter"`
+	CompFilter *CompFilter `xml:"comp-filter"`
+}
+
+// CompFilter represents a component filter (RFC 4791 §9.9.1)
 type CompFilter struct {
-	XMLName xml.Name `xml:"comp-filter"`
+	XMLName     xml.Name      `xml:"comp-filter"`
+	Name        string        `xml:"name,attr"`
+	TimeRange   *TimeRange    `xml:"time-range,omitempty"`
+	CompFilters []*CompFilter `xml:"comp-filter,omitempty"`
+	PropFilters []PropFilter  `xml:"prop-filter,omitempty"`
+}
+
+// TimeRange represents the RFC 4791 §9.9.3 time-range element.
+type TimeRange struct {
+	Start string `xml:"start,attr"`
+	End   string `xml:"end,attr"`
+}
+
+// TextMatch represents the RFC 4791 §9.9.4 text-match element: a substring
+// test over a property value with an optional collation and negation.
+type TextMatch struct {
+	Collation       string `xml:"collation,attr"`
+	NegateCondition string `xml:"negate-condition,attr"`
+	Value           string `xml:",chardata"`
+}
+
+// ParamFilter represents the RFC 4791 §9.9.3 param-filter element; parsing
+// exists so its presence can be rejected via supported-filter instead of
+// silently ignored.
+type ParamFilter struct {
+	XMLName xml.Name `xml:"param-filter"`
 	Name    string   `xml:"name,attr"`
+}
+
+// PropFilter represents the RFC 4791 §9.9.2 prop-filter element: a test over
+// a component property's presence (or, with is-not-defined, its absence) and
+// — via text-match — its value. Nested param-filters are parsed so their
+// presence is rejected via supported-filter instead of silently ignored.
+type PropFilter struct {
+	XMLName      xml.Name      `xml:"prop-filter"`
+	Name         string        `xml:"name,attr"`
+	TextMatch    *TextMatch    `xml:"text-match"`
+	IsNotDefined *struct{}     `xml:"is-not-defined"`
+	ParamFilters []ParamFilter `xml:"param-filter"`
 }
 
 // CalendarEvent represents a calendar event
