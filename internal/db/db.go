@@ -37,6 +37,10 @@ type DB struct {
 }
 
 // AccountData holds account information
+// ErrAccountExists is returned by CreateAccount when an account with the
+// same domain/local part already exists.
+var ErrAccountExists = errors.New("account already exists")
+
 type AccountData struct {
 	Email            string    `json:"email"`
 	LocalPart        string    `json:"local_part"`
@@ -313,7 +317,24 @@ func (d *DB) CreateAccount(account *AccountData) error {
 	account.UpdatedAt = time.Now()
 
 	key := AccountKey(account.Domain, account.LocalPart)
-	return d.Put(BucketAccounts, key, account)
+	data, err := json.Marshal(account)
+	if err != nil {
+		return fmt.Errorf("failed to marshal account: %w", err)
+	}
+
+	// Atomic check-and-put in a single transaction: a duplicate create
+	// returns ErrAccountExists instead of silently overwriting the stored
+	// account (last-write-wins on the same key).
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		if b.Get([]byte(key)) != nil {
+			return ErrAccountExists
+		}
+		return b.Put([]byte(key), data)
+	})
 }
 
 // GetAccount retrieves an account
@@ -364,6 +385,50 @@ func (d *DB) IncrementQuota(domain, localPart string, delta int64) error {
 		}
 		return b.Put([]byte(key), newData)
 	})
+}
+
+// ConsumeTOTPStep atomically advances an account's TOTP replay guard inside
+// a single bbolt transaction. It reports consumed=false when the stored
+// TOTPLastUsedStep is not the expected value — another login consumed a step
+// in the meantime and the caller must treat the code as replayed
+// (RFC 6238 §5.2) — so API-layer read-modify-write races cannot bypass the
+// single-acceptance rule.
+func (d *DB) ConsumeTOTPStep(domain, localPart string, expectedLast, newStep int64) (bool, error) {
+	key := AccountKey(domain, localPart)
+	consumed := false
+	err := d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		data := b.Get([]byte(key))
+		if data == nil {
+			return fmt.Errorf("key not found: %s", key)
+		}
+		var account AccountData
+		if err := json.Unmarshal(data, &account); err != nil {
+			return err
+		}
+		if account.TOTPLastUsedStep != expectedLast {
+			// consumed stays false: the step moved under us.
+			return nil
+		}
+		account.TOTPLastUsedStep = newStep
+		account.UpdatedAt = time.Now()
+		newData, err := json.Marshal(&account)
+		if err != nil {
+			return fmt.Errorf("failed to marshal value: %w", err)
+		}
+		if err := b.Put([]byte(key), newData); err != nil {
+			return err
+		}
+		consumed = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return consumed, nil
 }
 
 // StoreRevokedToken persists a revoked token hash with its expiry time.

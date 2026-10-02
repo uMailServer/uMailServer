@@ -21,7 +21,7 @@ import (
 func runTOP(t *testing.T, raw string, cmd string) (string, []string) {
 	t.Helper()
 	store := newMockMailstore()
-	store.dataMap[0] = []byte(raw)
+	store.dataMap[1] = []byte(raw)
 	srv, addr := startTestServer(t, store, func(user, pass string) (bool, error) {
 		return true, nil
 	})

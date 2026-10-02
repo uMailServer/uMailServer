@@ -341,10 +341,15 @@ func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
 		}
 
 		if meta.MessageID == messageID {
-			if !hasFlag(meta.Flags, "\\Seen") {
-				meta.Flags = append(meta.Flags, "\\Seen")
-				_ = h.mailDB.UpdateMessageMetadata(userEmail, mailbox, uid, meta)
-			}
+			// Atomic read-modify-write: the flag check and write happen in
+			// one storage transaction, so a concurrent flag change (an IMAP
+			// keyword, another session) can never be clobbered by a stale copy.
+			_ = h.mailDB.UpdateMessageMetadataFunc(userEmail, mailbox, uid, func(m *storage.MessageMetadata) error {
+				if !hasFlag(m.Flags, "\\Seen") {
+					m.Flags = append(m.Flags, "\\Seen")
+				}
+				return nil
+			})
 			break
 		}
 	}

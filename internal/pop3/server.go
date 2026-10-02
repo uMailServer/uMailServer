@@ -89,10 +89,11 @@ type Mailstore interface {
 
 // Message represents a POP3 message
 type Message struct {
-	Index int
-	UID   string
-	Size  int64
-	Data  []byte
+	Index  int
+	UID    string
+	BlobID string // content-hash address of the raw octets in the MessageStore
+	Size   int64
+	Data   []byte
 }
 
 // Session represents a POP3 client session
@@ -777,7 +778,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		// Load message data if not loaded
 		if msg.Data == nil {
 			var loadErr error
-			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index-1)
+			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index)
 			if loadErr != nil {
 				s.WriteResponse("-ERR Failed to read message")
 				return nil
@@ -879,7 +880,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		// Load message data
 		if msg.Data == nil {
 			var loadErr error
-			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index-1)
+			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index)
 			if loadErr != nil {
 				s.WriteResponse("-ERR Failed to read message")
 				return nil

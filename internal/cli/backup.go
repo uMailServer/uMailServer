@@ -648,12 +648,13 @@ func (bm *BackupManager) Verify(backupFile string) error {
 
 	tr := tar.NewReader(gr)
 
-	// Read manifest and verify all file hashes
+	// First pass: locate and parse the manifest. Backup() writes the
+	// manifest as the LAST member, so it cannot be parsed in the same pass
+	// that verifies the files — a single pass sees an empty expectedHashes
+	// for every file entry and verifies nothing.
 	var manifest map[string]interface{}
 	var expectedHashes []fileHash
 	manifestFound := false
-	filesVerified := 0
-	filesFailed := 0
 
 	for {
 		header, err := tr.Next()
@@ -677,19 +678,44 @@ func (bm *BackupManager) Verify(backupFile string) error {
 			if files, ok := manifest["files"].([]interface{}); ok {
 				for _, f := range files {
 					if fileMap, ok := f.(map[string]interface{}); ok {
-						h := fileHash{
+						expectedHashes = append(expectedHashes, fileHash{
 							Path: getString(fileMap, "path"),
 							Hash: getString(fileMap, "hash"),
 							Size: getInt64(fileMap, "size"),
-						}
-						expectedHashes = append(expectedHashes, h)
+						})
 					}
 				}
 			}
 			manifestFound = true
 			fmt.Printf("Backup created: %s\n", manifest["timestamp"])
 			fmt.Printf("Hostname: %s\n", manifest["hostname"])
-			continue
+			break
+		}
+	}
+
+	if !manifestFound {
+		return fmt.Errorf("invalid backup: manifest not found")
+	}
+
+	// Second pass: verify every regular member against the manifest hashes.
+	gr, err = gzip.NewReader(strings.NewReader(string(tarData)))
+	if err != nil {
+		return fmt.Errorf("failed to decompress backup: %w", err)
+	}
+	defer gr.Close()
+	tr = tar.NewReader(gr)
+
+	filesVerified := 0
+	filesFailed := 0
+	seen := make(map[string]bool)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar: %w", err)
 		}
 
 		// Skip non-regular files
@@ -704,27 +730,30 @@ func (bm *BackupManager) Verify(backupFile string) error {
 			return fmt.Errorf("failed to read file %s: %w", header.Name, err)
 		}
 
-		// Verify hash if we have expected hashes
-		if len(expectedHashes) > 0 {
-			computedHash := sha256.Sum256(content)
-			computedHashHex := hex.EncodeToString(computedHash[:])
-			for _, expected := range expectedHashes {
-				if expected.Path == header.Name {
-					if computedHashHex != expected.Hash {
-						fmt.Printf("  ✗ FAILED: %s\n", header.Name)
-						filesFailed++
-					} else {
-						fmt.Printf("  ✓ Verified: %s\n", header.Name)
-						filesVerified++
-					}
-					break
+		for _, expected := range expectedHashes {
+			if expected.Path == header.Name {
+				seen[expected.Path] = true
+				computedHash := sha256.Sum256(content)
+				if hex.EncodeToString(computedHash[:]) != expected.Hash {
+					fmt.Printf("  ✗ FAILED: %s\n", header.Name)
+					filesFailed++
+				} else {
+					fmt.Printf("  ✓ Verified: %s\n", header.Name)
+					filesVerified++
 				}
+				break
 			}
 		}
 	}
 
-	if !manifestFound {
-		return fmt.Errorf("invalid backup: manifest not found")
+	// Every file the manifest declares must be present in the archive.
+	// Without this coverage check a truncated or stripped archive — missing
+	// the database, for example — verifies as intact.
+	for _, expected := range expectedHashes {
+		if !seen[expected.Path] {
+			fmt.Printf("  ✗ MISSING: %s\n", expected.Path)
+			filesFailed++
+		}
 	}
 
 	fmt.Printf("\nVerification complete: %d files verified, %d failed\n", filesVerified, filesFailed)

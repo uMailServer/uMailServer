@@ -111,10 +111,21 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 		return
 	}
 
-	if !auth.ValidateTOTP(totpSecret, req.Code) {
+	valid, step := auth.ValidateTOTPAtWithStep(totpSecret, req.Code, time.Now(), auth.TOTPAlgorithmSHA1)
+	if !valid {
 		s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
 	}
+
+	// RFC 6238 §5.2: an OTP accepted once must never be accepted again.
+	// Consume the matched step here (persisted by the UpdateAccount below
+	// together with the enablement) so the same code cannot be replayed
+	// through the login path, which enforces the identical guard.
+	if step <= account.TOTPLastUsedStep {
+		s.sendError(w, http.StatusUnauthorized, "TOTP code already used")
+		return
+	}
+	account.TOTPLastUsedStep = step
 
 	// Code verified — enable TOTP
 	account.TOTPEnabled = true

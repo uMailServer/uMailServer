@@ -52,7 +52,10 @@ func TestCheckRBLServer_ValidIP(t *testing.T) {
 	d := &Diagnostics{}
 
 	// Test with a known clean IP (Google DNS)
-	listed, code := d.checkRBLServer("8.8.8.8", "bl.spamcop.net")
+	listed, code, lookupErr := d.checkRBLServer("8.8.8.8", "bl.spamcop.net")
+	if lookupErr != nil {
+		t.Skipf("RBL lookup could not run (%v)", lookupErr)
+	}
 	if listed {
 		t.Errorf("Expected 8.8.8.8 to NOT be listed on spamcop, got code %q", code)
 	}
@@ -62,9 +65,9 @@ func TestCheckRBLServer_InvalidIP(t *testing.T) {
 	d := &Diagnostics{}
 
 	// Invalid IP should return false
-	listed, _ := d.checkRBLServer("invalid", "bl.spamcop.net")
-	if listed {
-		t.Error("Expected invalid IP to return false")
+	listed, _, lookupErr := d.checkRBLServer("invalid", "bl.spamcop.net")
+	if listed || lookupErr == nil {
+		t.Errorf("invalid IP should return not-listed with a lookup error, got listed=%v err=%v", listed, lookupErr)
 	}
 }
 

@@ -130,7 +130,7 @@ func TestDELECommand_InvalidIndex(t *testing.T) {
 
 func TestTOPCommand_NoArgs(t *testing.T) {
 	store := newMockMailstore()
-	store.dataMap[0] = []byte("From: test\r\nSubject: Test\r\n\r\nBody\r\n")
+	store.dataMap[1] = []byte("From: test\r\nSubject: Test\r\n\r\nBody\r\n")
 	srv, addr := startTestServer(t, store, func(user, pass string) (bool, error) {
 		return true, nil
 	})
@@ -150,7 +150,7 @@ func TestTOPCommand_NoArgs(t *testing.T) {
 
 func TestTOPCommand_InvalidIndex(t *testing.T) {
 	store := newMockMailstore()
-	store.dataMap[0] = []byte("From: test\r\nSubject: Test\r\n\r\nBody\r\n")
+	store.dataMap[1] = []byte("From: test\r\nSubject: Test\r\n\r\nBody\r\n")
 	srv, addr := startTestServer(t, store, func(user, pass string) (bool, error) {
 		return true, nil
 	})

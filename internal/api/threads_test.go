@@ -6,12 +6,29 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/umailserver/umailserver/internal/storage"
 )
 
 // Test handleThreads
+
+// newThreadsTestServer returns a server with real mail storage wired, so
+// the thread delegates exercise the storage primitives (production wires
+// SetMailDB in internal/server).
+func newThreadsTestServer(t *testing.T, tmpDir string) *Server {
+	server := NewTestServer(t, tmpDir)
+	mailDB, err := storage.OpenDatabase(tmpDir + "/mail.db")
+	if err != nil {
+		t.Fatalf("open mail storage: %v", err)
+	}
+	t.Cleanup(func() { _ = mailDB.Close() })
+	server.SetMailDB(mailDB)
+	return server
+}
+
 func TestHandleThreads_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	req := httptest.NewRequest("GET", "/api/v1/threads", nil)
 	req = req.WithContext(withUser(req.Context(), "user@example.com"))
@@ -39,7 +56,7 @@ func TestHandleThreads_Success(t *testing.T) {
 
 func TestHandleThreads_WithParams(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	req := httptest.NewRequest("GET", "/api/v1/threads?limit=50&offset=10&mailbox=Sent", nil)
 	req = req.WithContext(withUser(req.Context(), "user@example.com"))
@@ -67,7 +84,7 @@ func TestHandleThreads_WithParams(t *testing.T) {
 
 func TestHandleThreads_InvalidLimit(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	// Limit > 100 should be capped to default (20)
 	req := httptest.NewRequest("GET", "/api/v1/threads?limit=200", nil)
@@ -123,7 +140,7 @@ func TestHandleThreads_Unauthorized(t *testing.T) {
 // Test handleThreadDetail
 func TestHandleThreadDetail_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	// Path format: /api/v1/threads/{id}
 	req := httptest.NewRequest("GET", "/api/v1/threads/thread-123?mailbox=INBOX", nil)
@@ -187,7 +204,7 @@ func TestHandleThreadDetail_Unauthorized(t *testing.T) {
 // Test handleThreadSearch
 func TestHandleThreadSearch_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	req := httptest.NewRequest("GET", "/api/v1/threads/search?q=test", nil)
 	req = req.WithContext(withUser(req.Context(), "user@example.com"))
@@ -257,7 +274,7 @@ func TestHandleThreadSearch_Unauthorized(t *testing.T) {
 // Test handleThreadMarkRead
 func TestHandleThreadMarkRead_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	// Path format: /api/v1/threads/{id}/read
 	req := httptest.NewRequest("POST", "/api/v1/threads/thread-123/read?mailbox=INBOX", nil)
@@ -329,7 +346,7 @@ func TestHandleThreadMarkRead_Unauthorized(t *testing.T) {
 // Test handleThreadDelete
 func TestHandleThreadDelete_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	req := httptest.NewRequest("DELETE", "/api/v1/threads/thread-123?mailbox=INBOX", nil)
 	req = req.WithContext(withUser(req.Context(), "user@example.com"))
@@ -401,7 +418,7 @@ func TestHandleThreadDelete_Unauthorized(t *testing.T) {
 // Test handleThreadPath router
 func TestHandleThreadPath_Get(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	req := httptest.NewRequest("GET", "/api/v1/threads/thread-123", nil)
 	req = req.WithContext(withUser(req.Context(), "user@example.com"))
@@ -417,7 +434,7 @@ func TestHandleThreadPath_Get(t *testing.T) {
 
 func TestHandleThreadPath_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	req := httptest.NewRequest("DELETE", "/api/v1/threads/thread-123", nil)
 	req = req.WithContext(withUser(req.Context(), "user@example.com"))
@@ -432,7 +449,7 @@ func TestHandleThreadPath_Delete(t *testing.T) {
 
 func TestHandleThreadPath_MarkRead(t *testing.T) {
 	tmpDir := t.TempDir()
-	server := NewTestServer(t, tmpDir)
+	server := newThreadsTestServer(t, tmpDir)
 
 	req := httptest.NewRequest("POST", "/api/v1/threads/thread-123/read", nil)
 	req = req.WithContext(withUser(req.Context(), "user@example.com"))

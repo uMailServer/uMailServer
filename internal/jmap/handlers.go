@@ -1,6 +1,8 @@
 package jmap
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -45,7 +47,7 @@ func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 			Name: "Mailbox/get",
 			Args: map[string]interface{}{
 				"accountId": accountID,
-				"state":     fmt.Sprintf("state-%d", time.Now().Unix()),
+				"state":     s.stateToken(user),
 				"list":      []Mailbox{},
 				"notFound":  []string{},
 			},
@@ -115,6 +117,7 @@ func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 
 	// Filter by IDs if specified
 	var result []Mailbox
+	var notFound []string
 	if len(ids) > 0 {
 		idSet := make(map[string]bool)
 		for _, id := range ids {
@@ -122,9 +125,18 @@ func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 				idSet[str] = true
 			}
 		}
+		foundIDs := make(map[string]bool)
 		for _, mbox := range mailboxes {
 			if idSet[mbox.ID] {
 				result = append(result, mbox)
+				foundIDs[mbox.ID] = true
+			}
+		}
+		// RFC 8620 §4.2: requested ids with no matching record are reported
+		// in notFound rather than silently dropped.
+		for id := range idSet {
+			if !foundIDs[id] {
+				notFound = append(notFound, id)
 			}
 		}
 	} else {
@@ -135,9 +147,9 @@ func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 		Name: "Mailbox/get",
 		Args: map[string]interface{}{
 			"accountId": accountID,
-			"state":     fmt.Sprintf("state-%d", time.Now().Unix()),
+			"state":     s.stateToken(user),
 			"list":      result,
-			"notFound":  []string{},
+			"notFound":  notFound,
 		},
 		ID: call.ID,
 	}
@@ -153,40 +165,45 @@ func (s *Server) handleMailboxQuery(user string, call MethodCall) Response {
 		return resp
 	}
 
-	// Get mailboxes from storage
-	mailboxNames, err := s.db.ListMailboxes(user)
-	if err != nil {
-		return Response{
-			Name: "Mailbox/query",
-			Args: map[string]interface{}{
-				"accountId":           accountID,
-				"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
-				"canCalculateChanges": false,
-				"position":            0,
-				"total":               0,
-				"ids":                 []string{},
-			},
-			ID: call.ID,
-		}
-	}
+	fullIDs := s.runMailboxQuery(user)
 
-	var ids []string
-	for _, name := range mailboxNames {
-		ids = append(ids, getMailboxIDFromName(name))
-	}
+	// Snapshot the ordered result for Mailbox/queryChanges deltas
+	// (RFC 8620 §5.6), stamped with the current state sequence.
+	queryState := s.stateToken(user)
+	_ = s.db.SaveQuerySnapshot(user, &storage.QuerySnapshot{
+		QueryHash: querySnapshotHash("Mailbox/query", nil, nil),
+		Seq:       storage.ParseChangeState(queryState),
+		IDs:       fullIDs,
+	})
 
 	return Response{
 		Name: "Mailbox/query",
 		Args: map[string]interface{}{
 			"accountId":           accountID,
-			"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
+			"queryState":          queryState,
 			"canCalculateChanges": false,
 			"position":            0,
-			"total":               len(ids),
-			"ids":                 ids,
+			"total":               len(fullIDs),
+			"ids":                 fullIDs,
 		},
 		ID: call.ID,
 	}
+}
+
+// runMailboxQuery computes the full ordered result of a Mailbox/query — the
+// canonical mailbox ids — shared by Mailbox/query and the Mailbox/queryChanges
+// delta computation. Storage errors yield an empty result, matching the
+// handler's existing error-path behavior.
+func (s *Server) runMailboxQuery(user string) []string {
+	mailboxNames, err := s.db.ListMailboxes(user)
+	if err != nil {
+		return []string{}
+	}
+	ids := make([]string, 0, len(mailboxNames))
+	for _, name := range mailboxNames {
+		ids = append(ids, getMailboxIDFromName(name))
+	}
+	return ids
 }
 
 // handleMailboxSet handles Mailbox/set method
@@ -292,7 +309,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 		Args: map[string]interface{}{
 			"accountId":    accountID,
 			"oldState":     nil,
-			"newState":     fmt.Sprintf("state-%d", time.Now().Unix()),
+			"newState":     s.stateToken(user),
 			"created":      created,
 			"updated":      updated,
 			"destroyed":    destroyed,
@@ -353,7 +370,7 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 		Name: "Email/get",
 		Args: map[string]interface{}{
 			"accountId": accountID,
-			"state":     fmt.Sprintf("state-%d", time.Now().Unix()),
+			"state":     s.stateToken(user),
 			"list":      emails,
 			"notFound":  notFound,
 		},
@@ -381,8 +398,61 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 		limit = 30
 	}
 
+	fullIDs := s.runEmailQuery(user, filter, sort)
+
+	// Snapshot the full ordered result for Email/queryChanges deltas
+	// (RFC 8620 §5.6), keyed by the filter/sort pair and stamped with the
+	// current state sequence.
+	queryState := s.stateToken(user)
+	_ = s.db.SaveQuerySnapshot(user, &storage.QuerySnapshot{
+		QueryHash: querySnapshotHash("Email/query", filter, sort),
+		Seq:       storage.ParseChangeState(queryState),
+		IDs:       fullIDs,
+	})
+
+	// Apply position and limit. position is a client-supplied offset and may
+	// arrive negative. Clamping only the upper bound would leave start
+	// negative and make the ids loop a negative-index panic, so floor it at
+	// 0 first.
+	total := len(fullIDs)
+	start := int(position)
+	if start < 0 {
+		start = 0
+	}
+	if start > total {
+		start = total
+	}
+	end := start + int(limit)
+	if end > total {
+		end = total
+	}
+
+	var ids []string
+	for i := start; i < end; i++ {
+		ids = append(ids, fullIDs[i])
+	}
+
+	return Response{
+		Name: "Email/query",
+		Args: map[string]interface{}{
+			"accountId":           accountID,
+			"queryState":          queryState,
+			"canCalculateChanges": false,
+			"position":            int(position),
+			"total":               total,
+			"ids":                 ids,
+		},
+		ID: call.ID,
+	}
+}
+
+// runEmailQuery computes the full ordered result of an Email/query for a
+// filter/sort pair, independent of paging — shared by Email/query and the
+// Email/queryChanges delta computation.
+func (s *Server) runEmailQuery(user string, filter interface{}, sort interface{}) []string {
 	// Parse filter
 	filterCondition := parseFilter(filter)
+	sortList, _ := sort.([]interface{})
 
 	// Get all messages from mailboxes
 	var allMessages []struct {
@@ -433,9 +503,9 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 	}
 
 	// Apply sorting
-	if len(sort) > 0 {
+	if len(sortList) > 0 {
 		// Parse first sort comparator
-		data, _ := json.Marshal(sort[0])
+		data, _ := json.Marshal(sortList[0])
 		var comp Comparator
 		_ = json.Unmarshal(data, &comp)
 
@@ -443,40 +513,20 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 		sortMessages(allMessages, comp)
 	}
 
-	// Apply position and limit. position is a client-supplied offset and may
-	// arrive negative. Clamping only the upper bound would leave start
-	// negative and make the ids loop a negative-index panic, so floor it at
-	// 0 first.
-	total := len(allMessages)
-	start := int(position)
-	if start < 0 {
-		start = 0
+	fullIDs := make([]string, len(allMessages))
+	for i := range allMessages {
+		fullIDs[i] = allMessages[i].id
 	}
-	if start > total {
-		start = total
-	}
-	end := start + int(limit)
-	if end > total {
-		end = total
-	}
+	return fullIDs
+}
 
-	var ids []string
-	for i := start; i < end; i++ {
-		ids = append(ids, allMessages[i].id)
-	}
-
-	return Response{
-		Name: "Email/query",
-		Args: map[string]interface{}{
-			"accountId":           accountID,
-			"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
-			"canCalculateChanges": false,
-			"position":            int(position),
-			"total":               total,
-			"ids":                 ids,
-		},
-		ID: call.ID,
-	}
+// querySnapshotHash derives the snapshot storage key for a query method and
+// its filter/sort pair. The method is part of the key so different query
+// types never collide on the same snapshot.
+func querySnapshotHash(method string, filter interface{}, sort interface{}) string {
+	data, _ := json.Marshal(map[string]interface{}{"method": method, "filter": filter, "sort": sort})
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
 }
 
 // matchesFilter checks if a message matches the filter condition
@@ -648,6 +698,33 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		return resp
 	}
 
+	// The account's state token is the change-journal sequence (RFC 8620
+	// §2): Email/changes accepts and returns it. RFC 8620 §4.3 requires the
+	// /set response to echo the state the request was applied to (oldState)
+	// and the state after it (newState) in that same format.
+	oldState, stateErr := s.db.CurrentChangeState(user)
+	if stateErr != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{
+				"type":        "serverFail",
+				"description": s.safeError("CurrentChangeState", stateErr),
+			},
+			ID: call.ID,
+		}
+	}
+
+	// RFC 8620 §4.3 (/set): if ifInState is supplied and does not match the
+	// current state, the request MUST be rejected with a stateMismatch error
+	// (§3.6.1 method-level error) and no create/update/destroy processed.
+	if ifInState, _ := args["ifInState"].(string); ifInState != "" && ifInState != oldState {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
+	}
+
 	// Parse create, update, destroy
 	create, _ := args["create"].(map[string]interface{})
 	update, _ := args["update"].(map[string]interface{})
@@ -762,6 +839,15 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			continue
 		}
 
+		// RFC 8620 §4.3: an invalid patch rejects the whole update for this
+		// object. Do not apply any further part of the patch (mailboxIds
+		// move, metadata persistence) and do not report it as updated —
+		// otherwise the response lists the id in both updated and notUpdated
+		// while storage changes on a failed update.
+		if _, failed := notUpdated[emailID]; failed {
+			continue
+		}
+
 		// Update mailboxIds (move message)
 		if mailboxIDs, ok := updateData["mailboxIds"].(map[string]interface{}); ok {
 			// Determine target mailbox
@@ -860,12 +946,27 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		}
 	}
 
+	// RFC 8620 §4.3: newState is the state after the request — the journal
+	// sequence now includes this request's changes, which the storage layer
+	// recorded via StoreMessageMetadata/DeleteMessage.
+	newState, err := s.db.CurrentChangeState(user)
+	if err != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{
+				"type":        "serverFail",
+				"description": s.safeError("CurrentChangeState", err),
+			},
+			ID: call.ID,
+		}
+	}
+
 	return Response{
 		Name: "Email/set",
 		Args: map[string]interface{}{
 			"accountId":    accountID,
-			"oldState":     nil,
-			"newState":     fmt.Sprintf("state-%d", time.Now().Unix()),
+			"oldState":     oldState,
+			"newState":     newState,
 			"created":      created,
 			"updated":      updated,
 			"destroyed":    destroyed,
@@ -893,6 +994,23 @@ func (s *Server) mailboxExists(user, name string) bool {
 	return false
 }
 
+// stateToken returns the account's change-journal state token (RFC 8620 §2)
+// — the same format the */changes methods accept and return — for the state
+// fields of /get, /query and /set responses. Read failures degrade to the
+// empty-journal token "0", which makes the client's next /changes a safe full
+// resync; the failure is logged, mirroring the best-effort RecordChange
+// convention in the storage layer.
+func (s *Server) stateToken(user string) string {
+	token, err := s.db.CurrentChangeState(user)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("CurrentChangeState failed; degrading to empty-journal state", "user", user, "error", err)
+		}
+		return "0"
+	}
+	return token
+}
+
 // handleEmailImport handles Email/import method
 func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 	args := call.Args
@@ -901,6 +1019,21 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 	// Validate accountId matches authenticated user
 	if valid, resp := validateAccountId(accountID, user, "Email/import", call.ID); !valid {
 		return resp
+	}
+
+	// RFC 8620 §4.3: /import responses carry the state before (oldState) and
+	// after (newState) the request as change-journal tokens (RFC 8620 §2),
+	// so clients can resume Email/changes from them.
+	oldState, stateErr := s.db.CurrentChangeState(user)
+	if stateErr != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{
+				"type":        "serverFail",
+				"description": s.safeError("CurrentChangeState", stateErr),
+			},
+			ID: call.ID,
+		}
 	}
 
 	emails, _ := args["emails"].(map[string]interface{})
@@ -931,30 +1064,42 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			continue
 		}
 
-		// Determine target mailbox
-		var targetMbox string
-		mboxIDs := make(map[string]bool)
+		// RFC 8621 §4.6: mailboxIds is Id[Boolean] — the email is imported
+		// into EVERY mailbox whose value is true, not just the first (the
+		// old loop broke after the first entry and silently dropped the
+		// rest). Resolve and dedupe names: two ids may map to one name.
+		var targetNames []string
+		seenNames := make(map[string]bool)
 		for id, v := range mailboxIDs {
 			if b, ok := v.(bool); ok && b {
-				targetMbox = getMailboxNameFromID(id)
-				mboxIDs[id] = true
-				break
+				name := getMailboxNameFromID(id)
+				if !seenNames[name] {
+					seenNames[name] = true
+					targetNames = append(targetNames, name)
+				}
 			}
 		}
-		if targetMbox == "" {
-			targetMbox = "INBOX"
-			mboxIDs["inbox"] = true
+		if len(targetNames) == 0 {
+			targetNames = append(targetNames, "INBOX")
 		}
 
 		// RFC 8620 §2.3: mailboxIds reference existing Mailbox objects, and
 		// RFC 8621 §4.4 requires the import to fail with "mailboxNotFound"
 		// otherwise. getMailboxNameFromID passes unknown ids through
 		// verbatim, so without this check the storage layer would silently
-		// materialize a phantom mailbox (CreateBucketIfNotExists).
-		if !s.mailboxExists(user, targetMbox) {
+		// materialize a phantom mailbox (CreateBucketIfNotExists). The gate
+		// covers every target: one missing mailbox rejects the whole entry.
+		var missingMbox string
+		for _, targetName := range targetNames {
+			if !s.mailboxExists(user, targetName) {
+				missingMbox = targetName
+				break
+			}
+		}
+		if missingMbox != "" {
 			notCreated[key] = map[string]interface{}{
 				"type":        "mailboxNotFound",
-				"description": fmt.Sprintf("Mailbox %s not found", targetMbox),
+				"description": fmt.Sprintf("Mailbox %s not found", missingMbox),
 			}
 			continue
 		}
@@ -996,37 +1141,64 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			}
 		}
 
-		// Get next UID for the mailbox
-		uid, err := s.db.GetNextUID(user, targetMbox)
-		if err != nil {
-			notCreated[key] = map[string]interface{}{
-				"type":        "serverFail",
-				"description": s.safeError("GetNextUID", err),
+		// Store the message in EVERY target mailbox, each with its own UID.
+		stored := true
+		for _, targetName := range targetNames {
+			uid, err := s.db.GetNextUID(user, targetName)
+			if err != nil {
+				notCreated[key] = map[string]interface{}{
+					"type":        "serverFail",
+					"description": s.safeError("GetNextUID", err),
+				}
+				stored = false
+				break
 			}
+			meta.UID = uid
+
+			// Store metadata in database
+			if err := s.db.StoreMessageMetadata(user, targetName, uid, meta); err != nil {
+				notCreated[key] = map[string]interface{}{
+					"type":        "serverFail",
+					"description": s.safeError("StoreMessageMetadata", err),
+				}
+				stored = false
+				break
+			}
+		}
+		if !stored {
 			continue
 		}
-		meta.UID = uid
 
-		// Store metadata in database
-		if err := s.db.StoreMessageMetadata(user, targetMbox, uid, meta); err != nil {
-			notCreated[key] = map[string]interface{}{
-				"type":        "serverFail",
-				"description": s.safeError("StoreMessageMetadata", err),
-			}
-			continue
+		// Convert to JMAP Email; the created object reports every mailbox
+		// the message was imported into, not just the first.
+		email := storageToJMAPEmail(meta, nil, targetNames[0])
+		for _, targetName := range targetNames[1:] {
+			email.MailboxIDs[getMailboxIDFromName(targetName)] = true
 		}
-
-		// Convert to JMAP Email
-		email := storageToJMAPEmail(meta, nil, targetMbox)
 		created[key] = email
+	}
+
+	// RFC 8620 §4.3: newState is the state after the request — the journal
+	// sequence now includes this import's changes (recorded via
+	// StoreMessageMetadata).
+	newState, err := s.db.CurrentChangeState(user)
+	if err != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{
+				"type":        "serverFail",
+				"description": s.safeError("CurrentChangeState", err),
+			},
+			ID: call.ID,
+		}
 	}
 
 	return Response{
 		Name: "Email/import",
 		Args: map[string]interface{}{
 			"accountId":  accountID,
-			"oldState":   nil,
-			"newState":   fmt.Sprintf("state-%d", time.Now().Unix()),
+			"oldState":   oldState,
+			"newState":   newState,
 			"created":    created,
 			"notCreated": notCreated,
 		},
@@ -1105,11 +1277,16 @@ func (s *Server) handleThreadGet(user string, call MethodCall) Response {
 
 	// Get threads from storage
 	var threads []Thread
+	var notFound []string
 	for _, id := range ids {
 		if idStr, ok := id.(string); ok {
 			// Get thread messages from database
 			threadMsgs, err := s.db.GetThreadMessages(user, "INBOX", idStr)
-			if err != nil {
+			if err != nil || len(threadMsgs) == 0 {
+				// RFC 8620 §4.2: a requested id with no matching thread is
+				// reported in notFound instead of returning a phantom empty
+				// thread.
+				notFound = append(notFound, idStr)
 				continue
 			}
 
@@ -1130,9 +1307,9 @@ func (s *Server) handleThreadGet(user string, call MethodCall) Response {
 		Name: "Thread/get",
 		Args: map[string]interface{}{
 			"accountId": accountID,
-			"state":     fmt.Sprintf("state-%d", time.Now().Unix()),
+			"state":     s.stateToken(user),
 			"list":      threads,
-			"notFound":  []string{},
+			"notFound":  notFound,
 		},
 		ID: call.ID,
 	}
@@ -1189,7 +1366,15 @@ func (s *Server) handleSearchSnippetGet(user string, call MethodCall) Response {
 // generateSearchSnippet generates a search snippet from email content
 func (s *Server) generateSearchSnippet(emailData, searchText string) SearchSnippet {
 	lines := strings.Split(emailData, "\n")
-	var subject, body string
+	// RFC 5322 emails use CRLF; after splitting on "\n" each line keeps a
+	// trailing "\r", which would defeat the empty-line header/body
+	// delimiter (a CRLF blank line is "\r", not "") and leak CRs into the
+	// preview. Normalize once, here.
+	for i, line := range lines {
+		lines[i] = strings.TrimSuffix(line, "\r")
+	}
+	var subject string
+	var bodyLines []string
 	inBody := false
 
 	for _, line := range lines {
@@ -1202,18 +1387,30 @@ func (s *Server) generateSearchSnippet(emailData, searchText string) SearchSnipp
 		if !inBody {
 			// Parse headers
 			if strings.HasPrefix(strings.ToLower(line), "subject:") {
-				subject = strings.TrimPrefix(line, "subject:")
-				subject = strings.TrimSpace(subject)
+				// The prefix match is case-insensitive and ToLower preserves
+				// byte length, so slice the original line at the prefix
+				// length — "SUBJECT:"/"Subject:" strip identically.
+				subject = strings.TrimSpace(line[len("subject:"):])
 			}
 		} else {
 			// Collect body
-			if len(body) < 200 {
-				body += line + " "
-			}
+			bodyLines = append(bodyLines, line)
 		}
 	}
 
-	body = strings.TrimSpace(body)
+	body := strings.TrimSpace(strings.Join(bodyLines, " "))
+
+	// RFC 8621 §5.3: the preview SHOULD contain the part of the body where
+	// the search match occurred. Anchor the window at the first
+	// case-insensitive occurrence of searchText; without search text or on
+	// no match, fall back to the leading body text. (Matching itself is the
+	// client's query job — the ids arrive pre-selected.)
+	if needle := strings.TrimSpace(searchText); needle != "" {
+		if idx := strings.Index(strings.ToLower(body), strings.ToLower(needle)); idx >= 0 {
+			body = body[idx:]
+		}
+	}
+
 	if len(body) > 150 {
 		body = body[:150] + "..."
 	}
@@ -1253,6 +1450,7 @@ func (s *Server) handleIdentityGet(user string, call MethodCall) Response {
 
 	// Filter by IDs if specified
 	var result []Identity
+	var notFound []string
 	if len(ids) > 0 {
 		idSet := make(map[string]bool)
 		for _, id := range ids {
@@ -1260,9 +1458,18 @@ func (s *Server) handleIdentityGet(user string, call MethodCall) Response {
 				idSet[str] = true
 			}
 		}
+		foundIDs := make(map[string]bool)
 		for _, identity := range identities {
 			if idSet[identity.ID] {
 				result = append(result, identity)
+				foundIDs[identity.ID] = true
+			}
+		}
+		// RFC 8620 §4.2: requested ids with no matching record are reported
+		// in notFound rather than silently dropped.
+		for id := range idSet {
+			if !foundIDs[id] {
+				notFound = append(notFound, id)
 			}
 		}
 	} else {
@@ -1273,9 +1480,9 @@ func (s *Server) handleIdentityGet(user string, call MethodCall) Response {
 		Name: "Identity/get",
 		Args: map[string]interface{}{
 			"accountId": accountID,
-			"state":     fmt.Sprintf("state-%d", time.Now().Unix()),
+			"state":     s.stateToken(user),
 			"list":      result,
-			"notFound":  []string{},
+			"notFound":  notFound,
 		},
 		ID: call.ID,
 	}
@@ -1335,7 +1542,7 @@ func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 		Args: map[string]interface{}{
 			"accountId":    accountID,
 			"oldState":     nil,
-			"newState":     fmt.Sprintf("state-%d", time.Now().Unix()),
+			"newState":     s.stateToken(user),
 			"created":      map[string]interface{}{},
 			"updated":      map[string]interface{}{},
 			"destroyed":    []string{},
@@ -1442,8 +1649,15 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 	}
 
 	// Reduce to one entry per ID; destruction wins over updates, and creates
-	// followed by destruction collapse to nothing (per JMAP semantics).
-	type fold struct{ created, updated, destroyed bool }
+	// followed by destruction in the SAME mailbox collapse to nothing (per
+	// JMAP semantics). A create and destroy in DIFFERENT mailboxes is a move:
+	// the object's mailboxIds changed, so it must surface as updated —
+	// otherwise a set-made move folds to nothing and syncing clients never
+	// learn the message moved.
+	type fold struct {
+		created, updated, destroyed bool
+		createdMbox, destroyedMbox  string
+	}
 	state := make(map[string]*fold)
 	order := []string{}
 	for _, e := range entries {
@@ -1456,10 +1670,12 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 		switch e.Kind {
 		case storage.ChangeKindCreated:
 			f.created = true
+			f.createdMbox = e.Mailbox
 		case storage.ChangeKindUpdated:
 			f.updated = true
 		case storage.ChangeKindDestroyed:
 			f.destroyed = true
+			f.destroyedMbox = e.Mailbox
 		}
 	}
 
@@ -1468,9 +1684,12 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 	destroyed := make([]string, 0)
 	for _, id := range order {
 		f := state[id]
+		moved := f.created && f.destroyed && f.createdMbox != f.destroyedMbox
 		switch {
-		case f.created && f.destroyed:
-			// no-op
+		case f.created && f.destroyed && !moved:
+			// no-op: the object never existed within this window
+		case moved:
+			updated = append(updated, id)
 		case f.destroyed:
 			destroyed = append(destroyed, id)
 		case f.created:
@@ -1505,27 +1724,64 @@ func (s *Server) handleMailboxQueryChanges(user string, call MethodCall) Respons
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 	sinceQueryState, _ := args["sinceQueryState"].(string)
-	maxChanges, _ := args["maxChanges"].(float64)
 
 	if valid, resp := validateAccountId(accountID, user, "Mailbox/queryChanges", call.ID); !valid {
 		return resp
 	}
 
-	if maxChanges == 0 || maxChanges > 256 {
-		maxChanges = 256
+	// RFC 8620 §5.6: deltas are computed by diffing the stored snapshot of
+	// the query result (saved by Mailbox/query) against a fresh run. Without
+	// a matching snapshot the delta cannot be computed and the server MUST
+	// answer stateMismatch.
+	snap, err := s.db.GetQuerySnapshot(user, querySnapshotHash("Mailbox/query", nil, nil))
+	if err != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
+	}
+	if sinceQueryState == "" || storage.ParseChangeState(sinceQueryState) != snap.Seq {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
 	}
 
-	_ = sinceQueryState
+	newIDs := s.runMailboxQuery(user)
+	newSet := make(map[string]bool, len(newIDs))
+	for _, id := range newIDs {
+		newSet[id] = true
+	}
+	oldSet := make(map[string]bool, len(snap.IDs))
+	for _, id := range snap.IDs {
+		oldSet[id] = true
+	}
+
+	added := []map[string]interface{}{}
+	removed := []int{}
+	for i, id := range snap.IDs {
+		if !newSet[id] {
+			removed = append(removed, i)
+		}
+	}
+	for j, id := range newIDs {
+		if !oldSet[id] {
+			added = append(added, map[string]interface{}{"index": j, "id": id})
+		}
+	}
 
 	return Response{
 		Name: "Mailbox/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":      accountID,
 			"oldQueryState":  sinceQueryState,
-			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"newQueryState":  s.stateToken(user),
 			"hasMoreChanges": false,
-			"added":          []map[string]interface{}{},
-			"removed":        []string{},
+			"added":          added,
+			"removed":        removed,
+			"total":          len(newIDs),
 		},
 		ID: call.ID,
 	}
@@ -1536,27 +1792,65 @@ func (s *Server) handleEmailQueryChanges(user string, call MethodCall) Response 
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 	sinceQueryState, _ := args["sinceQueryState"].(string)
-	maxChanges, _ := args["maxChanges"].(float64)
+	sortList, _ := args["sort"].([]interface{})
 
 	if valid, resp := validateAccountId(accountID, user, "Email/queryChanges", call.ID); !valid {
 		return resp
 	}
 
-	if maxChanges == 0 || maxChanges > 256 {
-		maxChanges = 256
+	// RFC 8620 §5.6: deltas are computed by diffing the stored snapshot of
+	// the query result (saved by Email/query) against a fresh run. Without a
+	// matching snapshot the delta cannot be computed and the server MUST
+	// answer stateMismatch.
+	snap, err := s.db.GetQuerySnapshot(user, querySnapshotHash("Email/query", args["filter"], sortList))
+	if err != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
+	}
+	if sinceQueryState == "" || storage.ParseChangeState(sinceQueryState) != snap.Seq {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
 	}
 
-	_ = sinceQueryState
+	newIDs := s.runEmailQuery(user, args["filter"], sortList)
+	newSet := make(map[string]bool, len(newIDs))
+	for _, id := range newIDs {
+		newSet[id] = true
+	}
+	oldSet := make(map[string]bool, len(snap.IDs))
+	for _, id := range snap.IDs {
+		oldSet[id] = true
+	}
+
+	added := []map[string]interface{}{}
+	removed := []int{}
+	for i, id := range snap.IDs {
+		if !newSet[id] {
+			removed = append(removed, i)
+		}
+	}
+	for j, id := range newIDs {
+		if !oldSet[id] {
+			added = append(added, map[string]interface{}{"index": j, "id": id})
+		}
+	}
 
 	return Response{
 		Name: "Email/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":      accountID,
 			"oldQueryState":  sinceQueryState,
-			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"newQueryState":  s.stateToken(user),
 			"hasMoreChanges": false,
-			"added":          []map[string]interface{}{},
-			"removed":        []string{},
+			"added":          added,
+			"removed":        removed,
+			"total":          len(newIDs),
 		},
 		ID: call.ID,
 	}
@@ -1580,9 +1874,56 @@ func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
 		limit = 30
 	}
 
-	filterCondition := parseFilter(filter)
+	threadIDs := s.runThreadQuery(user, filter, sortList)
 
-	// Get all messages and group by thread
+	// Snapshot the full ordered result for Thread/queryChanges deltas
+	// (RFC 8620 §5.6), stamped with the current state sequence.
+	queryState := s.stateToken(user)
+	_ = s.db.SaveQuerySnapshot(user, &storage.QuerySnapshot{
+		QueryHash: querySnapshotHash("Thread/query", filter, sortList),
+		Seq:       storage.ParseChangeState(queryState),
+		IDs:       threadIDs,
+	})
+
+	total := len(threadIDs)
+	// position is a client-supplied offset and may arrive negative. Clamping
+	// only the upper bound would leave start negative and make
+	// threadIDs[start:end] a slice-bounds panic, so floor it at 0 first.
+	start := int(position)
+	if start < 0 {
+		start = 0
+	}
+	if start > total {
+		start = total
+	}
+	end := start + int(limit)
+	if end > total {
+		end = total
+	}
+
+	ids := threadIDs[start:end]
+
+	return Response{
+		Name: "Thread/query",
+		Args: map[string]interface{}{
+			"accountId":           accountID,
+			"queryState":          queryState,
+			"canCalculateChanges": false,
+			"position":            int(position),
+			"total":               total,
+			"ids":                 ids,
+		},
+		ID: call.ID,
+	}
+}
+
+// runThreadQuery computes the full ordered result of a Thread/query — the
+// distinct thread IDs of all matching messages — independent of paging;
+// shared by Thread/query and the Thread/queryChanges delta computation.
+func (s *Server) runThreadQuery(user string, filter interface{}, sortArg interface{}) []string {
+	filterCondition := parseFilter(filter)
+	sortList, _ := sortArg.([]interface{})
+
 	var threadIDs []string
 	threadSet := make(map[string]bool)
 
@@ -1618,36 +1959,7 @@ func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
 		})
 	}
 
-	total := len(threadIDs)
-	// position is a client-supplied offset and may arrive negative. Clamping
-	// only the upper bound would leave start negative and make
-	// threadIDs[start:end] a slice-bounds panic, so floor it at 0 first.
-	start := int(position)
-	if start < 0 {
-		start = 0
-	}
-	if start > total {
-		start = total
-	}
-	end := start + int(limit)
-	if end > total {
-		end = total
-	}
-
-	ids := threadIDs[start:end]
-
-	return Response{
-		Name: "Thread/query",
-		Args: map[string]interface{}{
-			"accountId":           accountID,
-			"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
-			"canCalculateChanges": false,
-			"position":            int(position),
-			"total":               total,
-			"ids":                 ids,
-		},
-		ID: call.ID,
-	}
+	return threadIDs
 }
 
 // handleThreadChanges handles Thread/changes method (RFC 8620)
@@ -1660,27 +1972,64 @@ func (s *Server) handleThreadQueryChanges(user string, call MethodCall) Response
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 	sinceQueryState, _ := args["sinceQueryState"].(string)
-	maxChanges, _ := args["maxChanges"].(float64)
 
 	if valid, resp := validateAccountId(accountID, user, "Thread/queryChanges", call.ID); !valid {
 		return resp
 	}
 
-	if maxChanges == 0 || maxChanges > 256 {
-		maxChanges = 256
+	// RFC 8620 §5.6: deltas are computed by diffing the stored snapshot of
+	// the query result (saved by Thread/query) against a fresh run. Without
+	// a matching snapshot the delta cannot be computed and the server MUST
+	// answer stateMismatch.
+	snap, err := s.db.GetQuerySnapshot(user, querySnapshotHash("Thread/query", args["filter"], args["sort"]))
+	if err != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
+	}
+	if sinceQueryState == "" || storage.ParseChangeState(sinceQueryState) != snap.Seq {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
 	}
 
-	_ = sinceQueryState
+	newIDs := s.runThreadQuery(user, args["filter"], args["sort"])
+	newSet := make(map[string]bool, len(newIDs))
+	for _, id := range newIDs {
+		newSet[id] = true
+	}
+	oldSet := make(map[string]bool, len(snap.IDs))
+	for _, id := range snap.IDs {
+		oldSet[id] = true
+	}
+
+	added := []map[string]interface{}{}
+	removed := []int{}
+	for i, id := range snap.IDs {
+		if !newSet[id] {
+			removed = append(removed, i)
+		}
+	}
+	for j, id := range newIDs {
+		if !oldSet[id] {
+			added = append(added, map[string]interface{}{"index": j, "id": id})
+		}
+	}
 
 	return Response{
 		Name: "Thread/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":      accountID,
 			"oldQueryState":  sinceQueryState,
-			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"newQueryState":  s.stateToken(user),
 			"hasMoreChanges": false,
-			"added":          []map[string]interface{}{},
-			"removed":        []string{},
+			"added":          added,
+			"removed":        removed,
+			"total":          len(newIDs),
 		},
 		ID: call.ID,
 	}
@@ -1709,7 +2058,7 @@ func (s *Server) handleIdentityChanges(user string, call MethodCall) Response {
 		Args: map[string]interface{}{
 			"accountId":      accountID,
 			"oldState":       sinceState,
-			"newState":       fmt.Sprintf("state-%d", time.Now().Unix()),
+			"newState":       s.stateToken(user),
 			"hasMoreChanges": false,
 			"created":        []string{},
 			"updated":        []string{},
@@ -1728,8 +2077,6 @@ func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
 		return resp
 	}
 
-	filter := args["filter"]
-	sort, _ := args["sort"].([]interface{})
 	position, _ := args["position"].(float64)
 	limit, _ := args["limit"].(float64)
 	calculateTotal, _ := args["calculateTotal"].(bool)
@@ -1738,13 +2085,19 @@ func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
 		limit = 256
 	}
 
-	_ = filter
-	_ = sort
+	// Identities are read-only and derived from account settings: the result
+	// is the single default identity (handleIdentitySet rejects all writes).
+	ids := s.runIdentityQuery(user)
 
-	// Return default identity
-	ids := []string{"default"}
+	// Snapshot for Identity/queryChanges deltas (RFC 8620 §5.6).
+	queryState := s.stateToken(user)
+	_ = s.db.SaveQuerySnapshot(user, &storage.QuerySnapshot{
+		QueryHash: querySnapshotHash("Identity/query", nil, nil),
+		Seq:       storage.ParseChangeState(queryState),
+		IDs:       ids,
+	})
 
-	total := 1
+	total := len(ids)
 	if !calculateTotal {
 		total = 0
 	}
@@ -1753,7 +2106,7 @@ func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
 		Name: "Identity/query",
 		Args: map[string]interface{}{
 			"accountId":           accountID,
-			"queryState":          fmt.Sprintf("state-%d", time.Now().Unix()),
+			"queryState":          queryState,
 			"canCalculateChanges": false,
 			"position":            int(position),
 			"total":               total,
@@ -1763,32 +2116,77 @@ func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
 	}
 }
 
+// runIdentityQuery computes the full ordered result of an Identity/query.
+// Identities are read-only and derived from account settings: the list is
+// the single default identity, so the result is invariant.
+func (s *Server) runIdentityQuery(user string) []string {
+	return []string{"default"}
+}
+
 // handleIdentityQueryChanges handles Identity/queryChanges method (RFC 8620)
 func (s *Server) handleIdentityQueryChanges(user string, call MethodCall) Response {
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 	sinceQueryState, _ := args["sinceQueryState"].(string)
-	maxChanges, _ := args["maxChanges"].(float64)
 
 	if valid, resp := validateAccountId(accountID, user, "Identity/queryChanges", call.ID); !valid {
 		return resp
 	}
 
-	if maxChanges == 0 || maxChanges > 256 {
-		maxChanges = 256
+	// RFC 8620 §5.6: deltas are computed by diffing the stored snapshot of
+	// the query result (saved by Identity/query) against a fresh run — for
+	// the read-only identity model the diff is always empty. Without a
+	// matching snapshot the delta cannot be computed and the server MUST
+	// answer stateMismatch.
+	snap, err := s.db.GetQuerySnapshot(user, querySnapshotHash("Identity/query", nil, nil))
+	if err != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
+	}
+	if sinceQueryState == "" || storage.ParseChangeState(sinceQueryState) != snap.Seq {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
 	}
 
-	_ = sinceQueryState
+	newIDs := s.runIdentityQuery(user)
+	newSet := make(map[string]bool, len(newIDs))
+	for _, id := range newIDs {
+		newSet[id] = true
+	}
+	oldSet := make(map[string]bool, len(snap.IDs))
+	for _, id := range snap.IDs {
+		oldSet[id] = true
+	}
+
+	added := []map[string]interface{}{}
+	removed := []int{}
+	for i, id := range snap.IDs {
+		if !newSet[id] {
+			removed = append(removed, i)
+		}
+	}
+	for j, id := range newIDs {
+		if !oldSet[id] {
+			added = append(added, map[string]interface{}{"index": j, "id": id})
+		}
+	}
 
 	return Response{
 		Name: "Identity/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":      accountID,
 			"oldQueryState":  sinceQueryState,
-			"newQueryState":  fmt.Sprintf("state-%d", time.Now().Unix()),
+			"newQueryState":  s.stateToken(user),
 			"hasMoreChanges": false,
-			"added":          []map[string]interface{}{},
-			"removed":        []string{},
+			"added":          added,
+			"removed":        removed,
+			"total":          len(newIDs),
 		},
 		ID: call.ID,
 	}

@@ -64,11 +64,21 @@ func TestHandleMailboxQueryChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: Mailbox/queryChanges diffs the snapshot
+	// Mailbox/query saved, so the client must have run the query first.
+	// Nothing changes between the two calls here, so the delta is empty.
+	qResp := server.handleMailboxQuery("user@example.com", MethodCall{
+		Name: "Mailbox/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Mailbox/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 		},
 		ID: "call-1",
 	}
@@ -89,11 +99,20 @@ func TestHandleMailboxQueryChanges_WithMaxChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: the full delta is always returned; maxChanges is
+	// accepted and ignored. The client must have run the query first.
+	qResp := server.handleMailboxQuery("user@example.com", MethodCall{
+		Name: "Mailbox/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Mailbox/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 			"maxChanges":      float64(50),
 		},
 		ID: "call-1",
@@ -111,11 +130,21 @@ func TestHandleEmailQueryChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: Email/queryChanges diffs the snapshot Email/query
+	// saved, so the client must have run the query first. Nothing changes
+	// between the two calls here, so the delta is empty.
+	qResp := server.handleEmailQuery("user@example.com", MethodCall{
+		Name: "Email/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Email/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 		},
 		ID: "call-1",
 	}
@@ -136,11 +165,20 @@ func TestHandleEmailQueryChanges_WithMaxChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: the full delta is always returned; maxChanges is
+	// accepted and ignored. The client must have run the query first.
+	qResp := server.handleEmailQuery("user@example.com", MethodCall{
+		Name: "Email/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Email/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 			"maxChanges":      float64(100),
 		},
 		ID: "call-1",
@@ -283,11 +321,21 @@ func TestHandleThreadQueryChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: the client must have run the query first so a
+	// snapshot exists at the token presented. Nothing changes between the
+	// two calls, so the delta is empty.
+	qResp := server.handleThreadQuery("user@example.com", MethodCall{
+		Name: "Thread/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Thread/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 		},
 		ID: "call-1",
 	}
@@ -308,11 +356,21 @@ func TestHandleThreadQueryChanges_WithMaxChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: the client must have run the query first so a
+	// snapshot exists at the token presented. Nothing changes between the
+	// two calls, so the delta is empty.
+	qResp := server.handleThreadQuery("user@example.com", MethodCall{
+		Name: "Thread/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Thread/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 			"maxChanges":      float64(100),
 		},
 		ID: "call-1",
@@ -453,11 +511,21 @@ func TestHandleIdentityQueryChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: the client must have run the query first so a
+	// snapshot exists at the token presented. Nothing changes between the
+	// two calls, so the delta is empty.
+	qResp := server.handleIdentityQuery("user@example.com", MethodCall{
+		Name: "Identity/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Identity/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 		},
 		ID: "call-1",
 	}
@@ -478,11 +546,21 @@ func TestHandleIdentityQueryChanges_WithMaxChanges(t *testing.T) {
 	server, _, _, cleanup := setupTestServer(t)
 	defer cleanup()
 
+	// The snapshot design: the client must have run the query first so a
+	// snapshot exists at the token presented. Nothing changes between the
+	// two calls, so the delta is empty.
+	qResp := server.handleIdentityQuery("user@example.com", MethodCall{
+		Name: "Identity/query",
+		Args: map[string]interface{}{"accountId": "user@example.com"},
+		ID:   "q-1",
+	})
+	current, _ := qResp.Args["queryState"].(string)
+
 	call := MethodCall{
 		Name: "Identity/queryChanges",
 		Args: map[string]interface{}{
 			"accountId":       "user@example.com",
-			"sinceQueryState": "state-1234567890",
+			"sinceQueryState": current,
 			"maxChanges":      float64(100),
 		},
 		ID: "call-1",

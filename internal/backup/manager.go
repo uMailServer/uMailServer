@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -293,7 +294,11 @@ func (m *Manager) Verify(backupPath string) (*BackupManifest, error) {
 		return nil, fmt.Errorf("not a valid gzip file")
 	}
 
-	// Try to read as tar
+	// Verify the archive structurally: the gzip stream must decompress
+	// completely and the payload must be a well-formed tar with at least one
+	// entry (the format backupUserToPath writes). Previously only the
+	// 10-byte gzip header was validated, so truncated streams and gzip files
+	// that are not backups at all verified as intact.
 	if _, err := f.Seek(0, 0); err != nil {
 		return nil, err
 	}
@@ -302,7 +307,28 @@ func (m *Manager) Verify(backupPath string) (*BackupManifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid gzip format: %w", err)
 	}
-	gz.Close()
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	entries := 0
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("corrupt archive: %w", err)
+		}
+		entries++
+		// Consume each entry payload so corruption inside file data is
+		// detected too.
+		if _, err := io.Copy(io.Discard, tr); err != nil {
+			return nil, fmt.Errorf("corrupt archive entry %s: %w", header.Name, err)
+		}
+	}
+	if entries == 0 {
+		return nil, fmt.Errorf("corrupt archive: no entries")
+	}
 
 	// Compute checksum
 	if _, err := f.Seek(0, 0); err != nil {
@@ -546,6 +572,19 @@ func (m *Manager) Decrypt(srcPath, destPath, password string) error {
 	} else {
 		// Legacy v1 framing: salt(16) [unused] | nonce | ciphertext, with the
 		// historical unsalted SHA-256(password) key.
+		//
+		// DESIGN DECISION (2026-10-02): the v1 read path is kept so backups
+		// encrypted before the salted v2 envelope shipped remain recoverable;
+		// removing it would orphan existing backups with no security gain.
+		// The path is DEPRECATED: every use is logged so operators know to
+		// migrate (decrypt, then re-encrypt with Encrypt), and v1 support is
+		// scheduled for removal in a future major version after the warning
+		// window. Encrypt has only ever written v2 since the change.
+		slog.Warn("deprecated legacy v1 backup envelope: unsalted key derivation",
+			"src", srcPath,
+			"migration", "decrypt with Decrypt, then re-encrypt with Encrypt to migrate to the v2 envelope",
+		)
+
 		legacySalt := make([]byte, 16)
 		copy(legacySalt, magic)
 		if _, err := io.ReadFull(f, legacySalt[len(magic):]); err != nil {

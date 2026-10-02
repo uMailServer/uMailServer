@@ -413,6 +413,14 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 		uid, uidErr := s.storageDB.GetNextUID(email, folder)
 		if uidErr == nil {
 			subject, fromAddr, toAddr, dateStr := parseBasicHeaders(data)
+			inReplyTo, references := parseThreadHeaders(data)
+			// Assign thread identity at delivery, mirroring the IMAP APPEND
+			// path (internal/imap/mailstore.go) so SMTP-delivered mail is
+			// threaded for JMAP Thread/get and the REST threads API.
+			threadID, threadErr := s.storageDB.GetOrCreateThreadID(email, folder, subject, inReplyTo, references)
+			if threadErr != nil {
+				threadID = "" // Continue without threading if it fails
+			}
 			meta := &storage.MessageMetadata{
 				MessageID:    messageID,
 				UID:          uid,
@@ -423,9 +431,17 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 				Date:         dateStr,
 				From:         fromAddr,
 				To:           toAddr,
+				ThreadID:     threadID,
+				IsThreadRoot: inReplyTo == "" && len(references) == 0,
 			}
 			if err := s.storageDB.StoreMessageMetadata(email, folder, uid, meta); err != nil {
 				s.logger.Error("Failed to store message metadata", "email", email, "uid", uid, "folder", folder, "error", err)
+			}
+
+			// Refresh the thread aggregate row (best-effort), mirroring the
+			// IMAP APPEND path so the REST threads list reflects SMTP mail.
+			if threadID != "" {
+				s.updateThreadAggregate(email, subject, fromAddr, meta, threadID)
 			}
 
 			if s.searchSvc != nil {
@@ -523,6 +539,68 @@ func parseBasicHeaders(data []byte) (subject, from, to, date string) {
 	to = msg.Header.Get("To")
 	date = msg.Header.Get("Date")
 	return
+}
+
+// parseThreadHeaders extracts the threading headers from a raw message,
+// mirroring the IMAP parser (internal/imap/mailstore.go
+// parseMessageHeadersExtended): In-Reply-To as a single id and References
+// split into its whitespace-separated message-ids.
+func parseThreadHeaders(data []byte) (inReplyTo string, references []string) {
+	msg, err := mail.ReadMessage(strings.NewReader(string(data)))
+	if err != nil {
+		return "", nil
+	}
+	inReplyTo = strings.TrimSpace(msg.Header.Get("In-Reply-To"))
+	for _, raw := range msg.Header["References"] {
+		for _, ref := range strings.Fields(raw) {
+			ref = strings.TrimSpace(ref)
+			if ref != "" {
+				references = append(references, ref)
+			}
+		}
+	}
+	return inReplyTo, references
+}
+
+// updateThreadAggregate refreshes the Thread summary row after a local
+// delivery (best-effort), mirroring the IMAP APPEND path's updateThreadInfo.
+func (s *Server) updateThreadAggregate(email, subject, from string, meta *storage.MessageMetadata, threadID string) {
+	thread, err := s.storageDB.GetThread(email, threadID)
+	if err != nil || thread == nil {
+		thread = &storage.Thread{
+			ThreadID:     threadID,
+			Subject:      storage.NormalizeSubject(subject),
+			Participants: []string{},
+			MessageCount: 0,
+			UnreadCount:  0,
+			LastActivity: meta.InternalDate,
+			CreatedAt:    time.Now(),
+		}
+	}
+
+	thread.MessageCount++
+	thread.LastActivity = meta.InternalDate
+
+	if from != "" {
+		found := false
+		for _, p := range thread.Participants {
+			if p == from {
+				found = true
+				break
+			}
+		}
+		if !found {
+			thread.Participants = append(thread.Participants, from)
+		}
+	}
+
+	if !storage.HasFlag(meta.Flags, "\\Seen") {
+		thread.UnreadCount++
+	}
+
+	if err := s.storageDB.UpdateThread(email, thread); err != nil {
+		s.logger.Error("Failed to update thread aggregate", "email", email, "thread_id", threadID, "error", err)
+	}
 }
 
 // generateSecureToken generates a cryptographically random 32-byte hex token.

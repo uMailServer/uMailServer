@@ -452,10 +452,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusUnauthorized, "TOTP code already used")
 			return
 		}
-		account.TOTPLastUsedStep = step
-		if err := s.db.UpdateAccount(account); err != nil {
+		// Atomically consume the step (RFC 6238 §5.2): the replay check
+		// above runs against the account snapshot fetched before the slow
+		// password hash, so two concurrent logins with one code can both
+		// pass it. The compare-and-swap inside one bbolt transaction lets
+		// exactly one login consume; the loser is a replay.
+		consumed, err := s.db.ConsumeTOTPStep(domain, user, account.TOTPLastUsedStep, step)
+		if err != nil {
 			s.logger.Error("failed to update TOTP last used step", "error", err, "email", req.Email)
+		} else if !consumed {
+			s.recordTOTPFailure(req.Email)
+			s.recordAccountLoginFailure(emailKey)
+			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_replay")
+			s.sendError(w, http.StatusUnauthorized, "TOTP code already used")
+			return
 		}
+		account.TOTPLastUsedStep = step
 		s.clearTOTPFailures(req.Email)
 	}
 

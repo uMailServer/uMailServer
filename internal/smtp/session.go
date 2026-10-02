@@ -538,7 +538,15 @@ var errMessageTooLarge = errors.New("message too large")
 
 // readData reads the email message data from the connection
 func (s *Session) readData() ([]byte, error) {
-	reader := bufio.NewReader(s.conn)
+	// Read through the session's buffered reader so message bytes already
+	// consumed by its read-ahead (PIPELINING: the client may send the whole
+	// transaction, message included, in one TCP segment) are visible here.
+	// A fresh bufio.Reader over the raw conn cannot see them and stalls
+	// until ReadTimeout aborts the message.
+	reader := s.reader
+	if reader == nil {
+		reader = bufio.NewReader(s.conn)
+	}
 	var data []byte
 	const maxLineLength = 1000 // RFC 5322: max 1000 bytes per line including CRLF
 
@@ -626,7 +634,17 @@ func (s *Session) handleBDAT(arg string) error {
 	// Read chunk data
 	if size > 0 {
 		chunk := make([]byte, size)
-		_, err := io.ReadFull(s.conn, chunk)
+		// Read through the session's buffered reader so chunk octets already
+		// consumed by its read-ahead (CHUNKING + PIPELINING: RFC 3030 allows
+		// BDAT pipelined with MAIL/RCPT, so the client may send the chunk
+		// size line, payload, and next command in one TCP segment) are
+		// visible here. A fresh io.ReadFull over the raw conn cannot see
+		// them and stalls until ReadTimeout aborts the session.
+		reader := s.reader
+		if reader == nil {
+			reader = bufio.NewReader(s.conn)
+		}
+		_, err := io.ReadFull(reader, chunk)
 		if err != nil {
 			return fmt.Errorf("failed to read BDAT chunk: %w", err)
 		}
@@ -778,8 +796,12 @@ func (s *Session) handleAUTH(arg string) error {
 		return s.WriteResponse(538, "5.7.10 Encryption required for requested authentication mechanism")
 	}
 
-	// Must have greeted first
-	if s.state == StateNew {
+	// RFC 4954 §4: AUTH is only valid before a mail transaction starts.
+	// Reject it when no EHLO/HELO has been seen yet (StateNew) and while a
+	// transaction is in progress (after MAIL). After a completed
+	// transaction resetTransaction returns the session to StateGreeted, so
+	// AUTH remains valid there.
+	if s.state != StateGreeted {
 		if span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "bad sequence")
 		}
@@ -843,7 +865,10 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 			return err
 		}
 
-		reader := bufio.NewReader(s.conn)
+		reader := s.reader
+		if reader == nil {
+			reader = bufio.NewReader(s.conn)
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return err
@@ -906,7 +931,10 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	}
 
 	// Read username
-	reader := bufio.NewReader(s.conn)
+	reader := s.reader
+	if reader == nil {
+		reader = bufio.NewReader(s.conn)
+	}
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return err
@@ -982,7 +1010,10 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 			return err
 		}
 
-		reader := bufio.NewReader(s.conn)
+		reader := s.reader
+		if reader == nil {
+			reader = bufio.NewReader(s.conn)
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return err
@@ -1041,7 +1072,10 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	}
 
 	// Read client-final message
-	reader := bufio.NewReader(s.conn)
+	reader := s.reader
+	if reader == nil {
+		reader = bufio.NewReader(s.conn)
+	}
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return err

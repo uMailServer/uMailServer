@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -137,6 +138,21 @@ func (d *Diagnostics) checkMX(domain string) ([]DNSCheckResult, error) {
 
 // checkSPF checks SPF record
 func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
+	hostname := ""
+	if d.config != nil {
+		hostname = strings.TrimSpace(d.config.Server.Hostname)
+	}
+	// Without a server identity the SPF authorization cannot be verified:
+	// an empty hostname would make the inclusion test vacuously true.
+	if hostname == "" {
+		return DNSCheckResult{
+			RecordType: "SPF",
+			RecordName: domain,
+			Status:     "warning",
+			Message:    "Server hostname not configured; cannot verify SPF authorization",
+		}
+	}
+
 	txtRecords, err := net.LookupTXT(domain)
 	if err != nil {
 		return DNSCheckResult{
@@ -147,24 +163,29 @@ func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
 		}
 	}
 
+	expected := fmt.Sprintf("v=spf1 mx a:%s -all", hostname)
 	for _, txt := range txtRecords {
-		if strings.HasPrefix(txt, "v=spf1") {
-			// Check if it includes our server
-			hostname := ""
-			if d.config != nil {
-				hostname = d.config.Server.Hostname
+		if !strings.HasPrefix(txt, "v=spf1") {
+			continue
+		}
+		// Token-based mechanism match: whole tokens only, so unrelated
+		// records (e.g. include:spf.mxhacker.example) do not pass on the
+		// "mx" substring.
+		authorized := false
+		for _, token := range strings.Fields(txt) {
+			if token == "mx" || token == "a:"+hostname {
+				authorized = true
+				break
 			}
-			expected := fmt.Sprintf("v=spf1 mx a:%s -all", hostname)
-
-			if strings.Contains(txt, hostname) || strings.Contains(txt, "mx") {
-				return DNSCheckResult{
-					RecordType: "SPF",
-					RecordName: domain,
-					Expected:   expected,
-					Found:      txt,
-					Status:     "pass",
-					Message:    "SPF record found and configured",
-				}
+		}
+		if authorized {
+			return DNSCheckResult{
+				RecordType: "SPF",
+				RecordName: domain,
+				Expected:   expected,
+				Found:      txt,
+				Status:     "pass",
+				Message:    "SPF record found and configured",
 			}
 		}
 	}
@@ -172,8 +193,9 @@ func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
 	return DNSCheckResult{
 		RecordType: "SPF",
 		RecordName: domain,
+		Expected:   expected,
 		Status:     "fail",
-		Message:    "No SPF record found",
+		Message:    "No SPF record authorizing this server was found",
 	}
 }
 
@@ -653,14 +675,20 @@ func (d *Diagnostics) checkRBL() ([]RBLCheckResult, []string) {
 	servers := defaultRBLServers()
 	for _, server := range servers {
 		result := RBLCheckResult{Server: server}
-		listed, code := d.checkRBLServer(serverIP.String(), server)
+		listed, code, lookupErr := d.checkRBLServer(serverIP.String(), server)
 		result.Listed = listed
 		result.Code = code
-		if listed {
+		switch {
+		case lookupErr != nil:
+			// The check could not run; that must not read as "clean".
+			result.Score = "inconclusive"
+			result.Message = fmt.Sprintf("Lookup failed: %v", lookupErr)
+			issues = append(issues, fmt.Sprintf("RBL [%s]: lookup failed (%v)", server, lookupErr))
+		case listed:
 			result.Message = fmt.Sprintf("Listed on %s (code: %s)", server, code)
 			result.Score = "spam"
 			issues = append(issues, fmt.Sprintf("RBL [%s]: %s", server, code))
-		} else {
+		default:
 			result.Message = "Not listed"
 			result.Score = "clean"
 		}
@@ -670,29 +698,37 @@ func (d *Diagnostics) checkRBL() ([]RBLCheckResult, []string) {
 	return results, issues
 }
 
-// checkRBLServer checks if an IP is listed on a specific RBL server
-func (d *Diagnostics) checkRBLServer(ip, rblServer string) (bool, string) {
+// checkRBLServer checks if an IP is listed on a specific RBL server.
+// A nil error return means the lookup ran; a non-nil error is an
+// infrastructure failure the caller must not interpret as "not listed".
+func (d *Diagnostics) checkRBLServer(ip, rblServer string) (bool, string, error) {
 	reversed := reverseIP(ip)
 	if reversed == "" {
-		return false, ""
+		return false, "", fmt.Errorf("invalid IP address %q", ip)
 	}
 	lookupHost := fmt.Sprintf("%s.%s", reversed, rblServer)
 
 	ips, err := net.LookupIP(lookupHost)
 	if err != nil {
-		return false, ""
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			// NXDOMAIN: the RBL positively reports the IP as not listed.
+			return false, "", nil
+		}
+		// Transport/server failure: inconclusive, not evidence of absence.
+		return false, "", err
 	}
 	if len(ips) == 0 {
-		return false, ""
+		return false, "", nil
 	}
 
 	ipStr := ips[0].String()
 	// RBL result codes - first octet indicates listing type
 	if len(ipStr) >= 8 {
 		code := fmt.Sprintf("code-%s", ipStr)
-		return true, code
+		return true, code, nil
 	}
-	return true, "listed"
+	return true, "listed", nil
 }
 
 // reverseIP reverses an IPv4 address for RBL lookups

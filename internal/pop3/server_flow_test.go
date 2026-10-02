@@ -282,7 +282,7 @@ func TestRSETCommand(t *testing.T) {
 
 func TestRETRCommand(t *testing.T) {
 	store := newMockMailstore()
-	store.dataMap[0] = []byte("From: test@example.com\r\nSubject: Test\r\n\r\nHello World\r\n")
+	store.dataMap[1] = []byte("From: test@example.com\r\nSubject: Test\r\n\r\nHello World\r\n")
 	srv, addr := startTestServer(t, store, func(user, pass string) (bool, error) {
 		return true, nil
 	})
@@ -306,7 +306,7 @@ func TestRETRCommand(t *testing.T) {
 
 func TestTOPCommand(t *testing.T) {
 	store := newMockMailstore()
-	store.dataMap[0] = []byte("From: test@example.com\r\nSubject: Test\r\n\r\nLine1\r\nLine2\r\nLine3\r\n")
+	store.dataMap[1] = []byte("From: test@example.com\r\nSubject: Test\r\n\r\nLine1\r\nLine2\r\nLine3\r\n")
 	srv, addr := startTestServer(t, store, func(user, pass string) (bool, error) {
 		return true, nil
 	})
@@ -637,7 +637,7 @@ func TestNoAuthFunc(t *testing.T) {
 
 func TestTOPNoBodySeparator(t *testing.T) {
 	store := newMockMailstore()
-	store.dataMap[0] = []byte("Just a single block of text without headers")
+	store.dataMap[1] = []byte("Just a single block of text without headers")
 	srv, addr := startTestServer(t, store, func(user, pass string) (bool, error) {
 		return true, nil
 	})
