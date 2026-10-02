@@ -59,7 +59,7 @@ func startBDATPipelinedSession(t *testing.T, delivered *[]byte) (*Session, net.C
 	}
 	session := NewSession(serverConn, server)
 	session.mutex.Lock()
-	session.state = StateRcptTo // BDAT is valid once recipients are set
+	session.state = StateRcptTo                    // BDAT is valid once recipients are set
 	session.reader = bufio.NewReader(session.conn) // installed like server.go's main loop
 	session.mutex.Unlock()
 

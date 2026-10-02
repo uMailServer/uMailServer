@@ -51,7 +51,7 @@ func TestEmailSetInvalidPatchDoesNotMoveOrDoubleReport(t *testing.T) {
 			"accountId": user,
 			"update": map[string]interface{}{
 				"m1": map[string]interface{}{
-					"keywords/$seen": "yes", // invalid: non-bool, non-nil
+					"keywords/$seen": "yes",                                   // invalid: non-bool, non-nil
 					"mailboxIds":     map[string]interface{}{"archive": true}, // must NOT be applied
 				},
 			},
