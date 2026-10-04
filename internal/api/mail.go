@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/storage"
@@ -185,7 +186,11 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 		// Determine preview
 		preview := body
 		if len(preview) > 100 {
-			preview = preview[:100] + "..."
+			end := 100
+			for end > 0 && !utf8.RuneStart(preview[end]) {
+				end--
+			}
+			preview = preview[:end] + "..."
 		}
 
 		// Map folder name for response
