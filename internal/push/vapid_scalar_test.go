@@ -1,6 +1,7 @@
 package push
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -28,10 +29,12 @@ func TestGeneratedVAPIDKeysCanSign(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		x, y := elliptic.Unmarshal(elliptic.P256(), public)
-		if x == nil {
-			t.Fatal("invalid public key")
+		validatedPublic, err := ecdh.P256().NewPublicKey(public)
+		if err != nil {
+			t.Fatal(err)
 		}
+		encodedPublic := validatedPublic.Bytes()
+		x, y := new(big.Int).SetBytes(encodedPublic[1:33]), new(big.Int).SetBytes(encodedPublic[33:])
 		key := &ecdsa.PrivateKey{
 			PublicKey: ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y},
 			D:         new(big.Int).SetBytes(private),
@@ -70,7 +73,12 @@ func TestGeneratedVAPIDKeysCanSign(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x, y := elliptic.P256().ScalarBaseMult(private)
+	validatedPrivate, err := ecdh.P256().NewPrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedPublic := validatedPrivate.PublicKey().Bytes()
+	x, y := new(big.Int).SetBytes(encodedPublic[1:33]), new(big.Int).SetBytes(encodedPublic[33:])
 	key := &ecdsa.PrivateKey{PublicKey: ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, D: new(big.Int).SetBytes(private)}
 	der, err := x509.MarshalECPrivateKey(key)
 	if err != nil {

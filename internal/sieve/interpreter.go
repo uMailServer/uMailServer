@@ -420,7 +420,6 @@ func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 				continue
 			}
 			for _, value := range values {
-
 				switch t.MatchType {
 				case ":is", "is", "":
 					for _, key := range t.KeyList {
