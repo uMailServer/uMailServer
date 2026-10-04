@@ -300,7 +300,7 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 			var body string
 			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
 			if err == nil {
-				body = string(data)
+				body = h.extractBody(string(data))
 			}
 
 			folderName := reverseFolderMap[mailbox]
