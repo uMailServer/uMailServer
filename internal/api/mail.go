@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/storage"
@@ -185,7 +186,11 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 		// Determine preview
 		preview := body
 		if len(preview) > 100 {
-			preview = preview[:100] + "..."
+			end := 100
+			for end > 0 && !utf8.RuneStart(preview[end]) {
+				end--
+			}
+			preview = preview[:end] + "..."
 		}
 
 		// Map folder name for response
@@ -231,7 +236,7 @@ func (h *MailHandler) extractBody(raw string) string {
 // hasFlag checks if a flag is present
 func hasFlag(flags []string, flag string) bool {
 	for _, f := range flags {
-		if f == flag || f == strings.ToLower(flag) {
+		if strings.EqualFold(f, flag) {
 			return true
 		}
 	}
@@ -300,7 +305,7 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 			var body string
 			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
 			if err == nil {
-				body = string(data)
+				body = h.extractBody(string(data))
 			}
 
 			folderName := reverseFolderMap[mailbox]
