@@ -589,7 +589,10 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 
 // deleteMessageMetadata finds and deletes message metadata by messageID
 func (h *MailHandler) deleteMessageMetadata(userEmail, messageID string) {
-	mailboxes := []string{"INBOX", "Sent", "Drafts", "Trash", "Junk", "Archive"}
+	mailboxes, err := h.mailDB.ListMailboxes(userEmail)
+	if err != nil {
+		return
+	}
 	for _, mailbox := range mailboxes {
 		// Get all UIDs in this mailbox
 		uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
@@ -604,7 +607,6 @@ func (h *MailHandler) deleteMessageMetadata(userEmail, messageID string) {
 			}
 			if meta.MessageID == messageID {
 				_ = h.mailDB.DeleteMessage(userEmail, mailbox, uid)
-				return
 			}
 		}
 	}
