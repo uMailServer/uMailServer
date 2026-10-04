@@ -78,17 +78,25 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get threads from database
-	threads, err := s.getThreadsForMailbox(user, mailbox, limit, offset)
+	threads, err := s.getThreadsForMailbox(user, mailbox, 0, 0)
 	if err != nil {
 		s.logger.Error("failed to get threads", "error", err, "user", user)
 		s.sendError(w, http.StatusInternalServerError, "failed to get threads")
 		return
 	}
 
+	total := len(threads)
+	start := min(offset, total)
+	end := total
+	if limit < total-start {
+		end = start + limit
+	}
+	threads = threads[start:end]
+
 	// Convert to response format
 	response := ThreadListResponse{
 		Threads: make([]ThreadResponse, 0, len(threads)),
-		Total:   len(threads),
+		Total:   total,
 		Limit:   limit,
 		Offset:  offset,
 	}
