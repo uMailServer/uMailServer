@@ -381,7 +381,11 @@ func (s *Server) markThreadAsRead(user, mailbox, threadID string) error {
 	// Best-effort aggregate refresh: the Thread row exists only when the
 	// IMAP delivery path has written one; a missing row is not an error.
 	if thread, err := s.mailDB.GetThread(user, threadID); err == nil {
-		thread.UnreadCount = 0
+		count, unread, err := s.threadMessageCounts(user, threadID)
+		if err != nil {
+			return err
+		}
+		thread.MessageCount, thread.UnreadCount = count, unread
 		if err := s.mailDB.UpdateThread(user, thread); err != nil {
 			return err
 		}
@@ -403,5 +407,38 @@ func (s *Server) deleteThread(user, mailbox, threadID string) error {
 			return err
 		}
 	}
-	return s.mailDB.DeleteThread(user, threadID)
+	count, unread, err := s.threadMessageCounts(user, threadID)
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return s.mailDB.DeleteThread(user, threadID)
+	}
+	thread, err := s.mailDB.GetThread(user, threadID)
+	if err != nil {
+		return err
+	}
+	thread.MessageCount, thread.UnreadCount = count, unread
+	return s.mailDB.UpdateThread(user, thread)
+}
+
+// threadMessageCounts counts the user-wide summary across mailboxes.
+func (s *Server) threadMessageCounts(user, threadID string) (count, unread int, err error) {
+	mailboxes, err := s.mailDB.ListMailboxes(user)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, mailbox := range mailboxes {
+		messages, err := s.mailDB.GetThreadMessages(user, mailbox, threadID)
+		if err != nil {
+			return 0, 0, err
+		}
+		count += len(messages)
+		for _, message := range messages {
+			if !message.IsRead {
+				unread++
+			}
+		}
+	}
+	return count, unread, nil
 }
