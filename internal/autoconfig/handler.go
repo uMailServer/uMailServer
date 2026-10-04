@@ -2,6 +2,7 @@ package autoconfig
 
 import (
 	"encoding/xml"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -114,8 +115,13 @@ func (h *Handler) HandleAutodiscover(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// POST - read body
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 		if err != nil {
+			var limitErr *http.MaxBytesError
+			if errors.As(err, &limitErr) {
+				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "Bad request", http.StatusBadRequest)
 			return
 		}
@@ -253,6 +259,11 @@ func (h *Handler) getAuthMethod(ssl bool) string {
 
 func (h *Handler) buildAutodiscoverResponse(email, domain string) *AutodiscoverResponse {
 	hostname := h.provider.GetMailServerHost(domain)
+	ssl := h.provider.SupportsSSL(domain)
+	sslMode := "off"
+	if ssl {
+		sslMode = "on"
+	}
 
 	resp := &AutodiscoverResponse{
 		Space: "http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006",
@@ -267,22 +278,22 @@ func (h *Handler) buildAutodiscoverResponse(email, domain string) *AutodiscoverR
 		{
 			Type:      "IMAP",
 			Server:    hostname,
-			Port:      993,
+			Port:      h.provider.GetIncomingPort(domain, "imap", ssl),
 			LoginName: email,
 			Domain:    domain,
 			SPA:       "off",
-			SSL:       "on",
-			Auth:      "password-encrypted",
+			SSL:       sslMode,
+			Auth:      h.getAuthMethod(ssl),
 		},
 		{
 			Type:      "SMTP",
 			Server:    hostname,
-			Port:      465,
+			Port:      h.provider.GetOutgoingPort(domain, ssl),
 			LoginName: email,
 			Domain:    domain,
 			SPA:       "off",
-			SSL:       "on",
-			Auth:      "password-encrypted",
+			SSL:       sslMode,
+			Auth:      h.getAuthMethod(ssl),
 		},
 	}
 

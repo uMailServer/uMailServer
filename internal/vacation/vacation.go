@@ -70,6 +70,7 @@ func (m *Manager) GetConfig(email string) (*Config, error) {
 	if config, ok := m.configs[email]; ok {
 		// Return a copy
 		configCopy := *config
+		configCopy.ExcludeAddresses = append([]string(nil), config.ExcludeAddresses...)
 		return &configCopy, nil
 	}
 

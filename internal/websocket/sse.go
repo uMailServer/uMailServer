@@ -251,7 +251,7 @@ func (s *SSEServer) Broadcast(event string, data interface{}) {
 // SendToUser sends an event to all connections of a specific user
 func (s *SSEServer) SendToUser(user, event string, data interface{}) error {
 	s.clientsMu.RLock()
-	clients := s.clients[user]
+	clients := append([]*SSEClient(nil), s.clients[user]...)
 	s.clientsMu.RUnlock()
 
 	if len(clients) == 0 {

@@ -113,33 +113,38 @@ func sortMessagesByCriteria(messages []*storage.MessageMetadata, criteria []Sort
 		}
 	}
 
-	// Sort by primary criterion
+	// Compare criteria in order, preserving mailbox order when all keys tie.
 	sort.SliceStable(sortable, func(i, j int) bool {
-		c := criteria[0]
-		ascending := func(a, b int) bool {
-			switch c.Field {
-			case "ARRIVAL":
-				return sortable[a].arrival.Before(sortable[b].arrival)
-			case "DATE":
-				return sortable[a].date.Before(sortable[b].date)
-			case "FROM":
-				return strings.ToLower(sortable[a].from) < strings.ToLower(sortable[b].from)
-			case "SUBJECT":
-				return strings.ToLower(sortable[a].subject) < strings.ToLower(sortable[b].subject)
-			case "SIZE":
-				return sortable[a].size < sortable[b].size
-			case "UID":
-				return sortable[a].uid < sortable[b].uid
+		for _, c := range criteria {
+			ascending := func(a, b int) bool {
+				switch c.Field {
+				case "ARRIVAL":
+					return sortable[a].arrival.Before(sortable[b].arrival)
+				case "DATE":
+					return sortable[a].date.Before(sortable[b].date)
+				case "FROM":
+					return strings.ToLower(sortable[a].from) < strings.ToLower(sortable[b].from)
+				case "SUBJECT":
+					return strings.ToLower(sortable[a].subject) < strings.ToLower(sortable[b].subject)
+				case "SIZE":
+					return sortable[a].size < sortable[b].size
+				case "UID":
+					return sortable[a].uid < sortable[b].uid
+				}
+				return false
 			}
-			return false
+			a, b := i, j
+			if c.Descending {
+				a, b = b, a
+			}
+			if ascending(a, b) {
+				return true
+			}
+			if ascending(b, a) {
+				return false
+			}
 		}
-		if c.Descending {
-			// Compare with the operands swapped rather than negating the result.
-			// Negating reports true for messages that compare equal, which is not
-			// a strict weak ordering and makes SliceStable reverse tied messages.
-			return ascending(j, i)
-		}
-		return ascending(i, j)
+		return false
 	})
 
 	// Extract sequence numbers

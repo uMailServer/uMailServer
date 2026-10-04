@@ -45,16 +45,13 @@ type SCRAMSHA256 struct {
 
 // NewSCRAMSHA256 creates a new SCRAM-SHA-256 authenticator with the password
 func NewSCRAMSHA256(password string, salt []byte, iterations int) (*SCRAMSHA256, error) {
-	// Normalize password (RFC 7616 UsernameCaseMapped - lowercase)
-	normalized := strings.ToLower(password)
+	// Password case is significant; it must not be folded like a username.
+	saltedPassword := Hi(password, salt, iterations)
 
-	// SaltedPassword = Hi(Normalized(password), salt, i)
-	saltedPassword := Hi(normalized, salt, iterations)
-
-	// StoredKey = HMAC(SaltedPassword, "Client Key")
+	// StoredKey = H(HMAC(SaltedPassword, "Client Key"))
 	clientKey := hmac.New(sha256.New, saltedPassword)
 	clientKey.Write([]byte("Client Key"))
-	storedKey := clientKey.Sum(nil)
+	storedKey := sha256.Sum256(clientKey.Sum(nil))
 
 	// ServerKey = HMAC(SaltedPassword, "Server Key")
 	serverKey := hmac.New(sha256.New, saltedPassword)
@@ -63,7 +60,7 @@ func NewSCRAMSHA256(password string, salt []byte, iterations int) (*SCRAMSHA256,
 	return &SCRAMSHA256{
 		salt:           salt,
 		saltedPassword: saltedPassword,
-		storedKey:      storedKey,
+		storedKey:      storedKey[:],
 		serverKey:      serverKey.Sum(nil),
 	}, nil
 }
@@ -103,12 +100,16 @@ func Hi(password string, salt []byte, iterations int) []byte {
 	ui := hmac.New(sha256.New, []byte(password))
 	ui.Write(salt)
 	ui.Write([]byte{0, 0, 0, 1}) // INT(1) in big-endian
-	result := ui.Sum(nil)
+	u := ui.Sum(nil)
+	result := append([]byte(nil), u...)
 
 	for i := 2; i <= iterations; i++ {
 		ui = hmac.New(sha256.New, []byte(password))
-		ui.Write(result)
-		result = ui.Sum(nil)
+		ui.Write(u)
+		u = ui.Sum(nil)
+		for j := range result {
+			result[j] ^= u[j]
+		}
 	}
 	return result
 }

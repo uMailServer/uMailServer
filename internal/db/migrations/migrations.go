@@ -188,6 +188,10 @@ func (m *Migrator) getAppliedMigrations() (map[string]migrationRecord, error) {
 
 func (m *Migrator) runMigration(migration Migration) error {
 	return m.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(migrationBucket))
+		if bucket.Get([]byte(migration.Version)) != nil {
+			return nil
+		}
 		if migration.Up == nil {
 			return fmt.Errorf("migration %s has no up function", migration.Version)
 		}
@@ -207,7 +211,6 @@ func (m *Migrator) runMigration(migration Migration) error {
 			return err
 		}
 
-		bucket := tx.Bucket([]byte(migrationBucket))
 		return bucket.Put([]byte(migration.Version), data)
 	})
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -42,6 +43,9 @@ func NewWatcher(path string, logger *slog.Logger, onChange ChangeHandler) *Watch
 
 // Start begins watching the config file
 func (w *Watcher) Start(interval time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf("config watcher interval must be positive")
+	}
 	// Get initial file info
 	info, err := os.Stat(w.path)
 	if err != nil {

@@ -39,7 +39,7 @@ func verifyPasswordArgon2id(password, encodedHash string) bool {
 	// Parse the hash format
 	// $argon2id$v=19$m=65536,t=1,p=4$<salt>$<hash>
 	parts := strings.Split(encodedHash, "$")
-	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
+	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" || parts[2] != "v=19" {
 		return false
 	}
 	memoryStr := parts[3] // m=65536,t=1,p=4
@@ -63,7 +63,7 @@ func verifyPasswordArgon2id(password, encodedHash string) bool {
 	}
 
 	// Validate parameters before casting
-	if time < 0 || time > math.MaxUint32 || memory < 0 || memory > math.MaxUint32 ||
+	if time <= 0 || time > math.MaxUint32 || memory < 0 || memory > math.MaxUint32 ||
 		threads < 1 || threads > 255 || len(storedHash) == 0 || len(storedHash) > math.MaxUint32 {
 		return false
 	}

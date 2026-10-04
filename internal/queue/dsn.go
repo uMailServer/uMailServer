@@ -141,7 +141,7 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 			"--%s\r\n"+
 			"Content-Type: text/plain\r\n"+
 			"\r\n"+
-			"Delivery to the following recipient failed:\r\n"+
+			"Delivery to the following recipient %s:\r\n"+
 			"    %s\r\n\r\n"+
 			"Action: %s\r\n"+
 			"Status: %s\r\n"+
@@ -162,6 +162,7 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 		time.Now().Format(time.RFC1123Z),
 		dsn.MessageID,
 		boundary,
+		dsn.Action,
 		dsn.OriginalTo,
 		dsn.Action,
 		dsn.Status,

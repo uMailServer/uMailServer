@@ -420,8 +420,8 @@ func (rl *RateLimiter) CheckConnection(ip string) Result {
 		return Result{Allowed: true}
 	}
 
-	// Reset if window expired
-	if now.After(counter.until) {
+	// Active connection slots remain occupied until ReleaseConnection.
+	if counter.count == 0 && now.After(counter.until) {
 		counter.count = 1
 		counter.until = now.Add(time.Minute)
 		return Result{Allowed: true}

@@ -127,24 +127,26 @@ func (c *Classifier) UpdateStats() error {
 	if c.bolt == nil {
 		return nil
 	}
-	// Get counts first (outside the Update transaction to avoid nested transactions)
-	totalHam, totalSpam, err := c.GetTotalCounts()
-	if err != nil {
-		return err
-	}
-	// Now update in a separate transaction
 	return c.bolt.Update(func(tx *bbolt.Tx) error {
 		statsBucket := tx.Bucket([]byte(StatsBucket))
 		if statsBucket == nil {
 			return nil
 		}
-		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], totalHam)
-		if err := statsBucket.Put([]byte("total_ham"), buf[:]); err != nil {
+		var totalHam, totalSpam uint64
+		if bucket := tx.Bucket([]byte(HamBucket)); bucket != nil {
+			totalHam = countAllTokens(bucket)
+		}
+		if bucket := tx.Bucket([]byte(SpamBucket)); bucket != nil {
+			totalSpam = countAllTokens(bucket)
+		}
+		// bbolt retains value slices until the transaction commits.
+		var hamBuf, spamBuf [8]byte
+		binary.BigEndian.PutUint64(hamBuf[:], totalHam)
+		if err := statsBucket.Put([]byte("total_ham"), hamBuf[:]); err != nil {
 			return err
 		}
-		binary.BigEndian.PutUint64(buf[:], totalSpam)
-		return statsBucket.Put([]byte("total_spam"), buf[:])
+		binary.BigEndian.PutUint64(spamBuf[:], totalSpam)
+		return statsBucket.Put([]byte("total_spam"), spamBuf[:])
 	})
 }
 

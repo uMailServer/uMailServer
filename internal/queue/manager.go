@@ -265,7 +265,7 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 	// If notify is shorter than to, missing entries default to 0 (sender has no preference).
 	entries := make([]*db.QueueEntry, len(to))
 	for i, recipient := range to {
-		dsnNotify := DSNNotifyNever
+		var dsnNotify DSNNotify
 		if i < len(notify) && notify[i] != "" {
 			dsnNotify = ParseDSNNotify(notify[i])
 		}
@@ -402,17 +402,25 @@ func (m *Manager) DropEntry(id string) error {
 
 // FlushQueue retries all failed entries
 func (m *Manager) FlushQueue() error {
-	// Get all entries and retry them
-	entries, err := m.GetPendingEntries()
+	// Collect failed IDs before retrying so writes happen outside the read transaction.
+	var failedIDs []string
+	err := m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var entry db.QueueEntry
+		if err := json.Unmarshal(value, &entry); err != nil {
+			return err
+		}
+		if entry.Status == "failed" {
+			failedIDs = append(failedIDs, entry.ID)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
-	for _, entry := range entries {
-		if entry.Status == "failed" {
-			if err := m.RetryEntry(entry.ID); err != nil {
-				return err
-			}
+	for _, id := range failedIDs {
+		if err := m.RetryEntry(id); err != nil {
+			return err
 		}
 	}
 

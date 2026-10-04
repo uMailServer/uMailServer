@@ -330,6 +330,11 @@ func (m *Manager) Verify(backupPath string) (*BackupManifest, error) {
 		return nil, fmt.Errorf("corrupt archive: no entries")
 	}
 
+	// Tar EOF can precede gzip EOF; finish reading to validate the gzip footer.
+	if _, err := io.Copy(io.Discard, gz); err != nil {
+		return nil, fmt.Errorf("corrupt gzip stream: %w", err)
+	}
+
 	// Compute checksum
 	if _, err := f.Seek(0, 0); err != nil {
 		return nil, err

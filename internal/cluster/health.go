@@ -3,6 +3,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -204,17 +205,18 @@ func (c *ClusterManager) HealthMonitor() HealthMonitor {
 
 // Close closes all cluster resources
 func (c *ClusterManager) Close() error {
+	var errs []error
 	if c.session != nil {
-		c.session.Close()
+		errs = append(errs, c.session.Close())
 	}
 	if c.leader != nil {
-		c.leader.Close()
+		errs = append(errs, c.leader.Close())
 	}
 	if c.lock != nil {
-		c.lock.Close()
+		errs = append(errs, c.lock.Close())
 	}
 	if c.health != nil {
-		c.health.Close()
+		errs = append(errs, c.health.Close())
 	}
-	return nil
+	return errors.Join(errs...)
 }

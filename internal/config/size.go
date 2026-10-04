@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -79,28 +80,34 @@ func ParseSize(s string) (Size, error) {
 		return Size(n), nil
 	}
 
-	value, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid size value: %s", matches[1])
-	}
-
 	unit := matches[2]
-	if unit == "" || unit == "B" {
-		return Size(value), nil
-	}
-
+	multiplier := Size(1)
 	switch unit {
+	case "", "B":
 	case "K", "KB":
-		return Size(value * float64(KB)), nil
+		multiplier = KB
 	case "M", "MB":
-		return Size(value * float64(MB)), nil
+		multiplier = MB
 	case "G", "GB":
-		return Size(value * float64(GB)), nil
+		multiplier = GB
 	case "T", "TB":
-		return Size(value * float64(TB)), nil
+		multiplier = TB
 	default:
 		return 0, fmt.Errorf("unknown size unit: %s", unit)
 	}
+	if !strings.Contains(matches[1], ".") {
+		value, err := strconv.ParseInt(matches[1], 10, 64)
+		if err != nil || value > math.MaxInt64/int64(multiplier) {
+			return 0, fmt.Errorf("invalid size value: %s", matches[1])
+		}
+		return Size(value) * multiplier, nil
+	}
+	value, err := strconv.ParseFloat(matches[1], 64)
+	value *= float64(multiplier)
+	if err != nil || value >= float64(math.MaxInt64) {
+		return 0, fmt.Errorf("invalid size value: %s", matches[1])
+	}
+	return Size(value), nil
 }
 
 // Duration is a wrapper around time.Duration that can be parsed from strings

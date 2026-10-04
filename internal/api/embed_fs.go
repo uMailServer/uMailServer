@@ -48,6 +48,9 @@ func (a *embedFSAdapter) Exists(name string) bool {
 	if a.fs == nil {
 		return false
 	}
-	_, err := a.fs.Open(name)
+	file, err := a.fs.Open(name)
+	if err == nil {
+		_ = file.Close()
+	}
 	return err == nil
 }

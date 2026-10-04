@@ -141,6 +141,10 @@ func (cb *CircuitBreaker) RecordSuccess() {
 func (cb *CircuitBreaker) recordSuccess(gen uint64, release bool) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
+	// A completion from an older round must not change this round's state.
+	if release && gen != cb.halfOpenGen {
+		return
+	}
 
 	switch cb.state {
 	case StateClosed:
@@ -181,6 +185,9 @@ func (cb *CircuitBreaker) RecordFailure() {
 func (cb *CircuitBreaker) recordFailure(gen uint64, release bool) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
+	if release && gen != cb.halfOpenGen {
+		return
+	}
 
 	cb.lastFailure = time.Now()
 

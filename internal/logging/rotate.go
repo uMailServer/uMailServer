@@ -117,7 +117,7 @@ func (w *RotatingWriter) rotate() error {
 	}
 
 	// Rename current file to backup name with timestamp
-	timestamp := time.Now().Format("20060102-150405")
+	timestamp := time.Now().Format("20060102-150405.000000000")
 	backupName := fmt.Sprintf("%s.%s", w.filename, timestamp)
 
 	if _, err := os.Stat(w.filename); err == nil {

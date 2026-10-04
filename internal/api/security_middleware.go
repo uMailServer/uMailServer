@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"mime"
 	"net/http"
 	"strings"
 )
@@ -85,8 +86,8 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 		// Additionally, we validate Content-Type to prevent form-based attacks.
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			// Require application/json Content-Type to prevent simple form submissions
-			contentType := r.Header.Get("Content-Type")
-			if !strings.Contains(contentType, "application/json") {
+			contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || contentType != "application/json" {
 				s.sendError(w, http.StatusBadRequest, "Content-Type must be application/json")
 				return
 			}
@@ -209,8 +210,8 @@ func validateContentTypeMiddleware(contentType string) func(http.Handler) http.H
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
-				ct := r.Header.Get("Content-Type")
-				if ct == "" || !strings.HasPrefix(ct, contentType) {
+				ct, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+				if err != nil || ct != contentType {
 					http.Error(w, "Invalid Content-Type", http.StatusUnsupportedMediaType)
 					return
 				}

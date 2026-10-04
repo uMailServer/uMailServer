@@ -38,7 +38,10 @@ func VerifyCRAMMD5(challenge, response string, getSecret func(username string) (
 	}
 
 	// Calculate expected HMAC
-	challengeBytes, _ := base64.StdEncoding.DecodeString(challenge)
+	challengeBytes, err := base64.StdEncoding.DecodeString(challenge)
+	if err != nil {
+		return username, false
+	}
 	expectedHMAC := hmac.New(md5.New, []byte(secret))
 	expectedHMAC.Write(challengeBytes)
 	expectedHex := hex.EncodeToString(expectedHMAC.Sum(nil))

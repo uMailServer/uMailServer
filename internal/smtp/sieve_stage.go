@@ -100,7 +100,7 @@ func (s *SieveStage) Process(ctx *MessageContext) PipelineResult {
 			case sieve.VacationAction:
 				// Call vacation handler if set (for async vacation reply)
 				// CheckAndRecordVacation is atomic to prevent race conditions
-				if s.vacationHandler != nil && s.manager.CheckAndRecordVacation(from, a.Days) {
+				if s.vacationHandler != nil && s.manager.CheckAndRecordVacation(fmt.Sprintf("%q:%q", recipient, from), a.Days) {
 					// Call handler asynchronously to not block the pipeline
 					go s.vacationHandler(from, recipient, a)
 				}

@@ -55,9 +55,14 @@ func (cd *ConnectionDrainer) ActiveConnections() int64 {
 // Otherwise, it waits for connections to drain or timeout
 func (cd *ConnectionDrainer) Close(ctx context.Context) error {
 	cd.mu.Lock()
-	cd.closed = true
-	close(cd.closeCh)
+	if !cd.closed {
+		cd.closed = true
+		close(cd.closeCh)
+	}
 	cd.mu.Unlock()
+	if cd.ActiveConnections() == 0 {
+		return nil
+	}
 
 	// Create a timeout context if not provided
 	if ctx == nil {
@@ -182,8 +187,8 @@ func (gs *GracefulShutdown) Shutdown() error {
 	case <-done:
 		// All components stopped gracefully
 	case <-ctx.Done():
-		// Timeout reached
-		errCh <- ctx.Err()
+		// Workers may still send errors; leave their buffered channel open.
+		return ctx.Err()
 	}
 
 	close(errCh)

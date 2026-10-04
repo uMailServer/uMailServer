@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -304,6 +305,11 @@ type headerCarrier struct {
 func (c *headerCarrier) Get(key string) string {
 	if vals, ok := c.headers[key]; ok && len(vals) > 0 {
 		return vals[0]
+	}
+	for name, vals := range c.headers {
+		if strings.EqualFold(name, key) && len(vals) > 0 {
+			return vals[0]
+		}
 	}
 	return ""
 }

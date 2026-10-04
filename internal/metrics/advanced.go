@@ -49,8 +49,8 @@ func (h *Histogram) Snapshot() map[string]interface{} {
 	return map[string]interface{}{
 		"count":   atomic.LoadUint64(&h.count),
 		"sum":     h.sum,
-		"buckets": h.buckets,
-		"bounds":  h.bounds,
+		"buckets": append([]uint64(nil), h.buckets...),
+		"bounds":  append([]float64(nil), h.bounds...),
 	}
 }
 

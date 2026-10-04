@@ -3,6 +3,7 @@ package smtp
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/umailserver/umailserver/internal/auth"
 )
@@ -14,6 +15,7 @@ type OpenPGPStage struct {
 
 // OpenPGPKeystore manages OpenPGP keys per user
 type OpenPGPKeystore struct {
+	mu    sync.RWMutex
 	users map[string]*OpenPGPUserKeys
 }
 
@@ -40,6 +42,8 @@ func (ks *OpenPGPKeystore) GetKeys(user string) *OpenPGPUserKeys {
 	if ks == nil {
 		return nil
 	}
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
 	return ks.users[user]
 }
 
@@ -48,6 +52,8 @@ func (ks *OpenPGPKeystore) SetKeys(user string, keys *OpenPGPUserKeys) {
 	if ks == nil {
 		return
 	}
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
 	ks.users[user] = keys
 }
 

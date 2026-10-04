@@ -60,7 +60,7 @@ func GenerateTOTPUri(secret, account, issuer string, algo TOTPAlgorithm) string 
 	}
 	v.Set("digits", fmt.Sprintf("%d", TOTPDefaultDigits))
 	v.Set("period", fmt.Sprintf("%d", TOTPDefaultPeriod))
-	return fmt.Sprintf("otpauth://totp/%s:%s?%s", issuer, url.PathEscape(account), v.Encode())
+	return fmt.Sprintf("otpauth://totp/%s:%s?%s", url.PathEscape(issuer), url.PathEscape(account), v.Encode())
 }
 
 // ValidateTOTP validates a TOTP code against a secret at the current time.

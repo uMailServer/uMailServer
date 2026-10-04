@@ -927,7 +927,9 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 		s.WriteResponse("-ERR Unable to update maildrop")
 		return nil
 	}
-	for i, msg := range current {
+	// Delete highest indexes first so each removal preserves lower indexes.
+	for i := len(current) - 1; i >= 0; i-- {
+		msg := current[i]
 		if msg != nil && s.deletedUIDs[msg.UID] {
 			_ = s.server.mailstore.DeleteMessage(s.user, i+1) // 1-based
 		}
