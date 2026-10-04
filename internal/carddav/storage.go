@@ -302,7 +302,7 @@ func (s *Storage) GetETag(username, addressbookID, contactUID string) string {
 	if err != nil {
 		return fmt.Sprintf("\"%s\"", uuid.New().String())
 	}
-	return fmt.Sprintf("\"%d\"", info.ModTime().Unix())
+	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
 }
 
 // GetAddressbookETag generates an ETag for an addressbook
@@ -312,5 +312,5 @@ func (s *Storage) GetAddressbookETag(username, addressbookID string) string {
 	if err != nil {
 		return fmt.Sprintf("\"%s\"", uuid.New().String())
 	}
-	return fmt.Sprintf("\"%d\"", info.ModTime().Unix())
+	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
 }

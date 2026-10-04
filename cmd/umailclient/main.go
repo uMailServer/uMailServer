@@ -81,12 +81,10 @@ Examples:
 
 // formatAddr formats host:port correctly for both IPv4 and IPv6
 func formatAddr(host string, port int) string {
-	// Check if host is an IP address
-	if ip := net.ParseIP(host); ip != nil {
-		// IPv6 addresses need to be wrapped in brackets
-		return fmt.Sprintf("[%s]:%d", host, port)
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
 	}
-	return fmt.Sprintf("%s:%d", host, port)
+	return net.JoinHostPort(host, fmt.Sprint(port))
 }
 
 type SMTPClient struct {

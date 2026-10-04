@@ -104,11 +104,7 @@ func (w *Watcher) check() bool {
 		return false
 	}
 
-	// Check modification time first
-	if info.ModTime().Equal(w.lastModTime) {
-		return false
-	}
-
+	// Content can change while the modification timestamp is preserved.
 	// Verify with hash
 	hash, err := w.fileHash()
 	if err != nil {

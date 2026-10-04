@@ -31,12 +31,14 @@ func (s SecureString) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON allows direct unmarshaling (the actual value is stored)
 func (s *SecureString) UnmarshalJSON(data []byte) error {
-	if string(data) == `"[REDACTED]"` {
-		*s = ""
-		return nil
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
 	}
-	// Remove quotes and set the value
-	*s = SecureString(strings.Trim(string(data), `"`))
+	if value == "[REDACTED]" {
+		value = ""
+	}
+	*s = SecureString(value)
 	return nil
 }
 

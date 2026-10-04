@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -65,7 +66,7 @@ func (m *Manager) BackupUser(user string, destPath string, opts BackupOptions) e
 }
 
 // backupUserToPath creates a tar.gz archive of a user's maildir
-func (m *Manager) backupUserToPath(user, destPath string, opts BackupOptions) error {
+func (m *Manager) backupUserToPath(user, destPath string, opts BackupOptions) (retErr error) {
 	userPath := filepath.Join(m.dataDir, "messages", user)
 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
@@ -76,13 +77,13 @@ func (m *Manager) backupUserToPath(user, destPath string, opts BackupOptions) er
 	if err != nil {
 		return fmt.Errorf("failed to create backup file: %w", err)
 	}
-	defer f.Close()
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
 
 	gz := gzip.NewWriter(f)
-	defer gz.Close()
+	defer func() { retErr = errors.Join(retErr, gz.Close()) }()
 
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
+	defer func() { retErr = errors.Join(retErr, tw.Close()) }()
 
 	return m.addDirToTar(userPath, user, tw)
 }
@@ -131,7 +132,7 @@ func (m *Manager) addDirToTar(basePath, relPath string, tw *tar.Writer) error {
 }
 
 // BackupMailbox creates a backup of a specific mailbox
-func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptions) error {
+func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptions) (retErr error) {
 	if err := validatePathPart(user); err != nil {
 		return fmt.Errorf("invalid user: %w", err)
 	}
@@ -152,19 +153,19 @@ func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptio
 	if err != nil {
 		return fmt.Errorf("failed to create backup file: %w", err)
 	}
-	defer f.Close()
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
 
 	gz := gzip.NewWriter(f)
-	defer gz.Close()
+	defer func() { retErr = errors.Join(retErr, gz.Close()) }()
 
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
+	defer func() { retErr = errors.Join(retErr, tw.Close()) }()
 
 	return m.addDirToTar(mailboxPath, "", tw)
 }
 
 // BackupFull creates a full system backup
-func (m *Manager) BackupFull(destPath string, opts BackupOptions) error {
+func (m *Manager) BackupFull(destPath string, opts BackupOptions) (retErr error) {
 	messagesDir := filepath.Join(m.dataDir, "messages")
 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
@@ -175,13 +176,13 @@ func (m *Manager) BackupFull(destPath string, opts BackupOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to create backup file: %w", err)
 	}
-	defer f.Close()
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
 
 	gz := gzip.NewWriter(f)
-	defer gz.Close()
+	defer func() { retErr = errors.Join(retErr, gz.Close()) }()
 
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
+	defer func() { retErr = errors.Join(retErr, tw.Close()) }()
 
 	return m.addDirToTar(messagesDir, "messages", tw)
 }
@@ -489,6 +490,17 @@ func (m *Manager) Encrypt(srcPath, destPath, password string) error {
 		return err
 	}
 
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	plaintext, err := io.ReadAll(src)
+	if err != nil {
+		return err
+	}
+
 	f, err := os.Create(destPath)
 	if err != nil {
 		return err
@@ -505,17 +517,6 @@ func (m *Manager) Encrypt(srcPath, destPath, password string) error {
 		return err
 	}
 	if _, err := f.Write(nonce); err != nil {
-		return err
-	}
-
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-
-	plaintext, err := io.ReadAll(src)
-	if err != nil {
 		return err
 	}
 

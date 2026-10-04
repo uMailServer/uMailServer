@@ -156,7 +156,7 @@ func (h *Handler) HandleAutodiscover(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) extractDomain(r *http.Request) string {
-	host := r.Host
+	host := strings.ToLower(r.Host)
 	if idx := strings.Index(host, ":"); idx > 0 {
 		host = host[:idx]
 	}

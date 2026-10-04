@@ -143,11 +143,18 @@ func (w *RotatingWriter) cleanup() {
 		return
 	}
 
-	// Find all backup files
-	pattern := w.filename + ".*"
-	matches, err := filepath.Glob(pattern)
+	// Match the configured basename literally, including glob metacharacters.
+	dir := filepath.Dir(w.filename)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
+	}
+	prefix := filepath.Base(w.filename) + "."
+	var matches []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			matches = append(matches, filepath.Join(dir, entry.Name()))
+		}
 	}
 
 	if len(matches) == 0 {

@@ -506,7 +506,7 @@ func (s *Session) handleDATA() error {
 		headerScope = data[:idx]
 	}
 	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
-		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", s.id, s.server.config.Hostname)
+		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), s.server.config.Hostname)
 		data = append([]byte(msgID), data...)
 		s.data = data
 	}
@@ -561,7 +561,12 @@ func (s *Session) readData() ([]byte, error) {
 		}
 
 		// RFC 5322 line length limit check
-		if len(line) > maxLineLength {
+		lineLength := len(line)
+		if len(line) > 0 && line[0] == '.' {
+			// The extra transparency dot does not count toward the line limit.
+			lineLength--
+		}
+		if lineLength > maxLineLength {
 			return nil, fmt.Errorf("line exceeds maximum length of %d bytes", maxLineLength)
 		}
 

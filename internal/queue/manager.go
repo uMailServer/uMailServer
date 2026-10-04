@@ -250,6 +250,9 @@ func (m *Manager) SetWebhookTrigger(w WebhookTrigger) {
 // Each element of notify corresponds to the same index in to. An empty string
 // means the sender has no preference (bounce on permanent failure per RFC 3461).
 func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, message []byte) (string, error) {
+	if len(to) == 0 {
+		return "", fmt.Errorf("cannot enqueue message without recipients")
+	}
 	id := generateID()
 	queueDir := m.queueDir
 	if queueDir == "" {
@@ -305,6 +308,9 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 }
 
 func (m *Manager) Enqueue(from string, to []string, message []byte) (string, error) {
+	if len(to) == 0 {
+		return "", fmt.Errorf("cannot enqueue message without recipients")
+	}
 	// Generate unique message ID and write to disk outside the lock
 	id := generateID()
 
@@ -397,7 +403,15 @@ func (m *Manager) RetryEntry(id string) error {
 
 // DropEntry removes an entry from the queue
 func (m *Manager) DropEntry(id string) error {
-	return m.db.Dequeue(id)
+	entry, err := m.db.GetQueueEntry(id)
+	if err != nil {
+		return m.db.Dequeue(id)
+	}
+	if err := m.db.Dequeue(id); err != nil {
+		return err
+	}
+	m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+	return nil
 }
 
 // FlushQueue retries all failed entries

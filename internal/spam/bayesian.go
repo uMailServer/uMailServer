@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -240,7 +241,13 @@ func (c *Classifier) Classify(tokens []string) (*ClassifyResult, error) {
 	// Use only the most significant tokens (highest information gain)
 	// Sort by distance from 0.5 (most informative)
 	if len(probs) > 20 {
-		// Simple approach: use first 20 tokens
+		sort.Slice(probs, func(i, j int) bool {
+			di, dj := math.Abs(probs[i]-0.5), math.Abs(probs[j]-0.5)
+			if di == dj {
+				return probs[i] > probs[j]
+			}
+			return di > dj
+		})
 		probs = probs[:20]
 	}
 

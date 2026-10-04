@@ -1042,7 +1042,10 @@ func (s *Server) handleResourceRead(params json.RawMessage) (map[string]interfac
 		}}, nil
 
 	case "umailserver://accounts":
-		domains, _ := s.db.ListDomains()
+		domains, err := s.db.ListDomains()
+		if err != nil {
+			return nil, err
+		}
 		var allAccounts []*db.AccountData
 		for _, d := range domains {
 			accounts, _ := s.db.ListAccountsByDomain(d.Name)

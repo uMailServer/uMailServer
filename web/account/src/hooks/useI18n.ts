@@ -28,21 +28,25 @@ export function useI18n(): I18nReturn {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
     const loadTranslations = async () => {
       setLoading(true);
       try {
         const loader = translations[locale] || translations.en;
         const msgs = await loader();
-        setMessages(msgs.default);
+        if (active) setMessages(msgs.default);
       } catch (err) {
         console.error('Failed to load translations:', err);
         const fallback = await translations.en();
-        setMessages(fallback.default);
+        if (active) setMessages(fallback.default);
       }
-      setLoading(false);
+      if (active) setLoading(false);
     };
 
     loadTranslations();
+    return () => {
+      active = false;
+    };
   }, [locale]);
 
   const changeLocale = useCallback((newLocale: string) => {

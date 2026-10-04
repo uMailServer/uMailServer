@@ -60,11 +60,10 @@ func TestRotatingWriter_Cleanup(t *testing.T) {
 	// Trigger cleanup - removes oldest when maxBackups is set
 	r.cleanup()
 
-	// Cleanup removes one oldest file at a time when maxBackups exceeded
-	// Initial 5 files - should now be 4 after one cleanup pass
+	// One cleanup pass must enforce the configured backup maximum.
 	files, _ := filepath.Glob(logPath + ".*")
-	if len(files) != 4 {
-		t.Errorf("Expected 4 backups after cleanup, got %d", len(files))
+	if len(files) != 2 {
+		t.Errorf("Expected 2 backups after cleanup, got %d", len(files))
 	}
 }
 

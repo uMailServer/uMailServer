@@ -1,7 +1,7 @@
 export function formatDate(dateString: string): string {
   const date = new Date(dateString)
   const now = new Date()
-  const diff = now.getTime() - date.getTime()
+  const diff = Math.abs(now.getTime() - date.getTime())
 
   if (diff < 86400000) {
     // Less than 24 hours

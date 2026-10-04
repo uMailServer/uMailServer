@@ -45,6 +45,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) return;
         setIsConnected(true);
         reconnectCountRef.current = 0;
         // Auth is handled via HttpOnly cookie on the server side
@@ -52,6 +53,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       };
 
       ws.onmessage = (event) => {
+        if (wsRef.current !== ws) return;
         try {
           const message: WebSocketMessage = JSON.parse(event.data);
           setLastMessage(message);
@@ -76,6 +78,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       };
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) return;
         setIsConnected(false);
         wsRef.current = null;
 
@@ -89,6 +92,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       };
 
       ws.onerror = () => {
+        if (wsRef.current !== ws) return;
         onError?.(new Error("WebSocket error"));
       };
     } catch (err) {
@@ -99,11 +103,11 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
     }
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    const ws = wsRef.current;
+    wsRef.current = null;
+    ws?.close();
     setIsConnected(false);
   }, []);
 
