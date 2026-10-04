@@ -231,7 +231,7 @@ func (h *MailHandler) extractBody(raw string) string {
 // hasFlag checks if a flag is present
 func hasFlag(flags []string, flag string) bool {
 	for _, f := range flags {
-		if f == flag || f == strings.ToLower(flag) {
+		if strings.EqualFold(f, flag) {
 			return true
 		}
 	}
