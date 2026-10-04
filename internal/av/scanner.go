@@ -62,13 +62,21 @@ func (s *Scanner) Action() string {
 	return s.action
 }
 
+func (s *Scanner) connect() (net.Conn, error) {
+	network := "tcp"
+	if strings.HasPrefix(s.addr, "/") {
+		network = "unix"
+	}
+	return s.dial(network, s.addr, s.timeout)
+}
+
 // Scan scans data for viruses using ClamAV
 func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 	if !s.IsEnabled() {
 		return &ScanResult{Infected: false}, nil
 	}
 
-	conn, err := s.dial("tcp", s.addr, s.timeout)
+	conn, err := s.connect()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to ClamAV at %s: %w", s.addr, err)
 	}
@@ -129,7 +137,7 @@ func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 
 	// Read response
 	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
+	response, err := readClamAVResponse(reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ClamAV response: %w", err)
 	}
@@ -164,11 +172,14 @@ func (s *Scanner) ScanVersion() (string, error) {
 		return "", fmt.Errorf("scanner not enabled")
 	}
 
-	conn, err := s.dial("tcp", s.addr, s.timeout)
+	conn, err := s.connect()
 	if err != nil {
 		return "", fmt.Errorf("failed to connect to ClamAV: %w", err)
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(s.timeout)); err != nil {
+		return "", fmt.Errorf("failed to set deadline: %w", err)
+	}
 
 	_, err = conn.Write([]byte("zVERSION\000"))
 	if err != nil {
@@ -176,7 +187,7 @@ func (s *Scanner) ScanVersion() (string, error) {
 	}
 
 	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
+	response, err := readClamAVResponse(reader)
 	if err != nil {
 		return "", fmt.Errorf("failed to read version: %w", err)
 	}
@@ -190,11 +201,14 @@ func (s *Scanner) Ping() error {
 		return fmt.Errorf("scanner not enabled")
 	}
 
-	conn, err := s.dial("tcp", s.addr, s.timeout)
+	conn, err := s.connect()
 	if err != nil {
 		return fmt.Errorf("ClamAV not reachable at %s: %w", s.addr, err)
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(s.timeout)); err != nil {
+		return fmt.Errorf("failed to set deadline: %w", err)
+	}
 
 	_, err = conn.Write([]byte("zPING\000"))
 	if err != nil {
@@ -202,7 +216,7 @@ func (s *Scanner) Ping() error {
 	}
 
 	reader := bufio.NewReader(conn)
-	response, err := reader.ReadString('\n')
+	response, err := readClamAVResponse(reader)
 	if err != nil {
 		return fmt.Errorf("failed to read PONG: %w", err)
 	}
@@ -212,4 +226,19 @@ func (s *Scanner) Ping() error {
 	}
 
 	return nil
+}
+
+// Accept NUL framing for z commands and newline framing from legacy peers.
+func readClamAVResponse(reader *bufio.Reader) (string, error) {
+	var response strings.Builder
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		if b == 0 || b == '\n' {
+			return response.String(), nil
+		}
+		response.WriteByte(b)
+	}
 }

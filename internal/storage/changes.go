@@ -124,7 +124,7 @@ func ParseChangeState(state string) uint64 {
 // returned. lastSeq is the seq of the last returned entry (or sinceSeq if
 // nothing matched), suitable for the caller's newState.
 func (db *Database) GetChangesSince(user string, ct ChangeType, sinceSeq uint64, max int) (entries []ChangeEntry, hasMore bool, lastSeq uint64, err error) {
-	if db.bolt == nil {
+	if db.bolt == nil || sinceSeq == ^uint64(0) {
 		return nil, false, sinceSeq, nil
 	}
 	if max <= 0 {
@@ -147,17 +147,8 @@ func (db *Database) GetChangesSince(user string, ct ChangeType, sinceSeq uint64,
 				continue
 			}
 			if len(entries) >= max {
-				// Determine if more matching entries exist past the cap.
-				for nk, nv := c.Next(); nk != nil; nk, nv = c.Next() {
-					var ne ChangeEntry
-					if err := json.Unmarshal(nv, &ne); err != nil {
-						continue
-					}
-					if ne.Type == ct {
-						hasMore = true
-						break
-					}
-				}
+				// The current entry already matches and is beyond the cap.
+				hasMore = true
 				return nil
 			}
 			entries = append(entries, e)

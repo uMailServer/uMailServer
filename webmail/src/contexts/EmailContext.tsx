@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
 import api from '../utils/api'
 
 interface Email {
@@ -57,13 +57,16 @@ export function EmailProvider({ children }: { children: React.ReactNode }) {
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
   const [loading, setLoading] = useState(false)
   const [composeOpen, setComposeOpen] = useState(false)
+  const requestIdRef = useRef(0)
   const folders = ['Inbox', 'Sent', 'Drafts', 'Trash', 'Spam']
 
   const loadEmails = useCallback(async (folder = currentFolder) => {
+    const requestId = ++requestIdRef.current
     setLoading(true)
     try {
       const apiFolder = FOLDER_MAP[folder] || folder.toLowerCase()
       const data = await api.get<{ emails?: unknown[] }>(`/mail/${apiFolder}`)
+      if (requestId !== requestIdRef.current) return
 
       if (data && data.emails) {
         const mappedEmails = data.emails.map((email: any) => ({
@@ -75,10 +78,11 @@ export function EmailProvider({ children }: { children: React.ReactNode }) {
         setEmails([])
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return
       console.error('Failed to load emails:', err)
       setEmails([])
     } finally {
-      setLoading(false)
+      if (requestId === requestIdRef.current) setLoading(false)
     }
   }, [currentFolder])
 

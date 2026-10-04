@@ -464,6 +464,7 @@ func (s *Server) runEmailQuery(user string, filter interface{}, sort interface{}
 
 	mailboxes, _ := s.db.ListMailboxes(user)
 	targetMbox := ""
+	seenIDs := make(map[string]bool)
 
 	// If filter specifies a mailbox, only query that one
 	if filterCondition != nil && filterCondition.InMailbox != "" {
@@ -487,6 +488,10 @@ func (s *Server) runEmailQuery(user string, filter interface{}, sort interface{}
 			if !matchesFilter(meta, filterCondition) {
 				continue
 			}
+			if seenIDs[meta.MessageID] {
+				continue
+			}
+			seenIDs[meta.MessageID] = true
 
 			allMessages = append(allMessages, struct {
 				id      string

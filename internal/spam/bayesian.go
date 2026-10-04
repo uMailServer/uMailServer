@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -127,24 +128,26 @@ func (c *Classifier) UpdateStats() error {
 	if c.bolt == nil {
 		return nil
 	}
-	// Get counts first (outside the Update transaction to avoid nested transactions)
-	totalHam, totalSpam, err := c.GetTotalCounts()
-	if err != nil {
-		return err
-	}
-	// Now update in a separate transaction
 	return c.bolt.Update(func(tx *bbolt.Tx) error {
 		statsBucket := tx.Bucket([]byte(StatsBucket))
 		if statsBucket == nil {
 			return nil
 		}
-		var buf [8]byte
-		binary.BigEndian.PutUint64(buf[:], totalHam)
-		if err := statsBucket.Put([]byte("total_ham"), buf[:]); err != nil {
+		var totalHam, totalSpam uint64
+		if bucket := tx.Bucket([]byte(HamBucket)); bucket != nil {
+			totalHam = countAllTokens(bucket)
+		}
+		if bucket := tx.Bucket([]byte(SpamBucket)); bucket != nil {
+			totalSpam = countAllTokens(bucket)
+		}
+		// bbolt retains value slices until the transaction commits.
+		var hamBuf, spamBuf [8]byte
+		binary.BigEndian.PutUint64(hamBuf[:], totalHam)
+		if err := statsBucket.Put([]byte("total_ham"), hamBuf[:]); err != nil {
 			return err
 		}
-		binary.BigEndian.PutUint64(buf[:], totalSpam)
-		return statsBucket.Put([]byte("total_spam"), buf[:])
+		binary.BigEndian.PutUint64(spamBuf[:], totalSpam)
+		return statsBucket.Put([]byte("total_spam"), spamBuf[:])
 	})
 }
 
@@ -238,7 +241,13 @@ func (c *Classifier) Classify(tokens []string) (*ClassifyResult, error) {
 	// Use only the most significant tokens (highest information gain)
 	// Sort by distance from 0.5 (most informative)
 	if len(probs) > 20 {
-		// Simple approach: use first 20 tokens
+		sort.Slice(probs, func(i, j int) bool {
+			di, dj := math.Abs(probs[i]-0.5), math.Abs(probs[j]-0.5)
+			if di == dj {
+				return probs[i] > probs[j]
+			}
+			return di > dj
+		})
 		probs = probs[:20]
 	}
 

@@ -139,8 +139,12 @@ func (v *Validator) ValidateEmail(email string) error {
 
 // ExtractDomain extracts domain from email address
 func (v *Validator) ExtractDomain(email string) string {
-	if idx := strings.Index(email, "@"); idx > 0 {
-		return strings.ToLower(email[idx+1:])
+	address, err := mail.ParseAddress(email)
+	if err != nil {
+		return ""
+	}
+	if idx := strings.LastIndex(address.Address, "@"); idx > 0 {
+		return strings.ToLower(address.Address[idx+1:])
 	}
 	return ""
 }

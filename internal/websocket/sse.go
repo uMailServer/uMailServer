@@ -34,6 +34,7 @@ type SSEClient struct {
 	// notification events, plus Broadcast/SendToUser/SendToAdmins callers):
 	// http.ResponseWriter is not safe for concurrent use.
 	writeMu sync.Mutex
+	closed  bool // protected by writeMu
 }
 
 // NewSSEServer creates a new SSE server
@@ -222,6 +223,9 @@ func (s *SSEServer) sendEvent(client *SSEClient, event string, data interface{})
 	// concurrent use, and interleaved writes tear SSE frames.
 	client.writeMu.Lock()
 	defer client.writeMu.Unlock()
+	if client.closed {
+		return
+	}
 
 	if _, err := fmt.Fprintf(client.writer, "event: %s\n", event); err != nil {
 		s.logger.Debug("failed to write SSE event", "error", err)
@@ -251,7 +255,7 @@ func (s *SSEServer) Broadcast(event string, data interface{}) {
 // SendToUser sends an event to all connections of a specific user
 func (s *SSEServer) SendToUser(user, event string, data interface{}) error {
 	s.clientsMu.RLock()
-	clients := s.clients[user]
+	clients := append([]*SSEClient(nil), s.clients[user]...)
 	s.clientsMu.RUnlock()
 
 	if len(clients) == 0 {
@@ -319,4 +323,8 @@ func (s *SSEServer) removeClient(user string, client *SSEClient) {
 		delete(s.clients, user)
 	}
 	s.clientsMu.Unlock()
+
+	client.writeMu.Lock()
+	client.closed = true
+	client.writeMu.Unlock()
 }

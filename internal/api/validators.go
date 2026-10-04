@@ -43,7 +43,7 @@ func validateEmailFormat(email string) error {
 	if strings.Contains(email, "..") {
 		return fmt.Errorf("email contains invalid sequence")
 	}
-	if strings.ContainsAny(email, "/\\") {
+	if strings.ContainsAny(email, "/\\\r\n\x00") {
 		return fmt.Errorf("email contains invalid characters")
 	}
 	// Must have exactly one @

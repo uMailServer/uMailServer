@@ -70,6 +70,7 @@ func (m *Manager) GetConfig(email string) (*Config, error) {
 	if config, ok := m.configs[email]; ok {
 		// Return a copy
 		configCopy := *config
+		configCopy.ExcludeAddresses = append([]string(nil), config.ExcludeAddresses...)
 		return &configCopy, nil
 	}
 
@@ -102,12 +103,11 @@ func (m *Manager) SetConfig(email string, config *Config) error {
 		}
 	}
 
-	m.configs[email] = config
-
-	// Save to disk
+	// Save to disk before publishing the configuration.
 	if err := m.saveConfig(email, config); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
+	m.configs[email] = config
 
 	m.logger.Info("Vacation config updated",
 		"email", email,

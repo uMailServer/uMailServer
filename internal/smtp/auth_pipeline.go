@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/mail"
 	"strings"
 
 	"github.com/umailserver/umailserver/internal/auth"
@@ -164,6 +165,18 @@ func (s *AuthDMARCStage) Name() string { return "DMARC" }
 
 func (s *AuthDMARCStage) Process(ctx *MessageContext) PipelineResult {
 	fromDomain := extractDomain(ctx.From)
+	// DMARC aligns against the message author, not the envelope sender.
+	for name, values := range ctx.Headers {
+		if strings.EqualFold(name, "From") && len(values) > 0 {
+			fromDomain = ""
+			if address, err := mail.ParseAddress(values[0]); err == nil {
+				if idx := strings.LastIndex(address.Address, "@"); idx > 0 {
+					fromDomain = strings.ToLower(address.Address[idx+1:])
+				}
+			}
+			break
+		}
+	}
 	if fromDomain == "" {
 		ctx.DMARCResult = DMARCResult{Result: "none"}
 		return ResultAccept

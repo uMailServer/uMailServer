@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
+	"golang.org/x/net/publicsuffix"
 )
 
 // DMARCResult represents the result of DMARC evaluation
@@ -394,7 +395,6 @@ func checkAlignment(authDomain, fromDomain string, mode DMARCAlignment) bool {
 }
 
 // isOrganizationalDomainMatch checks if two domains share the same organizational domain
-// This is a simplified implementation - in production, this would use the Public Suffix List
 func isOrganizationalDomainMatch(domain1, domain2 string) bool {
 	domain1 = strings.ToLower(domain1)
 	domain2 = strings.ToLower(domain2)
@@ -404,29 +404,12 @@ func isOrganizationalDomainMatch(domain1, domain2 string) bool {
 		return true
 	}
 
-	// Check if one is a subdomain of the other
-	if strings.HasSuffix(domain1, "."+domain2) {
-		return true
-	}
-	if strings.HasSuffix(domain2, "."+domain1) {
-		return true
-	}
-
-	// For subdomains of the same parent, check shared organizational domain
-	// This is a simplified check - real implementation would use PSL
-	parts1 := strings.Split(domain1, ".")
-	parts2 := strings.Split(domain2, ".")
-
-	// Need at least 2 parts for an organizational domain
-	if len(parts1) < 2 || len(parts2) < 2 {
+	org1, err := publicsuffix.EffectiveTLDPlusOne(domain1)
+	if err != nil {
 		return false
 	}
-
-	// Get the last two parts (organizational domain)
-	org1 := parts1[len(parts1)-2] + "." + parts1[len(parts1)-1]
-	org2 := parts2[len(parts2)-2] + "." + parts2[len(parts2)-1]
-
-	return org1 == org2
+	org2, err := publicsuffix.EffectiveTLDPlusOne(domain2)
+	return err == nil && org1 == org2
 }
 
 // isSubdomain checks if the domain is a subdomain (has more than 2 labels)

@@ -1504,6 +1504,10 @@ func (s *Session) handleExpunge() error {
 
 // SEARCH command
 func (s *Session) handleSearch(args []string, line string) error {
+	return s.handleSearchWithUIDs(args, line, false)
+}
+
+func (s *Session) handleSearchWithUIDs(args []string, line string, uidResults bool) error {
 	ctx := context.Background()
 
 	// Create tracing span
@@ -1547,8 +1551,23 @@ func (s *Session) handleSearch(args []string, line string) error {
 		tracing.SetStatus(span, tracing.StatusOk, "")
 	}
 
-	// Convert UIDs to sequence numbers and output
-	// For simplicity, just output as SEARCH result
+	if uidResults && len(uids) > 0 {
+		var seqSet []string
+		for _, seq := range uids {
+			seqSet = append(seqSet, fmt.Sprintf("%d", seq))
+		}
+		messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, strings.Join(seqSet, ","), []string{"UID"})
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
+		}
+		uids = uids[:0]
+		for _, msg := range messages {
+			uids = append(uids, msg.UID)
+		}
+	}
+
+	// SearchMessages returns positions; UID SEARCH resolves them to stable UIDs.
 	result := "SEARCH"
 	for _, uid := range uids {
 		result += fmt.Sprintf(" %d", uid)
@@ -2216,7 +2235,7 @@ func (s *Session) handleUIDMove(args []string) error {
 
 func (s *Session) handleUIDSearch(args []string, line string) error {
 	// Same as SEARCH but output UIDs
-	return s.handleSearch(args, line)
+	return s.handleSearchWithUIDs(args, line, true)
 }
 
 func (s *Session) handleUIDExpunge(args []string) error {

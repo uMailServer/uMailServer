@@ -1,6 +1,7 @@
 package spam
 
 import (
+	"mime"
 	"strings"
 )
 
@@ -65,8 +66,11 @@ func (fe *FeatureExtractor) addSpecialFeatures(headers map[string][]string, body
 
 	// HTML-only email
 	if contentType, ok := headers["Content-Type"]; ok {
-		if len(contentType) > 0 && strings.Contains(contentType[0], "text/html") {
-			features = append(features, "html_only_email")
+		if len(contentType) > 0 {
+			mediaType, _, err := mime.ParseMediaType(contentType[0])
+			if err == nil && mediaType == "text/html" {
+				features = append(features, "html_only_email")
+			}
 		}
 	}
 

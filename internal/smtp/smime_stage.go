@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/umailserver/umailserver/internal/auth"
 )
@@ -15,6 +16,7 @@ type SMIMEStage struct {
 
 // SMIMEKeystore manages S/MIME keys per user
 type SMIMEKeystore struct {
+	mu    sync.RWMutex
 	users map[string]*SMIMEUserKeys
 }
 
@@ -42,6 +44,8 @@ func (ks *SMIMEKeystore) GetKeys(user string) *SMIMEUserKeys {
 	if ks == nil {
 		return nil
 	}
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
 	return ks.users[user]
 }
 
@@ -50,6 +54,8 @@ func (ks *SMIMEKeystore) SetKeys(user string, keys *SMIMEUserKeys) {
 	if ks == nil {
 		return
 	}
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
 	ks.users[user] = keys
 }
 

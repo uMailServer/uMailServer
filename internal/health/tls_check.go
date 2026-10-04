@@ -60,7 +60,7 @@ func TLSCertificateCheck(certPath, keyPath string, warningDays, criticalDays int
 		check.Details["days_until_expiry"] = daysUntilExpiry
 		check.Details["dns_names"] = cert.DNSNames
 
-		if daysUntilExpiry <= 0 {
+		if !time.Now().Before(cert.NotAfter) {
 			check.Status = StatusUnhealthy
 			check.Message = fmt.Sprintf("TLS certificate EXPIRED %d days ago", -daysUntilExpiry)
 		} else if daysUntilExpiry <= criticalDays {

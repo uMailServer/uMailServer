@@ -234,7 +234,7 @@ func (s *Session) handleEHLO(arg string) error {
 		// if s.server.onGetUserSecret != nil {
 		// 	authMechs = append(authMechs, "CRAM-MD5")
 		// }
-		capabilities = append(capabilities, strings.Join(authMechs, " "))
+		capabilities = append(capabilities, "AUTH "+strings.Join(authMechs, " "))
 		// Warn if AUTH is advertised over non-TLS connection
 		if !s.isTLS && s.server.config.IsSubmission && s.server.config.AllowInsecure {
 			s.server.logger.Warn("SMTP AUTH advertised over unencrypted connection - credentials may be exposed",
@@ -506,7 +506,7 @@ func (s *Session) handleDATA() error {
 		headerScope = data[:idx]
 	}
 	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
-		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", s.id, s.server.config.Hostname)
+		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), s.server.config.Hostname)
 		data = append([]byte(msgID), data...)
 		s.data = data
 	}
@@ -561,7 +561,12 @@ func (s *Session) readData() ([]byte, error) {
 		}
 
 		// RFC 5322 line length limit check
-		if len(line) > maxLineLength {
+		lineLength := len(line)
+		if len(line) > 0 && line[0] == '.' {
+			// The extra transparency dot does not count toward the line limit.
+			lineLength--
+		}
+		if lineLength > maxLineLength {
 			return nil, fmt.Errorf("line exceeds maximum length of %d bytes", maxLineLength)
 		}
 
@@ -698,6 +703,8 @@ func (s *Session) handleBDAT(arg string) error {
 				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 			}
 
+			s.sieveActions = ctx.SpamResult.Reasons
+
 			switch result {
 			case ResultReject:
 				s.resetTransaction()
@@ -718,7 +725,17 @@ func (s *Session) handleBDAT(arg string) error {
 		}
 
 		// Deliver message
-		if s.server.onDeliver != nil {
+		if s.server.onDeliverWithNotify != nil {
+			if err := s.server.onDeliverWithNotify(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data); err != nil {
+				s.resetTransaction()
+				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+			}
+		} else if s.server.onDeliverWithSieve != nil {
+			if err := s.server.onDeliverWithSieve(s.mailFrom, s.rcptTo, s.data, s.sieveActions); err != nil {
+				s.resetTransaction()
+				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+			}
+		} else if s.server.onDeliver != nil {
 			if err := s.server.onDeliver(s.mailFrom, s.rcptTo, s.data); err != nil {
 				s.resetTransaction()
 				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
@@ -1211,6 +1228,7 @@ func (s *Session) resetTransaction() {
 	s.rcptTo = make([]string, 0)
 	s.rcptToNotify = make([]string, 0) // Clear per-recipient DSN NOTIFY preferences
 	s.data = nil
+	s.bdatBuffer = nil
 	if s.state > StateGreeted {
 		s.state = StateGreeted
 	}

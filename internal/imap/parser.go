@@ -55,7 +55,7 @@ func parseSeqNumber(s string) (uint32, error) {
 	}
 
 	n, err := strconv.ParseUint(s, 10, 32)
-	if err != nil {
+	if err != nil || n == 0 {
 		return 0, fmt.Errorf("invalid sequence number: %s", s)
 	}
 

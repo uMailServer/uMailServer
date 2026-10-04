@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -42,6 +43,9 @@ func NewWatcher(path string, logger *slog.Logger, onChange ChangeHandler) *Watch
 
 // Start begins watching the config file
 func (w *Watcher) Start(interval time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf("config watcher interval must be positive")
+	}
 	// Get initial file info
 	info, err := os.Stat(w.path)
 	if err != nil {
@@ -100,17 +104,16 @@ func (w *Watcher) check() bool {
 		return false
 	}
 
-	// Check modification time first
-	if info.ModTime().Equal(w.lastModTime) {
-		return false
-	}
-
+	// Content can change while the modification timestamp is preserved.
 	// Verify with hash
 	hash, err := w.fileHash()
 	if err != nil {
 		w.logger.Error("Failed to hash config file", "error", err)
 		return false
 	}
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 
 	if hash == w.lastHash {
 		// File was touched but content didn't change

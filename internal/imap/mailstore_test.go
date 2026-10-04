@@ -1077,7 +1077,7 @@ func TestMatchesCriteriaExtended(t *testing.T) {
 			criteria: &SearchCriteria{
 				New: true,
 			},
-			want: true, // Has Recent flag, so New should match
+			want: false, // NEW requires both Recent and absence of Seen.
 		},
 	}
 

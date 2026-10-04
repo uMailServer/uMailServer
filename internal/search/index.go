@@ -45,7 +45,13 @@ func (idx *Index) Add(doc *Document) {
 		idx.removeInternal(doc.ID)
 	}
 
-	// Store document
+	// Keep indexed content independent of caller mutations.
+	stored := *doc
+	stored.Fields = make(map[string]string, len(doc.Fields))
+	for field, value := range doc.Fields {
+		stored.Fields[field] = value
+	}
+	doc = &stored
 	idx.docs[doc.ID] = doc
 	idx.docCount++
 
@@ -165,13 +171,16 @@ func (idx *Index) Search(query string, opts SearchOptions) []SearchResult {
 
 	// Apply limit and offset
 	start := opts.Offset
+	if start < 0 {
+		start = 0
+	}
 	if start > len(results) {
 		return []SearchResult{}
 	}
 
-	end := start + opts.Limit
-	if end > len(results) || opts.Limit == 0 {
-		end = len(results)
+	end := len(results)
+	if opts.Limit > 0 && opts.Limit < len(results)-start {
+		end = start + opts.Limit
 	}
 
 	return results[start:end]

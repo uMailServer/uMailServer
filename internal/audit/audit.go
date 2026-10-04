@@ -137,7 +137,7 @@ func (r *rotatingWriter) rotate() error {
 			return fmt.Errorf("failed to close audit log before rotation: %w", err)
 		}
 	}
-	timestamp := time.Now().Format("20060102-150405")
+	timestamp := time.Now().Format("20060102-150405.000000000")
 	backupName := fmt.Sprintf("%s.%s", r.filename, timestamp)
 	if _, err := os.Stat(r.filename); err == nil {
 		if err := os.Rename(r.filename, backupName); err != nil {
@@ -201,9 +201,15 @@ func (r *rotatingWriter) cleanupByCount() {
 		return
 	}
 
-	oldest, oldestInfo := r.findOldest(validMatches)
-	if oldestInfo != nil {
-		_ = os.Remove(oldest)
+	for len(validMatches) > r.maxBackups {
+		oldest, oldestInfo := r.findOldest(validMatches)
+		if oldestInfo == nil {
+			return
+		}
+		if err := os.Remove(oldest); err != nil {
+			return
+		}
+		validMatches = r.filterValidMatches(validMatches)
 	}
 }
 

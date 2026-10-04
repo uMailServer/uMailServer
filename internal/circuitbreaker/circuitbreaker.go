@@ -141,6 +141,10 @@ func (cb *CircuitBreaker) RecordSuccess() {
 func (cb *CircuitBreaker) recordSuccess(gen uint64, release bool) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
+	// A completion from an older round must not change this round's state.
+	if release && gen != cb.halfOpenGen {
+		return
+	}
 
 	switch cb.state {
 	case StateClosed:
@@ -181,6 +185,9 @@ func (cb *CircuitBreaker) RecordFailure() {
 func (cb *CircuitBreaker) recordFailure(gen uint64, release bool) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
+	if release && gen != cb.halfOpenGen {
+		return
+	}
 
 	cb.lastFailure = time.Now()
 
@@ -219,7 +226,15 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 	// to release a slot belonging to the new round.
 	gen := cb.currentHalfOpenGen()
 
+	completed := false
+	defer func() {
+		if !completed {
+			// A propagated panic must not retain a half-open admission slot.
+			cb.recordFailure(gen, true)
+		}
+	}()
 	err := fn()
+	completed = true
 	if err != nil {
 		cb.recordFailure(gen, true)
 		return err

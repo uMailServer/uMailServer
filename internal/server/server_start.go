@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/umailserver/umailserver/internal/imap"
@@ -24,6 +25,9 @@ func (s *Server) Start() error {
 
 	// Initialize queue manager
 	queueDir := filepath.Join(s.config.Server.DataDir, "queue")
+	if err := os.MkdirAll(queueDir, 0o750); err != nil {
+		return fmt.Errorf("failed to create queue directory: %w", err)
+	}
 	s.queue = queue.NewManager(s.database, nil, queueDir, s.logger)
 	s.queue.SetTracingProvider(s.tracingProvider)
 	s.queue.Start(s.ctx)

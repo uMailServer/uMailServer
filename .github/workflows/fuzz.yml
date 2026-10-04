@@ -22,7 +22,8 @@ jobs:
   fuzz:
     name: Fuzz (${{ inputs.package || 'all' }})
     runs-on: ubuntu-latest
-    timeout-hours: ${{ github.event.inputs.duration || '25' }}
+    # Fixed 25h budget in minutes (25h x 60); the inner step bounds itself at 1380.
+    timeout-minutes: 1500
     permissions:
       contents: read
     steps:

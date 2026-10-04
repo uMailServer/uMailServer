@@ -244,8 +244,8 @@ func TestIsOrganizationalDomainMatch(t *testing.T) {
 		{"example.com", "mail.example.com", true},
 		{"a.b.example.com", "c.d.example.com", true},
 		{"example.com", "other.com", false},
-		{"example.co.uk", "other.co.uk", true}, // Same org domain per simple implementation
-		{"example", "example", true},           // single label
+		{"example.co.uk", "other.co.uk", false}, // Separate registrants under co.uk
+		{"example", "example", true},            // single label
 		{"example.com", "example.org", false},
 	}
 

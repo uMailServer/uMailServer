@@ -419,34 +419,34 @@ func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 			if headerKeyLower != strings.ToLower(headerName) {
 				continue
 			}
-			value := strings.Join(values, ",")
-
-			switch t.MatchType {
-			case ":is", "is", "":
-				for _, key := range t.KeyList {
-					if value == key {
-						return true, nil
+			for _, value := range values {
+				switch t.MatchType {
+				case ":is", "is", "":
+					for _, key := range t.KeyList {
+						if value == key {
+							return true, nil
+						}
 					}
-				}
-			case ":contains", "contains":
-				for _, key := range t.KeyList {
-					// Case-insensitive contains
-					if strings.Contains(strings.ToLower(value), strings.ToLower(key)) {
-						return true, nil
+				case ":contains", "contains":
+					for _, key := range t.KeyList {
+						// Case-insensitive contains
+						if strings.Contains(strings.ToLower(value), strings.ToLower(key)) {
+							return true, nil
+						}
 					}
-				}
-			case ":matches", "matches":
-				for _, key := range t.KeyList {
-					pattern := strings.ReplaceAll(key, "*", ".*")
-					pattern = strings.ReplaceAll(pattern, "?", ".")
-					matched, err := safeRegexMatch("(?i)"+pattern, value, i.timeout)
-					if err != nil {
-						// Log the error but don't fail the entire filter
-						// Just return false for this test
-						return false, nil
-					}
-					if matched {
-						return true, nil
+				case ":matches", "matches":
+					for _, key := range t.KeyList {
+						pattern := strings.ReplaceAll(key, "*", ".*")
+						pattern = strings.ReplaceAll(pattern, "?", ".")
+						matched, err := safeRegexMatch("(?i)"+pattern, value, i.timeout)
+						if err != nil {
+							// Log the error but don't fail the entire filter
+							// Just return false for this test
+							return false, nil
+						}
+						if matched {
+							return true, nil
+						}
 					}
 				}
 			}

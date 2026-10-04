@@ -173,6 +173,9 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 
 // RenameMailbox renames a mailbox
 func (db *Database) RenameMailbox(user, oldName, newName string) error {
+	if oldName == newName {
+		return nil
+	}
 	if db.bolt == nil {
 		return nil
 	}

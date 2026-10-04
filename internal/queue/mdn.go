@@ -130,7 +130,7 @@ func GenerateMDN(originalMsg []byte, from, to, messageID, inReplyTo string, disp
 			"--%s\r\n"+
 			"Content-Type: text/plain\r\n"+
 			"\r\n"+
-			"Your message was displayed.\r\n"+
+			"Your message was %s.\r\n"+
 			"\r\n"+
 			"--%s\r\n"+
 			"Content-Type: message/disposition-notification\r\n"+
@@ -140,7 +140,7 @@ func GenerateMDN(originalMsg []byte, from, to, messageID, inReplyTo string, disp
 			"Final-Recipient: rfc822; %s\r\n"+
 			"Original-Message-ID: %s\r\n"+
 			"Disposition: %s\r\n",
-		reportingDomain+"@umailserver",
+		from,
 		to,
 		dispStr,
 		boundary,
@@ -148,6 +148,7 @@ func GenerateMDN(originalMsg []byte, from, to, messageID, inReplyTo string, disp
 		mdnMessageID,
 		inReplyTo,
 		boundary,
+		dispStr,
 		boundary,
 		reportingDomain,
 		to,

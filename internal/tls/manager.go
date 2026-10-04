@@ -134,11 +134,6 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 		m.certMu.RUnlock()
 		return cert, nil
 	}
-	// Names without their own certificate share the fallback slot.
-	if cert, ok := m.certCache[defaultCertCacheKey]; ok {
-		m.certMu.RUnlock()
-		return cert, nil
-	}
 	m.certMu.RUnlock()
 
 	// Determine cert paths
@@ -157,6 +152,16 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 				keyPath = specificKey
 				specific = true
 			}
+		}
+	}
+
+	// Resolve per-domain certificates before consulting the shared fallback.
+	if !specific {
+		m.certMu.RLock()
+		cert, ok := m.certCache[defaultCertCacheKey]
+		m.certMu.RUnlock()
+		if ok {
+			return cert, nil
 		}
 	}
 
@@ -293,10 +298,17 @@ func (m *Manager) RenewCertificates(ctx context.Context) error {
 	}
 
 	// Force renewal by deleting cached certs
+	var renewalErr error
 	for _, domain := range m.config.Domains {
 		if err := m.certManager.Cache.Delete(ctx, domain); err != nil {
 			m.logger.Warn("Failed to delete cached cert", "domain", domain, "error", err)
+			if renewalErr == nil {
+				renewalErr = fmt.Errorf("failed to delete cached certificate for %s: %w", domain, err)
+			}
 		}
+	}
+	if renewalErr != nil {
+		return renewalErr
 	}
 
 	m.logger.Info("Certificate renewal triggered", "domains", m.config.Domains)

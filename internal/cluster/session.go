@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -186,8 +187,9 @@ func (l *RedisLeaderElection) Close() error {
 
 // RedisDistributedLock implements DistributedLock using Redlock algorithm
 type RedisDistributedLock struct {
-	client    *redis.Client
-	lockValue string // value used for ownership verification on Release/Extend
+	client     *redis.Client
+	mu         sync.Mutex
+	lockValues map[string]string // successful acquisition tokens, keyed by lock name
 }
 
 // NewRedisDistributedLock creates a new Redis distributed lock
@@ -213,14 +215,22 @@ func lockKey(lockName string) string {
 
 // Acquire attempts to acquire the lock with TTL
 func (l *RedisDistributedLock) Acquire(ctx context.Context, lockName string, ttl time.Duration) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	// Generate a unique lock value for ownership verification
 	b := make([]byte, 16)
 	rand.Read(b)
-	l.lockValue = hex.EncodeToString(b)
+	lockValue := hex.EncodeToString(b)
 
-	result, err := l.client.SetNX(ctx, lockKey(lockName), l.lockValue, ttl).Result()
+	result, err := l.client.SetNX(ctx, lockKey(lockName), lockValue, ttl).Result()
 	if err != nil {
 		return false, err
+	}
+	if result {
+		if l.lockValues == nil {
+			l.lockValues = make(map[string]string)
+		}
+		l.lockValues[lockName] = lockValue
 	}
 
 	return result, nil
@@ -228,6 +238,8 @@ func (l *RedisDistributedLock) Acquire(ctx context.Context, lockName string, ttl
 
 // Release releases the lock
 func (l *RedisDistributedLock) Release(ctx context.Context, lockName string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	script := redis.NewScript(`
 		if redis.call("GET", KEYS[1]) == ARGV[1] then
 			return redis.call("DEL", KEYS[1])
@@ -235,12 +247,17 @@ func (l *RedisDistributedLock) Release(ctx context.Context, lockName string) err
 			return 0
 		end
 	`)
-	_, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValue).Result()
+	_, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValues[lockName]).Result()
+	if err == nil {
+		delete(l.lockValues, lockName)
+	}
 	return err
 }
 
 // Extend extends the lock TTL
 func (l *RedisDistributedLock) Extend(ctx context.Context, lockName string, ttl time.Duration) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	script := redis.NewScript(`
 		if redis.call("GET", KEYS[1]) == ARGV[1] then
 			return redis.call("EXPIRE", KEYS[1], ARGV[2])
@@ -248,7 +265,7 @@ func (l *RedisDistributedLock) Extend(ctx context.Context, lockName string, ttl 
 			return 0
 		end
 	`)
-	_, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValue, int(ttl.Seconds())).Result()
+	_, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValues[lockName], int(ttl.Seconds())).Result()
 	return err
 }
 

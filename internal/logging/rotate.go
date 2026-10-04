@@ -117,7 +117,7 @@ func (w *RotatingWriter) rotate() error {
 	}
 
 	// Rename current file to backup name with timestamp
-	timestamp := time.Now().Format("20060102-150405")
+	timestamp := time.Now().Format("20060102-150405.000000000")
 	backupName := fmt.Sprintf("%s.%s", w.filename, timestamp)
 
 	if _, err := os.Stat(w.filename); err == nil {
@@ -143,11 +143,18 @@ func (w *RotatingWriter) cleanup() {
 		return
 	}
 
-	// Find all backup files
-	pattern := w.filename + ".*"
-	matches, err := filepath.Glob(pattern)
+	// Match the configured basename literally, including glob metacharacters.
+	dir := filepath.Dir(w.filename)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
+	}
+	prefix := filepath.Base(w.filename) + "."
+	var matches []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), prefix) {
+			matches = append(matches, filepath.Join(dir, entry.Name()))
+		}
 	}
 
 	if len(matches) == 0 {

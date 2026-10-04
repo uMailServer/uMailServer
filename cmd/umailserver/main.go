@@ -458,9 +458,16 @@ func readPassword() string {
 		}
 	}
 	// Fallback for non-terminal contexts
-	var password string
-	_, _ = fmt.Scanln(&password)
-	return password
+	var password strings.Builder
+	var next [1]byte
+	// Consume one line without reading ahead into a later prompt's input.
+	for {
+		if n, _ := os.Stdin.Read(next[:]); n == 0 || next[0] == '\n' {
+			break
+		}
+		password.WriteByte(next[0])
+	}
+	return strings.TrimSuffix(password.String(), "\r")
 }
 
 // getDataDir returns the data directory from config file, or default

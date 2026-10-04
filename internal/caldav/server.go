@@ -395,14 +395,17 @@ func parseICSTime(value string) (time.Time, bool) {
 
 // componentTimeRange returns the interval covered by a component body from
 // its DTSTART/DTEND properties; ok is false when DTSTART is absent or
-// unparseable. A component without DTEND is a zero-length interval.
+// unparseable. Without DTEND, DATE values span one day and DATE-TIME
+// values are zero-length intervals.
 func componentTimeRange(body string) (start, end time.Time, ok bool) {
+	startIsDate := false
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		if start.IsZero() && strings.HasPrefix(line, "DTSTART") {
 			if idx := strings.Index(line, ":"); idx >= 0 {
 				if t, parsed := parseICSTime(line[idx+1:]); parsed {
 					start = t
+					startIsDate = len(line[idx+1:]) == 8
 				}
 			}
 			continue
@@ -420,6 +423,9 @@ func componentTimeRange(body string) (start, end time.Time, ok bool) {
 	}
 	if end.IsZero() {
 		end = start
+		if startIsDate {
+			end = start.AddDate(0, 0, 1)
+		}
 	}
 	return start, end, true
 }
@@ -1110,6 +1116,7 @@ func icsTimeFormat(value string) string {
 func rruleInstances(baseStart, baseEnd time.Time, r *rruleSpec, windowStart, windowEnd time.Time) []time.Time {
 	dur := baseEnd.Sub(baseStart)
 	var out []time.Time
+	count := 0
 	for i := 0; i < maxRRULEInstances; i++ {
 		var inst time.Time
 		switch r.freq {
@@ -1119,18 +1126,26 @@ func rruleInstances(baseStart, baseEnd time.Time, r *rruleSpec, windowStart, win
 			inst = baseStart.Add(time.Duration(i*r.interval) * 7 * 24 * time.Hour)
 		case "MONTHLY":
 			inst = baseStart.AddDate(0, i*r.interval, 0)
+			// Nonexistent dates are omitted and do not consume COUNT.
+			if inst.Day() != baseStart.Day() {
+				continue
+			}
 		case "YEARLY":
 			inst = baseStart.AddDate(i*r.interval, 0, 0)
+			if inst.Month() != baseStart.Month() || inst.Day() != baseStart.Day() {
+				continue
+			}
 		}
 		if !r.until.IsZero() && inst.After(r.until) {
 			break
 		}
-		if r.count > 0 && i >= r.count {
+		if r.count > 0 && count >= r.count {
 			break
 		}
 		if !inst.Before(windowEnd) {
 			break
 		}
+		count++
 		instEnd := inst.Add(dur)
 		intersects := instEnd.After(windowStart) && inst.Before(windowEnd)
 		if dur == 0 {

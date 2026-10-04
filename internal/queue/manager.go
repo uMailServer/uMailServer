@@ -250,6 +250,9 @@ func (m *Manager) SetWebhookTrigger(w WebhookTrigger) {
 // Each element of notify corresponds to the same index in to. An empty string
 // means the sender has no preference (bounce on permanent failure per RFC 3461).
 func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, message []byte) (string, error) {
+	if len(to) == 0 {
+		return "", fmt.Errorf("cannot enqueue message without recipients")
+	}
 	id := generateID()
 	queueDir := m.queueDir
 	if queueDir == "" {
@@ -265,7 +268,7 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 	// If notify is shorter than to, missing entries default to 0 (sender has no preference).
 	entries := make([]*db.QueueEntry, len(to))
 	for i, recipient := range to {
-		dsnNotify := DSNNotifyNever
+		var dsnNotify DSNNotify
 		if i < len(notify) && notify[i] != "" {
 			dsnNotify = ParseDSNNotify(notify[i])
 		}
@@ -305,6 +308,9 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 }
 
 func (m *Manager) Enqueue(from string, to []string, message []byte) (string, error) {
+	if len(to) == 0 {
+		return "", fmt.Errorf("cannot enqueue message without recipients")
+	}
 	// Generate unique message ID and write to disk outside the lock
 	id := generateID()
 
@@ -397,22 +403,38 @@ func (m *Manager) RetryEntry(id string) error {
 
 // DropEntry removes an entry from the queue
 func (m *Manager) DropEntry(id string) error {
-	return m.db.Dequeue(id)
+	entry, err := m.db.GetQueueEntry(id)
+	if err != nil {
+		return m.db.Dequeue(id)
+	}
+	if err := m.db.Dequeue(id); err != nil {
+		return err
+	}
+	m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+	return nil
 }
 
 // FlushQueue retries all failed entries
 func (m *Manager) FlushQueue() error {
-	// Get all entries and retry them
-	entries, err := m.GetPendingEntries()
+	// Collect failed IDs before retrying so writes happen outside the read transaction.
+	var failedIDs []string
+	err := m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var entry db.QueueEntry
+		if err := json.Unmarshal(value, &entry); err != nil {
+			return err
+		}
+		if entry.Status == "failed" {
+			failedIDs = append(failedIDs, entry.ID)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
-	for _, entry := range entries {
-		if entry.Status == "failed" {
-			if err := m.RetryEntry(entry.ID); err != nil {
-				return err
-			}
+	for _, id := range failedIDs {
+		if err := m.RetryEntry(id); err != nil {
+			return err
 		}
 	}
 

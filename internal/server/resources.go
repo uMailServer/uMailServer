@@ -158,19 +158,22 @@ func (rm *ResourceMonitor) checkResources() {
 // Returns false if connection limit would be exceeded
 func (rm *ResourceMonitor) AddConnection() bool {
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
 
 	if rm.limits.MaxConnections > 0 && rm.currentConnections >= int64(rm.limits.MaxConnections) {
+		limit := rm.limits.MaxConnections
+		callback := rm.onConnectionLimit
+		rm.mu.Unlock()
 		rm.logger.Warn("Connection limit reached",
-			"limit", rm.limits.MaxConnections)
+			"limit", limit)
 
-		if rm.onConnectionLimit != nil {
-			rm.onConnectionLimit()
+		if callback != nil {
+			callback()
 		}
 		return false
 	}
 
 	rm.currentConnections++
+	rm.mu.Unlock()
 	return true
 }
 

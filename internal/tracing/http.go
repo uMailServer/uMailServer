@@ -11,18 +11,39 @@ import (
 // for tracing. Defaults to 200 when WriteHeader is never called.
 type statusCaptureWriter struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
+}
+
+func (w *statusCaptureWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 func (w *statusCaptureWriter) WriteHeader(code int) {
-	w.status = code
+	if w.wroteHeader {
+		return
+	}
+	if code >= 200 || code == http.StatusSwitchingProtocols {
+		w.status = code
+		w.wroteHeader = true
+	}
 	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusCaptureWriter) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(data)
 }
 
 // Flush passes through to the wrapped writer when it supports flushing
 // (needed for SSE / streaming responses).
 func (w *statusCaptureWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		if !w.wroteHeader {
+			w.WriteHeader(http.StatusOK)
+		}
 		f.Flush()
 	}
 }

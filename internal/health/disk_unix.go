@@ -28,6 +28,11 @@ func DiskSpaceCheck(path string, warningThreshold, criticalThreshold float64) Ch
 
 		// Calculate usage percentage
 		total := stat.Blocks * uint64(stat.Bsize)
+		if total == 0 {
+			check.Status = StatusUnhealthy
+			check.Message = "filesystem reports zero capacity"
+			return check
+		}
 		free := stat.Bavail * uint64(stat.Bsize)
 		used := total - free
 		usagePercent := float64(used) / float64(total) * 100

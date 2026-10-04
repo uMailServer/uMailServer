@@ -1,6 +1,8 @@
 package api
 
 import (
+	"strings"
+
 	"github.com/umailserver/umailserver/internal/db"
 )
 
@@ -39,8 +41,12 @@ func accountToJSON(a *db.AccountData) map[string]interface{} {
 }
 
 func aliasToJSON(a *db.AliasData) map[string]interface{} {
+	address := a.Alias
+	if !strings.Contains(address, "@") {
+		address += "@" + a.Domain
+	}
 	return map[string]interface{}{
-		"alias":      a.Alias + "@" + a.Domain,
+		"alias":      address,
 		"target":     a.Target,
 		"domain":     a.Domain,
 		"is_active":  a.IsActive,

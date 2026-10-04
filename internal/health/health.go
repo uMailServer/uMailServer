@@ -28,6 +28,15 @@ type Check struct {
 	Details      map[string]interface{} `json:"details,omitempty"`
 }
 
+// MarshalJSON exposes response duration in milliseconds, matching the JSON field name.
+func (c Check) MarshalJSON() ([]byte, error) {
+	type alias Check
+	return json.Marshal(struct {
+		alias
+		ResponseTimeMS float64 `json:"response_time_ms"`
+	}{alias: alias(c), ResponseTimeMS: float64(c.ResponseTime) / float64(time.Millisecond)})
+}
+
 // Report represents a complete health report
 type Report struct {
 	Status    Status     `json:"status"`

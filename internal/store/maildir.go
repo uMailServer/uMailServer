@@ -368,11 +368,6 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 	// Build new filename with flags
 	newName := joinFlags(baseName, flags)
 
-	// If filename hasn't changed, nothing to do
-	if newName == filename {
-		return nil
-	}
-
 	// Try renaming directly without Stat checks to avoid TOCTOU race.
 	// Construct candidate paths in cur/ and new/ and attempt Rename.
 	newPath := filepath.Join(basePath, "cur", newName)
@@ -544,7 +539,10 @@ func (s *MaildirStore) Quota(domain, user string) (used int64, limit int64, err 
 	// Walk the directory tree and sum file sizes
 	err = filepath.Walk(maildir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip files we can't access
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
 		}
 		if !info.IsDir() {
 			used += info.Size()

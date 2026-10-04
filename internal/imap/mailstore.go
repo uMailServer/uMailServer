@@ -793,7 +793,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	if criteria.Unseen && hasFlag(meta.Flags, "\\Seen") {
 		return false
 	}
-	if criteria.New && !hasFlag(meta.Flags, "\\Recent") {
+	if criteria.New && (!hasFlag(meta.Flags, "\\Recent") || hasFlag(meta.Flags, "\\Seen")) {
 		return false
 	}
 	if criteria.Old && hasFlag(meta.Flags, "\\Recent") {
@@ -839,7 +839,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 			return false
 		}
 	}
-	if !criteria.Since.IsZero() && !meta.InternalDate.After(criteria.Since) {
+	if !criteria.Since.IsZero() && meta.InternalDate.Before(criteria.Since) {
 		return false
 	}
 
@@ -862,7 +862,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	}
 	if !criteria.SentSince.IsZero() {
 		if sentDate, err := parseMessageDate(meta.Date); err == nil {
-			if !sentDate.After(criteria.SentSince) {
+			if sentDate.Before(criteria.SentSince) {
 				return false
 			}
 		}

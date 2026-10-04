@@ -413,15 +413,19 @@ func (mm *MigrationManager) MigrateFromMBOX(mboxPattern string) error {
 		return fmt.Errorf("no MBOX files found matching: %s", mboxPattern)
 	}
 
+	var importErr error
 	for _, mboxFile := range matches {
 		fmt.Printf("Importing: %s\n", mboxFile)
 
 		if err := mm.importMBOXFile(mboxFile); err != nil {
 			mm.logger.Error("Failed to import MBOX", "file", mboxFile, "error", err)
+			if importErr == nil {
+				importErr = fmt.Errorf("failed to import MBOX %s: %w", mboxFile, err)
+			}
 		}
 	}
 
-	return nil
+	return importErr
 }
 
 // importMBOXFile imports a single MBOX file
