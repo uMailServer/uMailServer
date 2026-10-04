@@ -112,6 +112,9 @@ func (w *Watcher) check() bool {
 		return false
 	}
 
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
 	if hash == w.lastHash {
 		// File was touched but content didn't change
 		w.lastModTime = info.ModTime()
