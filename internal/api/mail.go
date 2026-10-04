@@ -131,8 +131,8 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 
 	emails, err := h.getEmailsFromStorage(userEmail, internalFolder)
 	if err != nil {
-		// If storage not available, return empty list
-		emails = []Mail{}
+		h.sendError(w, http.StatusInternalServerError, "Failed to list emails")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -154,17 +154,13 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 	// Ensure mailbox exists - try to get it
 	_, err := h.mailDB.GetMailbox(userEmail, mailbox)
 	if err != nil {
-		// Create mailbox if it doesn't exist (only for INBOX)
-		if mailbox == "INBOX" {
-			_ = h.mailDB.CreateMailbox(userEmail, mailbox) // Best-effort
-		}
-		return []Mail{}, nil
+		return nil, err
 	}
 
 	// Get message UIDs
 	uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
 	if err != nil {
-		return []Mail{}, nil
+		return nil, err
 	}
 
 	emails := make([]Mail, 0, len(uids))
