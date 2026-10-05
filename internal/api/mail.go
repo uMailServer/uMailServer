@@ -506,6 +506,8 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta); err != nil {
 			fmt.Printf("ERROR: failed to store message metadata: %v\n", err)
+			h.sendError(w, http.StatusInternalServerError, "Failed to store message metadata")
+			return
 		}
 	}
 
