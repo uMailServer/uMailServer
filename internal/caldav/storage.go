@@ -125,7 +125,13 @@ func (s *Storage) GetCalendars(username string) ([]*Calendar, error) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			cal, err := s.getCalendarUnsafe(username, entry.Name())
-			if err == nil && cal != nil {
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, fmt.Errorf("failed to read calendar %s: %w", entry.Name(), err)
+			}
+			if cal != nil {
 				calendars = append(calendars, cal)
 			}
 		}
@@ -262,9 +268,10 @@ func (s *Storage) GetEvents(username, calendarID string) ([]string, error) {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".ics") {
 			path := filepath.Join(dir, entry.Name())
 			data, err := os.ReadFile(filepath.Clean(path))
-			if err == nil {
-				events = append(events, string(data))
+			if err != nil {
+				return nil, fmt.Errorf("failed to read event %s: %w", entry.Name(), err)
 			}
+			events = append(events, string(data))
 		}
 	}
 

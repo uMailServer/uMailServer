@@ -146,10 +146,13 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 
 		// Query actual calendars from storage
 		calendars, err := s.storage.GetCalendars(username)
-		if err == nil {
-			for _, cal := range calendars {
-				multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
-			}
+		if err != nil {
+			s.logger.Error("Failed to query calendars", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to query calendars")
+			return
+		}
+		for _, cal := range calendars {
+			multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
 		}
 	}
 
@@ -272,6 +275,12 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 			}
 			multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
 		}
+	}
+
+	if err != nil {
+		s.logger.Error("Failed to query calendar events", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to query calendar events")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
