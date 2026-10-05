@@ -908,11 +908,8 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) error {
 
 // sendSuccessDSN sends a DSN success notification
 func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
-	// Read original message for headers if needed (DSNRetFull = 0, DSNRetHeaders = 1)
-	var originalMsg []byte
-	if int(entry.Ret) == 0 { // DSNRetFull
-		originalMsg, _ = readFile(entry.MessagePath)
-	}
+	// GenerateDSN extracts the headers when RET requests headers only.
+	originalMsg, _ := readFile(entry.MessagePath)
 
 	dsn := &DSN{
 		ReportedDomain: "umailserver",
@@ -953,7 +950,6 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 	if entry.RetryCount >= m.maxRetries {
 		// Generate bounce
 		entry.Status = "bounced"
-		m.generateBounce(entry)
 	} else {
 		// Calculate retry delay with jitter (±20%)
 		idx := entry.RetryCount - 1
@@ -974,6 +970,11 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 	if err := m.db.UpdateQueueEntry(entry); err != nil {
 		m.logger.Error("failed to update queue entry after delivery failure", "error", err)
 		return
+	}
+
+	if entry.Status == "bounced" {
+		m.generateBounce(entry)
+		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
 	}
 
 	// Track metric

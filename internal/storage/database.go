@@ -187,6 +187,9 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 	newMsgs := messagesBucket(user, newName)
 
 	err := db.bolt.Update(func(tx *bbolt.Tx) error {
+		if tx.Bucket([]byte(newKey)) != nil || tx.Bucket([]byte(newMsgs)) != nil {
+			return fmt.Errorf("destination mailbox already exists: %s", newName)
+		}
 		oldB := tx.Bucket([]byte(oldKey))
 		if oldB == nil {
 			// If source mailbox doesn't exist, just create the new one

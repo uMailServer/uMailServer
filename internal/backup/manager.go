@@ -352,6 +352,11 @@ func (m *Manager) Verify(backupPath string) (*BackupManifest, error) {
 
 // Restore restores a backup to the specified location
 func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
+	if opts.VerifyOnly {
+		_, err := m.Verify(backupPath)
+		return err
+	}
+
 	if !m.CanRestore(backupPath) {
 		return fmt.Errorf("cannot restore: invalid backup file")
 	}

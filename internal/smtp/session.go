@@ -291,6 +291,7 @@ func (s *Session) handleMAIL(arg string) error {
 		from = validated
 	}
 
+	s.resetTransaction()
 	s.mailFrom = from
 	s.mailFromRet = ret
 	s.state = StateMailFrom
@@ -1287,12 +1288,13 @@ func parseMailFromWithRet(arg string) (string, string, error) {
 
 	// Parse optional RET parameter
 	ret := ""
-	for _, part := range strings.Fields(arg) {
+	for i, part := range strings.Fields(arg) {
+		if i == 0 {
+			continue
+		}
 		upper := strings.ToUpper(part)
 		if strings.HasPrefix(upper, "RET=") {
 			ret = strings.TrimPrefix(upper, "RET=")
-			// Remove the param from arg
-			arg = strings.TrimSpace(strings.Replace(arg, part, "", 1))
 			break
 		}
 	}
@@ -1346,12 +1348,13 @@ func parseRcptToWithNotify(arg string) (string, string, error) {
 
 	// Parse optional parameters (NOTIFY=)
 	notify := ""
-	for _, part := range strings.Fields(arg) {
+	for i, part := range strings.Fields(arg) {
+		if i == 0 {
+			continue
+		}
 		upper := strings.ToUpper(part)
 		if strings.HasPrefix(upper, "NOTIFY=") {
 			notify = strings.TrimPrefix(upper, "NOTIFY=")
-			// Remove the param from arg
-			arg = strings.TrimSpace(strings.Replace(arg, part, "", 1))
 			break
 		}
 	}

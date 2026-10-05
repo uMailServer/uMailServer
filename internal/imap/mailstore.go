@@ -2,6 +2,7 @@ package imap
 
 import (
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"sort"
@@ -874,29 +875,8 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 
 		// CC criteria
 		if criteria.Cc != "" {
-			ccIdx := strings.Index(msgStr, "\r\ncc:")
-			if ccIdx == -1 {
-				ccIdx = strings.Index(msgStr, "\r\ncc :")
-			}
-			if ccIdx == -1 {
-				ccIdx = strings.Index(msgStr, "\ncc:")
-			}
-			if ccIdx == -1 {
-				ccIdx = strings.Index(msgStr, "\ncc :")
-			}
-			if ccIdx == -1 {
-				return false
-			}
-			// Extract CC line content
-			lineEnd := strings.Index(msgStr[ccIdx:], "\r\n")
-			if lineEnd == -1 {
-				lineEnd = strings.Index(msgStr[ccIdx:], "\n")
-			}
-			if lineEnd == -1 {
-				lineEnd = len(msgStr)
-			}
-			ccLine := msgStr[ccIdx : ccIdx+lineEnd]
-			if !strings.Contains(ccLine, strings.ToLower(criteria.Cc)) {
+			msg, err := mail.ReadMessage(strings.NewReader(string(msgData)))
+			if err != nil || !strings.Contains(strings.ToLower(msg.Header.Get("Cc")), strings.ToLower(criteria.Cc)) {
 				return false
 			}
 		}

@@ -128,6 +128,9 @@ func ParseServerFirstMessage(msg string) (*SCRAMServerFirstMessage, error) {
 		if len(pair) < 2 {
 			continue
 		}
+		if pair[1] != '=' {
+			return nil, fmt.Errorf("invalid SCRAM attribute: %s", pair)
+		}
 		key := pair[:1]
 		val := pair[2:] // after "="
 		parts[key] = val
@@ -177,6 +180,9 @@ func ParseClientFinalMessage(msg string) (*SCRAMClientFinalMessage, error) {
 	for _, pair := range strings.Split(msg, ",") {
 		if len(pair) < 2 {
 			continue
+		}
+		if pair[1] != '=' {
+			return nil, fmt.Errorf("invalid SCRAM attribute: %s", pair)
 		}
 		key := pair[:1]
 		val := pair[2:]
@@ -257,15 +263,13 @@ func BuildClientFirstMessage(authzID, username, channelBind, nonce string) strin
 
 // ParseClientFirstMessage parses the client-first message (RFC 7677)
 func ParseClientFirstMessage(msg string) (*SCRAMClientInitialMessage, error) {
-	// Remove leading channel binding prefix if present
-	msg = strings.TrimPrefix(msg, "n=")
-	msg = strings.TrimPrefix(msg, "y=")
-	msg = strings.TrimPrefix(msg, "p=")
-
 	parts := make(map[string]string)
 	for _, pair := range strings.Split(msg, ",") {
 		if len(pair) < 2 {
 			continue
+		}
+		if pair[1] != '=' {
+			return nil, fmt.Errorf("invalid SCRAM attribute: %s", pair)
 		}
 		key := pair[:1]
 		val := pair[2:]

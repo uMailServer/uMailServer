@@ -822,6 +822,11 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
+	if sourceCalendarID == destCalendarID && sourceEventUID == destEventUID {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// Update UID if different
 	if sourceEventUID != destEventUID {
 		eventData = strings.Replace(eventData, "UID:"+sourceEventUID, "UID:"+destEventUID, 1)
