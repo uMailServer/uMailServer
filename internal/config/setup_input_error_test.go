@@ -10,12 +10,12 @@ import (
 	"testing"
 )
 
-var setupInputRegressionErr = errors.New("setup input failed")
+var errSetupInputRegression = errors.New("setup input failed")
 
 type setupInputRegressionReader struct{}
 
-func (setupInputRegressionReader) Read(p []byte) (int, error) { return 0, setupInputRegressionErr }
-func setupInputRegressionRun(t *testing.T, n int) (error, string) {
+func (setupInputRegressionReader) Read(p []byte) (int, error) { return 0, errSetupInputRegression }
+func setupInputRegressionRun(t *testing.T, n int) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	lines := make([]string, n)
@@ -24,10 +24,10 @@ func setupInputRegressionRun(t *testing.T, n int) (error, string) {
 	w := NewSetupWizard()
 	w.reader = bufio.NewReader(io.MultiReader(strings.NewReader(strings.Join(lines, "\n")+"\n"), setupInputRegressionReader{}))
 	_, e := w.Run()
-	return e, filepath.Join(dir, "config.yaml")
+	return filepath.Join(dir, "config.yaml"), e
 }
 func TestSetupInputRegressionControl(t *testing.T) {
-	if e, _ := setupInputRegressionRun(t, 18); e != nil {
+	if _, e := setupInputRegressionRun(t, 18); e != nil {
 		t.Fatal(e)
 	}
 	w := NewSetupWizard()
@@ -38,17 +38,17 @@ func TestSetupInputRegressionControl(t *testing.T) {
 	}
 }
 func TestSetupInputRegressionFailure(t *testing.T) {
-	e, p := setupInputRegressionRun(t, 16)
+	p, e := setupInputRegressionRun(t, 16)
 	_, saved := os.Stat(p)
-	if !errors.Is(e, setupInputRegressionErr) || saved == nil {
+	if !errors.Is(e, errSetupInputRegression) || saved == nil {
 		t.Fatalf("DEFECT F4756 setup swallowed input error: err=%v saved=%v", e, saved == nil)
 	}
 }
 func TestSetupInputRegressionEdges(t *testing.T) {
 	for _, n := range []int{12, 17} {
-		e, p := setupInputRegressionRun(t, n)
+		p, e := setupInputRegressionRun(t, n)
 		_, saved := os.Stat(p)
-		if !errors.Is(e, setupInputRegressionErr) || saved == nil {
+		if !errors.Is(e, errSetupInputRegression) || saved == nil {
 			t.Fatalf("input fault at %d err=%v saved=%v", n, e, saved == nil)
 		}
 	}
