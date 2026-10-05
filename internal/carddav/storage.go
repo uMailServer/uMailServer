@@ -125,7 +125,13 @@ func (s *Storage) GetAddressbooks(username string) ([]*Addressbook, error) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			ab, err := s.getAddressbookUnsafe(username, entry.Name())
-			if err == nil && ab != nil {
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				return nil, fmt.Errorf("failed to read addressbook %s: %w", entry.Name(), err)
+			}
+			if ab != nil {
 				addressbooks = append(addressbooks, ab)
 			}
 		}
@@ -255,9 +261,10 @@ func (s *Storage) GetContacts(username, addressbookID string) ([]string, error) 
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".vcf") {
 			path := filepath.Join(dir, entry.Name())
 			data, err := os.ReadFile(filepath.Clean(path))
-			if err == nil {
-				contacts = append(contacts, string(data))
+			if err != nil {
+				return nil, fmt.Errorf("failed to read contact %s: %w", entry.Name(), err)
 			}
+			contacts = append(contacts, string(data))
 		}
 	}
 
