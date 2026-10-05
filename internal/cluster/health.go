@@ -86,7 +86,7 @@ func (h *RedisHealthMonitor) GetInstanceHealth(ctx context.Context) ([]InstanceH
 	for _, id := range instanceIDs {
 		data, err := h.client.HGetAll(ctx, healthKey(id)).Result()
 		if err != nil {
-			continue
+			return nil, err
 		}
 
 		if len(data) == 0 {

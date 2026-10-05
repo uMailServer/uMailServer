@@ -14,7 +14,10 @@ func ParseSequenceSet(set string) ([]SeqRange, error) {
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
-			continue
+			if len(parts) == 1 {
+				return ranges, nil
+			}
+			return nil, fmt.Errorf("invalid sequence set: %s", set)
 		}
 
 		if strings.Contains(part, ":") {

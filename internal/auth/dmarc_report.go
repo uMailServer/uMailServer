@@ -11,7 +11,7 @@ import (
 // DMARCReport represents a DMARC aggregate report
 type DMARCReport struct {
 	XMLName    xml.Name        `xml:"feedback"`
-	Version    string          `xml:"version,attr"`
+	Version    string          `xml:"version"`
 	ReportMeta ReportMeta      `xml:"report_metadata"`
 	PolicyPUB  PolicyPublished `xml:"policy_published"`
 	Records    []Record        `xml:"record"`
@@ -74,14 +74,14 @@ type AuthResult struct {
 
 // SPFResultEntry represents an SPF authentication result
 type SPFResultEntry struct {
-	Domain string `xml:"domain,attr"`
-	Result string `xml:"result,attr"`
+	Domain string `xml:"domain"`
+	Result string `xml:"result"`
 }
 
 // DKIMResultEntry represents a DKIM authentication result
 type DKIMResultEntry struct {
-	Domain string `xml:"domain,attr"`
-	Result string `xml:"result,attr"`
+	Domain string `xml:"domain"`
+	Result string `xml:"result"`
 }
 
 // ReportEntry tracks message authentication results for a source IP

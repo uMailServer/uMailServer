@@ -274,6 +274,10 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 
 		// Get old name from ID
 		oldName := getMailboxNameFromID(key)
+		if !s.mailboxExists(user, oldName) {
+			notUpdated[key] = map[string]interface{}{"type": "notFound"}
+			continue
+		}
 
 		// Check for rename
 		if newName, ok := updateData["name"].(string); ok && newName != "" && newName != oldName {
@@ -293,6 +297,10 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 	for _, id := range destroy {
 		if idStr, ok := id.(string); ok {
 			name := getMailboxNameFromID(idStr)
+			if !s.mailboxExists(user, name) {
+				notDestroyed[idStr] = map[string]interface{}{"type": "notFound"}
+				continue
+			}
 			if err := s.db.DeleteMailbox(user, name); err != nil {
 				notDestroyed[idStr] = map[string]interface{}{
 					"type":        "serverFail",
@@ -464,6 +472,7 @@ func (s *Server) runEmailQuery(user string, filter interface{}, sort interface{}
 
 	mailboxes, _ := s.db.ListMailboxes(user)
 	targetMbox := ""
+	seenIDs := make(map[string]bool)
 
 	// If filter specifies a mailbox, only query that one
 	if filterCondition != nil && filterCondition.InMailbox != "" {
@@ -487,6 +496,10 @@ func (s *Server) runEmailQuery(user string, filter interface{}, sort interface{}
 			if !matchesFilter(meta, filterCondition) {
 				continue
 			}
+			if seenIDs[meta.MessageID] {
+				continue
+			}
+			seenIDs[meta.MessageID] = true
 
 			allMessages = append(allMessages, struct {
 				id      string
@@ -2098,6 +2111,14 @@ func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
 	})
 
 	total := len(ids)
+	start := int(position)
+	if start < 0 {
+		start = 0
+	}
+	if start > len(ids) {
+		start = len(ids)
+	}
+	ids = ids[start:]
 	if !calculateTotal {
 		total = 0
 	}
@@ -2108,7 +2129,7 @@ func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
 			"accountId":           accountID,
 			"queryState":          queryState,
 			"canCalculateChanges": false,
-			"position":            int(position),
+			"position":            start,
 			"total":               total,
 			"ids":                 ids,
 		},

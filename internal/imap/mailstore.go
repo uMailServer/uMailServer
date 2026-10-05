@@ -2,6 +2,7 @@ package imap
 
 import (
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"sort"
@@ -793,7 +794,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	if criteria.Unseen && hasFlag(meta.Flags, "\\Seen") {
 		return false
 	}
-	if criteria.New && !hasFlag(meta.Flags, "\\Recent") {
+	if criteria.New && (!hasFlag(meta.Flags, "\\Recent") || hasFlag(meta.Flags, "\\Seen")) {
 		return false
 	}
 	if criteria.Old && hasFlag(meta.Flags, "\\Recent") {
@@ -839,7 +840,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 			return false
 		}
 	}
-	if !criteria.Since.IsZero() && !meta.InternalDate.After(criteria.Since) {
+	if !criteria.Since.IsZero() && meta.InternalDate.Before(criteria.Since) {
 		return false
 	}
 
@@ -862,7 +863,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	}
 	if !criteria.SentSince.IsZero() {
 		if sentDate, err := parseMessageDate(meta.Date); err == nil {
-			if !sentDate.After(criteria.SentSince) {
+			if sentDate.Before(criteria.SentSince) {
 				return false
 			}
 		}
@@ -874,29 +875,8 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 
 		// CC criteria
 		if criteria.Cc != "" {
-			ccIdx := strings.Index(msgStr, "\r\ncc:")
-			if ccIdx == -1 {
-				ccIdx = strings.Index(msgStr, "\r\ncc :")
-			}
-			if ccIdx == -1 {
-				ccIdx = strings.Index(msgStr, "\ncc:")
-			}
-			if ccIdx == -1 {
-				ccIdx = strings.Index(msgStr, "\ncc :")
-			}
-			if ccIdx == -1 {
-				return false
-			}
-			// Extract CC line content
-			lineEnd := strings.Index(msgStr[ccIdx:], "\r\n")
-			if lineEnd == -1 {
-				lineEnd = strings.Index(msgStr[ccIdx:], "\n")
-			}
-			if lineEnd == -1 {
-				lineEnd = len(msgStr)
-			}
-			ccLine := msgStr[ccIdx : ccIdx+lineEnd]
-			if !strings.Contains(ccLine, strings.ToLower(criteria.Cc)) {
+			msg, err := mail.ReadMessage(strings.NewReader(string(msgData)))
+			if err != nil || !strings.Contains(strings.ToLower(msg.Header.Get("Cc")), strings.ToLower(criteria.Cc)) {
 				return false
 			}
 		}

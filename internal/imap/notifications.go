@@ -68,6 +68,9 @@ func (h *NotificationHub) Unsubscribe(user string, ch chan MailboxNotification) 
 			break
 		}
 	}
+	if len(h.subscribers[user]) == 0 {
+		delete(h.subscribers, user)
+	}
 }
 
 // Notify sends a notification to all subscribers for a user

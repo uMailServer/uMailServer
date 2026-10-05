@@ -291,6 +291,7 @@ func (s *Session) handleMAIL(arg string) error {
 		from = validated
 	}
 
+	s.resetTransaction()
 	s.mailFrom = from
 	s.mailFromRet = ret
 	s.state = StateMailFrom
@@ -506,7 +507,7 @@ func (s *Session) handleDATA() error {
 		headerScope = data[:idx]
 	}
 	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
-		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", s.id, s.server.config.Hostname)
+		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), s.server.config.Hostname)
 		data = append([]byte(msgID), data...)
 		s.data = data
 	}
@@ -561,7 +562,12 @@ func (s *Session) readData() ([]byte, error) {
 		}
 
 		// RFC 5322 line length limit check
-		if len(line) > maxLineLength {
+		lineLength := len(line)
+		if len(line) > 0 && line[0] == '.' {
+			// The extra transparency dot does not count toward the line limit.
+			lineLength--
+		}
+		if lineLength > maxLineLength {
 			return nil, fmt.Errorf("line exceeds maximum length of %d bytes", maxLineLength)
 		}
 
@@ -1282,12 +1288,13 @@ func parseMailFromWithRet(arg string) (string, string, error) {
 
 	// Parse optional RET parameter
 	ret := ""
-	for _, part := range strings.Fields(arg) {
+	for i, part := range strings.Fields(arg) {
+		if i == 0 {
+			continue
+		}
 		upper := strings.ToUpper(part)
 		if strings.HasPrefix(upper, "RET=") {
 			ret = strings.TrimPrefix(upper, "RET=")
-			// Remove the param from arg
-			arg = strings.TrimSpace(strings.Replace(arg, part, "", 1))
 			break
 		}
 	}
@@ -1341,12 +1348,13 @@ func parseRcptToWithNotify(arg string) (string, string, error) {
 
 	// Parse optional parameters (NOTIFY=)
 	notify := ""
-	for _, part := range strings.Fields(arg) {
+	for i, part := range strings.Fields(arg) {
+		if i == 0 {
+			continue
+		}
 		upper := strings.ToUpper(part)
 		if strings.HasPrefix(upper, "NOTIFY=") {
 			notify = strings.TrimPrefix(upper, "NOTIFY=")
-			// Remove the param from arg
-			arg = strings.TrimSpace(strings.Replace(arg, part, "", 1))
 			break
 		}
 	}

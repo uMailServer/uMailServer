@@ -78,6 +78,7 @@ export function useDomains() {
 
   const fetchDomains = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const result = await apiRequest<Domain[]>("/domains");
       setData(result);
@@ -132,6 +133,7 @@ export function useAccounts() {
 
   const fetchAccounts = useCallback(async (domain?: string) => {
     setLoading(true);
+    setError(null);
     try {
       const url = domain ? `/accounts?domain=${domain}` : "/accounts";
       const result = await apiRequest<Account[]>(url);

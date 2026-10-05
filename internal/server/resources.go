@@ -125,31 +125,36 @@ func (rm *ResourceMonitor) checkResources() {
 	}
 	rm.currentGoroutines = runtime.NumGoroutine()
 	memoryMB := rm.currentMemory / 1024 / 1024
+	goroutines := rm.currentGoroutines
+	maxMemoryMB := rm.limits.MaxMemoryMB
+	maxGoroutines := rm.limits.MaxGoroutines
+	onMemoryLimit := rm.onMemoryLimit
+	onGoroutineLimit := rm.onGoroutineLimit
 	rm.mu.Unlock()
 
 	// Check memory limit
-	if rm.limits.MaxMemoryMB > 0 && memoryMB > rm.limits.MaxMemoryMB {
+	if maxMemoryMB > 0 && memoryMB > maxMemoryMB {
 		rm.logger.Warn("Memory limit exceeded",
-			"limit_mb", rm.limits.MaxMemoryMB,
+			"limit_mb", maxMemoryMB,
 			"current_mb", memoryMB)
 
 		// Trigger GC
 		runtime.GC()
 
 		// Call callback if set
-		if rm.onMemoryLimit != nil {
-			rm.onMemoryLimit()
+		if onMemoryLimit != nil {
+			onMemoryLimit()
 		}
 	}
 
 	// Check goroutine limit
-	if rm.limits.MaxGoroutines > 0 && rm.currentGoroutines > rm.limits.MaxGoroutines {
+	if maxGoroutines > 0 && goroutines > maxGoroutines {
 		rm.logger.Warn("Goroutine limit exceeded",
-			"limit", rm.limits.MaxGoroutines,
-			"current", rm.currentGoroutines)
+			"limit", maxGoroutines,
+			"current", goroutines)
 
-		if rm.onGoroutineLimit != nil {
-			rm.onGoroutineLimit()
+		if onGoroutineLimit != nil {
+			onGoroutineLimit()
 		}
 	}
 }
@@ -210,16 +215,22 @@ func (rm *ResourceMonitor) GetStats() ResourceStats {
 
 // SetMemoryLimitCallback sets callback for memory limit exceeded
 func (rm *ResourceMonitor) SetMemoryLimitCallback(fn func()) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
 	rm.onMemoryLimit = fn
 }
 
 // SetGoroutineLimitCallback sets callback for goroutine limit exceeded
 func (rm *ResourceMonitor) SetGoroutineLimitCallback(fn func()) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
 	rm.onGoroutineLimit = fn
 }
 
 // SetConnectionLimitCallback sets callback for connection limit reached
 func (rm *ResourceMonitor) SetConnectionLimitCallback(fn func()) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
 	rm.onConnectionLimit = fn
 }
 

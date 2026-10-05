@@ -298,10 +298,17 @@ func (m *Manager) RenewCertificates(ctx context.Context) error {
 	}
 
 	// Force renewal by deleting cached certs
+	var renewalErr error
 	for _, domain := range m.config.Domains {
 		if err := m.certManager.Cache.Delete(ctx, domain); err != nil {
 			m.logger.Warn("Failed to delete cached cert", "domain", domain, "error", err)
+			if renewalErr == nil {
+				renewalErr = fmt.Errorf("failed to delete cached certificate for %s: %w", domain, err)
+			}
 		}
+	}
+	if renewalErr != nil {
+		return renewalErr
 	}
 
 	m.logger.Info("Certificate renewal triggered", "domains", m.config.Domains)

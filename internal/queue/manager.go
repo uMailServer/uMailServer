@@ -250,6 +250,9 @@ func (m *Manager) SetWebhookTrigger(w WebhookTrigger) {
 // Each element of notify corresponds to the same index in to. An empty string
 // means the sender has no preference (bounce on permanent failure per RFC 3461).
 func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, message []byte) (string, error) {
+	if len(to) == 0 {
+		return "", fmt.Errorf("cannot enqueue message without recipients")
+	}
 	id := generateID()
 	queueDir := m.queueDir
 	if queueDir == "" {
@@ -305,6 +308,9 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 }
 
 func (m *Manager) Enqueue(from string, to []string, message []byte) (string, error) {
+	if len(to) == 0 {
+		return "", fmt.Errorf("cannot enqueue message without recipients")
+	}
 	// Generate unique message ID and write to disk outside the lock
 	id := generateID()
 
@@ -397,7 +403,15 @@ func (m *Manager) RetryEntry(id string) error {
 
 // DropEntry removes an entry from the queue
 func (m *Manager) DropEntry(id string) error {
-	return m.db.Dequeue(id)
+	entry, err := m.db.GetQueueEntry(id)
+	if err != nil {
+		return m.db.Dequeue(id)
+	}
+	if err := m.db.Dequeue(id); err != nil {
+		return err
+	}
+	m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+	return nil
 }
 
 // FlushQueue retries all failed entries
@@ -894,11 +908,8 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) error {
 
 // sendSuccessDSN sends a DSN success notification
 func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
-	// Read original message for headers if needed (DSNRetFull = 0, DSNRetHeaders = 1)
-	var originalMsg []byte
-	if int(entry.Ret) == 0 { // DSNRetFull
-		originalMsg, _ = readFile(entry.MessagePath)
-	}
+	// GenerateDSN extracts the headers when RET requests headers only.
+	originalMsg, _ := readFile(entry.MessagePath)
 
 	dsn := &DSN{
 		ReportedDomain: "umailserver",
@@ -939,7 +950,6 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 	if entry.RetryCount >= m.maxRetries {
 		// Generate bounce
 		entry.Status = "bounced"
-		m.generateBounce(entry)
 	} else {
 		// Calculate retry delay with jitter (±20%)
 		idx := entry.RetryCount - 1
@@ -960,6 +970,11 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 	if err := m.db.UpdateQueueEntry(entry); err != nil {
 		m.logger.Error("failed to update queue entry after delivery failure", "error", err)
 		return
+	}
+
+	if entry.Status == "bounced" {
+		m.generateBounce(entry)
+		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
 	}
 
 	// Track metric

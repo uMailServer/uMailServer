@@ -111,6 +111,9 @@ func (s *MaildirStore) folderPath(domain, user, folder string) string {
 // ensureFolder creates the Maildir structure for a folder if it doesn't exist
 func (s *MaildirStore) ensureFolder(domain, user, folder string) error {
 	basePath := s.folderPath(domain, user, folder)
+	if basePath == "" {
+		return fmt.Errorf("invalid mailbox path")
+	}
 
 	subdirs := []string{"tmp", "new", "cur"}
 	for _, subdir := range subdirs {
@@ -205,6 +208,9 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 
 	// Add flags to filename using platform separator
 	uniqueName = joinFlags(uniqueName, flags)
+	if err := validateFilename(uniqueName); err != nil {
+		return "", err
+	}
 
 	// Write to tmp directory first
 	tmpPath := filepath.Join(basePath, "tmp", uniqueName)
@@ -239,6 +245,9 @@ func (s *MaildirStore) Fetch(domain, user, folder, filename string) ([]byte, err
 		return nil, err
 	}
 	basePath := s.folderPath(domain, user, folder)
+	if basePath == "" {
+		return nil, fmt.Errorf("invalid mailbox path")
+	}
 
 	// Try cur/ first, then new/
 	paths := []string{
@@ -265,6 +274,9 @@ func (s *MaildirStore) FetchReader(domain, user, folder, filename string) (io.Re
 		return nil, err
 	}
 	basePath := s.folderPath(domain, user, folder)
+	if basePath == "" {
+		return nil, fmt.Errorf("invalid mailbox path")
+	}
 
 	// Try cur/ first, then new/
 	paths := []string{
@@ -320,6 +332,9 @@ func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string)
 
 	fromBase := s.folderPath(domain, user, fromFolder)
 	toBase := s.folderPath(domain, user, toFolder)
+	if fromBase == "" || toBase == "" {
+		return fmt.Errorf("invalid mailbox path")
+	}
 
 	// Find source file (strip any flags using platform separator)
 	baseName, _ := splitFlags(filename)
@@ -336,9 +351,9 @@ func (s *MaildirStore) Move(domain, user, fromFolder, toFolder, filename string)
 
 	// Generate new unique name for destination to avoid collisions
 	uniqueName := s.generateUniqueName()
-	toPath := filepath.Join(toBase, "new", uniqueName)
-
 	for _, path := range candidates {
+		_, flags := splitFlags(filepath.Base(path))
+		toPath := filepath.Join(toBase, "new", joinFlags(uniqueName, flags))
 		if err := os.Rename(path, toPath); err == nil {
 			fromPath = path
 			break
@@ -361,16 +376,17 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 		return err
 	}
 	basePath := s.folderPath(domain, user, folder)
+	if basePath == "" {
+		return fmt.Errorf("invalid mailbox path")
+	}
 
 	// Extract base name (without flags)
 	baseName, _ := splitFlags(filename)
 
 	// Build new filename with flags
 	newName := joinFlags(baseName, flags)
-
-	// If filename hasn't changed, nothing to do
-	if newName == filename {
-		return nil
+	if err := validateFilename(newName); err != nil {
+		return err
 	}
 
 	// Try renaming directly without Stat checks to avoid TOCTOU race.
@@ -401,6 +417,9 @@ func (s *MaildirStore) SetFlags(domain, user, folder, filename string, flags str
 // List returns all messages in a folder
 func (s *MaildirStore) List(domain, user, folder string) ([]MessageInfo, error) {
 	basePath := s.folderPath(domain, user, folder)
+	if basePath == "" {
+		return nil, fmt.Errorf("invalid mailbox path")
+	}
 
 	var messages []MessageInfo
 
@@ -450,6 +469,9 @@ func (s *MaildirStore) Delete(domain, user, folder, filename string) error {
 		return err
 	}
 	basePath := s.folderPath(domain, user, folder)
+	if basePath == "" {
+		return fmt.Errorf("invalid mailbox path")
+	}
 
 	// Try to find and delete from cur/ or new/
 	for _, subdir := range []string{"cur", "new"} {
@@ -474,6 +496,9 @@ func (s *MaildirStore) DeleteFolder(domain, user, folder string) error {
 	}
 
 	basePath := s.folderPath(domain, user, folder)
+	if basePath == "" {
+		return fmt.Errorf("invalid mailbox path")
+	}
 	if err := os.RemoveAll(basePath); err != nil {
 		return fmt.Errorf("failed to delete folder: %w", err)
 	}
@@ -489,6 +514,9 @@ func (s *MaildirStore) RenameFolder(domain, user, oldName, newName string) error
 
 	oldPath := s.folderPath(domain, user, oldName)
 	newPath := s.folderPath(domain, user, newName)
+	if oldPath == "" || newPath == "" {
+		return fmt.Errorf("invalid mailbox path")
+	}
 
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return fmt.Errorf("failed to rename folder: %w", err)
@@ -544,7 +572,10 @@ func (s *MaildirStore) Quota(domain, user string) (used int64, limit int64, err 
 	// Walk the directory tree and sum file sizes
 	err = filepath.Walk(maildir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip files we can't access
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
 		}
 		if !info.IsDir() {
 			used += info.Size()

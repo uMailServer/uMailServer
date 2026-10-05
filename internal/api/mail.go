@@ -2,14 +2,18 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/storage"
 )
+
+var errMailBodyRead = errors.New("failed to read message body")
 
 // Mail represents an email message
 type Mail struct {
@@ -130,8 +134,8 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 
 	emails, err := h.getEmailsFromStorage(userEmail, internalFolder)
 	if err != nil {
-		// If storage not available, return empty list
-		emails = []Mail{}
+		h.sendError(w, http.StatusInternalServerError, "Failed to list emails")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -153,17 +157,13 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 	// Ensure mailbox exists - try to get it
 	_, err := h.mailDB.GetMailbox(userEmail, mailbox)
 	if err != nil {
-		// Create mailbox if it doesn't exist (only for INBOX)
-		if mailbox == "INBOX" {
-			_ = h.mailDB.CreateMailbox(userEmail, mailbox) // Best-effort
-		}
-		return []Mail{}, nil
+		return nil, err
 	}
 
 	// Get message UIDs
 	uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
 	if err != nil {
-		return []Mail{}, nil
+		return nil, err
 	}
 
 	emails := make([]Mail, 0, len(uids))
@@ -185,7 +185,11 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 		// Determine preview
 		preview := body
 		if len(preview) > 100 {
-			preview = preview[:100] + "..."
+			end := 100
+			for end > 0 && !utf8.RuneStart(preview[end]) {
+				end--
+			}
+			preview = preview[:end] + "..."
 		}
 
 		// Map folder name for response
@@ -231,7 +235,7 @@ func (h *MailHandler) extractBody(raw string) string {
 // hasFlag checks if a flag is present
 func hasFlag(flags []string, flag string) bool {
 	for _, f := range flags {
-		if f == flag || f == strings.ToLower(flag) {
+		if strings.EqualFold(f, flag) {
 			return true
 		}
 	}
@@ -264,6 +268,10 @@ func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email, err := h.getEmailFromStorage(userEmail, internalFolder, emailID)
+	if errors.Is(err, errMailBodyRead) {
+		h.sendError(w, http.StatusInternalServerError, "Failed to read email")
+		return
+	}
 	if err != nil || email == nil {
 		h.sendError(w, http.StatusNotFound, "Email not found")
 		return
@@ -297,11 +305,11 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 
 		if meta.MessageID == messageID {
 			// Read message body
-			var body string
 			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
-			if err == nil {
-				body = string(data)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", errMailBodyRead, err)
 			}
+			body := h.extractBody(string(data))
 
 			folderName := reverseFolderMap[mailbox]
 			if folderName == "" {
@@ -505,6 +513,8 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta); err != nil {
 			fmt.Printf("ERROR: failed to store message metadata: %v\n", err)
+			h.sendError(w, http.StatusInternalServerError, "Failed to store message metadata")
+			return
 		}
 	}
 
@@ -584,7 +594,10 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 
 // deleteMessageMetadata finds and deletes message metadata by messageID
 func (h *MailHandler) deleteMessageMetadata(userEmail, messageID string) {
-	mailboxes := []string{"INBOX", "Sent", "Drafts", "Trash", "Junk", "Archive"}
+	mailboxes, err := h.mailDB.ListMailboxes(userEmail)
+	if err != nil {
+		return
+	}
 	for _, mailbox := range mailboxes {
 		// Get all UIDs in this mailbox
 		uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
@@ -599,7 +612,6 @@ func (h *MailHandler) deleteMessageMetadata(userEmail, messageID string) {
 			}
 			if meta.MessageID == messageID {
 				_ = h.mailDB.DeleteMessage(userEmail, mailbox, uid)
-				return
 			}
 		}
 	}

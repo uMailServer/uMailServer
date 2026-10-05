@@ -335,6 +335,23 @@ func (s *Service) loadOrGenerateConfig() (*Config, error) {
 	if data, err := os.ReadFile(filepath.Clean(configPath)); err == nil {
 		var config Config
 		if err := json.Unmarshal(data, &config); err == nil {
+			// Older versions stored EC private-key DER instead of the scalar
+			// expected by webpush-go. Preserve the keypair while correcting it.
+			if raw, err := base64.RawURLEncoding.DecodeString(config.VAPIDPrivateKey); err == nil && len(raw) != 32 {
+				if key, err := x509.ParseECPrivateKey(raw); err == nil && key.Curve == elliptic.P256() {
+					public, err := key.ECDH()
+					if err == nil && base64.RawURLEncoding.EncodeToString(public.PublicKey().Bytes()) == config.VAPIDPublicKey {
+						config.VAPIDPrivateKey = base64.RawURLEncoding.EncodeToString(key.D.FillBytes(make([]byte, 32)))
+						data, err := json.MarshalIndent(config, "", "  ")
+						if err != nil {
+							return nil, err
+						}
+						if err := os.WriteFile(configPath, data, 0o600); err != nil {
+							return nil, fmt.Errorf("failed to normalize VAPID private key: %w", err)
+						}
+					}
+				}
+			}
 			return &config, nil
 		}
 	}
@@ -380,10 +397,7 @@ func generateVAPIDKeys() (privateKey, publicKey string, err error) {
 	}
 
 	// Encode private key
-	privBytes, err := x509.MarshalECPrivateKey(priv)
-	if err != nil {
-		return "", "", err
-	}
+	privBytes := priv.D.FillBytes(make([]byte, 32))
 	privateKey = base64.RawURLEncoding.EncodeToString(privBytes)
 
 	// Encode public key

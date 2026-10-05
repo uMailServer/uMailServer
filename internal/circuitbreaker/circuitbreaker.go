@@ -226,7 +226,15 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 	// to release a slot belonging to the new round.
 	gen := cb.currentHalfOpenGen()
 
+	completed := false
+	defer func() {
+		if !completed {
+			// A propagated panic must not retain a half-open admission slot.
+			cb.recordFailure(gen, true)
+		}
+	}()
 	err := fn()
+	completed = true
 	if err != nil {
 		cb.recordFailure(gen, true)
 		return err

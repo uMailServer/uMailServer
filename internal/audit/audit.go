@@ -201,9 +201,15 @@ func (r *rotatingWriter) cleanupByCount() {
 		return
 	}
 
-	oldest, oldestInfo := r.findOldest(validMatches)
-	if oldestInfo != nil {
-		_ = os.Remove(oldest)
+	for len(validMatches) > r.maxBackups {
+		oldest, oldestInfo := r.findOldest(validMatches)
+		if oldestInfo == nil {
+			return
+		}
+		if err := os.Remove(oldest); err != nil {
+			return
+		}
+		validMatches = r.filterValidMatches(validMatches)
 	}
 }
 

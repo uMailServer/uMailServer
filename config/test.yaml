@@ -1,0 +1,31 @@
+server:
+  hostname: localhost
+  data_dir: ./data
+database:
+  path: ./data/umailserver.db
+security:
+  max_login_attempts: 1000
+http:
+  enabled: true
+  port: 8080
+  bind: "0.0.0.0"
+metrics:
+  enabled: false
+  port: 0
+smtp:
+  inbound:
+    enabled: false
+  submission:
+    enabled: false
+  submission_tls:
+    enabled: false
+imap:
+  enabled: false
+pop3:
+  enabled: false
+tls:
+  cert_file: ""
+  key_file: ""
+  min_version: "1.2"
+  acme:
+    enabled: false

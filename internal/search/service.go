@@ -85,7 +85,33 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 	}
 	searchOpts.Offset = opts.Offset
 
-	results := index.Search(opts.Query, searchOpts)
+	indexOpts := searchOpts
+	if opts.Folder != "" {
+		// Folder filtering must precede pagination.
+		indexOpts = SearchOptions{}
+	}
+	results := index.Search(opts.Query, indexOpts)
+	if opts.Folder != "" {
+		filtered := results[:0]
+		for _, result := range results {
+			folder, _, err := parseDocID(result.DocID)
+			if err == nil && folder == opts.Folder {
+				filtered = append(filtered, result)
+			}
+		}
+		start := searchOpts.Offset
+		if start < 0 {
+			start = 0
+		}
+		if start > len(filtered) {
+			start = len(filtered)
+		}
+		end := len(filtered)
+		if searchOpts.Limit < end-start {
+			end = start + searchOpts.Limit
+		}
+		results = filtered[start:end]
+	}
 
 	// Convert to MessageSearchResult
 	var searchResults []MessageSearchResult
@@ -259,17 +285,17 @@ func (s *Service) ClearIndex(user string) {
 // parseDocID parses a document ID into folder and UID
 func parseDocID(docID string) (string, uint32, error) {
 	// Parse format: folder:uid
-	parts := strings.SplitN(docID, ":", 2)
-	if len(parts) != 2 {
+	separator := strings.LastIndexByte(docID, ':')
+	if separator < 0 {
 		return "", 0, fmt.Errorf("invalid docID format")
 	}
 
-	uid, err := strconv.ParseUint(parts[1], 10, 32)
+	uid, err := strconv.ParseUint(docID[separator+1:], 10, 32)
 	if err != nil {
 		return "", 0, err
 	}
 
-	return parts[0], uint32(uid), nil
+	return docID[:separator], uint32(uid), nil
 }
 
 // generatePreview generates a preview text from content

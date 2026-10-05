@@ -227,12 +227,11 @@ func GenerateDelayDSN(dsn *DSN) ([]byte, error) {
 // extractHeaders extracts only the headers from a message
 func extractHeaders(msg string) string {
 	idx := strings.Index(msg, "\r\n\r\n")
+	if lfIdx := strings.Index(msg, "\n\n"); lfIdx >= 0 && (idx < 0 || lfIdx < idx) {
+		idx = lfIdx
+	}
 	if idx < 0 {
-		idx = strings.Index(msg, "\n\n")
-		if idx < 0 {
-			return msg
-		}
-		return msg[:idx]
+		return msg
 	}
 	return msg[:idx]
 }

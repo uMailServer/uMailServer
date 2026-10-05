@@ -172,6 +172,13 @@ func (s *Storage) UpdateCalendar(username string, cal *Calendar) error {
 
 // DeleteCalendar deletes a calendar and all its events
 func (s *Storage) DeleteCalendar(username, calendarID string) error {
+	if calendarID == "" || calendarID == "." {
+		return fmt.Errorf("invalid identifier: %s", calendarID)
+	}
+	if err := validateID(calendarID); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -302,7 +309,7 @@ func (s *Storage) GetETag(username, calendarID, eventUID string) string {
 	if err != nil {
 		return fmt.Sprintf("\"%s\"", uuid.New().String())
 	}
-	return fmt.Sprintf("\"%d\"", info.ModTime().Unix())
+	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
 }
 
 // GetCalendarETag generates an ETag for a calendar
@@ -312,5 +319,5 @@ func (s *Storage) GetCalendarETag(username, calendarID string) string {
 	if err != nil {
 		return fmt.Sprintf("\"%s\"", uuid.New().String())
 	}
-	return fmt.Sprintf("\"%d\"", info.ModTime().Unix())
+	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
 }

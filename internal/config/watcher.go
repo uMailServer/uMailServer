@@ -104,17 +104,16 @@ func (w *Watcher) check() bool {
 		return false
 	}
 
-	// Check modification time first
-	if info.ModTime().Equal(w.lastModTime) {
-		return false
-	}
-
+	// Content can change while the modification timestamp is preserved.
 	// Verify with hash
 	hash, err := w.fileHash()
 	if err != nil {
 		w.logger.Error("Failed to hash config file", "error", err)
 		return false
 	}
+
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
 
 	if hash == w.lastHash {
 		// File was touched but content didn't change
