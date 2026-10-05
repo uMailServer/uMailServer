@@ -173,6 +173,10 @@ func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request, alias strin
 			s.sendError(w, http.StatusBadRequest, "invalid target address format")
 			return
 		}
+		if _, err := s.db.GetAccount(targetDomain, targetUser); err != nil {
+			s.sendError(w, http.StatusBadRequest, "target account not found")
+			return
+		}
 		data.Target = req.Target
 	}
 
