@@ -274,6 +274,12 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 		}
 	}
 
+	if err != nil {
+		s.logger.Error("Failed to query calendar events", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to query calendar events")
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.WriteHeader(http.StatusMultiStatus)
 

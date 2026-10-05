@@ -223,6 +223,10 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 					multistatus.Responses = append(multistatus.Responses, s.buildContactResponse(username, addressbookID, uid, contact))
 				}
 			}
+		} else {
+			s.logger.Error("Failed to query addressbook contacts", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to query addressbook contacts")
+			return
 		}
 	}
 
