@@ -203,34 +203,41 @@ func TestResourceMonitor_ForceGC(t *testing.T) {
 }
 
 func TestResourceMonitor_MemoryLimitCallback(t *testing.T) {
-	limits := ResourceLimits{
-		MaxMemoryMB:         1, // 1MB - very low to trigger limit
-		MemoryCheckInterval: 50 * time.Millisecond,
-	}
-	logger := &testLogger{}
-	monitor := NewResourceMonitor(limits, logger)
+	for _, tc := range []struct {
+		name         string
+		initialCheck bool
+		maxMemoryMB  int64
+		wantCallback bool
+	}{
+		{name: "initial_check", initialCheck: true, maxMemoryMB: 1, wantCallback: true},
+		{name: "direct_check", maxMemoryMB: 1, wantCallback: true},
+		{name: "unlimited_initial", initialCheck: true},
+		{name: "unlimited_direct"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Disable periodic checks: both paths below check synchronously.
+			monitor := NewResourceMonitor(ResourceLimits{MaxMemoryMB: tc.maxMemoryMB}, &testLogger{})
+			t.Cleanup(monitor.Stop)
 
-	callbackCalled := false
-	monitor.SetMemoryLimitCallback(func() {
-		callbackCalled = true
-	})
+			callbackCalled := false
+			monitor.SetMemoryLimitCallback(func() {
+				callbackCalled = true
+			})
 
-	// Allocate memory BEFORE starting monitor so it's present during initial check
-	data := make([]byte, 1024*1024*5) // 5MB
-	_ = data
+			data := make([]byte, 5*1024*1024)
+			runtime.GC()
+			if tc.initialCheck {
+				monitor.Start()
+			} else {
+				monitor.checkResources()
+			}
+			// The allocation must stay live until the memory check has finished.
+			runtime.KeepAlive(data)
 
-	monitor.Start()
-
-	// Wait for the ticker to fire at least once (interval is 50ms)
-	time.Sleep(100 * time.Millisecond)
-
-	// Force a direct check in case ticker hasn't fired yet
-	monitor.checkResources()
-
-	monitor.Stop()
-
-	if !callbackCalled {
-		t.Error("memory limit callback should have been called")
+			if callbackCalled != tc.wantCallback {
+				t.Errorf("memory limit callback should have been called: got %v, want %v", callbackCalled, tc.wantCallback)
+			}
+		})
 	}
 }
 
