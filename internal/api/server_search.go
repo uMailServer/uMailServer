@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/search"
 )
@@ -30,7 +31,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate query length
-	if len(query) > 500 {
+	if utf8.RuneCountInString(query) > 500 {
 		s.sendError(w, http.StatusBadRequest, "query too long (max 500 characters)")
 		return
 	}
