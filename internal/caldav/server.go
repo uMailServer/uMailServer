@@ -146,10 +146,13 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 
 		// Query actual calendars from storage
 		calendars, err := s.storage.GetCalendars(username)
-		if err == nil {
-			for _, cal := range calendars {
-				multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
-			}
+		if err != nil {
+			s.logger.Error("Failed to query calendars", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to query calendars")
+			return
+		}
+		for _, cal := range calendars {
+			multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
 		}
 	}
 

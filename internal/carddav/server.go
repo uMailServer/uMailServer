@@ -154,20 +154,28 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	// Query address books
 	if depth != "0" {
 		addressbooks, err := s.storage.GetAddressbooks(username)
-		if err == nil {
-			for _, ab := range addressbooks {
-				multistatus.Responses = append(multistatus.Responses, s.buildAddressbookResponse(username, ab))
+		if err != nil {
+			s.logger.Error("Failed to query addressbooks", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to query addressbooks")
+			return
+		}
+		for _, ab := range addressbooks {
+			multistatus.Responses = append(multistatus.Responses, s.buildAddressbookResponse(username, ab))
 
-				// If depth is infinity or 1, include contacts
-				if depth == "infinity" || depth == "1" {
-					contacts, err := s.storage.GetContacts(username, ab.ID)
-					if err == nil {
-						for _, contact := range contacts {
-							uid := s.extractUIDFromVCard(contact)
-							if uid != "" {
-								multistatus.Responses = append(multistatus.Responses, s.buildContactResponse(username, ab.ID, uid, contact))
-							}
-						}
+			// If depth is infinity or 1, include contacts
+			if depth == "infinity" || depth == "1" {
+				contacts, err := s.storage.GetContacts(username, ab.ID)
+				if err != nil {
+					// One unreadable contact file must not fail the whole
+					// PROPFIND; skip this address book's contacts and keep
+					// serving the accumulated multistatus (RFC 4918 §9.1).
+					s.logger.Error("Failed to query contacts", "error", err)
+					continue
+				}
+				for _, contact := range contacts {
+					uid := s.extractUIDFromVCard(contact)
+					if uid != "" {
+						multistatus.Responses = append(multistatus.Responses, s.buildContactResponse(username, ab.ID, uid, contact))
 					}
 				}
 			}
