@@ -101,6 +101,13 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 	file, err := os.OpenFile(filepath.Clean(msgPath), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
+			info, statErr := os.Stat(msgPath)
+			if statErr != nil {
+				return "", statErr
+			}
+			if !info.Mode().IsRegular() {
+				return "", fmt.Errorf("message path is not a regular file: %s", msgPath)
+			}
 			return messageID, nil // Already exists
 		}
 		return "", err
