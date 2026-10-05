@@ -218,12 +218,13 @@ func parseQuery(query string) []QueryTerm {
 	for _, match := range matches {
 		if len(match) == 3 {
 			field := strings.ToLower(match[1])
-			value := strings.ToLower(match[2])
-			terms = append(terms, QueryTerm{
-				Field: field,
-				Value: value,
-				Boost: 2.0, // Field-specific matches get higher boost
-			})
+			for _, value := range tokenize(match[2]) {
+				terms = append(terms, QueryTerm{
+					Field: field,
+					Value: value,
+					Boost: 2.0, // Field-specific matches get higher boost
+				})
+			}
 		}
 	}
 
