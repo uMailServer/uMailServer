@@ -5,7 +5,9 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -90,7 +92,10 @@ func (w *SetupWizard) Run() (*Config, error) {
 	useACME := w.askBool("Use Let's Encrypt (ACME) for automatic certificates?", true)
 	if useACME {
 		w.Config.TLS.ACME.Enabled = true
-		w.Config.TLS.ACME.Email, _ = w.askString("ACME email address", "")
+		w.Config.TLS.ACME.Email, err = w.askString("ACME email address", "")
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
 		w.Config.TLS.ACME.Provider = "letsencrypt"
 	} else {
 		fmt.Println("You'll need to manually configure TLS certificates.")
@@ -108,8 +113,14 @@ func (w *SetupWizard) Run() (*Config, error) {
 	// Logging
 	fmt.Println()
 	fmt.Println("┌─ Logging Configuration ─")
-	w.Config.Logging.Level, _ = w.askChoice("Log level", []string{"debug", "info", "warn", "error"}, "info")
-	w.Config.Logging.Format, _ = w.askChoice("Log format", []string{"json", "text"}, "json")
+	w.Config.Logging.Level, err = w.askChoice("Log level", []string{"debug", "info", "warn", "error"}, "info")
+	if err != nil {
+		return nil, err
+	}
+	w.Config.Logging.Format, err = w.askChoice("Log format", []string{"json", "text"}, "json")
+	if err != nil {
+		return nil, err
+	}
 
 	// Save configuration
 	fmt.Println()
@@ -232,7 +243,10 @@ func (w *SetupWizard) askChoice(prompt string, options []string, defaultVal stri
 
 	input, err := w.reader.ReadString('\n')
 	if err != nil {
-		return defaultVal, nil
+		if errors.Is(err, io.EOF) {
+			return defaultVal, nil
+		}
+		return "", err
 	}
 
 	input = strings.TrimSpace(input)
