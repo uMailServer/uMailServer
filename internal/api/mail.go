@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/storage"
 )
+
+var errMailBodyRead = errors.New("failed to read message body")
 
 // Mail represents an email message
 type Mail struct {
@@ -265,6 +268,10 @@ func (h *MailHandler) handleMailGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email, err := h.getEmailFromStorage(userEmail, internalFolder, emailID)
+	if errors.Is(err, errMailBodyRead) {
+		h.sendError(w, http.StatusInternalServerError, "Failed to read email")
+		return
+	}
 	if err != nil || email == nil {
 		h.sendError(w, http.StatusNotFound, "Email not found")
 		return
@@ -298,11 +305,11 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 
 		if meta.MessageID == messageID {
 			// Read message body
-			var body string
 			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
-			if err == nil {
-				body = h.extractBody(string(data))
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", errMailBodyRead, err)
 			}
+			body := h.extractBody(string(data))
 
 			folderName := reverseFolderMap[mailbox]
 			if folderName == "" {
