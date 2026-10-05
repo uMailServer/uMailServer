@@ -1333,35 +1333,62 @@ func TestServerStartTLSNoTLSConfig(t *testing.T) {
 	}
 }
 
-// TestAcceptLoopShutdown tests acceptLoop exits on shutdown signal
-func TestAcceptLoopShutdown(t *testing.T) {
-	mailstore := &mockMailstore{}
-	s := NewServer(&Config{Addr: "127.0.0.1:0"}, mailstore)
+// shutdownTestListener makes the accept-first shutdown ordering deterministic.
+type shutdownTestListener struct {
+	entered chan struct{}
+	closed  chan struct{}
+}
 
-	// Create a listener
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Failed to create listener: %v", err)
+func (l *shutdownTestListener) Accept() (net.Conn, error) {
+	select {
+	case <-l.entered:
+	default:
+		close(l.entered)
 	}
-	defer listener.Close()
+	<-l.closed
+	return nil, net.ErrClosed
+}
 
-	// Initialize shutdown channel
-	s.shutdown = make(chan struct{})
+func (l *shutdownTestListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *shutdownTestListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+// TestAcceptLoopShutdown tests Stop releases an acceptLoop blocked in Accept.
+func TestAcceptLoopShutdown(t *testing.T) {
+	s := NewServer(&Config{Addr: "127.0.0.1:0"}, &mockMailstore{})
+	listener := &shutdownTestListener{entered: make(chan struct{}), closed: make(chan struct{})}
+	s.listeners = []net.Listener{listener}
 	s.running.Store(true)
+	t.Cleanup(func() {
+		if err := s.Stop(); err != nil {
+			t.Errorf("Failed to stop server: %v", err)
+		}
+	})
 
-	// Start acceptLoop
-	done := make(chan bool)
+	done := make(chan struct{})
 	go func() {
 		s.acceptLoop(listener)
-		done <- true
+		close(done)
 	}()
 
-	// Close shutdown channel to trigger exit
-	close(s.shutdown)
+	select {
+	case <-listener.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for acceptLoop to enter Accept")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Failed to stop server: %v", err)
+	}
 
 	select {
 	case <-done:
-		// Success
 	case <-time.After(500 * time.Millisecond):
 		t.Error("Timeout waiting for acceptLoop to exit")
 	}
