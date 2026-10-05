@@ -12,6 +12,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/storage"
 	"go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 func sentMetadataRequest(body string) *http.Request {
@@ -55,7 +56,7 @@ func TestMailSendMetadataFailure(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.StoreMessageMetadata("reader@example.com", "Sent", 1, &storage.MessageMetadata{UID: 1}); !errors.Is(err, bbolt.ErrIncompatibleValue) {
+	if err := db.StoreMessageMetadata("reader@example.com", "Sent", 1, &storage.MessageMetadata{UID: 1}); !errors.Is(err, bolterrors.ErrIncompatibleValue) {
 		t.Fatalf("failure fixture invalid: %v", err)
 	}
 	rec := httptest.NewRecorder()
