@@ -286,9 +286,14 @@ func (db *Database) ListMailboxesSharedWith(user string) ([]string, error) {
 			if !strings.HasPrefix(key, "acl:") {
 				continue
 			}
-			parts := strings.SplitN(key, ":", 4)
-			if len(parts) == 4 && parts[3] == user {
-				result = append(result, fmt.Sprintf("%s:%s", parts[1], parts[2]))
+			ownerMailbox, grantee, ok := strings.Cut(key[len("acl:"):], ":")
+			if !ok {
+				continue
+			}
+			// Mailbox names may contain colons; the grantee is the final field.
+			last := strings.LastIndexByte(grantee, ':')
+			if last >= 0 && grantee[last+1:] == user {
+				result = append(result, ownerMailbox+":"+grantee[:last])
 			}
 		}
 		return nil
@@ -312,9 +317,9 @@ func (db *Database) ListGranteesMailboxes(owner string) ([]string, error) {
 		seen := make(map[string]bool)
 		c := b.Cursor()
 		for k, _ := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, _ = c.Next() {
-			parts := strings.SplitN(string(k), ":", 4)
-			if len(parts) == 4 {
-				mailbox := parts[2]
+			mailboxGrantee := string(k[len(prefix):])
+			if last := strings.LastIndexByte(mailboxGrantee, ':'); last >= 0 {
+				mailbox := mailboxGrantee[:last]
 				if !seen[mailbox] {
 					seen[mailbox] = true
 					result = append(result, mailbox)
