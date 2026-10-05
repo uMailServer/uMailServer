@@ -185,7 +185,6 @@ func (db *Database) PruneChanges(user string) error {
 				toDelete = append(toDelete, append([]byte(nil), k...))
 				continue
 			}
-			break
 		}
 		for _, k := range toDelete {
 			if err := b.Delete(k); err != nil {
