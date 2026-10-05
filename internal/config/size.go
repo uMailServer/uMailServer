@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -102,12 +103,16 @@ func ParseSize(s string) (Size, error) {
 		}
 		return Size(value) * multiplier, nil
 	}
-	value, err := strconv.ParseFloat(matches[1], 64)
-	value *= float64(multiplier)
-	if err != nil || value >= float64(math.MaxInt64) {
+	value, ok := new(big.Rat).SetString(matches[1])
+	if !ok {
 		return 0, fmt.Errorf("invalid size value: %s", matches[1])
 	}
-	return Size(value), nil
+	value.Mul(value, new(big.Rat).SetInt64(int64(multiplier)))
+	if value.Cmp(new(big.Rat).SetInt64(math.MaxInt64)) > 0 {
+		return 0, fmt.Errorf("invalid size value: %s", matches[1])
+	}
+	bytes := new(big.Int).Quo(value.Num(), value.Denom())
+	return Size(bytes.Int64()), nil
 }
 
 // Duration is a wrapper around time.Duration that can be parsed from strings
