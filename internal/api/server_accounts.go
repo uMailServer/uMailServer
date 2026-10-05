@@ -254,7 +254,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	var req struct {
 		Password             string `json:"password"`
 		IsAdmin              bool   `json:"is_admin"`
-		IsActive             bool   `json:"is_active"`
+		IsActive             *bool  `json:"is_active"`
 		ForwardTo            string `json:"forward_to"`
 		ForwardKeepCopy      bool   `json:"forward_keep_copy"`
 		QuotaLimit           int64  `json:"quota_limit"`
@@ -322,7 +322,9 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		account.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
 	}
 	account.IsAdmin = req.IsAdmin
-	account.IsActive = req.IsActive
+	if req.IsActive != nil {
+		account.IsActive = *req.IsActive
+	}
 	account.ForwardTo = req.ForwardTo
 	account.ForwardKeepCopy = req.ForwardKeepCopy
 	account.QuotaLimit = req.QuotaLimit

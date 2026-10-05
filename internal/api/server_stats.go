@@ -25,9 +25,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	queueSize := 0
 	if s.queueMgr != nil {
-		if stats, err := s.queueMgr.GetStats(); err == nil {
-			queueSize = stats.Pending + stats.Sending + stats.Failed
+		stats, err := s.queueMgr.GetStats()
+		if err != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to get queue stats")
+			return
 		}
+		queueSize = stats.Pending + stats.Sending + stats.Failed
 	}
 
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
