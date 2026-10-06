@@ -25,16 +25,28 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const {
-    onMetrics,
-    onActivity,
-    onStatus,
-    onHealth,
-    onError,
     reconnectInterval = 5000,
     maxReconnectAttempts = 5,
   } = options;
 
+  // Keep the latest options in a ref: consumers (App.tsx) pass inline
+  // callbacks, so callback identity changes on every render. The socket must
+  // survive those re-renders — handlers always read the freshest callbacks
+  // without tearing down and re-subscribing.
+  const optionsRef = useRef(options);
+  useEffect(() => {
+    optionsRef.current = options;
+  });
+
   const connect = useCallback(() => {
+    const {
+      onMetrics,
+      onActivity,
+      onStatus,
+      onHealth,
+      onError,
+      reconnectInterval: interval = 5000,
+    } = optionsRef.current;
     // SSE endpoint uses HttpOnly cookie for auth on the server side
     // The browser automatically sends cookies with requests to the same origin
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -60,16 +72,16 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
 
           switch (message.type) {
             case "metrics":
-              onMetrics?.(message.data as RealtimeMetrics);
+              optionsRef.current.onMetrics?.(message.data as RealtimeMetrics);
               break;
             case "activity":
-              onActivity?.(message.data as Activity);
+              optionsRef.current.onActivity?.(message.data as Activity);
               break;
             case "status":
-              onStatus?.(message.data);
+              optionsRef.current.onStatus?.(message.data);
               break;
             case "health":
-              onHealth?.(message.data);
+              optionsRef.current.onHealth?.(message.data);
               break;
           }
         } catch (err) {
@@ -83,22 +95,24 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         wsRef.current = null;
 
         // Attempt to reconnect
-        if (reconnectCountRef.current < maxReconnectAttempts) {
+        const { maxReconnectAttempts: maxAttempts = 5, reconnectInterval: retryInterval = 5000 } =
+          optionsRef.current;
+        if (reconnectCountRef.current < maxAttempts) {
           reconnectCountRef.current++;
           reconnectTimerRef.current = setTimeout(() => {
             connect();
-          }, reconnectInterval);
+          }, interval);
         }
       };
 
       ws.onerror = () => {
         if (wsRef.current !== ws) return;
-        onError?.(new Error("WebSocket error"));
+        optionsRef.current.onError?.(new Error("WebSocket error"));
       };
     } catch (err) {
-      onError?.(err as Error);
+      optionsRef.current.onError?.(err as Error);
     }
-  }, [maxReconnectAttempts, reconnectInterval, onMetrics, onActivity, onStatus, onHealth, onError]);
+  }, []);
 
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) {

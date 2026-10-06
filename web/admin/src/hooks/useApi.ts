@@ -6,6 +6,20 @@ interface ApiError {
   status?: number;
 }
 
+// Errors thrown by apiRequest must be real Error instances: catch sites
+// (Login, Domains, Accounts) use "err instanceof Error" to decide whether to
+// surface err.message. A plain object makes that check fail and hides the
+// server's message behind a generic fallback.
+class ApiRequestError extends Error implements ApiError {
+  status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
 interface UseApiOptions {
   onError?: (error: ApiError) => void;
   onSuccess?: () => void;
@@ -30,7 +44,7 @@ async function apiRequest<T>(
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
-    throw { message: errorData.error || "Request failed", status: response.status };
+    throw new ApiRequestError(errorData.error || "Request failed", response.status);
   }
 
   if (response.status === 204) {

@@ -58,9 +58,13 @@ export function Queue() {
   });
 
   const totalPages = Math.ceil((filteredEntries?.length || 0) / itemsPerPage);
+  // Clamp the effective page: refetches and filter changes can shrink the
+  // result set below the stored page, which would otherwise slice past the
+  // end and show a phantom empty page with pagination hidden.
+  const page = Math.min(currentPage, Math.max(1, totalPages));
   const paginatedEntries = filteredEntries?.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
+    (page - 1) * itemsPerPage,
+    page * itemsPerPage
   );
 
   const handleRetry = async () => {
@@ -200,22 +204,22 @@ export function Queue() {
               {totalPages > 1 && (
                 <div className="flex items-center justify-between mt-6 pt-4 border-t">
                   <p className="text-sm text-muted-foreground">
-                    Page {currentPage} of {totalPages}
+                    Page {page} of {totalPages}
                   </p>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage(Math.max(1, page - 1))}
+                      disabled={page === 1}
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                      disabled={currentPage === totalPages}
+                      onClick={() => setCurrentPage(Math.min(totalPages, page + 1))}
+                      disabled={page === totalPages}
                     >
                       <ChevronRight className="h-4 w-4" />
                     </Button>

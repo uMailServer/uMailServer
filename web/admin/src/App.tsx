@@ -54,7 +54,15 @@ function App() {
   };
 
   const handleLogout = () => {
-    // Server will clear the HttpOnly cookie
+    // Revoke the server session: without this call the HttpOnly cookie stays
+    // valid and "logout" only clears local state. Best-effort — a failing
+    // request must not block or break the local logout.
+    void fetch("/api/v1/auth/logout", {
+      method: "POST",
+      credentials: "include",
+    }).catch(() => {
+      // Local logout already applied; server revocation is best-effort.
+    });
     setIsAuthenticated(false);
     setUser(null);
     setActivities([]);
