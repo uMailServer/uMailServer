@@ -31,7 +31,7 @@ describe('API Error Handling', () => {
       expect(window.location.href).toBe('/login')
 
       // Restore window.location
-      window.location = originalLocation
+      Reflect.set(window, 'location', originalLocation)
     })
 
     it('throws error for 500 Internal Server Error', async () => {

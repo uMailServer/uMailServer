@@ -114,24 +114,22 @@ it('F-units the layout inbox badge reflects the real unread count', async () => 
   try {
     await act(async () =>
       root.render(
-        createElement(
-          ThemeProvider,
-          { defaultTheme: 'system', storageKey: 'webmail-theme' },
-          createElement(
-            AuthProvider,
-            {},
-            createElement(LoginProbe),
-            createElement(
-              EmailProvider,
-              {},
-              createElement(
-                MemoryRouter,
-                { initialEntries: ['/'] },
-                createElement(Layout)
-              )
-            )
-          )
-        )
+        createElement(ThemeProvider, {
+          defaultTheme: 'system',
+          storageKey: 'webmail-theme',
+          children: createElement(AuthProvider, {
+            children: [
+              createElement(LoginProbe),
+              createElement(EmailProvider, {
+                children: createElement(
+                  MemoryRouter,
+                  { initialEntries: ['/'] },
+                  createElement(Layout)
+                ),
+              }),
+            ],
+          }),
+        })
       )
     )
     // Login settles, the auth-gated loadEmails resolves, then the badge

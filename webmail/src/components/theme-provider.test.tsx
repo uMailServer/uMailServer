@@ -18,7 +18,7 @@ it('F-theme system theme follows OS scheme changes while open', async () => {
     addEventListener: vi.fn((type: string, cb: (event: { matches: boolean }) => void) => {
       if (type === 'change') changeListeners.push(cb)
     }),
-    removeEventListener: vi.fn((type: string, cb: (event: { matches: boolean }) => void) => {
+    removeEventListener: vi.fn((_type: string, cb: (event: { matches: boolean }) => void) => {
       const i = changeListeners.indexOf(cb)
       if (i >= 0) changeListeners.splice(i, 1)
     }),
@@ -50,11 +50,11 @@ it('F-theme system theme follows OS scheme changes while open', async () => {
   try {
     await act(async () =>
       root.render(
-        createElement(
-          ThemeProvider,
-          { defaultTheme: 'system', storageKey: 'webmail-theme' },
-          createElement(Probe)
-        )
+        createElement(ThemeProvider, {
+          defaultTheme: 'system',
+          storageKey: 'webmail-theme',
+          children: createElement(Probe),
+        })
       )
     )
 
