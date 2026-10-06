@@ -414,6 +414,7 @@ func (s *Server) initRouter() {
 
 	// Authentication
 	mux.Handle("/api/v1/auth/login", s.limitBodyMiddleware(http.HandlerFunc(s.handleLogin)))
+	mux.Handle("/api/v1/account/password", s.limitBodyMiddleware(s.authMiddleware(http.HandlerFunc(s.handleAccountPassword))))
 	mux.Handle("/api/v1/auth/logout", s.rateLimitMiddleware(s.authMiddleware(http.HandlerFunc(s.handleLogout))))
 
 	// Protected routes
