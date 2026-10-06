@@ -104,9 +104,7 @@ func TestAccountPasswordRejectsShortNewPassword(t *testing.T) {
 func TestAccountPasswordRejectsMissingFields(t *testing.T) {
 	server, current, _ := setupAccountPasswordTest(t)
 
-	rec := postAccountPassword(server, "user@example.com", map[string]string{
-		"current_password": current,
-	})
+	rec := postAccountPassword(server, "user@example.com", current, "")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, rec.Code)
 	}
