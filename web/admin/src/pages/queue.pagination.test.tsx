@@ -66,7 +66,7 @@ it('queue pagination clamps to the last page when the result set shrinks', async
     console.log('CONTROL EXPECTED: Page 1 of 3 | ACTUAL: shown')
 
     // Navigate to the last page via the real next-page button.
-    const [prevBtn, nextBtn] = findPaginationButtons(container)
+    const [, nextBtn] = findPaginationButtons(container)
     await act(async () => nextBtn.click())
     await act(async () => nextBtn.click())
     expect(

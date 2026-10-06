@@ -48,11 +48,11 @@ it('F-theme-os system theme tracks OS scheme changes while open (web/admin)', as
   try {
     await act(async () =>
       root.render(
-        createElement(
-          ThemeProvider,
-          { defaultTheme: 'system', storageKey: 'umail-admin-theme' },
-          createElement(Probe),
-        ),
+        createElement(ThemeProvider, {
+          defaultTheme: 'system',
+          storageKey: 'umail-admin-theme',
+          children: createElement(Probe),
+        }),
       ),
     )
 
