@@ -35,19 +35,17 @@ it('F-signout the header Sign Out item revokes the server session', async () => 
   try {
     await act(async () =>
       root.render(
-        createElement(
-          ThemeProvider,
-          { defaultTheme: 'system', storageKey: 'webmail-theme' },
-          createElement(
-            AuthProvider,
-            {},
-            createElement(
+        createElement(ThemeProvider, {
+          defaultTheme: 'system',
+          storageKey: 'webmail-theme',
+          children: createElement(AuthProvider, {
+            children: createElement(
               MemoryRouter,
               { initialEntries: ['/inbox'] },
               createElement(Header, { onMenuToggle: () => {}, sidebarCollapsed: false })
-            )
-          )
-        )
+            ),
+          }),
+        })
       )
     )
 
@@ -82,7 +80,7 @@ it('F-signout the header Sign Out item revokes the server session', async () => 
     }
     console.log('CONTROL EXPECTED: Sign Out menu item present | ACTUAL: shown')
 
-    await act(async () => signOut.click())
+    await act(async () => (signOut as HTMLElement).click())
     await flush()
 
     // CONTRACT: signing out must revoke the server session via POST

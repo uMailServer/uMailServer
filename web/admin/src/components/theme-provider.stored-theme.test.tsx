@@ -35,11 +35,11 @@ async function renderProvider() {
   const root = createRoot(container)
   await act(async () =>
     root.render(
-      createElement(
-        ThemeProvider,
-        { defaultTheme: 'system', storageKey: STORAGE_KEY },
-        createElement(Probe)
-      )
+      createElement(ThemeProvider, {
+        defaultTheme: 'system',
+        storageKey: STORAGE_KEY,
+        children: createElement(Probe),
+      })
     )
   )
   return { container, root }

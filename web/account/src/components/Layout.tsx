@@ -1,8 +1,20 @@
-import { Outlet, Link, useLocation } from 'react-router-dom'
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { User, Lock, Shield, Forward, Palmtree, LogOut, Filter } from 'lucide-react'
 
 function Layout() {
   const location = useLocation()
+  const navigate = useNavigate()
+
+  // Revoke the server session: without this the HttpOnly cookie stays valid
+  // and "Sign out" only hides the UI. Best-effort — a failing request must
+  // not block the local sign-out.
+  const handleSignOut = () => {
+    void fetch('/api/v1/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {})
+    navigate('/login')
+  }
 
   const navItems = [
     { path: '/profile', label: 'Profile', icon: User },
@@ -23,7 +35,7 @@ function Layout() {
                 Account Settings
               </h1>
             </div>
-            <button className="flex items-center text-sm text-gray-600 hover:text-gray-900">
+            <button onClick={handleSignOut} className="flex items-center text-sm text-gray-600 hover:text-gray-900">
               <LogOut className="w-4 h-4 mr-2" />
               Sign out
             </button>

@@ -3,11 +3,11 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { SearchPage } from './search'
-import API from '@/utils/api'
+import API, { SearchResponse } from '@/utils/api'
 
 interface DeferredSearch {
   q: string
-  resolve: (value: { emails: unknown[]; total: number }) => void
+  resolve: (value: SearchResponse | PromiseLike<SearchResponse>) => void
   reject: (error: Error) => void
 }
 
@@ -34,11 +34,16 @@ function searchEmail(id: string, subject: string) {
     id,
     from: `sender-${id}`,
     fromName: `sender-${id}`,
+    to: [] as string[],
     subject,
+    body: `${subject} body`,
     preview: `${subject} body`,
     date: '10:00',
     folder: 'inbox',
     read: false,
+    starred: false,
+    hasAttachments: false,
+    size: 0,
   }
 }
 
@@ -91,6 +96,7 @@ it('F-race older search completion cannot replace the latest query results', asy
       requests[0].resolve({
         emails: [searchEmail('id-a1', 'AAA unique subject line')],
         total: 1,
+        query: 'AAA',
       })
     )
     expect(
@@ -119,6 +125,7 @@ it('F-race older search completion cannot replace the latest query results', asy
       requests[2].resolve({
         emails: [searchEmail('id-c1', 'CCC unique subject line')],
         total: 1,
+        query: 'CCC',
       })
     )
     expect(
@@ -132,6 +139,7 @@ it('F-race older search completion cannot replace the latest query results', asy
       requests[1].resolve({
         emails: [searchEmail('id-b1', 'BBB unique subject line')],
         total: 1,
+        query: 'BBB',
       })
     )
 
@@ -170,6 +178,7 @@ it('F-race older search completion cannot replace the latest query results', asy
       requests[4].resolve({
         emails: [searchEmail('id-f1', 'FFF unique subject line')],
         total: 1,
+        query: 'FFF',
       })
     )
     expect(

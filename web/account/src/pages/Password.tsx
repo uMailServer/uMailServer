@@ -4,14 +4,11 @@ function PasswordPage() {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState(false)
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    setSuccess(false)
 
     if (newPassword !== confirmPassword) {
       setError('New passwords do not match')
@@ -23,13 +20,12 @@ function PasswordPage() {
       return
     }
 
-    setSaving(true)
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    setSaving(false)
-    setSuccess(true)
-    setCurrentPassword('')
-    setNewPassword('')
-    setConfirmPassword('')
+    // The portal has no self-service password endpoint to call: the server's
+    // account API only exposes admin account management (the documented
+    // POST /api/v1/accounts/{email}/password is not implemented) and the
+    // portal has no session context holding the account address. Report the
+    // truth instead of claiming a password change that never happened.
+    setError('Password change is not available in this portal yet — contact your administrator.')
   }
 
   return (
@@ -39,12 +35,6 @@ function PasswordPage() {
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md text-red-700">
           {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-md text-green-700">
-          Password changed successfully!
         </div>
       )}
 
@@ -97,10 +87,9 @@ function PasswordPage() {
         <div className="flex justify-end">
           <button
             type="submit"
-            disabled={saving}
-            className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+            className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
           >
-            {saving ? 'Changing...' : 'Change Password'}
+            Change Password
           </button>
         </div>
       </form>
