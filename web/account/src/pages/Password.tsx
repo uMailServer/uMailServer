@@ -4,11 +4,14 @@ function PasswordPage() {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setSuccess(false)
 
     if (newPassword !== confirmPassword) {
       setError('New passwords do not match')
@@ -20,12 +23,34 @@ function PasswordPage() {
       return
     }
 
-    // The portal has no self-service password endpoint to call: the server's
-    // account API only exposes admin account management (the documented
-    // POST /api/v1/accounts/{email}/password is not implemented) and the
-    // portal has no session context holding the account address. Report the
-    // truth instead of claiming a password change that never happened.
-    setError('Password change is not available in this portal yet — contact your administrator.')
+    setSaving(true)
+    try {
+      // Self-service change: the server re-authenticates the current
+      // password for the cookie-authenticated account before applying the
+      // new one.
+      const res = await fetch('/api/v1/account/password', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword,
+        }),
+      })
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null
+        setError(data?.error ?? 'Password change failed. Please try again.')
+        return
+      }
+      setSuccess(true)
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+    } catch {
+      setError('Password change failed. Please try again.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -35,6 +60,12 @@ function PasswordPage() {
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md text-red-700">
           {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-md text-green-700">
+          Password changed successfully!
         </div>
       )}
 
@@ -87,9 +118,10 @@ function PasswordPage() {
         <div className="flex justify-end">
           <button
             type="submit"
-            className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+            disabled={saving}
+            className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
           >
-            Change Password
+            {saving ? 'Changing...' : 'Change Password'}
           </button>
         </div>
       </form>
