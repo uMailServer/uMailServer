@@ -58,6 +58,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(false)
     setError(null)
     api.setToken(null)
+    // Revoke the server session: without this call the HttpOnly cookie stays
+    // valid and "logout" only clears local state. Best-effort — a failing
+    // request must not block or break the local logout.
+    void api.post('/auth/logout').catch(() => {
+      // Server revocation is best-effort; local state is already cleared.
+    })
   }, [])
 
   const value: AuthContextType = {

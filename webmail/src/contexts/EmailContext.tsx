@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
 import api from '../utils/api'
+import { useAuth } from './AuthContext'
 
 interface Email {
   id: string
@@ -52,6 +53,7 @@ const REVERSE_FOLDER_MAP: Record<string, string> = {
 }
 
 export function EmailProvider({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated } = useAuth()
   const [emails, setEmails] = useState<Email[]>([])
   const [currentFolder, setCurrentFolder] = useState('Inbox')
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null)
@@ -123,10 +125,14 @@ export function EmailProvider({ children }: { children: React.ReactNode }) {
     await loadEmails(currentFolder)
   }, [currentFolder, loadEmails])
 
-  // Load emails on mount
+  // Load emails once authentication is established: an unauthenticated fetch
+  // would 401 and the api layer would redirect-reload /login. Folder changes
+  // fetch via changeFolder; only auth transitions trigger this effect.
   useEffect(() => {
-    loadEmails()
-  }, [])
+    if (isAuthenticated) {
+      loadEmails()
+    }
+  }, [isAuthenticated])
 
   const value: EmailContextType = {
     emails,

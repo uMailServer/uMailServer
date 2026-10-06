@@ -41,6 +41,7 @@ export function SearchPage() {
   const [error, setError] = useState<string | null>(null)
   const [recentSearches, setRecentSearches] = useState<string[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
+  const searchIdRef = useRef(0)
 
   // Load recent searches from localStorage
   useEffect(() => {
@@ -71,16 +72,20 @@ export function SearchPage() {
     localStorage.removeItem(RECENT_SEARCHES_KEY)
   }, [])
 
-  // Perform actual search
+  // Perform actual search. A response from a superseded search is discarded
+  // so a slow earlier query can never replace the latest results
+  // (same guard as EmailContext.loadEmails).
   const performSearch = useCallback(async (searchQuery: string) => {
     if (!searchQuery.trim()) return
 
+    const requestId = ++searchIdRef.current
     setLoading(true)
     setError(null)
     setHasSearched(true)
 
     try {
       const response = await API.search(searchQuery)
+      if (requestId !== searchIdRef.current) return
       if (response.emails) {
         const mapped = response.emails.map(email => ({
           id: email.id,
@@ -100,12 +105,13 @@ export function SearchPage() {
         setTotalResults(0)
       }
     } catch (err) {
+      if (requestId !== searchIdRef.current) return
       console.error('Search error:', err)
       setError('Search failed. Please try again.')
       setResults([])
       setTotalResults(0)
     } finally {
-      setLoading(false)
+      if (requestId === searchIdRef.current) setLoading(false)
     }
   }, [saveRecentSearch])
 

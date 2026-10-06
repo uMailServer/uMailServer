@@ -27,7 +27,7 @@ function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [, setError] = useState('')
+  const [error, setError] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -89,6 +89,12 @@ function LoginPage() {
               />
             </div>
           </div>
+
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 p-3" role="alert">
+              <p className="text-sm text-red-600">{error}</p>
+            </div>
+          )}
 
           <button
             type="submit"

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider, useAuth } from "@/contexts/AuthContext"
+import { EmailProvider } from "@/contexts/EmailContext"
 import { Layout } from "@/components/layout/layout"
 import { InboxPage } from "@/pages/inbox"
 import { EmailDetailPage } from "@/pages/email-detail"
@@ -77,10 +78,12 @@ function App() {
   return (
     <ThemeProvider defaultTheme="system" storageKey="webmail-theme">
       <AuthProvider>
-        <BrowserRouter>
-          <AppContent />
-        </BrowserRouter>
-        <Toaster />
+        <EmailProvider>
+          <BrowserRouter>
+            <AppContent />
+          </BrowserRouter>
+          <Toaster />
+        </EmailProvider>
       </AuthProvider>
     </ThemeProvider>
   )

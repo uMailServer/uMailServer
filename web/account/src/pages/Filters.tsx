@@ -57,6 +57,7 @@ function FiltersPage() {
   const [saving, setSaving] = useState(false)
   const [editingFilter, setEditingFilter] = useState<EmailFilter | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
     loadFilters()
@@ -141,7 +142,10 @@ function FiltersPage() {
     const newIndex = direction === 'up' ? index - 1 : index + 1
     if (newIndex < 0 || newIndex >= filters.length) return
 
-    const newFilters = [...filters]
+    // Copy before swapping: the optimistic order must not mutate the shared
+    // filter objects — their priority fields belong to the confirmed state
+    // and are restored verbatim if the reorder fails.
+    const newFilters = filters.map((f) => ({ ...f }))
     const temp = newFilters[index]
     newFilters[index] = newFilters[newIndex]
     newFilters[newIndex] = temp
@@ -152,10 +156,11 @@ function FiltersPage() {
     })
 
     setFilters(newFilters)
+    setActionError('')
 
     // Save new order
     try {
-      await fetch('/api/v1/filters/reorder', {
+      const response = await fetch('/api/v1/filters/reorder', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -163,8 +168,18 @@ function FiltersPage() {
         credentials: 'include', // HttpOnly cookie handles auth
         body: JSON.stringify({ filterIds: newFilters.map(f => f.id) })
       })
+      if (!response.ok) {
+        throw new Error(`Reorder failed with status ${response.status}`)
+      }
     } catch (err) {
       console.error('Failed to reorder filters:', err)
+      // The server refused (or never received) the new order: roll back to
+      // the last confirmed state immediately, then re-sync from the server —
+      // a network-level failure is ambiguous, so the UI must reflect server
+      // truth instead of silently diverging.
+      setFilters(filters)
+      setActionError('Failed to reorder filters. The previous order was restored.')
+      await loadFilters()
     }
   }
 
@@ -191,8 +206,18 @@ function FiltersPage() {
         </button>
       </div>
 
+      {actionError && (
+        <div
+          className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md text-red-700"
+          role="alert"
+        >
+          {actionError}
+        </div>
+      )}
+
       {(showAddForm || editingFilter) && (
         <FilterEditor
+          key={editingFilter ? editingFilter.id : 'new'}
           filter={editingFilter}
           onSave={handleSave}
           onCancel={() => {
