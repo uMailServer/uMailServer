@@ -30,6 +30,7 @@ func TestSSEServerHandlerAcceptsJWTCookie(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
+	req.AddCookie(&http.Cookie{Name: "jwt", Value: "cookie-jwt-token"})
 	rec := httptest.NewRecorder()
 
 	done := make(chan struct{})
@@ -37,7 +38,18 @@ func TestSSEServerHandlerAcceptsJWTCookie(t *testing.T) {
 		server.Handler().ServeHTTP(rec, req)
 		close(done)
 	}()
+
+	// Give the handler time to authenticate and stream the connected event,
+	// then cancel: the handler exits its stream loop and the goroutine
+	// finishes. Reading the recorder only after <-done is race-free — every
+	// handler write happens before the goroutine exits.
 	time.Sleep(300 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after request context cancellation")
+	}
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d for cookie-authenticated request, got %d", http.StatusOK, rec.Code)
