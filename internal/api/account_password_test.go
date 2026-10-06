@@ -82,9 +82,9 @@ func TestAccountPasswordChangesPassword(t *testing.T) {
 
 // Re-authentication: the current password must match.
 func TestAccountPasswordRejectsWrongCurrentPassword(t *testing.T) {
-	server, current, _ := setupAccountPasswordTest(t)
+	server, _, _ := setupAccountPasswordTest(t)
 
-	rec := postAccountPassword(server, "user@example.com", current, "brand-new-password")
+	rec := postAccountPassword(server, "user@example.com", "definitely-not-the-seed-password", "brand-new-password")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
 	}
@@ -110,7 +110,7 @@ func TestAccountPasswordRejectsMissingFields(t *testing.T) {
 	}
 }
 
-// The handler reads the account from the auth context — no context, no
+// The handler reads the account from the auth context: no context, no
 // service.
 func TestAccountPasswordRequiresAuthentication(t *testing.T) {
 	server, current, _ := setupAccountPasswordTest(t)
