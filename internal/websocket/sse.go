@@ -68,6 +68,15 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 				token = strings.TrimPrefix(authHeader, "Bearer ")
 			}
 		}
+		// Browser EventSource clients cannot set custom headers. The route is
+		// wrapped in authMiddleware, which already validated the HttpOnly
+		// "jwt" cookie for this request; fall back to it so browser clients
+		// can authenticate (authFunc validates the same JWT string).
+		if token == "" {
+			if cookie, cookieErr := r.Cookie("jwt"); cookieErr == nil {
+				token = cookie.Value
+			}
+		}
 
 		var user string
 		var isAdmin bool
