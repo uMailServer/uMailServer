@@ -16,7 +16,7 @@ interface VacationConfig {
 }
 
 function VacationPage() {
-  const { t } = useI18n()
+  const { t, loading: i18nLoading } = useI18n()
   const [config, setConfig] = useState<VacationConfig>({
     enabled: false,
     subject: '',
@@ -45,7 +45,10 @@ function VacationPage() {
         const data = await response.json()
         setConfig({
           enabled: data.enabled || false,
-          subject: data.subject || t('vacation.defaultSubject'),
+          // While translations are still loading, t() would return the raw
+          // key — never leak it into persisted state (the subject input is
+          // required, so an empty prefill is safe).
+          subject: data.subject || (i18nLoading ? '' : t('vacation.defaultSubject')),
           message: data.message || t('vacation.defaultMessage'),
           start_date: data.start_date,
           end_date: data.end_date,
@@ -93,7 +96,8 @@ function VacationPage() {
   }
 
   const handleAddExclude = () => {
-    if (excludeInput && !config.exclude_addresses.includes(excludeInput)) {
+    // Email addresses are case-insensitive: dedupe must be too.
+    if (excludeInput && !config.exclude_addresses.some((e) => e.toLowerCase() === excludeInput.toLowerCase())) {
       setConfig({
         ...config,
         exclude_addresses: [...config.exclude_addresses, excludeInput]
