@@ -1,8 +1,15 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      // Mirror vite.config.ts so tests can import page components that use "@/...".
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

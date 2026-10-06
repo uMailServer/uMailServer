@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Search, Bell, Sun, Moon, Menu, User, LogOut, ChevronDown, Keyboard } from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
+import { useAuth } from "@/contexts/AuthContext"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -23,6 +24,7 @@ interface HeaderProps {
 
 export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
   const { setTheme, resolvedTheme } = useTheme()
+  const { logout } = useAuth()
   const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState("")
 
@@ -146,7 +148,10 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
                 Account Settings
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-destructive">
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={() => logout()}
+              >
                 <LogOut className="mr-2 h-4 w-4" />
                 Sign Out
               </DropdownMenuItem>

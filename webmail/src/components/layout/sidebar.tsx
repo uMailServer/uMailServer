@@ -54,7 +54,15 @@ const folderItems: NavItem[] = [
   { icon: Tag, label: "Important", path: "/tag/important", color: "text-amber-500" },
 ]
 
-const NavItemComponent = ({ item, isExpanded }: { item: NavItem; isExpanded: boolean }) => {
+const NavItemComponent = ({
+  item,
+  isExpanded,
+  unreadCount,
+}: {
+  item: NavItem
+  isExpanded: boolean
+  unreadCount: number
+}) => {
   const location = useLocation()
   const isActive = location.pathname === item.path
 
@@ -82,12 +90,12 @@ const NavItemComponent = ({ item, isExpanded }: { item: NavItem; isExpanded: boo
               <span>⌘</span>{item.shortcut}
             </kbd>
           )}
-          {(item.count !== undefined || (item.path === "/inbox" && item.path === "/inbox")) && (
+          {(item.count !== undefined || item.path === "/inbox") && (
             <Badge
               variant={isActive ? "default" : "secondary"}
               className="h-5 min-w-[20px] px-1.5 text-xs"
             >
-              {item.path === "/inbox" ? 12 : item.count}
+              {item.path === "/inbox" ? unreadCount : item.count}
             </Badge>
           )}
         </>
@@ -97,7 +105,7 @@ const NavItemComponent = ({ item, isExpanded }: { item: NavItem; isExpanded: boo
           variant="default"
           className="absolute -right-1 -top-1 h-4 w-4 p-0 flex items-center justify-center text-[10px]"
         >
-          {item.path === "/inbox" ? 12 : item.count}
+          {item.path === "/inbox" ? unreadCount : item.count}
         </Badge>
       )}
     </NavLink>
@@ -124,7 +132,7 @@ const NavItemComponent = ({ item, isExpanded }: { item: NavItem; isExpanded: boo
   return content
 }
 
-export function Sidebar({ collapsed, onToggle, unreadCount: _unreadCount = 0 }: SidebarProps) {
+export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) {
   const navigate = useNavigate()
   const [hovered, setHovered] = useState(false)
 
@@ -187,7 +195,12 @@ export function Sidebar({ collapsed, onToggle, unreadCount: _unreadCount = 0 }: 
       {/* Main Navigation */}
       <nav className="flex-1 space-y-1 px-2 py-2 overflow-y-auto">
         {mainNavItems.map((item) => (
-          <NavItemComponent key={item.path} item={item} isExpanded={isExpanded} />
+          <NavItemComponent
+            key={item.path}
+            item={item}
+            isExpanded={isExpanded}
+            unreadCount={unreadCount}
+          />
         ))}
 
         <Separator className="my-3" />
@@ -199,7 +212,12 @@ export function Sidebar({ collapsed, onToggle, unreadCount: _unreadCount = 0 }: 
         )}
 
         {folderItems.map((item) => (
-          <NavItemComponent key={item.path} item={item} isExpanded={isExpanded} />
+          <NavItemComponent
+            key={item.path}
+            item={item}
+            isExpanded={isExpanded}
+            unreadCount={unreadCount}
+          />
         ))}
       </nav>
 

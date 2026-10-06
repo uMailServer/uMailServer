@@ -14,13 +14,7 @@ type ThemeProviderState = {
   resolvedTheme: "dark" | "light"
 }
 
-const initialState: ThemeProviderState = {
-  theme: "system",
-  setTheme: () => null,
-  resolvedTheme: "light",
-}
-
-const ThemeProviderContext = createContext<ThemeProviderState>(initialState)
+const ThemeProviderContext = createContext<ThemeProviderState | null>(null)
 
 export function ThemeProvider({
   children,
@@ -28,26 +22,36 @@ export function ThemeProvider({
   storageKey = "webmail-theme",
   ...props
 }: ThemeProviderProps) {
-  const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
-  )
+  const [theme, setTheme] = useState<Theme>(() => {
+    // Persisted values come from outside the app's control (older versions,
+    // other apps on the same origin, manual edits): only union members may
+    // become the theme, anything else falls back to the default.
+    const stored = localStorage.getItem(storageKey)
+    return stored === "dark" || stored === "light" || stored === "system"
+      ? stored
+      : defaultTheme
+  })
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">("light")
 
   useEffect(() => {
     const root = window.document.documentElement
-    root.classList.remove("light", "dark")
+    const media = window.matchMedia("(prefers-color-scheme: dark)")
 
-    let resolved: "dark" | "light"
-    if (theme === "system") {
-      resolved = window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light"
-    } else {
-      resolved = theme
+    const apply = () => {
+      root.classList.remove("light", "dark")
+      const resolved: "dark" | "light" =
+        theme === "system" ? (media.matches ? "dark" : "light") : theme
+      root.classList.add(resolved)
+      setResolvedTheme(resolved)
     }
 
-    root.classList.add(resolved)
-    setResolvedTheme(resolved)
+    apply()
+
+    // While "system" is selected, follow live OS scheme changes (e.g.
+    // scheduled auto dark-mode) instead of resolving only at mount.
+    if (theme !== "system") return
+    media.addEventListener("change", apply)
+    return () => media.removeEventListener("change", apply)
   }, [theme])
 
   const value = {
@@ -68,7 +72,7 @@ export function ThemeProvider({
 
 export const useTheme = () => {
   const context = useContext(ThemeProviderContext)
-  if (context === undefined)
+  if (!context)
     throw new Error("useTheme must be used within a ThemeProvider")
   return context
 }

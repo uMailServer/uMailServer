@@ -36,6 +36,37 @@ describe('sanitizeHTML', () => {
     expect(result).toContain('target="_blank"')
     expect(result).toContain('https://example.com')
   })
+
+  it('drops javascript: URIs from href', () => {
+    const input = '<a href="javascript:alert(1)">Click me</a>'
+    const result = sanitizeHTML(input)
+    expect(result).not.toMatch(/javascript\s*:/i)
+    expect(result).not.toContain('alert(1)')
+  })
+
+  it('drops case-variant javascript: URIs from href', () => {
+    const input = '<a href="JaVaScRiPt:alert(document.cookie)">Click me</a>'
+    const result = sanitizeHTML(input)
+    expect(result).not.toMatch(/javascript\s*:/i)
+  })
+
+  it('drops vbscript: and data: URIs from href', () => {
+    const input =
+      '<a href="vbscript:msgbox(1)">a</a><a href="data:text/plain,hi">b</a>'
+    const result = sanitizeHTML(input)
+    expect(result).not.toMatch(/vbscript\s*:/i)
+    expect(result).not.toMatch(/data\s*:/i)
+  })
+
+  it('keeps safe schemes and relative links', () => {
+    const input =
+      '<a href="https://example.com">web</a><a href="mailto:user@example.com">mail</a><a href="/inbox">relative</a><a href="#anchor">frag</a>'
+    const result = sanitizeHTML(input)
+    expect(result).toContain('href="https://example.com"')
+    expect(result).toContain('href="mailto:user@example.com"')
+    expect(result).toContain('href="/inbox"')
+    expect(result).toContain('href="#anchor"')
+  })
 })
 
 describe('sanitizeText', () => {

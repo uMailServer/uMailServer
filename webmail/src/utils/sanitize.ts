@@ -42,8 +42,10 @@ export function sanitizeHTML(dirty: string): string {
     ADD_ATTR: ['target'],
     FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'input', 'button', 'object', 'embed'],
     FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit'],
-    // Drop dangerous protocols
-    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+\-.]+(?:[^a-z+\-.]|$))/i,
+    // Drop dangerous protocols. The final character class excludes ":" so an
+    // UNLISTED scheme (javascript:, vbscript:, data:, ...) can never satisfy
+    // the third alternative — same safeguard as DOMPurify's default regex.
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+\-.]+(?:[^a-z+\-.:]|$))/i,
   })
 }
 
