@@ -211,7 +211,133 @@ Delete an account.
 
 ### POST /api/v1/accounts/{email}/password
 
-Reset account password.
+**Not implemented.** This route is not registered; requests return `404 Not Found`. Password changes are self-service — see `POST /api/v1/account/password` below. (Admin password resets can be performed with the same fields via `PUT /api/v1/accounts/{email}`.)
+
+## Account Self-Service
+
+Endpoints for the **authenticated account** to manage its own credentials
+and settings. Authentication accepts the session cookie (set by
+`POST /api/v1/auth/login`) or a bearer token.
+
+### POST /api/v1/account/password
+
+Change the authenticated account's password. The current password must be
+re-supplied.
+
+**Request body** (JSON):
+
+| Field | Type | Description |
+|---|---|---|
+| `current_password` | string | The account's current password. |
+| `new_password` | string | The new password (at least 8 characters). |
+
+**Response (200):**
+```json
+{
+  "message": "password changed"
+}
+```
+
+**Errors:** `400` invalid body / new password shorter than 8 characters or
+missing fields · `401` missing authentication · `403` wrong
+`current_password` · `404` account not found.
+
+### GET /api/v1/account/totp
+
+Report the authenticated account's TOTP (2FA) state.
+
+**Response (200):**
+```json
+{
+  "enabled": false,
+  "pending_setup": false
+}
+```
+
+### POST /api/v1/account/totp/setup
+
+Generate a new TOTP secret (stored encrypted, not yet enabled) and return
+the `otpauth://` URI for the authenticator app.
+
+**Response (200):**
+```json
+{
+  "uri": "otpauth://totp/uMailServer:user@example.com?secret=...&issuer=uMailServer"
+}
+```
+
+### POST /api/v1/account/totp/verify
+
+Verify a 6-digit code against the pending secret and enable TOTP. Each
+accepted code consumes its time step (RFC 6238 §5.2 replay protection) and
+cannot be reused.
+
+**Request:**
+```json
+{
+  "code": "123456"
+}
+```
+
+**Response (200):**
+```json
+{
+  "enabled": true
+}
+```
+
+**Errors:** `400` TOTP not set up (call `/setup` first) or invalid body ·
+`401` invalid or already-used code.
+
+### POST /api/v1/account/totp/disable
+
+Disable TOTP and clear the stored secret.
+
+**Response (200):**
+```json
+{
+  "enabled": false
+}
+```
+
+### GET /api/v1/account/forwarding
+
+Report the authenticated account's mail-forwarding configuration.
+
+**Response (200):**
+```json
+{
+  "forward_to": "backup@example.com",
+  "keep_copy": true,
+  "forwarding_on": true
+}
+```
+
+### PUT /api/v1/account/forwarding
+
+Update the authenticated account's mail forwarding. An empty `forward_to`
+disables forwarding and clears `keep_copy`. The response echoes the stored
+configuration and is authoritative.
+
+**Request:**
+```json
+{
+  "forward_to": "backup@example.com",
+  "keep_copy": true
+}
+```
+
+**Response (200):**
+```json
+{
+  "forward_to": "backup@example.com",
+  "keep_copy": true,
+  "forwarding_on": true
+}
+```
+
+**Errors:** `400` invalid body or `forward_to` is not a valid email
+address · `401` missing authentication · `404` account not found.
 
 ## Mail Endpoints
 
