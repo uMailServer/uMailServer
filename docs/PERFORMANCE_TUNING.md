@@ -426,5 +426,4 @@ iftop -i eth0
 
 - [Production Readiness](./PRODUCTION_READINESS.md)
 - [Distributed Tracing](./DISTRIBUTED_TRACING.md)
-- [Monitoring Guide](./MONITORING.md)
-- [Kubernetes Deployment](./KUBERNETES.md)
+- [Deployment Guide](./DEPLOYMENT.md)
