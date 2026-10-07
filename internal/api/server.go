@@ -415,6 +415,10 @@ func (s *Server) initRouter() {
 	// Authentication
 	mux.Handle("/api/v1/auth/login", s.limitBodyMiddleware(http.HandlerFunc(s.handleLogin)))
 	mux.Handle("/api/v1/account/password", s.limitBodyMiddleware(s.authMiddleware(http.HandlerFunc(s.handleAccountPassword))))
+	mux.Handle("/api/v1/account/totp", s.limitBodyMiddleware(s.authMiddleware(s.handleSelfTOTP(s.handleTOTPStatus))))
+	mux.Handle("/api/v1/account/totp/setup", s.limitBodyMiddleware(s.authMiddleware(s.handleSelfTOTP(s.handleTOTPSetup))))
+	mux.Handle("/api/v1/account/totp/verify", s.limitBodyMiddleware(s.authMiddleware(s.handleSelfTOTP(s.handleTOTPVerify))))
+	mux.Handle("/api/v1/account/totp/disable", s.limitBodyMiddleware(s.authMiddleware(s.handleSelfTOTP(s.handleTOTPDisable))))
 	mux.Handle("/api/v1/auth/logout", s.rateLimitMiddleware(s.authMiddleware(http.HandlerFunc(s.handleLogout))))
 
 	// Protected routes
