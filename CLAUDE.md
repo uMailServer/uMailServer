@@ -116,7 +116,7 @@ The `Server` struct and its methods are split across many files in `internal/ser
 | `metrics` | Prometheus-compatible metrics endpoint |
 | `sieve` | Sieve mail filtering script support |
 | `vacation` | Vacation/auto-responder functionality |
-| `websocket` | WebSocket support for real-time webmail updates |
+| `websocket` | Server-Sent Events (SSE) hub for real-time updates, served at `/api/v1/events` (no WebSocket despite the name) |
 | `caldav` | CalDAV calendar server (RFC 4791) |
 | `carddav` | CardDAV contacts server (RFC 6352) |
 | `jmap` | JMAP email API (RFC 8620) |
@@ -133,7 +133,7 @@ The `Server` struct and its methods are split across many files in `internal/ser
 
 ### Key Patterns
 
-- **SMTP Pipeline:** `smtp.NewPipeline()` → `pipeline.AddStage(stage)`. Each stage implements a `Stage` interface. Stages are wired in `server_smtp.go` in order: SPF → DKIM → DMARC → ARC → RateLimit → Greylist → RBL → Heuristic → Bayesian → Score → Sieve → S/MIME → OpenPGP → AV.
+- **SMTP Pipeline:** `smtp.NewPipeline()` → `pipeline.AddStage(stage)`. Each stage implements a `Stage` interface. Stages are wired in `server_smtp.go` in order: SPF → DKIM → DMARC → ARC → RateLimit → Greylist → RBL → Heuristic → Bayesian → Score → Sieve → AV.
 - **Handler injection:** SMTP/IMAP/POP3 servers use `SetAuthHandler`, `SetDeliveryHandler`, `SetAuthFunc` etc. to inject dependencies from the orchestrator.
 - **Config types:** `config.Config` is the root YAML-mapped struct with nested configs for each subsystem. Custom `Size` and `Duration` types handle byte/time parsing.
 - **Database:** bbolt (key-value) for all persistence. `db.DB` manages domains/accounts/aliases. `storage.Database` wraps a separate bbolt instance for search indexing. `imap.BboltMailstore` wraps another for IMAP mailbox metadata.
