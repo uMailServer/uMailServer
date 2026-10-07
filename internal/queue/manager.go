@@ -744,8 +744,10 @@ func (m *Manager) withMXConn(mx string, fn func(*smtp.Client) error) (err error)
 			}
 		}
 		defer func() {
-			valid := err == nil && recover() == nil
-			m.releaseMXConn(mx, client, valid)
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic during MX delivery: %v", r)
+			}
+			m.releaseMXConn(mx, client, err == nil)
 		}()
 	} else {
 		defer func() {
