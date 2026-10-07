@@ -1022,22 +1022,30 @@ func cmdTest(args []string) {
 }
 
 func cmdBackup(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: umailserver backup <path>")
+	fs := flag.NewFlagSet("backup", flag.ExitOnError)
+	configPath := fs.String("config", "./umailserver.yaml", "Path to config file")
+	password := fs.String("password", "", "Backup encryption password (empty = store unencrypted)")
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Println("Usage: umailserver backup <backup-directory> [--config <path>] [--password <pass>]")
 		os.Exit(1)
 	}
 
-	backupPath := args[0]
+	// BackupManager treats the path as a DIRECTORY: a timestamped
+	// umailserver_backup_<TS>.tar.gz[.enc] file is created inside it.
+	backupPath := fs.Arg(0)
 
-	// Load config
-	configPath := "./umailserver.yaml"
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
 	bm := cli.NewBackupManager(cfg)
+	if *password != "" {
+		bm.SetPassword(*password)
+	}
 	if err := bm.Backup(backupPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Backup failed: %v\n", err)
 		os.Exit(1)
@@ -1045,22 +1053,28 @@ func cmdBackup(args []string) {
 }
 
 func cmdRestore(args []string) {
-	if len(args) < 1 {
-		fmt.Println("Usage: umailserver restore <backup-file>")
+	fs := flag.NewFlagSet("restore", flag.ExitOnError)
+	configPath := fs.String("config", "./umailserver.yaml", "Path to config file")
+	password := fs.String("password", "", "Backup encryption password (required for encrypted backups)")
+	_ = fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		fmt.Println("Usage: umailserver restore <backup-file> [--config <path>] [--password <pass>]")
 		os.Exit(1)
 	}
 
-	backupFile := args[0]
+	backupFile := fs.Arg(0)
 
-	// Load config
-	configPath := "./umailserver.yaml"
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
 	bm := cli.NewBackupManager(cfg)
+	if *password != "" {
+		bm.SetPassword(*password)
+	}
 	if err := bm.Restore(backupFile); err != nil {
 		fmt.Fprintf(os.Stderr, "Restore failed: %v\n", err)
 		os.Exit(1)

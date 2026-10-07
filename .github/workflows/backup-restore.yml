@@ -87,33 +87,44 @@ jobs:
           BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
           BACKUP_PASSWORD: ${{ secrets.BACKUP_PASSWORD }}
         run: |
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          BACKUP_FILE="umailserver_backup_${TIMESTAMP}.tar.gz.enc"
-          BACKUP_PATH="${{ steps.backup_dest.outputs.destination }}/${BACKUP_FILE}"
-          
-          # Create backup with encryption
-          ./umailserver backup "$BACKUP_PATH" \
+          # The CLI backs up INTO a directory: it creates a timestamped
+          # umailserver_backup_<TS>.tar.gz[.enc] inside it. Encryption is
+          # enabled when --password is non-empty; output is always gzip-
+          # compressed (there are no --compress/--encrypt flags).
+          ./umailserver backup \
             --password "${BACKUP_PASSWORD:-default-password-change-me}" \
             --config /tmp/umailserver_current_config.yaml \
-            --compress \
-            --encrypt
-          
+            /tmp/umailserver-backups
+
+          # Discover the timestamped file the CLI created
+          BACKUP_FILE=$(ls -t /tmp/umailserver-backups/umailserver_backup_*.tar.gz* | head -1)
+          BACKUP_NAME=$(basename "$BACKUP_FILE")
+
           # Calculate checksum
-          CHECKSUM=$(sha256sum "$BACKUP_PATH" | cut -d' ' -f1)
-          
-          echo "backup_file=$BACKUP_PATH" >> $GITHUB_OUTPUT
+          CHECKSUM=$(sha256sum "$BACKUP_FILE" | cut -d' ' -f1)
+
+          echo "backup_file=$BACKUP_FILE" >> $GITHUB_OUTPUT
           echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
-          
+
           # Create checksum file
-          echo "$CHECKSUM" > "${BACKUP_PATH}.sha256"
-          
-          echo "Backup created: $BACKUP_FILE"
+          echo "$CHECKSUM" > "${BACKUP_FILE}.sha256"
+
+          echo "Backup created: $BACKUP_NAME"
           echo "Checksum: $CHECKSUM"
-          
+
+          # Copy to the configured local destination when it differs
+          DEST="${{ steps.backup_dest.outputs.destination }}"
+          if [ -n "$DEST" ] && [ "$DEST" != "/tmp/umailserver-backups" ]; then
+            mkdir -p "$DEST"
+            cp "$BACKUP_FILE" "$DEST/$BACKUP_NAME"
+            cp "${BACKUP_FILE}.sha256" "$DEST/$BACKUP_NAME.sha256"
+            echo "Copied backup to $DEST"
+          fi
+
           # Upload to S3 if configured
           if [ "${{ secrets.BACKUP_S3_BUCKET }}" ]; then
-            aws s3 cp "$BACKUP_PATH" "s3://${{ secrets.BACKUP_S3_BUCKET }}/$(date +%Y/%m/%d)/${BACKUP_FILE}"
-            aws s3 cp "${BACKUP_PATH}.sha256" "s3://${{ secrets.BACKUP_S3_BUCKET }}/$(date +%Y/%m/%d)/${BACKUP_FILE}.sha256"
+            aws s3 cp "$BACKUP_FILE" "s3://${{ secrets.BACKUP_S3_BUCKET }}/$(date +%Y/%m/%d)/$BACKUP_NAME"
+            aws s3 cp "${BACKUP_FILE}.sha256" "s3://${{ secrets.BACKUP_S3_BUCKET }}/$(date +%Y/%m/%d)/$BACKUP_NAME.sha256"
             echo "Uploaded to S3"
           fi
 
@@ -122,7 +133,7 @@ jobs:
         env:
           RETENTION_DAYS: ${{ github.event.inputs.retention_days || 30 }}
         run: |
-          find "${{ steps.backup_dest.outputs.destination }}" -name "umailserver_backup_*.tar.gz.enc" -mtime +$RETENTION_DAYS -delete
+          find /tmp/umailserver-backups -name "umailserver_backup_*.tar.gz*" -mtime +$RETENTION_DAYS -delete 2>/dev/null || true
           echo "Cleaned up backups older than $RETENTION_DAYS days"
 
       - name: Notify success
@@ -244,9 +255,10 @@ jobs:
         env:
           BACKUP_PASSWORD: ${{ secrets.BACKUP_PASSWORD }}
         run: |
-          ./umailserver-test restore "${{ steps.find_backup.outputs.backup_file }}" \
+          ./umailserver-test restore \
             --config /tmp/umailserver-test/data/config/umailserver.yaml \
-            --password "${BACKUP_PASSWORD:-default-password-change-me}"
+            --password "${BACKUP_PASSWORD:-default-password-change-me}" \
+            "${{ steps.find_backup.outputs.backup_file }}"
 
       - name: Verify restored contents
         if: steps.find_backup.outputs.backup_file != ''
