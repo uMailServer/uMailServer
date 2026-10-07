@@ -72,6 +72,81 @@ func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleAccountPassword allows the authenticated account to change its own
+// password (self-service). The current password must be provided for
+// re-authentication.
+//
+//	@Summary Change own password
+//	@Description Changes the password of the cookie/bearer-authenticated account
+//	@Tags Account
+//	@Produce json
+//	@Accept json
+//	@Param body body object true "Current and new password"
+//	@Success 200 {object} map[string]string
+//	@Failure 400 {object} map[string]string
+//	@Failure 401 {object} map[string]string
+//	@Failure 403 {object} map[string]string
+//	@Router /api/v1/account/password [post]
+func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	authUser, _ := r.Context().Value("user").(string)
+	if authUser == "" {
+		s.sendError(w, http.StatusUnauthorized, "missing authentication")
+		return
+	}
+
+	var req struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		s.sendError(w, http.StatusBadRequest, "current_password and new_password are required")
+		return
+	}
+	if len(req.NewPassword) < 8 {
+		s.sendError(w, http.StatusBadRequest, "new password must be at least 8 characters")
+		return
+	}
+
+	user, domain := parseEmail(authUser)
+	account, err := s.db.GetAccount(domain, user)
+	if err != nil || account == nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	// Re-authentication: the current password must match.
+	if matches, _ := s.verifyPassword(req.CurrentPassword, account.PasswordHash); !matches {
+		s.sendError(w, http.StatusForbidden, "current password is incorrect")
+		return
+	}
+
+	hashedPassword, err := s.hashPassword(req.NewPassword)
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+	account.PasswordHash = hashedPassword
+	account.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.NewPassword)))
+	account.UpdatedAt = time.Now()
+
+	if err := s.db.UpdateAccount(account); err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	s.auditLogger.LogAccountUpdate(authUser, authUser, audit.ExtractIP(r), []string{"password_changed"})
+	s.sendJSON(w, http.StatusOK, map[string]string{"message": "password changed"})
+}
+
 // Account handlers
 
 func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
