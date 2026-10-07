@@ -1,6 +1,6 @@
 # uMailServer Architecture
 
-> **Complete architectural documentation for uMailServer** — A production-ready, RFC-compliant email server written in Go.
+> **Complete architectural documentation for uMailServer** — An RFC-focused email server written in Go (beta; see Known Limitations in README.md).
 
 ---
 
@@ -32,8 +32,7 @@ uMailServer is a **single-binary monolith** email server implementing:
 | SMTP Submission (TLS) | 465 | Implicit TLS submission |
 | IMAP4rev1 | 143 | Mail Access |
 | IMAP4rev2 | 143 | Mail Access (newer variant) |
-| POP3 | 110 | Mail Access (legacy) |
-| POP3 (TLS) | 995 | Implicit TLS pop3 |
+| POP3 (TLS) | 995 | Implicit TLS POP3 (default; port configurable) |
 | HTTP | 443 | REST API & Webmail |
 | HTTPS (Admin) | 8443 | Admin Panel only (localhost-only) |
 | MCP | 3000 | Model Context Protocol (AI) |
@@ -46,7 +45,7 @@ uMailServer is a **single-binary monolith** email server implementing:
 - **Embedded Frontends**: React webmail/admin panels embedded via `//go:embed`
 - **Minimal Dependencies**: Only purpose-specific libraries (bbolt, jwt, bcrypt, yaml)
 - **RFC Compliant**: Full compliance with email standards
-- **Production Ready**: TLS, authentication, spam filtering, antivirus scanning
+- **Secure Defaults**: TLS, authentication, spam filtering, antivirus scanning
 
 ---
 
@@ -63,7 +62,7 @@ uMailServer is a **single-binary monolith** email server implementing:
 │  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐  │
 │  │   SMTP    │   │   IMAP    │   │   POP3    │   │   HTTP    │   │   MCP     │  │
 │  │  Server   │   │  Server   │   │  Server   │   │   Server   │   │  Server   │  │
-│  │  (port 25)│   │  (port 143)│   │  (port 110)│   │ (port 443) │   │ (port 3000)│  │
+│  │  (port 25)│   │  (port 143)│   │  (port 995)│   │ (port 443) │   │ (port 3000)│  │
 │  └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘  │
 │  └────┬─────┘   └────┬─────┘   └────┬─────┘   └────┬─────┘                │
 │       │              │              │              │                       │
@@ -121,7 +120,7 @@ type Server struct {
 	submissionServer  *smtp.Server       // Submission server (port 587)
 	submissionTLSServer *smtp.Server     // Submission TLS server (port 465)
 	imapServer        *imap.Server       // IMAP server (port 143)
-	pop3Server        *pop3.Server       // POP3 server (port 110)
+	pop3Server        *pop3.Server       // POP3 server (port 995)
 	apiServer         *api.Server        // HTTP API (port 443)
 	adminServer       *api.AdminServer    // Admin API (port 8443)
 	tlsManager        *umailTLS.Manager  // TLS certificates
@@ -141,8 +140,6 @@ type Server struct {
 	healthMonitor     *health.Monitor    // Health checks
 	rateLimiter       *ratelimit.RateLimiter // Rate limiting
 	tracingProvider   *tracing.Provider  // Distributed tracing
-	smimeKeystore     *smtp.SMIMEKeystore   // S/MIME keystore
-	openpgpKeystore   *smtp.OpenPGPKeystore // OpenPGP keystore
 	ldapClient        *auth.LDAPClient   // LDAP authentication (optional)
 	// ...
 }
@@ -165,7 +162,7 @@ type Server struct {
 13. Start vacation reply cleanup goroutine (hourly)
 14. Start alert checker goroutine
 15. Start IMAP server (port 143)
-16. Start POP3 server (port 110)
+16. Start POP3 server (port 995)
 17. Start MCP server (port 3000)
 18. Start ManageSieve server (port 4190)
 19. Start CalDAV server
@@ -195,14 +192,9 @@ type Server struct {
 │  └──────────────┘   └─────────┘   └─────────┘   └─────────────┘  │
 │                                                            │
 │  ┌─────────────┐   ┌─────────┐   ┌──────────┐   ┌──────────┐   │
-│  │  Bayesian   │──▶│  Score  │──▶│  Sieve   │──▶│  S/MIME  │   │
-│  │  Classifier │   │ Threshold│   │ Filtering│   │  Stage   │   │
+│  │  Bayesian   │──▶│  Score  │──▶│  Sieve   │──▶│    AV    │   │
+│  │  Classifier │   │ Threshold│   │ Filtering│   │  Scanner │   │
 │  └─────────────┘   └─────────┘   └──────────┘   └──────────┘   │
-│                                                            │
-│  ┌───────────┐   ┌─────────────┐                            │
-│  │  OpenPGP  │──▶│     AV      │                            │
-│  │  Stage    │   │  Scanner    │                            │
-│  └───────────┘   └─────────────┘                            │
 │                                                            │
 │                        │                                    │
 │                        ▼                                    │
@@ -226,8 +218,6 @@ type Server struct {
 | Bayesian | Per-user spam classification | - |
 | Score | Threshold-based delivery decision | - |
 | Sieve | Server-side mail filtering | RFC 5228 |
-| S/MIME | S/MIME decryption/verification | RFC 8551 |
-| OpenPGP | OpenPGP decryption/verification | RFC 3156 |
 | AV | ClamAV virus scanning | - |
 
 ### 3.3 IMAP Server (`internal/imap/`)
@@ -744,7 +734,7 @@ Hello World!
 │  │   Port 587       Port 465          Port 4190 (ManageSieve)           │   │
 │  │   Port 993       Port 995          Port 3000 (MCP)                   │   │
 │  │   Port 143       Port 443                                           │   │
-│  │   Port 110       Port 8080                                         │   │
+│  │                  Port 8080                                         │   │
 │  │   Port 8443 (Admin)                                                │   │
 │  │                                                                      │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
@@ -921,8 +911,6 @@ Hello World!
 | RFC 6154 | SPECIAL-USE | ✅ Full | \Sent, \Drafts, etc. |
 | RFC 6851 | IMAP MOVE | ✅ Full | MOVE command |
 | RFC 7888 | LITERAL+ | ✅ Full | Non-synchronizing literals |
-| RFC 8551 | S/MIME | ✅ Full | AES-256-GCM + RSA OAEP |
-| RFC 3156 | OpenPGP | ✅ Full | AES-256-GCM symmetric |
 
 ### 8.5 Delivery & Notifications
 
@@ -987,8 +975,6 @@ uMailServer/
 │   │   ├── arc.go                 # ARC chain verification
 │   │   ├── dane.go                # DANE/TLSA
 │   │   ├── totp.go                # TOTP 2FA
-│   │   ├── smime.go               # S/MIME encryption
-│   │   ├── openpgp.go             # OpenPGP encryption
 │   │   └── ldap.go                # LDAP authentication
 │   ├── storage/
 │   │   ├── database.go            # bbolt wrapper (mail/mail.db)
@@ -1197,8 +1183,6 @@ func (s *Server) Stop() {
    - JMAP email API (RFC 8620) with per-user change journal
    - CalDAV calendar server (RFC 4791)
    - CardDAV contacts server (RFC 6352)
-   - S/MIME with AES-256-GCM + RSA OAEP (RFC 8551)
-   - OpenPGP with AES-256-GCM (RFC 3156)
 
 6. **Observability**
    - Prometheus metrics
@@ -1372,7 +1356,7 @@ tracing:
    - MCP (AI integration)
 
 6. **Webmail**
-   - React-based webmail
+   - React-based webmail (most mailbox views still use mock data)
    - Full-text search
    - Real-time updates (WebSocket/SSE)
    - Autoconfig/Autodiscover
@@ -1430,7 +1414,7 @@ imap:
 
 pop3:
   bind: 0.0.0.0
-  port: 110
+  port: 995
 
 tls:
   acme:
@@ -1447,4 +1431,4 @@ security:
 ---
 
 *Document generated: 2026-05-02*
-*uMailServer Version: 1.0.0*
+*uMailServer Version: 0.1.0*

@@ -27,7 +27,7 @@
 
 ---
 
-> **Note:** uMailServer v0.1.0 is production ready. Please report any issues found.
+> **Status:** uMailServer v0.1.0 is **beta**. The mail core (SMTP, IMAP, POP3, authentication, queue, storage) is tested end to end; parts of the web UIs are still being wired to the backend. See [Known Limitations](#known-limitations) and please report any issues found.
 
 
 **uMailServer** is a modern, self-hosted email server written in Go. It provides everything you need to run a complete email infrastructure: SMTP, IMAP, webmail, admin panel, spam filtering, automatic TLS certificates, and more — all in a single binary.
@@ -41,12 +41,11 @@
 - **Spam Protection**: SPF, DKIM, DMARC, ARC, RBL, Bayesian filtering, greylisting, heuristic analysis
 - **Antivirus**: ClamAV integration for virus scanning
 - **Server-side Mail Filtering**: Sieve (RFC 5228) with ManageSieve (RFC 5804)
-- **Email Encryption**: S/MIME (RFC 8551) and OpenPGP (RFC 3156) support
 - **Delivery Notifications**: DSN (RFC 3461) - Success, Failure, Delay
 - **Read Receipts**: MDN (RFC 3798) - Message Disposition Notifications
 - **Auto Configuration**: Mozilla Autoconfig & Microsoft Autodiscover
-- **Webmail**: Modern React-based web interface with real-time updates
-- **Admin Panel**: Manage domains, accounts, queues, certificates
+- **Webmail**: React-based web interface (in progress — see Known Limitations)
+- **Admin Panel**: Manage domains, accounts, and the mail queue
 - **MCP Server**: Model Context Protocol for AI assistants
 - **Queue Management**: Reliable outbound delivery with retry logic and exponential backoff
 - **Full-text Search**: TF-IDF based email search
@@ -57,6 +56,14 @@
 - **CalDAV/CardDAV**: Calendar and contacts synchronization
 - **JMAP**: Modern email API (HTTP-based)
 - **Docker**: First-class container support
+
+## Known Limitations
+
+- **Webmail:** login, search, and trash use the API; the inbox, folders, message view, compose, and contacts pages still render mock data.
+- **Admin panel:** the Settings page does not persist changes yet.
+- **Account portal:** the Profile page is a placeholder.
+- **S/MIME and OpenPGP:** not supported. Messages pass through unmodified and unverified.
+- **Single node only:** all state lives in local bbolt files and directories; running more than one replica against the same data is not supported.
 
 ## Quick Start
 

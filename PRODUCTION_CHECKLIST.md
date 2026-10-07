@@ -24,7 +24,6 @@
 | Rate Limiting | ✅ | Per-IP and per-user |
 | SPF/DKIM/DMARC | ✅ | Full email auth stack |
 | ARC | ✅ | Authentication chain |
-| S/MIME & OpenPGP | ✅ | Email encryption |
 | Input Validation | ✅ | All endpoints validated |
 | Audit Logging | ✅ | Admin action logging |
 | TLS 1.2/1.3 | ✅ | Modern TLS only |
@@ -148,11 +147,10 @@ docker-compose up -d
 ## Version Information
 
 - **Version:** v0.1.0
-- **Commit:** $(git rev-parse --short HEAD)
-- **Build Date:** $(date -u +%Y-%m-%d)
+- **Commit / Build Date:** run `umailserver version` on the release binary
 - **Go Version:** 1.25+
 - **Node Version:** 20+
 
 ---
 
-**Status:** ✅ READY FOR PRODUCTION
+**Status:** ⚠️ BETA — the mail core is ready; see Known Limitations in README.md before deploying
