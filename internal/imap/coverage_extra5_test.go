@@ -319,12 +319,23 @@ func TestCheckAndSendMDN_HandlerError(t *testing.T) {
 		t.Error("expected MDN handler to complete")
 	}
 
-	// After error, the message ID should be removed from mdnSent to allow retry
-	ms.mdnSentMu.Lock()
-	sent := ms.mdnSent["msg5"]
-	ms.mdnSentMu.Unlock()
-	if sent {
-		t.Error("expected msg5 to be removed from mdnSent after handler error")
+	// After error, the message ID should be removed from mdnSent to allow retry.
+	// The removal happens in the send goroutine AFTER the handler returns (and
+	// thus after close(done) fires), so poll with a bounded deadline instead of
+	// asserting immediately — this test previously raced that window (CI flake).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ms.mdnSentMu.Lock()
+		sent := ms.mdnSent["msg5"]
+		ms.mdnSentMu.Unlock()
+		if !sent {
+			break // removed — retry is allowed
+		}
+		if time.Now().After(deadline) {
+			t.Error("expected msg5 to be removed from mdnSent after handler error")
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
