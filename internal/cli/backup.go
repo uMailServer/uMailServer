@@ -783,7 +783,7 @@ func (bm *BackupManager) CleanupOldBackups(backupPath string, retentionDays int)
 		}
 
 		name := entry.Name()
-		if filepath.Ext(name) != ".gz" && !strings.HasSuffix(name, ".tar.gz") {
+		if filepath.Ext(name) != ".gz" && !strings.HasSuffix(name, ".tar.gz.enc") {
 			continue
 		}
 
@@ -820,7 +820,7 @@ func (bm *BackupManager) ListBackups(backupPath string) ([]BackupInfo, error) {
 		}
 
 		name := entry.Name()
-		if filepath.Ext(name) != ".gz" && !strings.HasSuffix(name, ".tar.gz") {
+		if filepath.Ext(name) != ".gz" && !strings.HasSuffix(name, ".tar.gz.enc") {
 			continue
 		}
 
