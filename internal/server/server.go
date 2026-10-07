@@ -69,10 +69,6 @@ type Server struct {
 	jmapHTTPServer    *http.Server
 	metricsHTTPServer *http.Server
 
-	// S/MIME and OpenPGP keystores
-	smimeKeystore   *smtp.SMIMEKeystore
-	openpgpKeystore *smtp.OpenPGPKeystore
-
 	// LDAP authentication client (optional, nil if LDAP disabled)
 	ldapClient *auth.LDAPClient
 
@@ -150,8 +146,6 @@ func New(cfg *config.Config) (*Server, error) {
 		ctx:             ctx,
 		cancel:          cancel,
 		sieveManager:    sieve.NewManager(),
-		smimeKeystore:   smtp.NewSMIMEKeystore(),
-		openpgpKeystore: smtp.NewOpenPGPKeystore(),
 		bgSem:           make(chan struct{}, 100),
 	}
 

@@ -123,12 +123,6 @@ func (s *Server) startInboundSMTP() {
 		pipeline.AddStage(sieveStage)
 	}
 
-	// S/MIME processing stage
-	pipeline.AddStage(smtp.NewSMIMEStage(s.smimeKeystore))
-
-	// OpenPGP processing stage
-	pipeline.AddStage(smtp.NewOpenPGPStage(s.openpgpKeystore))
-
 	// Antivirus scanning stage
 	if s.config.AV.Enabled {
 		avScanner := av.NewScanner(av.Config{
