@@ -127,11 +127,8 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 
 	// Cleanup old entries every 100 entries to prevent unbounded growth
 	if len(s.vacationReplies) > 100 {
-		// Must release lock before calling cleanupVacationRepliesLocked
-		// which acquires the lock internally - sync.Mutex is not reentrant
-		s.vacationRepliesMu.Unlock()
+		// cleanupVacationRepliesLocked does not lock; it requires vacationRepliesMu held.
 		s.cleanupVacationRepliesLocked()
-		s.vacationRepliesMu.Lock()
 	}
 
 	s.vacationRepliesMu.Unlock()
