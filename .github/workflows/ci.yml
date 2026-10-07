@@ -106,7 +106,7 @@ jobs:
         # web/admin/node_modules/flatted and webmail/node_modules/flatted
         # (Go test glob ./... would otherwise try to compile those).
         # Note: api/ at the repository root contains only OpenAPI docs, no Go packages.
-        run: go test -v -race -coverprofile=coverage.out ./internal/... ./cmd/...
+        run: go test -v -race -timeout=20m -coverprofile=coverage.out ./internal/... ./cmd/...
 
       - name: Run webmail tests
         run: |

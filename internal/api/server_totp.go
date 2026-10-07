@@ -183,3 +183,39 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 		"enabled": false,
 	})
 }
+
+// handleSelfTOTP adapts the admin TOTP handlers for self-service use: the
+// account is resolved from the auth context instead of the URL, so a portal
+// user can only ever address their own TOTP (the handlers' own
+// owner-or-admin check then always sees email == authenticated user).
+func (s *Server) handleSelfTOTP(handler func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		email, _ := r.Context().Value("user").(string)
+		if email == "" {
+			s.sendError(w, http.StatusUnauthorized, "missing authentication")
+			return
+		}
+		handler(w, r, email)
+	}
+}
+
+// handleTOTPStatus reports the caller's current TOTP state so the portal can
+// render the right management view (enabled, setup-in-progress, or off).
+func (s *Server) handleTOTPStatus(w http.ResponseWriter, r *http.Request, email string) {
+	if r.Method != http.MethodGet {
+		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	user, domain := parseEmail(email)
+	account, err := s.db.GetAccount(domain, user)
+	if err != nil || account == nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	s.sendJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled":       account.TOTPEnabled,
+		"pending_setup": account.TOTPSecret != "" && !account.TOTPEnabled,
+	})
+}
