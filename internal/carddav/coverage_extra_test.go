@@ -344,8 +344,11 @@ func TestServer_handleMove_SourceNotFound(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
+	// F5093: the absolute-URI Destination now resolves to the existing
+	// test-ab address book, so the missing source is reported as 404. The
+	// old 403 came from misparsing the Destination ("http:" as the book ID).
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected %d, got %d", http.StatusNotFound, rr.Code)
 	}
 }
 
@@ -443,8 +446,11 @@ func TestServer_handleCopy_SourceNotFound(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusForbidden {
-		t.Errorf("expected %d, got %d", http.StatusForbidden, rr.Code)
+	// F5093: the absolute-URI Destination now resolves to the existing
+	// test-ab address book, so the missing source is reported as 404. The
+	// old 403 came from misparsing the Destination ("http:" as the book ID).
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("expected %d, got %d", http.StatusNotFound, rr.Code)
 	}
 }
 

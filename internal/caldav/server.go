@@ -3,16 +3,24 @@ package caldav
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/tracing"
 )
+
+// maxRequestBodyBytes caps every CalDAV request body (F5090). Calendar
+// objects and DAV XML requests are small; without a cap an authenticated
+// client could make the server buffer an arbitrarily large body in memory.
+const maxRequestBodyBytes = 10 << 20
 
 // Server represents a CalDAV server
 type Server struct {
@@ -21,6 +29,9 @@ type Server struct {
 	dataDir         string
 	storage         *Storage
 	tracingProvider *tracing.Provider
+	// writeMu serializes conditional writes so an If-Match/If-None-Match
+	// evaluation and the write it guards are atomic (F5088).
+	writeMu sync.Mutex
 }
 
 // SetTracingProvider attaches an OpenTelemetry tracing provider so each
@@ -71,6 +82,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	}
+
 	// Log request
 	s.logger.Debug("CalDAV request",
 		"method", r.Method,
@@ -114,14 +129,91 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// handlePropfind handles PROPFIND requests
-func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username string) {
+// readBody reads the request body, answering 413 when it exceeds
+// maxRequestBodyBytes (F5090) and 400 on any other read failure.
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.sendError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return nil, false
+		}
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		return nil, false
+	}
+	return body, true
+}
+
+// etagListMatches reports whether a comma-separated If-Match/If-None-Match
+// list names etag. Strong comparison (If-Match) never matches a weak entity
+// tag; weak comparison (If-None-Match) ignores the W/ prefix (RFC 7232 §2.3.2).
+func etagListMatches(list, etag string, weak bool) bool {
+	for _, candidate := range strings.Split(list, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if strings.HasPrefix(candidate, "W/") {
+			if !weak {
+				continue
+			}
+			candidate = strings.TrimPrefix(candidate, "W/")
+		}
+		if candidate == etag {
+			return true
+		}
+	}
+	return false
+}
+
+// preconditionsHold evaluates If-Match and If-None-Match for a state-changing
+// request against the target's current state (RFC 7232 §3.1, §3.2, §6). A
+// false result must be answered with 412 and the method not performed (F5088).
+func preconditionsHold(r *http.Request, exists bool, etag string) bool {
+	if values, present := r.Header["If-Match"]; present {
+		list := strings.Join(values, ",")
+		if strings.TrimSpace(list) == "*" {
+			if !exists {
+				return false
+			}
+		} else if !exists || !etagListMatches(list, etag, false) {
+			return false
+		}
+	}
+	if values, present := r.Header["If-None-Match"]; present {
+		list := strings.Join(values, ",")
+		if strings.TrimSpace(list) == "*" {
+			if exists {
+				return false
+			}
+		} else if exists && etagListMatches(list, etag, true) {
+			return false
+		}
+	}
+	return true
+}
+
+// destinationSegments parses the RFC 4918 §10.3 Destination header, which
+// may be an absolute URI or an absolute path, into its decoded path segments
+// below /dav/calendars/ (F5092). ok is false when the header is malformed or
+// points outside the calendar namespace.
+func destinationSegments(destination string) ([]string, bool) {
+	u, err := url.Parse(destination)
+	if err != nil {
+		return nil, false
+	}
+	const prefix = "/dav/calendars/"
+	if !strings.HasPrefix(u.Path, prefix) {
+		return nil, false
+	}
+	return strings.Split(strings.Trim(u.Path, "/"), "/"), true
+}
+
+// handlePropfind handles PROPFIND requests
+func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username string) {
+	body, ok := s.readBody(w, r)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
 	// Parse PROPFIND request
 	var propfind Propfind
@@ -171,12 +263,10 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 
 // handleReport handles REPORT requests
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username string) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+	body, ok := s.readBody(w, r)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
 	// Parse calendar query
 	var query CalendarQuery
@@ -598,12 +688,10 @@ func (s *Server) sendUnsupportedFilter(w http.ResponseWriter) {
 
 // handlePut handles PUT requests for creating/updating events
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username string) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+	body, ok := s.readBody(w, r)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
 	icsData := string(body)
 
@@ -639,6 +727,20 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		return
 	}
 	uid := eventUID
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	existing, err := s.storage.GetEvent(username, calendarID, uid)
+	if err != nil {
+		s.logger.Error("Failed to read event", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to read event")
+		return
+	}
+	if !preconditionsHold(r, existing != "", s.storage.GetETag(username, calendarID, uid)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
+		return
+	}
 
 	// Create event
 	event := &CalendarEvent{
@@ -715,6 +817,19 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 		return
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	existing, err := s.storage.GetEvent(username, calendarID, eventUID)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid event")
+		return
+	}
+	if !preconditionsHold(r, existing != "", s.storage.GetETag(username, calendarID, eventUID)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
+		return
+	}
+
 	// Delete event
 	if err := s.storage.DeleteEvent(username, calendarID, eventUID); err != nil {
 		s.logger.Error("Failed to delete event", "error", err)
@@ -745,6 +860,10 @@ func (s *Server) handleMkCalendar(w http.ResponseWriter, r *http.Request, userna
 	}
 
 	if err := s.storage.CreateCalendar(username, cal); err != nil {
+		if errors.Is(err, errInvalidID) {
+			s.sendError(w, http.StatusBadRequest, "invalid calendar ID")
+			return
+		}
 		s.logger.Error("Failed to create calendar", "error", err)
 		s.sendError(w, http.StatusInternalServerError, "failed to create calendar")
 		return
@@ -808,7 +927,11 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	// Parse destination path
-	destParts := strings.Split(strings.Trim(destination, "/"), "/")
+	destParts, destOK := destinationSegments(destination)
+	if !destOK {
+		s.sendError(w, http.StatusForbidden, "destination outside calendar namespace")
+		return
+	}
 	if len(destParts) < 4 {
 		s.sendError(w, http.StatusBadRequest, "invalid destination path")
 		return
@@ -890,7 +1013,11 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	// Parse destination path
-	destParts := strings.Split(strings.Trim(destination, "/"), "/")
+	destParts, destOK := destinationSegments(destination)
+	if !destOK {
+		s.sendError(w, http.StatusForbidden, "destination outside calendar namespace")
+		return
+	}
 	if len(destParts) < 4 {
 		s.sendError(w, http.StatusBadRequest, "invalid destination path")
 		return

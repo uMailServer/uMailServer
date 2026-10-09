@@ -2,6 +2,7 @@ package carddav
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,10 +33,18 @@ func (s *Storage) userDir(username string) string {
 	return filepath.Join(s.dataDir, safeUsername)
 }
 
-// validateID ensures an identifier does not contain path traversal sequences
+// errInvalidID marks an identifier that would resolve outside its parent
+// directory; handlers map it to a client error.
+var errInvalidID = errors.New("invalid identifier")
+
+// validateID ensures an identifier names exactly one entry inside its parent
+// directory: no separators, no ".." sequence, and not the "." self-reference.
+// Every storage entry point that builds a path from a request-derived ID calls
+// it (F5085: GET/COPY/MOVE read other users' contacts via "../"; F5086: MKCOL
+// created address books in other users' namespaces).
 func validateID(id string) error {
-	if strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
-		return fmt.Errorf("invalid identifier: %s", id)
+	if id == "." || strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
+		return fmt.Errorf("%w: %s", errInvalidID, id)
 	}
 	return nil
 }
@@ -63,6 +72,9 @@ func (s *Storage) CreateAddressbook(username string, ab *Addressbook) error {
 	if ab.ID == "" {
 		ab.ID = uuid.New().String()
 	}
+	if err := validateID(ab.ID); err != nil {
+		return err
+	}
 	now := time.Now()
 	ab.Created = now
 	ab.Modified = now
@@ -87,6 +99,9 @@ func (s *Storage) CreateAddressbook(username string, ab *Addressbook) error {
 
 // GetAddressbook retrieves an address book by ID
 func (s *Storage) GetAddressbook(username, addressbookID string) (*Addressbook, error) {
+	if err := validateID(addressbookID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -158,6 +173,9 @@ func (s *Storage) getAddressbookUnsafe(username, addressbookID string) (*Address
 
 // UpdateAddressbook updates an address book
 func (s *Storage) UpdateAddressbook(username string, ab *Addressbook) error {
+	if err := validateID(ab.ID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -178,6 +196,12 @@ func (s *Storage) UpdateAddressbook(username string, ab *Addressbook) error {
 
 // DeleteAddressbook deletes an address book and all its contacts
 func (s *Storage) DeleteAddressbook(username, addressbookID string) error {
+	if addressbookID == "" {
+		return fmt.Errorf("%w: empty", errInvalidID)
+	}
+	if err := validateID(addressbookID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -227,6 +251,12 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 
 // GetContact retrieves a contact
 func (s *Storage) GetContact(username, addressbookID, contactUID string) (string, error) {
+	if err := validateID(addressbookID); err != nil {
+		return "", err
+	}
+	if err := validateID(contactUID); err != nil {
+		return "", err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -244,6 +274,9 @@ func (s *Storage) GetContact(username, addressbookID, contactUID string) (string
 
 // GetContacts returns all contacts in an address book
 func (s *Storage) GetContacts(username, addressbookID string) ([]string, error) {
+	if err := validateID(addressbookID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
