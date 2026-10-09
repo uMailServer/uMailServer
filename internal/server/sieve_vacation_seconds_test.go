@@ -60,12 +60,11 @@ func TestSieveVacationSecondsWindowHonored(t *testing.T) {
 	if got := sieveVacReplies(t, srv); got != 2 {
 		t.Fatalf("FAIL: :seconds 1 window ignored — after 1.4s got %d replies, want 2 (the 7-day days-form gate would suppress)", got)
 	}
-
-	// The fresh 1-second window must gate an immediate retry.
-	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, junkRTClean)
-	if got := sieveVacReplies(t, srv); got != 2 {
-		t.Fatalf("FAIL: fresh :seconds window does not gate: %d replies after immediate third delivery, want 2", got)
-	}
+	// The fresh-window gating half (an immediate retry stays suppressed while
+	// the new window runs) is pinned deterministically by
+	// internal/sieve/vacation_window_test.go via back-dated cache entries; an
+	// in-test immediate retry would depend on sub-second wall-clock margins
+	// and flake under load.
 }
 
 // Control (must hold before and after the fix): the :days form still
