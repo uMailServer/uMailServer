@@ -258,26 +258,6 @@ func TestIsOrganizationalDomainMatch(t *testing.T) {
 	}
 }
 
-func TestIsSubdomain(t *testing.T) {
-	tests := []struct {
-		domain   string
-		expected bool
-	}{
-		{"example.com", false},
-		{"mail.example.com", true},
-		{"a.b.example.com", true},
-		{"example.co.uk", true}, // Note: simple implementation counts parts
-		{"com", false},
-	}
-
-	for _, tt := range tests {
-		result := isSubdomain(tt.domain)
-		if result != tt.expected {
-			t.Errorf("isSubdomain(%q) = %v, want %v", tt.domain, result, tt.expected)
-		}
-	}
-}
-
 func TestShouldApplyPolicy(t *testing.T) {
 	// Test that shouldApplyPolicy returns consistent results
 	// Note: This uses random sampling, so we can't test exact behavior
@@ -496,9 +476,10 @@ func TestDMARCEvaluateWithPercentage(t *testing.T) {
 	if eval.Result != DMARCFail {
 		t.Errorf("Expected DMARCFail, got %s", eval.Result.String())
 	}
-	// With pct=0, policy should be none (not applied)
-	if eval.AppliedPolicy != DMARCPolicyNone {
-		t.Errorf("Expected none policy with pct=0, got %s", eval.AppliedPolicy)
+	// F5078: with pct=0 an unsampled p=reject failure gets the next-lower
+	// policy, quarantine (RFC 7489 §6.6.4), not none.
+	if eval.AppliedPolicy != DMARCPolicyQuarantine {
+		t.Errorf("Expected quarantine policy with pct=0, got %s", eval.AppliedPolicy)
 	}
 }
 

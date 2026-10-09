@@ -7,12 +7,10 @@ import (
 
 // --- executeIf elsif skip when previous condition was false ---
 
-// TestInterpreter_Elsif_SkippedWhenPreviousFalse tests the case where
-// the first if evaluates to false, and elsif's skip condition is hit
-// (line 277-281 in interpreter.go)
-func TestInterpreter_Elsif_SkippedWhenPreviousFalse(t *testing.T) {
-	// Script where first if fails and elsif should be skipped
-	// because previous conditions weren't met
+// TestInterpreter_Elsif_RunsWhenPreviousFalse tests that an elsif is
+// evaluated when the preceding if was false (RFC 5228 §3.1, F5008).
+func TestInterpreter_Elsif_RunsWhenPreviousFalse(t *testing.T) {
+	// Script where first if fails, so the elsif is evaluated and taken
 	script := `
 	if header :contains "subject" "nomatch" {
 		discard;
@@ -43,15 +41,13 @@ func TestInterpreter_Elsif_SkippedWhenPreviousFalse(t *testing.T) {
 		t.Fatalf("Execute error: %v", err)
 	}
 
-	// Neither branch executes:
-	// 1. First if is false (subject doesn't contain "nomatch")
-	// 2. Elsif is skipped because previous condition (first if) was false
-	// Default action is keep (implicit)
+	// First if is false (subject doesn't contain "nomatch"), so the elsif
+	// is evaluated; it matches and files the message.
 	if len(actions) != 1 {
-		t.Errorf("Expected 1 implicit keep action, got %d", len(actions))
+		t.Fatalf("Expected 1 action, got %d", len(actions))
 	}
-	if _, ok := actions[0].(KeepAction); !ok {
-		t.Errorf("Expected KeepAction, got %T", actions[0])
+	if f, ok := actions[0].(FileintoAction); !ok || f.Folder != "SkippedFolder" {
+		t.Errorf("Expected FileintoAction{SkippedFolder}, got %#v", actions[0])
 	}
 }
 
@@ -426,9 +422,9 @@ func TestInterpreter_EvaluateTest_SizeUnknownRelation(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	_, err = interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+	// F5006: a size test with an unknown relation is malformed, not "true".
+	if _, err = interp.Execute(msg); err == nil {
+		t.Fatal("expected error for size test with unknown relation")
 	}
 }
 

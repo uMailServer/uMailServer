@@ -118,7 +118,25 @@ func (m *Monitor) Check(ctx context.Context) Report {
 			defer cancel()
 
 			start := time.Now()
-			check := c(checkCtx)
+			// Run the checker in its own goroutine so one that ignores its
+			// context (e.g. a syscall on a hung mount) cannot block the whole
+			// report (F5189). The buffered channel lets it exit when it
+			// eventually returns.
+			result := make(chan Check, 1)
+			go func() { result <- c(checkCtx) }()
+			var check Check
+			select {
+			case check = <-result:
+			case <-checkCtx.Done():
+				select {
+				case check = <-result: // finished at the deadline: keep its result
+				default:
+					check = Check{
+						Status:  StatusUnhealthy,
+						Message: fmt.Sprintf("health check timed out: %v", checkCtx.Err()),
+					}
+				}
+			}
 			check.ResponseTime = time.Since(start)
 			check.Name = n
 

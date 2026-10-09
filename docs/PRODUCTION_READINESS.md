@@ -2,10 +2,10 @@
 
 This document tracks the production readiness status of uMailServer.
 
-**Overall Status**: ✅ **PRODUCTION READY**
+**Overall Status**: ⚠️ **BETA** — the mail core is production-grade; see Known Limitations in README.md for the web UI and feature gaps
 
 **Date**: 2026-04-16
-**Version**: 1.0.0
+**Version**: 0.1.0
 **Test Coverage**: ~77.9% average across 36 packages (API: ~88.6%)
 
 ---
@@ -18,7 +18,7 @@ This document tracks the production readiness status of uMailServer.
 | SMTPS | ✅ Complete | 91.0% | Port 465, TLS wrapper |
 | SMTP Submission | ✅ Complete | 91.0% | Port 587, AUTH required |
 | IMAP4rev1 | ✅ Complete | 90.2% | Port 143/993, RFC 3501 |
-| POP3 | ✅ Complete | 77.9% | Port 110/995, RFC 1939 |
+| POP3 | ✅ Complete | 77.9% | Port 995 (implicit TLS, configurable), RFC 1939 |
 | STARTTLS | ✅ Complete | 95.9% | RFC 3207 |
 | PIPELINING | ✅ Complete | 91.0% | RFC 2920 |
 | CHUNKING (BDAT) | ✅ Complete | 91.0% | RFC 3030 |
@@ -148,8 +148,6 @@ This document tracks the production readiness status of uMailServer.
 |---------|--------|----------|-------|
 | Sieve Mail Filtering | ✅ Complete | 85%+ | RFC 5228 |
 | ManageSieve Protocol | ✅ Complete | 85%+ | RFC 5804, port 4190 |
-| S/MIME Encryption | ✅ Complete | 85%+ | RFC 8551 |
-| OpenPGP Encryption | ✅ Complete | 85%+ | RFC 3156 |
 | DSN Support | ✅ Complete | 85%+ | RFC 3461, NOTIFY/RET |
 | MDN Support | ✅ Complete | 85%+ | RFC 3798 |
 | Mozilla Autoconfig | ✅ Complete | 90%+ | Thunderbird |
@@ -210,7 +208,7 @@ This document tracks the production readiness status of uMailServer.
 
 ## Summary
 
-uMailServer is **production ready** with:
+uMailServer's mail core is production-grade, with:
 - 25 tested packages (~87% average coverage)
 - Full RFC compliance for SMTP, IMAP, POP3
 - Comprehensive security (TLS, auth, rate limiting)
@@ -218,4 +216,4 @@ uMailServer is **production ready** with:
 - Complete documentation (deployment, API, security)
 - Performance benchmarks validating scalability
 
-**Ready for production deployment.**
+**Beta:** review Known Limitations in README.md before a production deployment.

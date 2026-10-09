@@ -36,6 +36,11 @@ type ManageSieveServer struct {
 	running     bool
 	authHandler func(user, pass string) bool // Auth validation function
 
+	// addr and tlsAddr override ManageSieveListenAddr and
+	// ManageSieveTLSListenAddr when set (SetListenAddrs).
+	addr    string
+	tlsAddr string
+
 	// tracingProvider wraps every command in a `managesieve.<COMMAND>`
 	// server-kind span when set.
 	tracingProvider *tracing.Provider
@@ -53,6 +58,14 @@ func NewManageSieveServer(manager *Manager, tlsCfg *tls.Config) *ManageSieveServ
 // SetAuthHandler sets the authentication handler for ManageSieve
 func (s *ManageSieveServer) SetAuthHandler(handler func(user, pass string) bool) {
 	s.authHandler = handler
+}
+
+// SetListenAddrs sets the plain and TLS listen addresses used by Listen;
+// an empty value keeps the default. The server wires the configured
+// managesieve bind/port here (F5116).
+func (s *ManageSieveServer) SetListenAddrs(addr, tlsAddr string) {
+	s.addr = addr
+	s.tlsAddr = tlsAddr
 }
 
 // SetTracingProvider wires an OpenTelemetry provider so every command is
@@ -73,7 +86,11 @@ func (s *ManageSieveServer) Listen() error {
 
 	// Start plain TCP listener
 	// #nosec G102 -- Bind address is a configurable default constant
-	ln, err := net.Listen("tcp", ManageSieveListenAddr)
+	addr := ManageSieveListenAddr
+	if s.addr != "" {
+		addr = s.addr
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to start listener: %w", err)
 	}
@@ -84,7 +101,11 @@ func (s *ManageSieveServer) Listen() error {
 	// Start TLS listener if TLS config is provided (on separate port)
 	if s.tlsCfg != nil {
 		// #nosec G102 -- Bind address is a configurable default constant
-		tlsLn, err := tls.Listen("tcp", ManageSieveTLSListenAddr, s.tlsCfg)
+		tlsAddr := ManageSieveTLSListenAddr
+		if s.tlsAddr != "" {
+			tlsAddr = s.tlsAddr
+		}
+		tlsLn, err := tls.Listen("tcp", tlsAddr, s.tlsCfg)
 		if err != nil {
 			return fmt.Errorf("failed to start TLS listener: %w", err)
 		}
@@ -185,6 +206,11 @@ type manageSieveReader struct {
 	r io.Reader
 }
 
+// maxManageSieveLineLength bounds one command line (excluding CRLF). F5009:
+// without it an unauthenticated peer could make the server buffer an
+// arbitrarily long line.
+const maxManageSieveLineLength = 8192
+
 func (r *manageSieveReader) ReadLine() (string, error) {
 	var line []byte
 	for {
@@ -200,8 +226,15 @@ func (r *manageSieveReader) ReadLine() (string, error) {
 			break
 		}
 		line = append(line, b[0])
+		if len(line) > maxManageSieveLineLength+1 { // +1 for a trailing CR
+			return "", fmt.Errorf("command line too long")
+		}
 	}
-	return strings.TrimRight(string(line), "\r"), nil
+	text := strings.TrimRight(string(line), "\r")
+	if len(text) > maxManageSieveLineLength {
+		return "", fmt.Errorf("command line too long")
+	}
+	return text, nil
 }
 
 // processCommandSession processes a single ManageSieve command using session state
@@ -286,9 +319,19 @@ func parseManageSieveLine(line string) []string {
 	var parts []string
 	var current strings.Builder
 	inQuote := false
+	escaped := false
 
 	for _, ch := range line {
+		if escaped {
+			// F5040: \" and \\ inside a quoted string do not end it.
+			escaped = false
+			current.WriteRune(ch)
+			continue
+		}
 		switch ch {
+		case '\\':
+			escaped = inQuote
+			current.WriteRune(ch)
 		case '"':
 			inQuote = !inQuote
 			current.WriteRune(ch)
@@ -309,6 +352,71 @@ func parseManageSieveLine(line string) []string {
 	return parts
 }
 
+// unquoteManageSieveArg returns the value of an RFC 5804 quoted string
+// ("..." with \\ and \" escapes). Unquoted atoms are returned unchanged. F5040.
+func unquoteManageSieveArg(arg string) string {
+	if len(arg) < 2 || arg[0] != '"' || arg[len(arg)-1] != '"' {
+		return arg
+	}
+	inner := arg[1 : len(arg)-1]
+	var b strings.Builder
+	for idx := 0; idx < len(inner); idx++ {
+		if inner[idx] == '\\' && idx+1 < len(inner) {
+			idx++
+		}
+		b.WriteByte(inner[idx])
+	}
+	return b.String()
+}
+
+// quoteManageSieveString renders s as an RFC 5804 quoted string.
+func quoteManageSieveString(v string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
+}
+
+// readScriptArg reads the script argument of PUTSCRIPT/CHECKSCRIPT. It accepts
+// an RFC 5804 literal ("{N+}" or "{N}", whose command line ends with the CRLF
+// after the N octets) as well as a bare octet count followed by exactly that
+// many octets. F5040.
+func readScriptArg(session *manageSieveSession, arg string) (string, error) {
+	literal := strings.HasPrefix(arg, "{") && strings.HasSuffix(arg, "}")
+	sizeText := arg
+	if literal {
+		sizeText = strings.TrimSuffix(strings.TrimSuffix(arg[1:], "}"), "+")
+	}
+	scriptSize := 0
+	_, _ = fmt.Sscanf(sizeText, "%d", &scriptSize)
+
+	if scriptSize <= 0 || scriptSize > 1024*1024 {
+		return "", fmt.Errorf("invalid script size")
+	}
+
+	// Read script content
+	scriptBytes := make([]byte, scriptSize)
+	totalRead := 0
+	for totalRead < scriptSize {
+		n, err := session.reader.r.Read(scriptBytes[totalRead:])
+		if err != nil {
+			return "", fmt.Errorf("failed to read script: %w", err)
+		}
+		totalRead += n
+	}
+
+	// RFC 5804 §2.3: the script is exactly script-size octets. For the bare
+	// count form nothing follows; for a literal the command line still ends
+	// with CRLF, which must be consumed so the next command stays in sync.
+	if literal {
+		rest, err := session.reader.ReadLine()
+		if err != nil {
+			return "", fmt.Errorf("failed to read end of command: %w", err)
+		}
+		if strings.TrimSpace(rest) != "" {
+			return "", fmt.Errorf("unexpected data after script literal")
+		}
+	}
+	return string(scriptBytes), nil
+}
+
 // cmdAuthenticate handles AUTHENTICATE command
 // Format: AUTHENTICATE <mechanism> <initial-response>
 func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []string) error {
@@ -316,19 +424,26 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 		return fmt.Errorf("AUTHENTICATE requires mechanism")
 	}
 
-	mechanism := strings.ToUpper(args[0])
+	mechanism := strings.ToUpper(unquoteManageSieveArg(args[0]))
 
 	// Handle PLAIN authentication mechanism
 	if mechanism == "PLAIN" {
-		// Send continuation request
-		if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
-			return err
-		}
+		var data string
+		if len(args) >= 2 {
+			// F5040: RFC 5804 §2.1 SASL initial response.
+			data = unquoteManageSieveArg(args[1])
+		} else {
+			// Send continuation request
+			if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
+				return err
+			}
 
-		// Read the authentication data
-		data, err := session.reader.ReadLine()
-		if err != nil {
-			return fmt.Errorf("authentication failed: %w", err)
+			// Read the authentication data
+			line, err := session.reader.ReadLine()
+			if err != nil {
+				return fmt.Errorf("authentication failed: %w", err)
+			}
+			data = unquoteManageSieveArg(line)
 		}
 
 		// Decode PLAIN auth: [authzid]\x00authcid\x00password
@@ -432,29 +547,11 @@ func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []str
 		return fmt.Errorf("PUTSCRIPT requires script-name and script-size")
 	}
 
-	scriptName := args[0]
-	scriptSize := 0
-	_, _ = fmt.Sscanf(args[1], "%d", &scriptSize)
-
-	if scriptSize <= 0 || scriptSize > 1024*1024 {
-		return fmt.Errorf("invalid script size")
+	scriptName := unquoteManageSieveArg(args[0])
+	scriptContent, err := readScriptArg(session, args[1])
+	if err != nil {
+		return err
 	}
-
-	// Read script content
-	scriptBytes := make([]byte, scriptSize)
-	totalRead := 0
-	for totalRead < scriptSize {
-		n, err := session.reader.r.Read(scriptBytes[totalRead:])
-		if err != nil {
-			return fmt.Errorf("failed to read script: %w", err)
-		}
-		totalRead += n
-	}
-
-	// RFC 5804 §2.3: the script is sent as exactly script-size octets; there is
-	// no trailing newline to consume. Reading one here would block on (or swallow)
-	// the client's next command, desynchronizing the connection.
-	scriptContent := string(scriptBytes)
 
 	// Validate script
 	if err := s.manager.ValidateScript(scriptContent); err != nil {
@@ -483,16 +580,16 @@ func (s *ManageSieveServer) cmdListScripts(session *manageSieveSession, _ []stri
 	scripts := s.manager.ListScripts(session.user)
 	activeName := s.manager.GetActiveScriptName(session.user)
 
-	if err := s.sendResponse(session.conn, "OK \"List scripts\""); err != nil {
-		return err
-	}
+	// F5040: RFC 5804 §2.7 — one quoted name per line, the active one
+	// followed by ACTIVE, then the final OK (no OK before the entries).
 	for _, name := range scripts {
+		quoted := quoteManageSieveString(name)
 		if name == activeName {
-			if err := s.sendResponse(session.conn, "%s \"active script\"", name); err != nil {
+			if err := s.sendResponse(session.conn, "%s ACTIVE", quoted); err != nil {
 				return err
 			}
 		} else {
-			if err := s.sendResponse(session.conn, "%s", name); err != nil {
+			if err := s.sendResponse(session.conn, "%s", quoted); err != nil {
 				return err
 			}
 		}
@@ -514,7 +611,7 @@ func (s *ManageSieveServer) cmdSetActive(session *manageSieveSession, args []str
 		return fmt.Errorf("SETACTIVE requires script-name")
 	}
 
-	scriptName := args[0]
+	scriptName := unquoteManageSieveArg(args[0])
 	if scriptName == "" {
 		return fmt.Errorf("script name cannot be empty")
 	}
@@ -541,7 +638,7 @@ func (s *ManageSieveServer) cmdDeleteScript(session *manageSieveSession, args []
 		return fmt.Errorf("DELETESCRIPT requires script-name")
 	}
 
-	scriptName := args[0]
+	scriptName := unquoteManageSieveArg(args[0])
 	if scriptName == "" {
 		return fmt.Errorf("script name cannot be empty")
 	}
@@ -565,7 +662,7 @@ func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []str
 		return fmt.Errorf("GETSCRIPT requires script-name")
 	}
 
-	scriptName := args[0]
+	scriptName := unquoteManageSieveArg(args[0])
 
 	// Get script source for the authenticated user
 	source := s.manager.GetScriptSource(session.user, scriptName)
@@ -577,7 +674,10 @@ func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []str
 	if err := s.sendResponse(session.conn, "{%d}", len(source)); err != nil {
 		return err
 	}
-	_, _ = session.conn.Write([]byte(source)) // Best-effort write
+	// F5040: RFC 5804 §2.9 — the literal is followed by CRLF before OK.
+	if _, err := session.conn.Write([]byte(source + "\r\n")); err != nil {
+		return err
+	}
 	if err := s.sendResponse(session.conn, "OK \"Get script complete\""); err != nil {
 		return err
 	}
@@ -587,32 +687,19 @@ func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []str
 // cmdCheckScript handles CHECKSCRIPT command
 // Format: CHECKSCRIPT <script-size>
 func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []string) error {
+	// F5037: RFC 5804 §2.12 CHECKSCRIPT is only valid in authenticated state.
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
+
 	if len(args) < 1 {
 		return fmt.Errorf("CHECKSCRIPT requires script-size")
 	}
 
-	scriptSize := 0
-	_, _ = fmt.Sscanf(args[0], "%d", &scriptSize)
-
-	if scriptSize <= 0 || scriptSize > 1024*1024 {
-		return fmt.Errorf("invalid script size")
+	scriptContent, err := readScriptArg(session, args[0])
+	if err != nil {
+		return err
 	}
-
-	// Read script content
-	scriptBytes := make([]byte, scriptSize)
-	totalRead := 0
-	for totalRead < scriptSize {
-		n, err := session.reader.r.Read(scriptBytes[totalRead:])
-		if err != nil {
-			return fmt.Errorf("failed to read script: %w", err)
-		}
-		totalRead += n
-	}
-
-	// RFC 5804 §2.3: the script is sent as exactly script-size octets; there is
-	// no trailing newline to consume. Reading one here would block on (or swallow)
-	// the client's next command, desynchronizing the connection.
-	scriptContent := string(scriptBytes)
 
 	// Validate script
 	if err := s.manager.ValidateScript(scriptContent); err != nil {

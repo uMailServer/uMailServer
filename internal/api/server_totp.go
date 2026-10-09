@@ -35,6 +35,14 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 		return
 	}
 
+	// F5028: while 2FA is enabled the stored secret is the verified one that
+	// login checks; overwriting it with a new, unverified secret would lock
+	// the enrolled authenticator out. Re-enrollment requires disabling first.
+	if account.TOTPEnabled {
+		s.sendError(w, http.StatusConflict, "TOTP already enabled — disable it before setting up again")
+		return
+	}
+
 	secret, err := auth.GenerateTOTPSecret()
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to generate TOTP secret")

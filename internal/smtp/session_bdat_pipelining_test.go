@@ -103,7 +103,8 @@ func TestBDATPipelinedChunkAccepted(t *testing.T) {
 	if delivered == nil {
 		t.Fatalf("FAIL: onDeliver was not invoked for the pipelined chunk message")
 	}
-	if string(delivered) != "0123456789" {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if bdatPayload(delivered) != "0123456789" {
 		t.Fatalf("FAIL: delivered payload = %q, want %q", string(delivered), "0123456789")
 	}
 }
@@ -145,7 +146,8 @@ func TestBDATNonPipelinedChunkStillAccepted(t *testing.T) {
 	if code := readReplyCode(t, conn, reply); code != 250 {
 		t.Fatalf("FAIL: BDAT 0 LAST replied %d, want 250 (control)", code)
 	}
-	if string(delivered) != "0123456789" {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if bdatPayload(delivered) != "0123456789" {
 		t.Fatalf("FAIL: delivered payload = %q, want %q (control)", string(delivered), "0123456789")
 	}
 }

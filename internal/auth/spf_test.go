@@ -796,9 +796,9 @@ func TestEvaluateInclude_VoidLookup(t *testing.T) {
 	ip := net.ParseIP("192.168.1.1")
 	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
 
-	// The include results in void, then -all matches -> SPFFail
-	if result != SPFFail {
-		t.Errorf("Expected SPFFail (include void + -all), got %s", result.String())
+	// RFC 7208 §5.2 (F4886): include of a domain with no SPF record is permerror
+	if result != SPFPermError {
+		t.Errorf("Expected SPFPermError (include target has no SPF record), got %s", result.String())
 	}
 }
 
@@ -967,8 +967,11 @@ func TestEvaluate_VoidLookupLimit(t *testing.T) {
 	// Use an include that has 2 void lookups in its SPF record, then includes
 	// another domain -- that second include re-enters evaluate with voidLookups >= 2.
 	resolver := newMockDNSResolver()
-	resolver.txtRecords["example.com"] = []string{"v=spf1 include:_spf.example.com -all"}
+	// RFC 7208 §4.6.4 (F4885/F4887): the third void lookup, counted across the
+	// include boundary, is a permerror.
+	resolver.txtRecords["example.com"] = []string{"v=spf1 a:fail0.example.com include:_spf.example.com -all"}
 	resolver.txtRecords["_spf.example.com"] = []string{"v=spf1 a:fail1.example.com a:fail2.example.com include:deep.example.com -all"}
+	resolver.failLookup["fail0.example.com"] = true
 	resolver.failLookup["fail1.example.com"] = true
 	resolver.failLookup["fail2.example.com"] = true
 	resolver.txtRecords["deep.example.com"] = []string{"v=spf1 ip4:192.168.1.1 -all"}
@@ -1032,11 +1035,11 @@ func TestEvaluate_DefaultNeutralNoMechanisms(t *testing.T) {
 func TestEvaluate_RedirectLookupLimit(t *testing.T) {
 	// evaluate: redirect should trigger lookup limit check
 	resolver := newMockDNSResolver()
-	// Build a long redirect chain
+	// Build a redirect chain of 11 redirects; 10 are allowed (F4887).
 	resolver.txtRecords["example.com"] = []string{"v=spf1 redirect=r1.example.com"}
 	for i := 1; i <= 12; i++ {
 		cur := fmt.Sprintf("r%d.example.com", i)
-		if i >= 10 {
+		if i >= 11 {
 			resolver.txtRecords[cur] = []string{"v=spf1 ip4:192.168.1.0/24 -all"}
 		} else {
 			resolver.txtRecords[cur] = []string{fmt.Sprintf("v=spf1 redirect=r%d.example.com", i+1)}

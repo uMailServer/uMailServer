@@ -673,7 +673,8 @@ func TestParseDMARCRecord_MissingPolicy_Cov3(t *testing.T) {
 
 func TestDMARCEvaluate_SubdomainWithSP_Cov3(t *testing.T) {
 	resolver := newMockDNSResolver()
-	resolver.txtRecords["_dmarc.sub.example.com"] = []string{"v=DMARC1; p=reject; sp=quarantine"}
+	// sp= applies to subdomains via the organizational-domain record (F4893/F4894).
+	resolver.txtRecords["_dmarc.example.com"] = []string{"v=DMARC1; p=reject; sp=quarantine"}
 	evaluator := NewDMARCEvaluator(resolver)
 
 	eval, err := evaluator.Evaluate(context.Background(), "sub.example.com", SPFNone, "", DKIMNone, "")
@@ -967,11 +968,12 @@ func TestCanonicalizeHeaders_MultipleValues_Cov3(t *testing.T) {
 
 	signedHeaders := []string{"received"}
 	result := canonicalizeHeaders(headers, signedHeaders, "simple")
-	if !strings.Contains(result, "received: by host1") {
-		t.Errorf("Expected first received header, got %q", result)
+	// RFC 6376 §5.4.2 (F4891): one h= entry selects only the bottom-most instance.
+	if strings.Contains(result, "received: by host1") {
+		t.Errorf("Did not expect the upper received header, got %q", result)
 	}
 	if !strings.Contains(result, "received: by host2") {
-		t.Errorf("Expected second received header, got %q", result)
+		t.Errorf("Expected bottom-most received header, got %q", result)
 	}
 }
 

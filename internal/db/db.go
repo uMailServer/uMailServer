@@ -41,6 +41,14 @@ type DB struct {
 // same domain/local part already exists.
 var ErrAccountExists = errors.New("account already exists")
 
+// ErrDomainExists is returned by CreateDomain when a domain with the same
+// name already exists.
+var ErrDomainExists = errors.New("domain already exists")
+
+// ErrAliasExists is returned by CreateAlias when an alias with the same
+// domain/local part already exists.
+var ErrAliasExists = errors.New("alias already exists")
+
 type AccountData struct {
 	Email            string    `json:"email"`
 	LocalPart        string    `json:"local_part"`
@@ -324,17 +332,37 @@ func (d *DB) CreateAccount(account *AccountData) error {
 
 	// Atomic check-and-put in a single transaction: a duplicate create
 	// returns ErrAccountExists instead of silently overwriting the stored
-	// account (last-write-wins on the same key).
+	// account (last-write-wins on the same key). F5165: an address that
+	// differs only by case is the same mailbox and is a duplicate too.
 	return d.bolt.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(BucketAccounts))
 		if b == nil {
 			return fmt.Errorf("bucket not found: %s", BucketAccounts)
 		}
-		if b.Get([]byte(key)) != nil {
+		if hasKeyFold(b, []byte(key)) {
 			return ErrAccountExists
 		}
 		return b.Put([]byte(key), data)
 	})
+}
+
+// hasKeyFold reports whether bucket b holds key under any letter case.
+// Domains are case-insensitive (RFC 5321 2.4) and every local part is
+// treated case-insensitively here (SMTP AUTH lowercases the username,
+// aliases are keyed by the lowercased local part), so keys differing only by
+// case name the same mailbox. The exact-key probe keeps the common duplicate
+// O(log n); the scan only runs for a new key and only on create paths.
+func hasKeyFold(b *bbolt.Bucket, key []byte) bool {
+	if b.Get(key) != nil {
+		return true
+	}
+	c := b.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if bytes.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetAccount retrieves an account
@@ -347,11 +375,45 @@ func (d *DB) GetAccount(domain, localPart string) (*AccountData, error) {
 	return &account, nil
 }
 
-// UpdateAccount updates an existing account
+// UpdateAccount updates an existing account (or stores it if absent).
+//
+// F5166: callers update from a snapshot read earlier (GetAccount -> modify ->
+// UpdateAccount). The counters below are owned by their own atomic
+// operations, so the stored values are carried over inside this transaction
+// instead of being overwritten by the snapshot:
+//   - QuotaUsed is maintained only by IncrementQuota; a stale snapshot would
+//     erase deliveries committed in between and let the mailbox exceed its
+//     quota.
+//   - TOTPLastUsedStep only moves forward (RFC 6238 5.2 replay guard,
+//     ConsumeTOTPStep); a stale snapshot would rewind it and make an
+//     already-used code acceptable again.
+//
+// The caller's struct is updated to the values actually stored.
 func (d *DB) UpdateAccount(account *AccountData) error {
 	account.UpdatedAt = time.Now()
-	key := AccountKey(account.Domain, account.LocalPart)
-	return d.Put(BucketAccounts, key, account)
+	key := []byte(AccountKey(account.Domain, account.LocalPart))
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		if cur := b.Get(key); cur != nil {
+			// An unreadable stored row has no counters to keep; the update
+			// then replaces it, as before.
+			var stored AccountData
+			if json.Unmarshal(cur, &stored) == nil {
+				account.QuotaUsed = stored.QuotaUsed
+				if stored.TOTPLastUsedStep > account.TOTPLastUsedStep {
+					account.TOTPLastUsedStep = stored.TOTPLastUsedStep
+				}
+			}
+		}
+		data, err := json.Marshal(account)
+		if err != nil {
+			return fmt.Errorf("failed to marshal value: %w", err)
+		}
+		return b.Put(key, data)
+	})
 }
 
 // IncrementQuota atomically adds delta to an account's QuotaUsed inside a bbolt transaction.
@@ -540,7 +602,24 @@ func (d *DB) CreateDomain(domain *DomainData) error {
 	}
 	domain.UpdatedAt = time.Now()
 
-	return d.Put(BucketDomains, domain.Name, domain)
+	data, err := json.Marshal(domain)
+	if err != nil {
+		return fmt.Errorf("failed to marshal domain: %w", err)
+	}
+
+	// Atomic check-and-put: a duplicate create returns ErrDomainExists
+	// instead of overwriting the stored domain (DKIM keys, settings,
+	// catch-all and active flag).
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketDomains))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketDomains)
+		}
+		if hasKeyFold(b, []byte(domain.Name)) { // F5165: case-insensitive
+			return ErrDomainExists
+		}
+		return b.Put([]byte(domain.Name), data)
+	})
 }
 
 // GetDomain retrieves a domain
@@ -558,9 +637,45 @@ func (d *DB) UpdateDomain(domain *DomainData) error {
 	return d.Put(BucketDomains, domain.Name, domain)
 }
 
-// DeleteDomain removes a domain
+// DeleteDomain removes a domain together with its accounts and aliases in a
+// single transaction, so no orphan account of a deleted domain can still
+// authenticate and no orphan alias can still resolve.
 func (d *DB) DeleteDomain(name string) error {
-	return d.Delete(BucketDomains, name)
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketDomains))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketDomains)
+		}
+		if err := b.Delete([]byte(name)); err != nil {
+			return err
+		}
+		if err := deletePrefix(tx, BucketAccounts, AccountKey(name, "")); err != nil {
+			return err
+		}
+		return deletePrefix(tx, BucketAliases, name+":")
+	})
+}
+
+// deletePrefix removes every key in bucket that starts with prefix. Keys are
+// collected first and deleted afterwards so the cursor is never mutated
+// mid-iteration.
+func deletePrefix(tx *bbolt.Tx, bucket, prefix string) error {
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return fmt.Errorf("bucket not found: %s", bucket)
+	}
+	p := []byte(prefix)
+	var keys [][]byte
+	c := b.Cursor()
+	for k, _ := c.Seek(p); k != nil && bytes.HasPrefix(k, p); k, _ = c.Next() {
+		keys = append(keys, append([]byte(nil), k...))
+	}
+	for _, k := range keys {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListDomains returns all domains
@@ -722,7 +837,23 @@ func (d *DB) CreateAlias(alias *AliasData) error {
 		alias.CreatedAt = time.Now()
 	}
 	key := alias.Domain + ":" + strings.ToLower(alias.Alias)
-	return d.Put(BucketAliases, key, alias)
+	data, err := json.Marshal(alias)
+	if err != nil {
+		return fmt.Errorf("failed to marshal alias: %w", err)
+	}
+
+	// Atomic check-and-put: a duplicate create returns ErrAliasExists
+	// instead of silently retargeting the existing alias.
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAliases))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAliases)
+		}
+		if hasKeyFold(b, []byte(key)) { // F5165: case-insensitive
+			return ErrAliasExists
+		}
+		return b.Put([]byte(key), data)
+	})
 }
 
 // UpdateAlias updates an existing alias

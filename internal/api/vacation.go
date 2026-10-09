@@ -1,7 +1,9 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/vacation"
@@ -44,7 +46,7 @@ func (s *Server) handleGetVacation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get vacation manager from server (we need to add this field)
+	// Load through the vacation manager wired by NewServer.
 	config, err := s.getVacationConfig(user)
 	if err != nil {
 		if s.logger != nil {
@@ -264,4 +266,28 @@ func (s *Server) listActiveVacations() []string {
 	}
 	// Placeholder - in real implementation, get from vacation manager
 	return []string{}
+}
+
+// productionVacationManager adapts *vacation.Manager to the VacationManager
+// interface: the manager's ListActiveVacations carries no error return.
+type productionVacationManager struct {
+	*vacation.Manager
+}
+
+// ListActive keeps the interface's error-carrying signature while
+// delegating to the manager, and never returns a nil slice so the JSON
+// shape of an empty listing stays [] rather than null.
+func (m productionVacationManager) ListActive() ([]string, error) {
+	list := m.Manager.ListActiveVacations()
+	if list == nil {
+		return []string{}, nil
+	}
+	return list, nil
+}
+
+// newProductionVacationManager builds the disk-backed vacation store rooted
+// at <dataDir>/vacation. Used by NewServer so the vacation endpoints
+// persist through the real store instead of the in-file placeholders.
+func newProductionVacationManager(dataDir string, logger *slog.Logger) VacationManager {
+	return productionVacationManager{vacation.NewManager(filepath.Join(dataDir, "vacation"), logger)}
 }

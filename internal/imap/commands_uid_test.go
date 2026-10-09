@@ -63,8 +63,9 @@ func mailboxMsgs(t *testing.T, ms *BboltMailstore, user, mailbox string) []stora
 
 func hasSystemFlag(flags []string, want string) bool {
 	for _, f := range flags {
-		// parseFlags strips backslashes, so \Flagged is stored as "Flagged".
-		if f == want {
+		// F5066: STORE now keeps the system-flag backslash, so \Flagged is
+		// stored as `\Flagged` (it used to be stripped to "Flagged").
+		if f == `\`+want {
 			return true
 		}
 	}
@@ -214,5 +215,27 @@ func TestPlainStore_StillUsesSequenceNumbers(t *testing.T) {
 	if msgs[1].UID != 3 || !hasSystemFlag(msgs[1].Flags, "Flagged") {
 		t.Errorf("plain STORE 2 should flag sequence 2 (uid=%d flags=%v), got uid=%d flags=%v",
 			msgs[1].UID, msgs[1].Flags, msgs[1].UID, msgs[1].Flags)
+	}
+}
+
+// EXPUNGE must report UIDs, not sequence numbers, to the onExpunge hook
+// (production wires it to the search index's RemoveMessage(user, mbox, uid)).
+func TestExpunge_OnExpungeReceivesUIDs(t *testing.T) {
+	s, ms, user, conn := uidCmdSession(t)
+	defer conn.Close()
+	defer ms.Close()
+
+	appendMsgs(t, ms, user, 4)
+	expungeMiddle(t, ms, user) // UIDs 1,3,4 at seq 1,2,3
+	var got []uint32
+	s.server.SetOnExpunge(func(_, _ string, uid uint32) { got = append(got, uid) })
+	if err := ms.StoreFlags(user, "INBOX", "3", []string{`\Deleted`}, FlagAdd); err != nil {
+		t.Fatalf("StoreFlags: %v", err)
+	}
+	if err := s.handleExpunge(); err != nil {
+		t.Fatalf("handleExpunge: %v", err)
+	}
+	if len(got) != 1 || got[0] != 4 {
+		t.Errorf("onExpunge got %v, want UID [4] (sequence 3)", got)
 	}
 }

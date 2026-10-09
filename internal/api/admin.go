@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -105,7 +106,8 @@ func (s *AdminServer) router() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 
 	// Metrics - delegate to embedded server's handler
-	mux.HandleFunc("/metrics", s.handleMetrics)
+	// F4848: same data as /api/v1/metrics, so the same admin requirement.
+	mux.HandleFunc("/metrics", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleMetrics))))
 
 	// Admin API routes (all require admin auth)
 	api := http.NewServeMux()
@@ -162,15 +164,9 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
-			// Try kid-based secret lookup first
-			if kid, ok := t.Header["kid"].(string); ok && kid != "" {
-				if kidSecret, ok := s.jwtSecrets[kid]; ok {
-					return []byte(kidSecret), nil
-				}
-			}
-			// Fall back to current kid
-			if secret, ok := s.jwtSecrets[s.currentKid]; ok {
-				return []byte(secret), nil
+			// kid, then current kid (F4847: read under jwtMu)
+			if secret, ok := s.lookupJWTSecret(t); ok {
+				return secret, nil
 			}
 			// Last resort: try legacy JWTSecret only if not disabled
 			if !s.config.DisableLegacyJWT {
@@ -180,6 +176,13 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 		})
 		if err != nil || !parsed.Valid {
 			writeError(w, "unauthorized", "Invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		// F4846: honour logout/refresh revocation exactly like authMiddleware;
+		// a revocation-store error is treated as revoked (fail closed).
+		if s.IsTokenRevoked(fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))) {
+			writeError(w, "unauthorized", "Token has been revoked", http.StatusUnauthorized)
 			return
 		}
 
@@ -200,6 +203,10 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 
 		ctx := context.WithValue(r.Context(), CtxKeyUser, user)
 		ctx = context.WithValue(ctx, CtxKeyIsAdmin, isAdmin)
+		// F4935: the shared Server handlers (vacations, accounts, TOTP, ...)
+		// read the identity under the string keys set by Server.authMiddleware.
+		ctx = context.WithValue(ctx, "user", user)
+		ctx = context.WithValue(ctx, "isAdmin", isAdmin)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }

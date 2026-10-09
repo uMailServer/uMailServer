@@ -108,7 +108,7 @@ func (c *SPFChecker) CheckSPF(ctx context.Context, ip net.IP, domain string, sen
 	// Check cache first
 	if record, ok := c.cache.get(domain); ok {
 		metrics.Get().SPFCacheHit()
-		return c.evaluate(ctx, ip, domain, sender, record, 0, 0)
+		return c.evaluate(ctx, ip, domain, sender, record, &spfLimits{})
 	}
 
 	metrics.Get().SPFCacheMiss()
@@ -131,7 +131,7 @@ func (c *SPFChecker) CheckSPF(ctx context.Context, ip net.IP, domain string, sen
 	}
 	c.cache.set(domain, record, ttl)
 
-	return c.evaluate(ctx, ip, domain, sender, record, 0, 0)
+	return c.evaluate(ctx, ip, domain, sender, record, &spfLimits{})
 }
 
 // lookupSPF looks up the SPF record for a domain
@@ -150,29 +150,47 @@ func (c *SPFChecker) lookupSPF(ctx context.Context, domain string) (string, erro
 	return "", fmt.Errorf("no SPF record found")
 }
 
+// spfMaxDNSTerms and spfMaxVoidLookups are the RFC 7208 §4.6.4 limits.
+const (
+	spfMaxDNSTerms    = 10
+	spfMaxVoidLookups = 2
+)
+
+// spfLimits carries the DNS-term and void-lookup counters across the whole
+// check_host() evaluation, including include and redirect recursion
+// (F4885: nested counts used to be discarded).
+type spfLimits struct {
+	lookups int
+	voids   int
+}
+
+// spfIsDNSTerm reports whether a term counts toward the 10-term limit
+// (RFC 7208 §4.6.4: include, a, mx, ptr, exists and redirect).
+func spfIsDNSTerm(typ string) bool {
+	switch typ {
+	case "include", "a", "mx", "ptr", "exists", "redirect":
+		return true
+	}
+	return false
+}
+
 // evaluate evaluates an SPF record
-func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, record string, lookups, voidLookups int) (SPFResult, string) {
-	// RFC 7208: Maximum 10 DNS lookups
-	if lookups >= 10 {
-		return SPFPermError, "Too many DNS lookups"
-	}
-
-	// RFC 7208: Maximum 2 void lookups
-	if voidLookups >= 2 {
-		return SPFPermError, "Too many void lookups"
-	}
-
+func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, record string, lim *spfLimits) (SPFResult, string) {
 	// Parse mechanisms
-	mechanisms := parseSPF(record)
+	terms := parseSPF(record)
 
-	// Check for redirect modifier (must be at end and only processed if no match)
+	// F4888: modifiers may appear anywhere in the record; redirect is applied
+	// only after no mechanism matched.
 	var redirect string
-	if len(mechanisms) > 0 {
-		lastMech := mechanisms[len(mechanisms)-1]
-		if lastMech.typ == "redirect" {
-			redirect = lastMech.value
-			mechanisms = mechanisms[:len(mechanisms)-1]
+	mechanisms := terms[:0:0]
+	for _, m := range terms {
+		if m.typ == "redirect" {
+			if redirect == "" {
+				redirect = m.value
+			}
+			continue
 		}
+		mechanisms = append(mechanisms, m)
 	}
 
 	// Default result
@@ -182,12 +200,15 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 
 	// Evaluate each mechanism
 	for _, m := range mechanisms {
-		// Check lookup limit before evaluation
-		if lookups >= 10 {
-			return SPFPermError, "Too many DNS lookups"
+		// F4887: only DNS terms count, and only the 11th exceeds the limit.
+		if spfIsDNSTerm(m.typ) {
+			lim.lookups++
+			if lim.lookups > spfMaxDNSTerms {
+				return SPFPermError, "Too many DNS lookups"
+			}
 		}
 
-		match, void, lookupCount, err := c.evaluateMechanism(ctx, ip, domain, sender, m, lookups, voidLookups)
+		match, void, err := c.evaluateMechanism(ctx, ip, domain, sender, m, lim)
 		if err != nil {
 			if isTemporaryError(err) {
 				return SPFTempError, err.Error()
@@ -196,9 +217,11 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 		}
 
 		if void {
-			voidLookups++
+			lim.voids++
+			if lim.voids > spfMaxVoidLookups {
+				return SPFPermError, "Too many void lookups"
+			}
 		}
-		lookups += lookupCount
 
 		if match {
 			result = m.qualifier
@@ -210,6 +233,11 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 
 	// Handle redirect if no mechanism matched
 	if !matched && redirect != "" {
+		// Redirect counts as one DNS term
+		lim.lookups++
+		if lim.lookups > spfMaxDNSTerms {
+			return SPFPermError, "Too many DNS lookups"
+		}
 		record, err := c.lookupSPF(ctx, redirect)
 		if err != nil {
 			if isTemporaryError(err) {
@@ -217,50 +245,43 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 			}
 			return SPFPermError, "Invalid redirect"
 		}
-		// Redirect counts as one lookup
-		if lookups+1 >= 10 {
-			return SPFPermError, "Too many DNS lookups"
-		}
-		return c.evaluate(ctx, ip, redirect, sender, record, lookups+1, voidLookups)
+		return c.evaluate(ctx, ip, redirect, sender, record, lim)
 	}
 
 	return result, explanation
 }
 
 // evaluateMechanism evaluates a single SPF mechanism
-// Returns: match, isVoid, lookupCount, error
-func (c *SPFChecker) evaluateMechanism(ctx context.Context, ip net.IP, domain, sender string, m spfMechanism, lookups, voidLookups int) (bool, bool, int, error) {
+// Returns: match, isVoid, error
+func (c *SPFChecker) evaluateMechanism(ctx context.Context, ip net.IP, domain, sender string, m spfMechanism, lim *spfLimits) (bool, bool, error) {
 	switch m.typ {
 	case "all":
-		return true, false, 0, nil
+		return true, false, nil
 
 	case "ip4":
-		return c.evaluateIP4(ip, m.value), false, 0, nil
+		return c.evaluateIP4(ip, m.value), false, nil
 
 	case "ip6":
-		return c.evaluateIP6(ip, m.value), false, 0, nil
+		return c.evaluateIP6(ip, m.value), false, nil
 
 	case "a":
-		match, void, err := c.evaluateA(ctx, ip, m.value, domain, lookups, voidLookups)
-		return match, void, 1, err
+		return c.evaluateA(ctx, ip, m.value, domain, lim.lookups, lim.voids)
 
 	case "mx":
-		match, void, err := c.evaluateMX(ctx, ip, m.value, domain, lookups, voidLookups)
-		return match, void, 1, err
+		return c.evaluateMX(ctx, ip, m.value, domain, lim.lookups, lim.voids)
 
 	case "ptr":
 		// PTR is discouraged in SPF, return false
-		return false, false, 0, nil
+		return false, false, nil
 
 	case "exists":
-		match, void, err := c.evaluateExists(ctx, m.value, lookups, voidLookups)
-		return match, void, 1, err
+		return c.evaluateExists(ctx, m.value, lim.lookups, lim.voids)
 
 	case "include":
-		return c.evaluateInclude(ctx, ip, m.value, sender, lookups, voidLookups)
+		return c.evaluateInclude(ctx, ip, m.value, sender, lim)
 
 	default:
-		return false, false, 0, nil
+		return false, false, nil
 	}
 }
 
@@ -383,27 +404,30 @@ func (c *SPFChecker) evaluateExists(ctx context.Context, value string, lookups, 
 }
 
 // evaluateInclude includes another domain's SPF record
-func (c *SPFChecker) evaluateInclude(ctx context.Context, ip net.IP, domain, sender string, lookups, voidLookups int) (bool, bool, int, error) {
+func (c *SPFChecker) evaluateInclude(ctx context.Context, ip net.IP, domain, sender string, lim *spfLimits) (bool, bool, error) {
 	record, err := c.lookupSPF(ctx, domain)
 	if err != nil {
 		if isTemporaryError(err) {
-			return false, false, 1, err
+			return false, false, err
 		}
-		return false, true, 1, nil // Void lookup
+		// F4886: RFC 7208 §5.2 — an included domain without an SPF record
+		// ("none") is a permerror, not a non-match.
+		return false, false, fmt.Errorf("include target %s has no SPF record", domain)
 	}
 
-	result, explanation := c.evaluate(ctx, ip, domain, sender, record, lookups+1, voidLookups)
+	// F4885: nested lookups and voids accumulate in the shared counters.
+	result, explanation := c.evaluate(ctx, ip, domain, sender, record, lim)
 
 	// Propagate permanent errors from nested evaluation
 	if result == SPFPermError {
-		return false, false, 0, errors.New(explanation)
+		return false, false, errors.New(explanation)
 	}
 	if result == SPFTempError {
-		return false, false, 0, errors.New("DNS lookup failed")
+		return false, false, errors.New("DNS lookup failed")
 	}
 
 	// Include returns true only if the included SPF passes
-	return result == SPFPass, false, 0, nil
+	return result == SPFPass, false, nil
 }
 
 // spfMechanism represents an SPF mechanism

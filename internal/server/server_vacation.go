@@ -16,6 +16,16 @@ func sanitizeHeaderValue(s string) string {
 	return s
 }
 
+// vacationBody returns a reply body with every line break as CRLF. Unlike
+// header values, the body keeps its line breaks: stripping them (as
+// sanitizeHeaderValue does) collapsed a multi-line vacation text into one
+// line (F5117). A bare CR or LF is normalised so the message stays RFC 5322.
+func vacationBody(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return strings.ReplaceAll(s, "\n", "\r\n")
+}
+
 // handleSieveVacation handles Sieve vacation action by sending a vacation auto-reply
 func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.VacationAction) {
 	if s.queue == nil {
@@ -44,11 +54,13 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 	if s.vacationReplies == nil {
 		s.vacationReplies = make(map[string]time.Time)
 	}
-	if lastSent, ok := s.vacationReplies[key]; ok && time.Since(lastSent) < sendInterval {
+	// F4826: entries hold the suppression deadline (send time + interval), so
+	// cleanup cannot drop an entry whose interval is longer than its cutoff.
+	if until, ok := s.vacationReplies[key]; ok && time.Now().Before(until) {
 		s.vacationRepliesMu.Unlock()
 		return
 	}
-	s.vacationReplies[key] = time.Now()
+	s.vacationReplies[key] = time.Now().Add(sendInterval)
 	s.vacationRepliesMu.Unlock()
 
 	// Build vacation message content
@@ -67,11 +79,13 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 		fromAddr = vacation.From
 	}
 	safeSubject := sanitizeHeaderValue(subject)
-	safeBody := sanitizeHeaderValue(body)
+	safeBody := vacationBody(body)
 	safeFrom := sanitizeHeaderValue(fromAddr)
-	vacationMsg := fmt.Sprintf("From: %s\r\nSubject: %s\r\nX-Mail-Loop: <%s>\r\n\r\n%s",
+	// F4827: RFC 3834 §5 / RFC 5230 §5 auto-reply marker and RFC 5322 mandatory Date.
+	vacationMsg := fmt.Sprintf("From: %s\r\nSubject: %s\r\nDate: %s\r\nAuto-Submitted: auto-replied\r\nX-Mail-Loop: <%s>\r\n\r\n%s",
 		safeFrom,
 		safeSubject,
+		time.Now().Format(time.RFC1123Z),
 		recipient,
 		safeBody)
 
@@ -110,32 +124,8 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		sendInterval = 24 * time.Hour
 	}
 
-	// sanitizeForDedup replaces the pipe delimiter with a double-underscore
-	// to prevent key collisions when email addresses contain '|'.
-	safeRecipient := strings.ReplaceAll(recipientEmail, "|", "__")
-	safeSender := strings.ReplaceAll(senderEmail, "|", "__")
-	key := safeRecipient + "|" + safeSender
-	s.vacationRepliesMu.Lock()
-	if s.vacationReplies == nil {
-		s.vacationReplies = make(map[string]time.Time)
-	}
-	if lastSent, ok := s.vacationReplies[key]; ok && time.Since(lastSent) < sendInterval {
-		s.vacationRepliesMu.Unlock()
-		return
-	}
-	s.vacationReplies[key] = time.Now()
-
-	// Cleanup old entries every 100 entries to prevent unbounded growth
-	if len(s.vacationReplies) > 100 {
-		// Must release lock before calling cleanupVacationRepliesLocked
-		// which acquires the lock internally - sync.Mutex is not reentrant
-		s.vacationRepliesMu.Unlock()
-		s.cleanupVacationRepliesLocked()
-		s.vacationRepliesMu.Lock()
-	}
-
-	s.vacationRepliesMu.Unlock()
-
+	// F4825: decide whether a reply will be sent before recording dedup state,
+	// so a message outside the vacation window cannot suppress a later reply.
 	now := time.Now()
 	if settings.StartDate != "" {
 		if start, err := time.Parse("2006-01-02", settings.StartDate); err == nil && now.Before(start) {
@@ -147,6 +137,29 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 			return
 		}
 	}
+
+	// sanitizeForDedup replaces the pipe delimiter with a double-underscore
+	// to prevent key collisions when email addresses contain '|'.
+	safeRecipient := strings.ReplaceAll(recipientEmail, "|", "__")
+	safeSender := strings.ReplaceAll(senderEmail, "|", "__")
+	key := safeRecipient + "|" + safeSender
+	s.vacationRepliesMu.Lock()
+	if s.vacationReplies == nil {
+		s.vacationReplies = make(map[string]time.Time)
+	}
+	if until, ok := s.vacationReplies[key]; ok && now.Before(until) {
+		s.vacationRepliesMu.Unlock()
+		return
+	}
+	s.vacationReplies[key] = now.Add(sendInterval) // F4826: suppression deadline
+
+	// Cleanup old entries every 100 entries to prevent unbounded growth
+	if len(s.vacationReplies) > 100 {
+		// cleanupVacationRepliesLocked does not lock; it requires vacationRepliesMu held.
+		s.cleanupVacationRepliesLocked()
+	}
+
+	s.vacationRepliesMu.Unlock()
 
 	// Guard against nil queue
 	if s.queue == nil {
@@ -160,14 +173,15 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 		"Precedence: bulk\r\n" +
 		"Date: " + now.Format(time.RFC1123Z) + "\r\n" +
 		"\r\n" +
-		sanitizeHeaderValue(settings.Message)
+		vacationBody(settings.Message)
 
 	if _, err := s.queue.Enqueue(recipientEmail, []string{senderEmail}, []byte(autoReply)); err != nil {
 		s.logger.Error("Failed to enqueue vacation reply", "error", err)
 	}
 }
 
-// cleanupVacationReplies removes entries older than 48 hours from vacationReplies map.
+// cleanupVacationReplies removes entries whose suppression deadline passed more
+// than 48 hours ago (F4826: values are deadlines, not send times).
 // Single-phase scan+delete under lock: the two-phase pattern (snapshot then delete outside
 // the lock) introduced a correctness flaw where a fresh entry added between phases 1 and 2
 // with the same key would be silently deleted, breaking deduplication and causing a second
@@ -184,7 +198,8 @@ func (s *Server) cleanupVacationReplies() {
 	}
 }
 
-// cleanupVacationRepliesLocked removes entries older than 48 hours.
+// cleanupVacationRepliesLocked removes entries whose suppression deadline passed
+// more than 48 hours ago.
 // Caller must hold s.vacationRepliesMu.
 func (s *Server) cleanupVacationRepliesLocked() {
 	cutoff := time.Now().Add(-48 * time.Hour)

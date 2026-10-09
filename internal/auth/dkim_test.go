@@ -226,7 +226,7 @@ func TestCanonicalizeBodyRelaxed(t *testing.T) {
 		{
 			name:     "empty body",
 			input:    "",
-			expected: "\r\n",
+			expected: "", // F5076: RFC 6376 §3.4.4 relaxed empty body is empty
 		},
 		{
 			name:     "simple line",
@@ -1273,9 +1273,10 @@ func TestCanonicalizeBodyEmpty(t *testing.T) {
 
 // TestCanonicalizeBodyRelaxedEmpty tests relaxed canonicalization with empty body.
 func TestCanonicalizeBodyRelaxedEmpty(t *testing.T) {
+	// F5076: RFC 6376 §3.4.4 — relaxed canonical form of an empty body is empty.
 	result := canonicalizeBodyRelaxed([]byte(""))
-	if string(result) != "\r\n" {
-		t.Errorf("canonicalizeBodyRelaxed(empty) = %q, want %q", string(result), "\r\n")
+	if string(result) != "" {
+		t.Errorf("canonicalizeBodyRelaxed(empty) = %q, want %q", string(result), "")
 	}
 }
 
@@ -1339,7 +1340,7 @@ func TestCanonicalizeBodyDispatch(t *testing.T) {
 		t.Error("canonicalizeBody with 'relaxed' should return non-empty result")
 	}
 
-	// Test "simple" dispatch - falls through to return body as-is
+	// Test "simple" dispatch - already-canonical body is unchanged (F4889)
 	simpleResult := canonicalizeBody(body, "simple")
 	if string(simpleResult) != string(body) {
 		t.Errorf("canonicalizeBody with 'simple' = %q, want %q", string(simpleResult), string(body))

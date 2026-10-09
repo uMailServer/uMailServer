@@ -170,42 +170,68 @@ func NewDMARCEvaluator(resolver DNSResolver) *DMARCEvaluator {
 
 // Evaluate evaluates DMARC for the given message
 func (e *DMARCEvaluator) Evaluate(ctx context.Context, fromDomain string, spfResult SPFResult, spfDomain string, dkimResult DKIMResult, dkimDomain string) (*DMARCEvaluation, error) {
+	record, err := e.policyRecord(ctx, fromDomain)
+	if err != nil {
+		return &DMARCEvaluation{
+			Result:      DMARCTempError,
+			Domain:      fromDomain,
+			Explanation: "DNS lookup failed",
+		}, nil
+	}
+	fromOrg := false
+
+	// F4893: RFC 7489 §6.6.3 — with no record at the From domain, use the
+	// organizational domain's record.
+	if record == nil {
+		org, perr := publicsuffix.EffectiveTLDPlusOne(strings.ToLower(fromDomain))
+		if perr == nil && !strings.EqualFold(org, fromDomain) {
+			record, err = e.policyRecord(ctx, org)
+			if err != nil {
+				return &DMARCEvaluation{
+					Result:      DMARCTempError,
+					Domain:      fromDomain,
+					Explanation: "DNS lookup failed",
+				}, nil
+			}
+			fromOrg = record != nil
+		}
+	}
+
+	return e.evaluateWithRecord(fromDomain, spfResult, spfDomain, dkimResult, dkimDomain, record, fromOrg)
+}
+
+// policyRecord returns the DMARC record published at _dmarc.<domain>
+// (nil when there is none), using the cache. Only temporary DNS failures
+// are returned as errors.
+func (e *DMARCEvaluator) policyRecord(ctx context.Context, domain string) (*DMARCRecord, error) {
 	// Check cache first
-	if record, ok := e.cache.get(fromDomain); ok {
+	if record, ok := e.cache.get(domain); ok {
 		metrics.Get().DMARCCacheHit()
-		return e.evaluateWithRecord(fromDomain, spfResult, spfDomain, dkimResult, dkimDomain, record)
+		return record, nil
 	}
 
 	metrics.Get().DMARCCacheMiss()
 
 	// Look up DMARC record
-	record, err := e.lookupDMARC(ctx, fromDomain)
+	record, err := e.lookupDMARC(ctx, domain)
 	if err != nil {
 		if isTemporaryError(err) {
-			return &DMARCEvaluation{
-				Result:      DMARCTempError,
-				Domain:      fromDomain,
-				Explanation: "DNS lookup failed",
-			}, nil
+			return nil, err
 		}
 		// No DMARC record found - cache negative result
-		e.cache.set(fromDomain, nil)
-		return &DMARCEvaluation{
-			Result:      DMARCNone,
-			Policy:      DMARCPolicyNone,
-			Domain:      fromDomain,
-			Explanation: "No DMARC record found",
-		}, nil
+		e.cache.set(domain, nil)
+		return nil, nil
 	}
 
 	// Cache the record
-	e.cache.set(fromDomain, record)
-
-	return e.evaluateWithRecord(fromDomain, spfResult, spfDomain, dkimResult, dkimDomain, record)
+	e.cache.set(domain, record)
+	return record, nil
 }
 
 // evaluateWithRecord evaluates DMARC using a cached or looked-up record
-func (e *DMARCEvaluator) evaluateWithRecord(fromDomain string, spfResult SPFResult, spfDomain string, dkimResult DKIMResult, dkimDomain string, record *DMARCRecord) (*DMARCEvaluation, error) {
+// fromOrg reports that record was found at the organizational domain
+// rather than at fromDomain itself.
+func (e *DMARCEvaluator) evaluateWithRecord(fromDomain string, spfResult SPFResult, spfDomain string, dkimResult DKIMResult, dkimDomain string, record *DMARCRecord, fromOrg bool) (*DMARCEvaluation, error) {
 	// Handle negative cache entry (nil record means no DMARC record found)
 	if record == nil {
 		return &DMARCEvaluation{
@@ -253,16 +279,22 @@ func (e *DMARCEvaluator) evaluateWithRecord(fromDomain string, spfResult SPFResu
 		// Determine which policy to apply
 		policyToApply := record.Policy
 
-		// Check if this is a subdomain and subdomain policy is set
-		if record.SubdomainPolicy != "" && isSubdomain(fromDomain) {
+		// F4894: sp= applies only when the record came from the
+		// organizational domain (RFC 7489 §6.3, §6.6.3), not by label count.
+		if record.SubdomainPolicy != "" && fromOrg {
 			policyToApply = record.SubdomainPolicy
 		}
 
 		// Apply percentage sampling
 		if record.Percentage < 100 {
 			if !shouldApplyPolicy(record.Percentage) {
-				// Skip enforcement for this message
-				policyToApply = DMARCPolicyNone
+				// F5078: RFC 7489 §6.6.4 — an unsampled message gets the
+				// next-lower policy: reject → quarantine, quarantine → none.
+				if policyToApply == DMARCPolicyReject {
+					policyToApply = DMARCPolicyQuarantine
+				} else {
+					policyToApply = DMARCPolicyNone
+				}
 				evaluation.Explanation = fmt.Sprintf("DMARC policy not applied due to pct=%d", record.Percentage)
 			} else {
 				evaluation.Explanation = fmt.Sprintf("DMARC policy applied (pct=%d)", record.Percentage)
@@ -410,12 +442,6 @@ func isOrganizationalDomainMatch(domain1, domain2 string) bool {
 	}
 	org2, err := publicsuffix.EffectiveTLDPlusOne(domain2)
 	return err == nil && org1 == org2
-}
-
-// isSubdomain checks if the domain is a subdomain (has more than 2 labels)
-func isSubdomain(domain string) bool {
-	parts := strings.Split(domain, ".")
-	return len(parts) > 2
 }
 
 // shouldApplyPolicy determines if DMARC policy should be applied based on percentage

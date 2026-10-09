@@ -819,10 +819,11 @@ keep;
 		t.Fatalf("Execute error: %v", err)
 	}
 
-	// Size test is parsed as header test - no "size" header exists so condition is false
-	// Fall through to keep action
+	// F5006: the size test is evaluated, so the discard branch is taken.
+	// F5035: the following explicit keep still runs (RFC 5228 §2.10) and
+	// discard only cancels the implicit keep, so the result is keep.
 	if len(actions) != 1 {
-		t.Errorf("Expected 1 action, got %d", len(actions))
+		t.Fatalf("Expected 1 action, got %d", len(actions))
 	}
 	if _, ok := actions[0].(KeepAction); !ok {
 		t.Errorf("Expected KeepAction, got %T", actions[0])
@@ -856,10 +857,11 @@ keep;
 		t.Fatalf("Execute error: %v", err)
 	}
 
-	// Size test is parsed as header test - no "size" header exists so condition is false
-	// Fall through to keep action
+	// F5006: the size test is evaluated, so the discard branch is taken.
+	// F5035: the following explicit keep still runs (RFC 5228 §2.10) and
+	// discard only cancels the implicit keep, so the result is keep.
 	if len(actions) != 1 {
-		t.Errorf("Expected 1 action, got %d", len(actions))
+		t.Fatalf("Expected 1 action, got %d", len(actions))
 	}
 	if _, ok := actions[0].(KeepAction); !ok {
 		t.Errorf("Expected KeepAction, got %T", actions[0])

@@ -2,6 +2,7 @@ package caldav
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,10 +33,16 @@ func (s *Storage) userDir(username string) string {
 	return filepath.Join(s.dataDir, safeUsername)
 }
 
-// validateID ensures an identifier does not contain path traversal sequences
+// errInvalidID marks an identifier that would resolve outside its parent
+// directory; handlers map it to a client error.
+var errInvalidID = errors.New("invalid identifier")
+
+// validateID ensures an identifier names exactly one entry inside its parent
+// directory: no separators, no ".." sequence, and not the "." self-reference
+// (F5087: unvalidated IDs let MKCALENDAR/GET escape the user's namespace).
 func validateID(id string) error {
-	if strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
-		return fmt.Errorf("invalid identifier: %s", id)
+	if id == "." || strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
+		return fmt.Errorf("%w: %s", errInvalidID, id)
 	}
 	return nil
 }
@@ -63,6 +70,9 @@ func (s *Storage) CreateCalendar(username string, cal *Calendar) error {
 	if cal.ID == "" {
 		cal.ID = uuid.New().String()
 	}
+	if err := validateID(cal.ID); err != nil {
+		return err
+	}
 	now := time.Now()
 	cal.Created = now
 	cal.Modified = now
@@ -87,6 +97,9 @@ func (s *Storage) CreateCalendar(username string, cal *Calendar) error {
 
 // GetCalendar retrieves a calendar by ID
 func (s *Storage) GetCalendar(username, calendarID string) (*Calendar, error) {
+	if err := validateID(calendarID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -158,6 +171,9 @@ func (s *Storage) getCalendarUnsafe(username, calendarID string) (*Calendar, err
 
 // UpdateCalendar updates a calendar
 func (s *Storage) UpdateCalendar(username string, cal *Calendar) error {
+	if err := validateID(cal.ID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -234,6 +250,12 @@ func (s *Storage) SaveEvent(username, calendarID string, event *CalendarEvent, i
 
 // GetEvent retrieves a calendar event
 func (s *Storage) GetEvent(username, calendarID, eventUID string) (string, error) {
+	if err := validateID(calendarID); err != nil {
+		return "", err
+	}
+	if err := validateID(eventUID); err != nil {
+		return "", err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -251,6 +273,9 @@ func (s *Storage) GetEvent(username, calendarID, eventUID string) (string, error
 
 // GetEvents returns all events in a calendar
 func (s *Storage) GetEvents(username, calendarID string) ([]string, error) {
+	if err := validateID(calendarID); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

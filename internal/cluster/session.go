@@ -29,6 +29,7 @@ func NewRedisSessionStore(redisURL string) (*RedisSessionStore, error) {
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
+		client.Close()
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
@@ -102,6 +103,7 @@ func NewRedisLeaderElection(redisURL, instanceID string, leaseTTL time.Duration)
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
+		client.Close()
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
@@ -153,16 +155,23 @@ func (l *RedisLeaderElection) IsLeader(ctx context.Context, electionKey string) 
 
 // Refresh extends the leader lease
 func (l *RedisLeaderElection) Refresh(ctx context.Context, electionKey string) error {
-	// Only refresh if we are the leader
-	isLeader, err := l.IsLeader(ctx, electionKey)
+	// Only refresh if we are the leader. Check and extend atomically so a
+	// takeover between the two steps cannot extend another leader's lease.
+	script := redis.NewScript(`
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+		else
+			return 0
+		end
+	`)
+	res, err := script.Run(ctx, l.client, []string{leaderKey(electionKey)}, l.instanceID, l.leaseTTL.Milliseconds()).Int64()
 	if err != nil {
 		return err
 	}
-	if !isLeader {
+	if res == 0 {
 		return fmt.Errorf("not the leader")
 	}
-
-	return l.client.Expire(ctx, leaderKey(electionKey), l.leaseTTL).Err()
+	return nil
 }
 
 // Release gives up leadership
@@ -202,6 +211,7 @@ func NewRedisDistributedLock(redisURL string) (*RedisDistributedLock, error) {
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
+		client.Close()
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
@@ -256,17 +266,27 @@ func (l *RedisDistributedLock) Release(ctx context.Context, lockName string) err
 
 // Extend extends the lock TTL
 func (l *RedisDistributedLock) Extend(ctx context.Context, lockName string, ttl time.Duration) error {
+	// Sub-millisecond TTLs would become PEXPIRE 0, which deletes the key.
+	if ttl < time.Millisecond {
+		return fmt.Errorf("lock TTL must be at least 1ms, got %v", ttl)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	script := redis.NewScript(`
 		if redis.call("GET", KEYS[1]) == ARGV[1] then
-			return redis.call("EXPIRE", KEYS[1], ARGV[2])
+			return redis.call("PEXPIRE", KEYS[1], ARGV[2])
 		else
 			return 0
 		end
 	`)
-	_, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValues[lockName], int(ttl.Seconds())).Result()
-	return err
+	res, err := script.Run(ctx, l.client, []string{lockKey(lockName)}, l.lockValues[lockName], ttl.Milliseconds()).Int64()
+	if err != nil {
+		return err
+	}
+	if res == 0 {
+		return fmt.Errorf("lock %q is not held", lockName)
+	}
+	return nil
 }
 
 // Close closes the Redis connection

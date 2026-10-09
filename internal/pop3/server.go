@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -411,6 +412,9 @@ func (s *Session) Handle() {
 	for {
 		line, err := s.readLine()
 		if err != nil {
+			if errors.Is(err, errLineTooLong) {
+				s.WriteResponse("-ERR Line too long")
+			}
 			return
 		}
 
@@ -426,6 +430,14 @@ func (s *Session) Handle() {
 	}
 }
 
+// maxCommandLineLength bounds one client command line, CRLF included (F4987).
+// RFC 2449 §4 limits commands to 255 octets; 8 KiB leaves room for long
+// passwords while stopping an unauthenticated peer from making the server
+// buffer an unbounded line.
+const maxCommandLineLength = 8192
+
+var errLineTooLong = errors.New("command line too long")
+
 // readLine reads a line from the connection
 func (s *Session) readLine() (string, error) {
 	if s.server.readTimeout > 0 {
@@ -433,11 +445,21 @@ func (s *Session) readLine() (string, error) {
 			s.server.logger.Debug("failed to set read deadline", "error", err)
 		}
 	}
-	line, err := s.reader.ReadString('\n')
-	if err != nil {
-		return "", err
+	var line []byte
+	for {
+		chunk, err := s.reader.ReadSlice('\n')
+		if len(line)+len(chunk) > maxCommandLineLength {
+			return "", errLineTooLong
+		}
+		line = append(line, chunk...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(string(line), "\r\n"), nil
 	}
-	return strings.TrimRight(line, "\r\n"), nil
 }
 
 // setWriteDeadline sets the write deadline if configured.
@@ -778,7 +800,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		// Load message data if not loaded
 		if msg.Data == nil {
 			var loadErr error
-			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index)
+			msg.Data, loadErr = s.loadSnapshotMessageData(msg)
 			if loadErr != nil {
 				s.WriteResponse("-ERR Failed to read message")
 				return nil
@@ -880,7 +902,7 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		// Load message data
 		if msg.Data == nil {
 			var loadErr error
-			msg.Data, loadErr = s.server.mailstore.GetMessageData(s.user, index)
+			msg.Data, loadErr = s.loadSnapshotMessageData(msg)
 			if loadErr != nil {
 				s.WriteResponse("-ERR Failed to read message")
 				return nil
@@ -946,6 +968,25 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 	return fmt.Errorf("quit")
 }
 
+// loadSnapshotMessageData fetches the octets of a message from the session's
+// login-time snapshot. The Mailstore addresses messages by 1-based index into
+// the CURRENT maildrop, which shifts when another session's UPDATE or an IMAP
+// expunge removes an earlier message, so the snapshot number is resolved to
+// the current index by UID first (F4986). A message no longer in the maildrop
+// is an error, never a different message.
+func (s *Session) loadSnapshotMessageData(msg *Message) ([]byte, error) {
+	current, err := s.server.mailstore.ListMessages(s.user)
+	if err != nil {
+		return nil, err
+	}
+	for i, m := range current {
+		if m != nil && m.UID == msg.UID {
+			return s.server.mailstore.GetMessageData(s.user, i+1) // 1-based
+		}
+	}
+	return nil, fmt.Errorf("message %s no longer in maildrop", msg.UID)
+}
+
 // sendTop sends headers + specified number of lines
 func (s *Session) sendTop(data []byte, lines int) {
 	s.setWriteDeadline()
@@ -961,14 +1002,18 @@ func (s *Session) sendTop(data []byte, lines int) {
 	}
 
 	if headerEnd == -1 {
-		// No headers found, send all
-		_, _ = s.writer.Write(data)
-		s.WriteDataEnd()
+		// No headers found, send all. The caller writes the single terminator;
+		// the octets are dot-stuffed and CRLF-closed like RETR (F4985).
+		stuffed := dotStuffData(data)
+		_, _ = s.writer.Write(stuffed)
+		if len(stuffed) > 0 && !bytes.HasSuffix(stuffed, []byte("\n")) {
+			_, _ = s.writer.WriteString("\r\n")
+		}
 		return
 	}
 
-	// Send headers
-	_, _ = s.writer.WriteString(content[:headerEnd])
+	// Send headers (dot-stuffed, F4985)
+	_, _ = s.writer.Write(dotStuffData([]byte(content[:headerEnd])))
 	_, _ = s.writer.WriteString("\r\n\r\n")
 
 	// Send specified number of lines

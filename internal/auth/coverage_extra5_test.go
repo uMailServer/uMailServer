@@ -100,7 +100,8 @@ func TestDKIMVerify_DNSFailure_Cov5(t *testing.T) {
 	verifier := NewDKIMVerifier(resolver)
 
 	headers := map[string][]string{"From": {"test@example.com"}}
-	dkimHeader := "v=1; a=rsa-sha256; d=example.com; s=selector; bh=abc; b=xyz"
+	// F5077: h=from so the DNS path is reached (unsigned From is PERMFAIL).
+	dkimHeader := "v=1; a=rsa-sha256; d=example.com; s=selector; h=from; bh=abc; b=xyz"
 
 	result, sig, err := verifier.Verify(headers, []byte("body"), dkimHeader)
 	if result != DKIMFail && result != DKIMTempError {

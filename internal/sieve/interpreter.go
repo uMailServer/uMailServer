@@ -52,14 +52,15 @@ type StopAction struct {
 
 // VacationAction sends vacation auto-reply
 type VacationAction struct {
-	Subject   string
-	Body      string
-	Days      int
-	Seconds   int
-	Addresses []string
-	From      string
-	Mime      bool
-	Handle    string
+	Subject    string
+	Body       string
+	Days       int
+	Seconds    int
+	SecondsSet bool
+	Addresses  []string
+	From       string
+	Mime       bool
+	Handle     string
 }
 
 // SieveContext holds execution context
@@ -76,6 +77,7 @@ type Interpreter struct {
 	extensions  map[string]bool
 	requireDone map[string]bool
 	timeout     time.Duration // Timeout for regex matching to prevent ReDoS
+	stopped     bool          // set by "stop"; ends the whole script (F5035)
 }
 
 // NewInterpreter creates a new Sieve interpreter
@@ -194,6 +196,8 @@ func (i *Interpreter) Execute(msg *MessageContext) ([]Action, error) {
 		Variables:      make(map[string]string),
 	}
 
+	i.stopped = false
+
 	// Set built-in variables
 	i.setBuiltInVariables()
 
@@ -207,21 +211,40 @@ func (i *Interpreter) Execute(msg *MessageContext) ([]Action, error) {
 	}
 
 	// Execute commands
-	for _, cmd := range i.script.Commands {
-		if cmd.Name == "require" {
-			continue
-		}
-		actions, err := i.executeCommand(&cmd)
-		if err != nil {
-			return nil, err
-		}
-		if len(actions) > 0 {
-			return actions, nil
-		}
+	actions, err := i.executeCommands(i.script.Commands)
+	if err != nil {
+		return nil, err
+	}
+	actions = dropCancelledDiscard(actions)
+	if len(actions) > 0 {
+		return actions, nil
 	}
 
 	// Default: keep
 	return []Action{KeepAction{}}, nil
+}
+
+// dropCancelledDiscard removes discard when the script also keeps, files or
+// redirects the message: RFC 5228 §4.5 discard only cancels the implicit keep,
+// it never overrides an explicit delivery action. F5035.
+func dropCancelledDiscard(actions []Action) []Action {
+	delivers := false
+	for _, a := range actions {
+		switch a.(type) {
+		case KeepAction, FileintoAction, RedirectAction:
+			delivers = true
+		}
+	}
+	if !delivers {
+		return actions
+	}
+	out := actions[:0:0]
+	for _, a := range actions {
+		if _, ok := a.(DiscardAction); !ok {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func (i *Interpreter) setBuiltInVariables() {
@@ -230,23 +253,110 @@ func (i *Interpreter) setBuiltInVariables() {
 	i.ctx.Variables["virustest"] = "0"
 }
 
-func (i *Interpreter) processRequire(cmd *Command) error {
+// supportedExtensions lists the capabilities this interpreter implements.
+// RFC 5228 §3.2: requiring anything else must fail the script. F5036.
+var supportedExtensions = map[string]bool{
+	"fileinto":                   true,
+	"reject":                     true,
+	"vacation":                   true,
+	"vacation-seconds":           true,
+	"variables":                  true,
+	"comparator-i;octet":         true,
+	"comparator-i;ascii-casemap": true,
+}
+
+// requireExtensions returns the extension names named by a require command,
+// or an error if any of them is not supported.
+func requireExtensions(cmd *Command) ([]string, error) {
+	var exts []string
 	for _, arg := range cmd.Arguments {
-		var ext string
 		switch v := arg.(type) {
 		case *StringValue:
-			ext = v.Value
+			exts = append(exts, v.Value)
 		case *ListValue:
-			for _, s := range v.Values {
-				i.extensions[s] = true
-				i.requireDone[s] = false
-			}
-			continue
+			exts = append(exts, v.Values...)
+		default:
+			return nil, fmt.Errorf("require: invalid argument")
 		}
+	}
+	for _, ext := range exts {
+		if !supportedExtensions[ext] {
+			return nil, fmt.Errorf("require: unsupported extension %q", ext)
+		}
+	}
+	return exts, nil
+}
+
+// CheckRequires validates every top-level require of a parsed script.
+func CheckRequires(s *Script) error {
+	for idx := range s.Commands {
+		if s.Commands[idx].Name == "require" {
+			if _, err := requireExtensions(&s.Commands[idx]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (i *Interpreter) processRequire(cmd *Command) error {
+	exts, err := requireExtensions(cmd)
+	if err != nil {
+		return err
+	}
+	for _, ext := range exts {
 		i.extensions[ext] = true
 		i.requireDone[ext] = false
 	}
 	return nil
+}
+
+// executeCommands runs a command sequence. F5008: if/elsif/else form one
+// chain per sequence; elsif/else run only when no earlier branch of the same
+// chain was taken, and a nested block keeps its own chain state.
+// F5035: actions accumulate (RFC 5228 §2.10); only "stop" ends execution.
+func (i *Interpreter) executeCommands(cmds []Command) ([]Action, error) {
+	var all []Action
+	inChain, chainTaken := false, false
+	for idx := range cmds {
+		if i.stopped {
+			break
+		}
+		cmd := &cmds[idx]
+		switch cmd.Name {
+		case "if":
+			inChain, chainTaken = true, false
+		case "elsif", "else":
+			if !inChain {
+				return nil, fmt.Errorf("%s without preceding if", cmd.Name)
+			}
+			if cmd.Name == "else" {
+				inChain = false
+			}
+			if chainTaken {
+				continue
+			}
+		case "require":
+			inChain = false
+			continue
+		default:
+			inChain = false
+			actions, err := i.executeCommand(cmd)
+			if err != nil {
+				return nil, err
+			}
+			all = append(all, actions...)
+			continue
+		}
+
+		taken, actions, err := i.executeConditional(cmd)
+		if err != nil {
+			return nil, err
+		}
+		chainTaken = taken
+		all = append(all, actions...)
+	}
+	return all, nil
 }
 
 func (i *Interpreter) executeCommand(cmd *Command) ([]Action, error) {
@@ -256,6 +366,7 @@ func (i *Interpreter) executeCommand(cmd *Command) ([]Action, error) {
 	case "require":
 		return nil, nil // Already processed
 	case "stop":
+		i.stopped = true
 		return []Action{StopAction{}}, nil
 	case "discard":
 		return []Action{DiscardAction{}}, nil
@@ -281,49 +392,65 @@ func (i *Interpreter) executeCommand(cmd *Command) ([]Action, error) {
 }
 
 func (i *Interpreter) executeIf(cmd *Command) ([]Action, error) {
-	// Parse test from arguments
-	if len(cmd.Arguments) == 0 {
-		return nil, nil
-	}
+	_, actions, err := i.executeConditional(cmd)
+	return actions, err
+}
 
-	test, err := i.parseHeaderTest(cmd.Arguments)
+// executeConditional evaluates one if/elsif/else branch and runs its block
+// when the branch is taken. It reports whether the branch was taken.
+func (i *Interpreter) executeConditional(cmd *Command) (bool, []Action, error) {
+	result := true
+	if cmd.Name != "else" {
+		test, err := i.parseTestCommand(cmd.Arguments)
+		if err != nil {
+			return false, nil, err
+		}
+		result, err = i.evaluateTest(test)
+		if err != nil {
+			return false, nil, err
+		}
+	}
+	if !result || cmd.Block == nil {
+		return result, nil, nil
+	}
+	actions, err := i.executeCommands(cmd.Block.Commands)
+	return true, actions, err
+}
+
+// constTest is the RFC 5228 "true" / "false" test.
+type constTest bool
+
+// parseTestCommand builds the test of an if/elsif. F5006: a test that cannot
+// be parsed is an error, never an implicit "true".
+func (i *Interpreter) parseTestCommand(args []Value) (Test, error) {
+	if len(args) > 0 {
+		if sv, ok := args[0].(*StringValue); ok {
+			switch strings.ToLower(sv.Value) {
+			case "true", "false":
+				if len(args) != 1 {
+					return nil, fmt.Errorf("%s test takes no arguments", sv.Value)
+				}
+				return constTest(strings.EqualFold(sv.Value, "true")), nil
+			case "size":
+				if len(args) == 3 {
+					tag, okTag := args[1].(*TagValue)
+					num, okNum := args[2].(*NumberValue)
+					if okTag && okNum && (strings.EqualFold(tag.Value, "over") || strings.EqualFold(tag.Value, "under")) {
+						return &SizeTest{Relation: ":" + strings.ToLower(tag.Value), Size: num.Value}, nil
+					}
+				}
+				return nil, fmt.Errorf("malformed size test")
+			}
+		}
+	}
+	test, err := i.parseHeaderTest(args)
 	if err != nil {
 		return nil, err
 	}
-
-	result, err := i.evaluateTest(test)
-	if err != nil {
-		return nil, err
+	if test == nil {
+		return nil, fmt.Errorf("unsupported or malformed test")
 	}
-
-	// If command is elsif, we need previous if/elsif to be true
-	if cmd.Name == "elsif" && len(i.ctx.Stack) > 0 && !i.ctx.Stack[len(i.ctx.Stack)-1] {
-		// Previous conditions weren't met, skip
-		return nil, nil
-	}
-
-	if cmd.Name == "elsif" {
-		// Pop the previous frame since we're replacing it
-		if len(i.ctx.Stack) > 0 {
-			i.ctx.Stack = i.ctx.Stack[:len(i.ctx.Stack)-1]
-		}
-	}
-
-	i.ctx.Stack = append(i.ctx.Stack, result)
-
-	if result && cmd.Block != nil {
-		for _, c := range cmd.Block.Commands {
-			actions, err := i.executeCommand(&c)
-			if err != nil {
-				return nil, err
-			}
-			if len(actions) > 0 {
-				return actions, nil
-			}
-		}
-	}
-
-	return nil, nil
+	return test, nil
 }
 
 // parseHeaderTest parses a header test from command arguments
@@ -344,12 +471,27 @@ func (i *Interpreter) parseHeaderTest(args []Value) (Test, error) {
 		argIdx++
 	}
 
-	// Next arg could be a match type tag
-	if argIdx < len(args) {
-		if tag, ok := args[argIdx].(*TagValue); ok {
-			matchType = tag.Value
-			argIdx++
+	// Next args may be match-type and :comparator tags, in any order.
+	var comparator string
+	for argIdx < len(args) {
+		tag, ok := args[argIdx].(*TagValue)
+		if !ok {
+			break
 		}
+		argIdx++
+		if strings.EqualFold(tag.Value, "comparator") {
+			var sv *StringValue
+			if argIdx < len(args) {
+				sv, _ = args[argIdx].(*StringValue)
+			}
+			if sv == nil {
+				return nil, fmt.Errorf(":comparator requires a string argument")
+			}
+			comparator = sv.Value
+			argIdx++
+			continue
+		}
+		matchType = tag.Value
 	}
 
 	// Next arg(s) are header names
@@ -379,9 +521,10 @@ func (i *Interpreter) parseHeaderTest(args []Value) (Test, error) {
 	}
 
 	return &HeaderTest{
-		Headers:   headers,
-		KeyList:   keys,
-		MatchType: ":" + matchType,
+		Headers:    headers,
+		KeyList:    keys,
+		MatchType:  ":" + matchType,
+		Comparator: comparator,
 	}, nil
 }
 
@@ -406,12 +549,68 @@ func (i *Interpreter) evaluateTest(test Test) (bool, error) {
 		return i.evaluateSizeTest(t)
 	case *BooleanTest:
 		return i.evaluateBooleanTest(t)
+	case constTest:
+		return bool(t), nil
 	default:
 		return true, nil
 	}
 }
 
+// asciiLower folds only ASCII letters, as the i;ascii-casemap comparator
+// (RFC 4790 §9.2) requires.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for idx, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[idx] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
+// globToRegexp converts a Sieve :matches key (RFC 5228 §2.7.1) into an
+// anchored regular expression: "*" and "?" are wildcards, "\" escapes the
+// next character, and every other character is literal. F5007.
+func globToRegexp(glob string) string {
+	var b strings.Builder
+	b.WriteString("(?s)^")
+	for idx := 0; idx < len(glob); idx++ {
+		switch c := glob[idx]; c {
+		case '*':
+			b.WriteString(".*")
+		case '?':
+			b.WriteString(".")
+		case '\\':
+			if idx+1 < len(glob) {
+				idx++
+				c = glob[idx]
+			}
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	b.WriteString("$")
+	return b.String()
+}
+
 func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
+	// F5010: RFC 5228 §2.7.3 default comparator is i;ascii-casemap.
+	fold := true
+	switch t.Comparator {
+	case "", "i;ascii-casemap":
+	case "i;octet":
+		fold = false
+	default:
+		return false, fmt.Errorf("unsupported comparator %q", t.Comparator)
+	}
+	cmp := func(s string) string {
+		if fold {
+			return asciiLower(s)
+		}
+		return s
+	}
+
 	// Search headers case-insensitively
 	for headerKey, values := range i.ctx.Headers {
 		headerKeyLower := strings.ToLower(headerKey)
@@ -419,26 +618,24 @@ func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 			if headerKeyLower != strings.ToLower(headerName) {
 				continue
 			}
-			for _, value := range values {
+			for _, rawValue := range values {
+				value := cmp(rawValue)
 				switch t.MatchType {
 				case ":is", "is", "":
 					for _, key := range t.KeyList {
-						if value == key {
+						if value == cmp(key) {
 							return true, nil
 						}
 					}
 				case ":contains", "contains":
 					for _, key := range t.KeyList {
-						// Case-insensitive contains
-						if strings.Contains(strings.ToLower(value), strings.ToLower(key)) {
+						if strings.Contains(value, cmp(key)) {
 							return true, nil
 						}
 					}
 				case ":matches", "matches":
 					for _, key := range t.KeyList {
-						pattern := strings.ReplaceAll(key, "*", ".*")
-						pattern = strings.ReplaceAll(pattern, "?", ".")
-						matched, err := safeRegexMatch("(?i)"+pattern, value, i.timeout)
+						matched, err := safeRegexMatch(globToRegexp(cmp(key)), value, i.timeout)
 						if err != nil {
 							// Log the error but don't fail the entire filter
 							// Just return false for this test
@@ -486,8 +683,7 @@ func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {
 			}
 		}
 	case ":matches", "matches":
-		pattern := strings.ReplaceAll(value, "*", ".*")
-		pattern = strings.ReplaceAll(pattern, "?", ".")
+		pattern := globToRegexp(value)
 		for name, values := range i.ctx.Headers {
 			if !strings.EqualFold(name, target) {
 				continue
@@ -622,6 +818,7 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 		}
 	case "seconds":
 		// Next arg is the seconds number (RFC 5230 §4.1).
+		vacation.SecondsSet = true
 		if len(cmd.Arguments) > 0 {
 			if nv, ok := cmd.Arguments[0].(*NumberValue); ok {
 				vacation.Seconds = int(nv.Value)
@@ -686,6 +883,7 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 				}
 			case "seconds":
 				// Next arg is the seconds number.
+				vacation.SecondsSet = true
 				if argIdx+1 < len(cmd.Arguments) {
 					argIdx++
 					if nv, ok := cmd.Arguments[argIdx].(*NumberValue); ok {

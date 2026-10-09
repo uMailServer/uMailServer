@@ -3,18 +3,26 @@ package carddav
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/umailserver/umailserver/internal/tracing"
 )
+
+// maxRequestBodyBytes caps every CardDAV request body (F5091). vCards and
+// DAV XML requests are small; without a cap an authenticated client could
+// make the server buffer an arbitrarily large body in memory.
+const maxRequestBodyBytes = 10 << 20
 
 // Server represents a CardDAV server
 type Server struct {
@@ -23,6 +31,9 @@ type Server struct {
 	dataDir         string
 	storage         *Storage
 	tracingProvider *tracing.Provider
+	// writeMu serializes conditional writes so an If-Match/If-None-Match
+	// evaluation and the write it guards are atomic (F5089).
+	writeMu sync.Mutex
 }
 
 // SetTracingProvider attaches an OpenTelemetry tracing provider so each
@@ -73,6 +84,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if r.Body != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	}
+
 	// Log request
 	s.logger.Debug("CardDAV request",
 		"method", r.Method,
@@ -114,14 +129,91 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// handlePropfind handles PROPFIND requests
-func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username string) {
+// readBody reads the request body, answering 413 when it exceeds
+// maxRequestBodyBytes (F5091) and 400 on any other read failure.
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.sendError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return nil, false
+		}
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		return nil, false
+	}
+	return body, true
+}
+
+// etagListMatches reports whether a comma-separated If-Match/If-None-Match
+// list names etag. Strong comparison (If-Match) never matches a weak entity
+// tag; weak comparison (If-None-Match) ignores the W/ prefix (RFC 7232 §2.3.2).
+func etagListMatches(list, etag string, weak bool) bool {
+	for _, candidate := range strings.Split(list, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if strings.HasPrefix(candidate, "W/") {
+			if !weak {
+				continue
+			}
+			candidate = strings.TrimPrefix(candidate, "W/")
+		}
+		if candidate == etag {
+			return true
+		}
+	}
+	return false
+}
+
+// preconditionsHold evaluates If-Match and If-None-Match for a state-changing
+// request against the target's current state (RFC 7232 §3.1, §3.2, §6). A
+// false result must be answered with 412 and the method not performed (F5089).
+func preconditionsHold(r *http.Request, exists bool, etag string) bool {
+	if values, present := r.Header["If-Match"]; present {
+		list := strings.Join(values, ",")
+		if strings.TrimSpace(list) == "*" {
+			if !exists {
+				return false
+			}
+		} else if !exists || !etagListMatches(list, etag, false) {
+			return false
+		}
+	}
+	if values, present := r.Header["If-None-Match"]; present {
+		list := strings.Join(values, ",")
+		if strings.TrimSpace(list) == "*" {
+			if exists {
+				return false
+			}
+		} else if exists && etagListMatches(list, etag, true) {
+			return false
+		}
+	}
+	return true
+}
+
+// destinationPath parses the RFC 4918 §10.3 Destination header, which may be
+// an absolute URI or an absolute path, into the decoded path below
+// /dav/addressbooks/ (F5093). ok is false when the header is malformed or
+// points outside the address book namespace.
+func destinationPath(destination string) (string, bool) {
+	u, err := url.Parse(destination)
+	if err != nil {
+		return "", false
+	}
+	const prefix = "/dav/addressbooks/"
+	if !strings.HasPrefix(u.Path, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(u.Path, prefix), true
+}
+
+// handlePropfind handles PROPFIND requests
+func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username string) {
+	body, ok := s.readBody(w, r)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
 	// Parse PROPFIND request
 	var propfind Propfind
@@ -192,12 +284,10 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 
 // handleReport handles REPORT requests
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username string) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+	body, ok := s.readBody(w, r)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
 	// Parse addressbook query
 	var query AddressbookQuery
@@ -248,12 +338,10 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 
 // handlePut handles PUT requests for creating/updating contacts
 func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username string) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+	body, ok := s.readBody(w, r)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
 	// Validate vCard data
 	if !strings.Contains(string(body), "BEGIN:VCARD") {
@@ -298,6 +386,19 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		body = []byte(strings.Replace(string(body), "BEGIN:VCARD\r\n", fmt.Sprintf("BEGIN:VCARD\r\nUID:%s\r\n", uid), 1))
 	} else if urlUID != "" && uid != urlUID {
 		s.sendError(w, http.StatusForbidden, "UID in request URL does not match UID in vCard data")
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	existing, err := s.storage.GetContact(username, addressbookID, uid)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid contact")
+		return
+	}
+	if !preconditionsHold(r, existing != "", s.storage.GetETag(username, addressbookID, uid)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
 
@@ -372,6 +473,19 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 		return
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	existing, err := s.storage.GetContact(username, addressbookID, contactUID)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid contact")
+		return
+	}
+	if !preconditionsHold(r, existing != "", s.storage.GetETag(username, addressbookID, contactUID)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
+		return
+	}
+
 	// Delete contact from storage
 	if err := s.storage.DeleteContact(username, addressbookID, contactUID); err != nil {
 		s.logger.Error("Failed to delete contact", "error", err)
@@ -394,8 +508,10 @@ func (s *Server) handleMkCol(w http.ResponseWriter, r *http.Request, username st
 	}
 
 	// Read request body for address book properties
-	body, _ := io.ReadAll(r.Body)
-	defer r.Body.Close()
+	body, ok := s.readBody(w, r)
+	if !ok {
+		return
+	}
 
 	name := addressbookID
 	description := ""
@@ -427,6 +543,10 @@ func (s *Server) handleMkCol(w http.ResponseWriter, r *http.Request, username st
 	}
 
 	if err := s.storage.CreateAddressbook(username, ab); err != nil {
+		if errors.Is(err, errInvalidID) {
+			s.sendError(w, http.StatusBadRequest, "invalid addressbook ID")
+			return
+		}
 		s.logger.Error("Failed to create addressbook", "error", err)
 		s.sendError(w, http.StatusInternalServerError, "failed to create addressbook")
 		return
@@ -447,12 +567,10 @@ func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, usernam
 	addressbookID := parts[0]
 
 	// Read and parse PROPPATCH request
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+	body, ok := s.readBody(w, r)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
 	// Get current address book
 	ab, err := s.storage.GetAddressbook(username, addressbookID)
@@ -529,7 +647,11 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	// Parse destination path
-	destPath := strings.TrimPrefix(dest, "/dav/addressbooks/")
+	destPath, destOK := destinationPath(dest)
+	if !destOK {
+		s.sendError(w, http.StatusForbidden, "destination outside address book namespace")
+		return
+	}
 	destParts := strings.SplitN(destPath, "/", 2)
 	if len(destParts) < 2 {
 		s.sendError(w, http.StatusBadRequest, "invalid destination path")
@@ -609,7 +731,11 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	// Parse destination path
-	destPath := strings.TrimPrefix(dest, "/dav/addressbooks/")
+	destPath, destOK := destinationPath(dest)
+	if !destOK {
+		s.sendError(w, http.StatusForbidden, "destination outside address book namespace")
+		return
+	}
 	destParts := strings.SplitN(destPath, "/", 2)
 	if len(destParts) < 2 {
 		s.sendError(w, http.StatusBadRequest, "invalid destination path")

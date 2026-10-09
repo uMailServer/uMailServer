@@ -220,7 +220,8 @@ func TestMCPServerListAccountsWithDomain(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	// F5045: directory reads are admin-only.
+	handler.ServeHTTP(rr, adminRequest(httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -425,7 +426,8 @@ func TestToolListAccountsAll(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	// F5045: directory reads are admin-only.
+	handler.ServeHTTP(rr, adminRequest(httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -456,7 +458,8 @@ func TestToolListAccountsNoAccounts(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	// F5045: directory reads are admin-only.
+	handler.ServeHTTP(rr, adminRequest(httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)

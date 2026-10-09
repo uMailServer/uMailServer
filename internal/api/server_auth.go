@@ -110,6 +110,35 @@ func (s *Server) clearAccountLoginFailures(email string) {
 	delete(s.accountLoginAttempts, email)
 }
 
+// newJTI returns a random 128-bit token ID for the JWT "jti" claim (F4939,
+// F5025), so every issued token is unique even within one second.
+func newJTI() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// sessionAccountState applies the account's current state to a validated
+// token for subject sub (F5029). JWT claims are a snapshot from issue time,
+// so without this a deactivated account kept working and a demoted admin
+// kept admin access until the token expired. When the account exists its
+// record is authoritative: active=false rejects the session and isAdmin is
+// the stored role. Unknown subjects keep the claim value (no account to
+// consult).
+func (s *Server) sessionAccountState(sub string, claimAdmin bool) (isAdmin, active bool) {
+	if s.db == nil || sub == "" {
+		return claimAdmin, true
+	}
+	localPart, domain := parseEmail(sub)
+	account, err := s.db.GetAccount(domain, localPart)
+	if err != nil || account == nil {
+		return claimAdmin, true
+	}
+	return account.IsAdmin, account.IsActive
+}
+
 // getTOTPKey returns the encryption key for TOTP secrets.
 // Returns TOTPKey if set, otherwise falls back to JWTSecret.
 func (s *Server) getTOTPKey() string {
@@ -206,7 +235,12 @@ func (s *Server) CleanupExpiredTokens() {
 }
 
 // checkLoginRateLimit returns true if the IP is allowed to attempt login.
-// Uses exponential backoff: 5 attempts, then lockout doubles each failure (5min, 10min, 20min, etc.)
+// It only reads the failure count kept by recordLoginFailure (F5027: counting
+// every attempt here as well made one wrong password count twice and made
+// successful logins from a shared IP count toward the lockout). Once
+// maxAttempts failures are recorded the IP is locked out for 5 minutes,
+// doubled per failure recorded beyond the limit (e.g. by concurrent
+// requests), capped at 60 minutes.
 func (s *Server) checkLoginRateLimit(ip string) bool {
 	s.loginMu.Lock()
 	defer s.loginMu.Unlock()
@@ -218,13 +252,12 @@ func (s *Server) checkLoginRateLimit(ip string) bool {
 	now := time.Now()
 	attempt, exists := s.loginAttempts[ip]
 	if !exists {
-		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
 		return true
 	}
 
-	// Reset if previous lockout expired (sliding window from last attempt)
+	// Reset if previous lockout expired (sliding window from last failure)
 	if now.Sub(attempt.lastSeen) > 5*time.Minute {
-		attempt.count = 1
+		attempt.count = 0
 		attempt.lastSeen = now
 		attempt.lockoutUntil = time.Time{}
 		return true
@@ -238,7 +271,7 @@ func (s *Server) checkLoginRateLimit(ip string) bool {
 	// Clear lockout if expired
 	if !attempt.lockoutUntil.IsZero() && now.After(attempt.lockoutUntil) {
 		attempt.lockoutUntil = time.Time{}
-		attempt.count = 1
+		attempt.count = 0
 		return true
 	}
 
@@ -247,17 +280,21 @@ func (s *Server) checkLoginRateLimit(ip string) bool {
 		maxAttempts = s.config.MaxLoginAttempts
 	}
 	if attempt.count >= maxAttempts {
-		// Apply exponential backoff: 5min * 2^(attempts-5)
-		// attempts=5: 5min, attempts=6: 10min, attempts=7: 20min, etc.
-		backoffMinutes := 5 * (1 << (attempt.count - 5))
+		// Exponential backoff: 5min * 2^(failures-maxAttempts), capped at 60min.
+		// F5026: the shift is relative to maxAttempts and clamped, so a
+		// limit below 5 cannot produce a negative shift (runtime panic) and
+		// a large count cannot overflow it.
+		shift := attempt.count - maxAttempts
+		if shift > 4 {
+			shift = 4
+		}
+		backoffMinutes := 5 * (1 << shift)
 		if backoffMinutes > 60 {
 			backoffMinutes = 60 // cap at 60 minutes
 		}
 		attempt.lockoutUntil = now.Add(time.Duration(backoffMinutes) * time.Minute)
 		return false
 	}
-	attempt.count++
-	attempt.lastSeen = now
 	return true
 }
 
@@ -293,28 +330,23 @@ func (s *Server) recordLoginFailure(ip string) {
 }
 
 // checkAccountLoginRateLimit returns true if the account is allowed to attempt login.
-// Allows 5 attempts per 5-minute window per account; blocks after that.
+// Allows 5 failed attempts per 5-minute window per account; blocks after that.
+// F5135: the check only reads the failure count recorded by
+// recordAccountLoginFailure. It used to increment on every attempt as well,
+// so each failure counted twice and 3 wrong passwords locked the account.
 func (s *Server) checkAccountLoginRateLimit(email string) bool {
 	s.accountLoginMu.Lock()
 	defer s.accountLoginMu.Unlock()
 
-	if s.accountLoginAttempts == nil {
-		s.accountLoginAttempts = make(map[string]*loginAttempt)
-	}
-
-	now := time.Now()
 	attempt, exists := s.accountLoginAttempts[email]
-	if !exists || now.Sub(attempt.lastSeen) > 5*time.Minute {
-		s.accountLoginAttempts[email] = &loginAttempt{count: 1, lastSeen: now}
+	if !exists {
 		return true
 	}
-
-	if attempt.count >= 5 {
-		return false
+	if time.Since(attempt.lastSeen) > 5*time.Minute {
+		delete(s.accountLoginAttempts, email)
+		return true
 	}
-	attempt.count++
-	attempt.lastSeen = now
-	return true
+	return attempt.count < 5
 }
 
 // recordAccountLoginFailure increments the failed login counter for an account.
@@ -408,6 +440,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F4845: a deactivated account must not obtain a session (SMTP/IMAP auth
+	// already refuses it). Same generic response as a bad password so the
+	// account state is not disclosed.
+	if !account.IsActive {
+		s.recordLoginFailure(ip)
+		s.recordAccountLoginFailure(emailKey)
+		s.auditLogger.LogLoginFailure(req.Email, ip, "account_inactive")
+		s.sendError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
 	// Rehash password if using older algorithm and argon2id is preferred
 	if needsRehash {
 		newHash, err := s.hashPassword(req.Password)
@@ -471,17 +514,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.clearTOTPFailures(req.Email)
 	}
 
-	// Generate JWT
+	// Generate JWT. F5025: a random jti keeps two logins by the same user in
+	// the same second from signing byte-identical tokens (logging out one
+	// session would otherwise revoke the other).
+	jti, err := newJTI()
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":   account.Email,
 		"admin": account.IsAdmin,
 		"exp":   time.Now().Add(s.config.TokenExpiry).Unix(),
 		"iat":   time.Now().Unix(),
+		"jti":   jti,
 	})
 	// Set key ID header for secret rotation support
-	token.Header["kid"] = s.currentKid
+	kid, secret := s.signingKey()
+	token.Header["kid"] = kid
 
-	tokenString, err := token.SignedString([]byte(s.jwtSecrets[s.currentKid]))
+	tokenString, err := token.SignedString(secret)
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -595,10 +647,22 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Revoke the old token by adding it to the blacklist
+	// Revoke the old token(s) by adding them to the blacklist. F4937:
+	// authMiddleware authenticates the "jwt" cookie in preference to the
+	// Bearer header, so the cookie token must be rotated out too.
+	var oldTokens []string
+	fromCookie := false
+	if cookie, err := r.Cookie("jwt"); err == nil && cookie.Value != "" {
+		oldTokens = append(oldTokens, cookie.Value)
+		fromCookie = true
+	}
 	authHeader := r.Header.Get("Authorization")
 	if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-		oldTokenStr := parts[1]
+		if len(oldTokens) == 0 || oldTokens[0] != parts[1] {
+			oldTokens = append(oldTokens, parts[1])
+		}
+	}
+	for _, oldTokenStr := range oldTokens {
 		oldTokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldTokenStr)))
 
 		// Defense-in-depth: verify the old token has not already been revoked
@@ -606,7 +670,9 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusUnauthorized, "token has been revoked")
 			return
 		}
-
+	}
+	for _, oldTokenStr := range oldTokens {
+		oldTokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldTokenStr)))
 		expiry := s.tokenExpiryFromString(oldTokenStr)
 		s.RevokeToken(oldTokenHash, expiry)
 	}
@@ -615,19 +681,42 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value("user")
 	isAdmin := r.Context().Value("isAdmin")
 
-	// Generate new token
+	// Generate new token. F4939: a random jti keeps it distinct from the
+	// token revoked above even when both are issued in the same second
+	// (identical claims would otherwise sign to the identical, revoked token).
+	jti, err := newJTI()
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":   user,
 		"admin": isAdmin,
 		"exp":   time.Now().Add(s.config.TokenExpiry).Unix(),
 		"iat":   time.Now().Unix(),
+		"jti":   jti,
 	})
-	token.Header["kid"] = s.currentKid
+	kid, secret := s.signingKey()
+	token.Header["kid"] = kid
 
-	tokenString, err := token.SignedString([]byte(s.jwtSecrets[s.currentKid]))
+	tokenString, err := token.SignedString(secret)
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
 		return
+	}
+
+	// F4937: the old cookie token is now revoked, so a cookie (browser)
+	// session receives the new token as its replacement HttpOnly cookie.
+	if fromCookie {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "jwt",
+			Value:    tokenString,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   r.TLS != nil,
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   int(s.config.TokenExpiry.Seconds()),
+		})
 	}
 
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{

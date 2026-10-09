@@ -466,28 +466,8 @@ func TestAuthARCStage_Process_WithNilLogger(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// extractUserFromRecipient direct unit tests
-// ---------------------------------------------------------------------------
-
-func TestExtractUserFromRecipient_BangPath(t *testing.T) {
-	tests := []struct {
-		recipient string
-		expected  string
-	}{
-		{"user!domain", "user"},
-		{"postmaster!mailhub", "postmaster"},
-		{"", ""},
-		{"no-at-nada", "no-at-nada"},
-	}
-
-	for _, tt := range tests {
-		result := extractUserFromRecipient(tt.recipient)
-		if result != tt.expected {
-			t.Errorf("extractUserFromRecipient(%q) = %q, want %q", tt.recipient, result, tt.expected)
-		}
-	}
-}
+// extractUserFromRecipient was removed with F5125 (scripts are keyed by the
+// full address); see TestSieveStageScriptUser.
 
 func TestSieveStage_Process_BangPathRecipient(t *testing.T) {
 	manager := sieve.NewManager()
