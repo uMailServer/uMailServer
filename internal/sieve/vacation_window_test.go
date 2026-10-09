@@ -23,8 +23,10 @@ func TestCheckAndRecordVacationFor_ZeroWindowRepliesEveryTime(t *testing.T) {
 
 func TestCheckAndRecordVacationFor_NegativeWindowAlwaysAllows(t *testing.T) {
 	m := NewManager()
-	if !m.CheckAndRecordVacationFor("sneg@example.com", -time.Second) || !m.CheckAndRecordVacationFor("sneg@example.com", -time.Second) {
-		t.Fatalf("FAIL: negative window must always allow")
+	for i := 0; i < 2; i++ {
+		if !m.CheckAndRecordVacationFor("sneg@example.com", -time.Second) {
+			t.Fatalf("FAIL: negative window must always allow, call %d suppressed", i+1)
+		}
 	}
 }
 
