@@ -2,6 +2,7 @@ package search
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -306,16 +307,18 @@ func isStopWord(word string) bool {
 	return stopWords[word]
 }
 
-// sortResults sorts results by score (descending)
+// sortResults sorts results by score (descending), breaking ties by DocID.
+// The input order comes from map iteration, so without a total order equal
+// scores landed in a random order on every call and offset pagination
+// duplicated some messages and skipped others (F5195). sort.Slice also
+// replaces the former O(n^2) bubble sort.
 func sortResults(results []SearchResult) {
-	// Simple bubble sort for now (sufficient for small result sets)
-	for i := 0; i < len(results); i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[j].Score > results[i].Score {
-				results[i], results[j] = results[j], results[i]
-			}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
 		}
-	}
+		return results[i].DocID < results[j].DocID
+	})
 }
 
 // Clear removes all documents from the index
