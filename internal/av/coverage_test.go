@@ -348,13 +348,11 @@ func TestScanResponseNotOKNotFound(t *testing.T) {
 		Timeout: 5 * time.Second,
 	})
 
+	// F5107: an unrecognised status means the stream was not scanned, so it
+	// must be reported as an error rather than a clean result.
 	result, err := scanner.Scan([]byte("test"))
-	if err != nil {
-		t.Fatalf("Scan failed: %v", err)
-	}
-	// Should return clean (not infected, no error)
-	if result.Infected {
-		t.Error("Expected clean result for unknown response status")
+	if err == nil {
+		t.Fatalf("Expected error for unknown response status, got %+v", result)
 	}
 }
 

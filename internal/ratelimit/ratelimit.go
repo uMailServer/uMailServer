@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"net"
 	"sync"
 	"time"
 
@@ -173,21 +174,46 @@ func (rl *RateLimiter) configLocked() *Config {
 	return rl.config
 }
 
+// ipKey groups addresses into the unit an IP limit applies to: one IPv4
+// address, or one IPv6 /64 (the smallest allocation a single subscriber gets),
+// so rotating the interface ID cannot bypass the limit (F5106). IPv4-mapped
+// IPv6 addresses share the IPv4 bucket. Unparseable input is used verbatim.
+func ipKey(ip string) string {
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return ip
+	}
+	if v4 := addr.To4(); v4 != nil {
+		return v4.String()
+	}
+	return addr.Mask(net.CIDRMask(64, 128)).String() + "/64"
+}
+
 // CheckIP checks rate limits for an IP address (inbound)
 func (rl *RateLimiter) CheckIP(ip string) Result {
 	rl.ipMu.Lock()
 	defer rl.ipMu.Unlock()
 
-	now := time.Now()
-	bucket, exists := rl.ipCounters[ip]
+	bucket := rl.ipBucketLocked(ipKey(ip), time.Now())
+	result := rl.ipLimit(bucket)
+	if result.Allowed {
+		bucket.commit()
+	}
+	return result
+}
+
+// ipBucketLocked returns the bucket for key with expired windows reset,
+// creating it if needed. The caller holds ipMu.
+func (rl *RateLimiter) ipBucketLocked(key string, now time.Time) *ipBucket {
+	bucket, exists := rl.ipCounters[key]
 	if !exists {
 		bucket = &ipBucket{
 			minuteReset: now.Add(time.Minute),
 			hourReset:   now.Add(time.Hour),
 			dayReset:    now.Add(24 * time.Hour),
 		}
-		rl.ipCounters[ip] = bucket
-		return rl.checkIPBucket(bucket)
+		rl.ipCounters[key] = bucket
+		return bucket
 	}
 
 	// Reset expired windows
@@ -203,11 +229,11 @@ func (rl *RateLimiter) CheckIP(ip string) Result {
 		bucket.dayCount = 0
 		bucket.dayReset = now.Add(24 * time.Hour)
 	}
-
-	return rl.checkIPBucket(bucket)
+	return bucket
 }
 
-func (rl *RateLimiter) checkIPBucket(bucket *ipBucket) Result {
+// ipLimit reports whether one more message fits in bucket without counting it.
+func (rl *RateLimiter) ipLimit(bucket *ipBucket) Result {
 	cfg := rl.configLocked()
 	if cfg.IPPerMinute > 0 && bucket.minuteCount >= cfg.IPPerMinute {
 		retrySecs := int(time.Until(bucket.minuteReset).Seconds())
@@ -245,12 +271,13 @@ func (rl *RateLimiter) checkIPBucket(bucket *ipBucket) Result {
 		}
 	}
 
-	// Increment counters
-	bucket.minuteCount++
-	bucket.hourCount++
-	bucket.dayCount++
-
 	return Result{Allowed: true}
+}
+
+func (b *ipBucket) commit() {
+	b.minuteCount++
+	b.hourCount++
+	b.dayCount++
 }
 
 // CheckUser checks rate limits for an authenticated user (outbound sending)
@@ -258,7 +285,18 @@ func (rl *RateLimiter) CheckUser(user string) Result {
 	rl.userMu.Lock()
 	defer rl.userMu.Unlock()
 
-	now := time.Now()
+	bucket := rl.userBucketLocked(user, time.Now())
+	result := rl.userLimit(bucket)
+	if result.Allowed {
+		rl.commitUser(user, bucket)
+	}
+	return result
+}
+
+// userBucketLocked returns the user's bucket with expired windows reset,
+// creating it (and restoring the persisted daily quota) if needed. The
+// caller holds userMu.
+func (rl *RateLimiter) userBucketLocked(user string, now time.Time) *userBucket {
 	bucket, exists := rl.userCounters[user]
 	if !exists {
 		bucket = &userBucket{
@@ -266,12 +304,21 @@ func (rl *RateLimiter) CheckUser(user string) Result {
 			hourReset:   now.Add(time.Hour),
 			dayReset:    now.Add(24 * time.Hour),
 		}
-		// Load persisted sentToday from bbolt
+		// Load persisted sentToday from bbolt. The persisted window end is
+		// restored too, so a restart neither restarts the 24h window for a
+		// spent quota nor carries yesterday's count into a new day (F5105).
 		if rl.bolt != nil {
-			bucket.sentToday = rl.loadUserSentToday(user)
+			sent, reset := rl.loadUserSentToday(user)
+			switch {
+			case reset.IsZero(): // legacy record without a window end
+				bucket.sentToday = sent
+			case now.Before(reset):
+				bucket.sentToday = sent
+				bucket.dayReset = reset
+			}
 		}
 		rl.userCounters[user] = bucket
-		return rl.checkUserBucket(user, bucket)
+		return bucket
 	}
 
 	// Reset expired windows
@@ -288,13 +335,13 @@ func (rl *RateLimiter) CheckUser(user string) Result {
 		bucket.dayReset = now.Add(24 * time.Hour)
 		// Reset persisted daily counter
 		bucket.sentToday = 0
-		rl.saveUserSentToday(user, 0)
+		rl.saveUserSentToday(user, 0, bucket.dayReset)
 	}
-
-	return rl.checkUserBucket(user, bucket)
+	return bucket
 }
 
-func (rl *RateLimiter) checkUserBucket(user string, bucket *userBucket) Result {
+// userLimit reports whether one more message fits in bucket without counting it.
+func (rl *RateLimiter) userLimit(bucket *userBucket) Result {
 	cfg := rl.configLocked()
 	if cfg.UserPerMinute > 0 && bucket.minuteCount >= cfg.UserPerMinute {
 		retrySecs := int(time.Until(bucket.minuteReset).Seconds())
@@ -333,14 +380,17 @@ func (rl *RateLimiter) checkUserBucket(user string, bucket *userBucket) Result {
 		}
 	}
 
-	// Increment counters
+	return Result{Allowed: true}
+}
+
+// commitUser counts one message against the user's bucket and persists the
+// daily quota. The caller holds userMu.
+func (rl *RateLimiter) commitUser(user string, bucket *userBucket) {
 	bucket.minuteCount++
 	bucket.hourCount++
 	bucket.dayCount++
 	bucket.sentToday++
-	rl.saveUserSentToday(user, bucket.sentToday)
-
-	return Result{Allowed: true}
+	rl.saveUserSentToday(user, bucket.sentToday, bucket.dayReset)
 }
 
 // CheckGlobal checks global rate limits across all users/connections
@@ -348,9 +398,16 @@ func (rl *RateLimiter) CheckGlobal() Result {
 	rl.globalMu.Lock()
 	defer rl.globalMu.Unlock()
 
-	now := time.Now()
+	rl.resetGlobalLocked(time.Now())
+	result := rl.globalLimit()
+	if result.Allowed {
+		rl.commitGlobal()
+	}
+	return result
+}
 
-	// Reset expired windows
+// resetGlobalLocked resets expired global windows. The caller holds globalMu.
+func (rl *RateLimiter) resetGlobalLocked(now time.Time) {
 	if now.After(rl.globalBucket.minuteReset) {
 		rl.globalBucket.minuteCount = 0
 		rl.globalBucket.minuteReset = now.Add(time.Minute)
@@ -359,8 +416,11 @@ func (rl *RateLimiter) CheckGlobal() Result {
 		rl.globalBucket.hourCount = 0
 		rl.globalBucket.hourReset = now.Add(time.Hour)
 	}
+}
 
-	// Check global limits
+// globalLimit reports whether one more message fits globally without
+// counting it. The caller holds globalMu.
+func (rl *RateLimiter) globalLimit() Result {
 	cfg := rl.configLocked()
 	if cfg.GlobalPerMinute > 0 && rl.globalBucket.minuteCount >= int64(cfg.GlobalPerMinute) {
 		retrySecs := int(time.Until(rl.globalBucket.minuteReset).Seconds())
@@ -386,10 +446,64 @@ func (rl *RateLimiter) CheckGlobal() Result {
 		}
 	}
 
-	// Increment global counters
+	return Result{Allowed: true}
+}
+
+// commitGlobal counts one message globally. The caller holds globalMu.
+func (rl *RateLimiter) commitGlobal() {
 	rl.globalBucket.minuteCount++
 	rl.globalBucket.hourCount++
+}
 
+// CheckMessage checks the per-user (when user is non-empty), per-IP and
+// global limits for one message and counts it against all of them only when
+// every limit allows it. A message refused by one limit therefore spends
+// nothing from the others, in particular not the user's persisted daily
+// quota (F5205). Limits are evaluated in the order user, IP, global and the
+// first refusal is returned.
+func (rl *RateLimiter) CheckMessage(user, ip string) Result {
+	now := time.Now()
+
+	// Lock order: userMu → ipMu → globalMu (configMu is taken innermost by
+	// the limit helpers). No other path holds two of these at once.
+	var ub *userBucket
+	if user != "" {
+		rl.userMu.Lock()
+		defer rl.userMu.Unlock()
+		ub = rl.userBucketLocked(user, now)
+		if result := rl.userLimit(ub); !result.Allowed {
+			return result
+		}
+	}
+
+	if result := rl.checkIPAndGlobal(ipKey(ip), now); !result.Allowed {
+		return result
+	}
+
+	if ub != nil {
+		rl.commitUser(user, ub)
+	}
+	return Result{Allowed: true}
+}
+
+// checkIPAndGlobal checks the IP and global limits together and counts the
+// message against both only when both allow it.
+func (rl *RateLimiter) checkIPAndGlobal(key string, now time.Time) Result {
+	rl.ipMu.Lock()
+	defer rl.ipMu.Unlock()
+	rl.globalMu.Lock()
+	defer rl.globalMu.Unlock()
+
+	ib := rl.ipBucketLocked(key, now)
+	if result := rl.ipLimit(ib); !result.Allowed {
+		return result
+	}
+	rl.resetGlobalLocked(now)
+	if result := rl.globalLimit(); !result.Allowed {
+		return result
+	}
+	ib.commit()
+	rl.commitGlobal()
 	return Result{Allowed: true}
 }
 
@@ -408,6 +522,7 @@ func (rl *RateLimiter) CheckRecipients(user string, count int) Result {
 
 // CheckConnection checks if a new connection is allowed from an IP
 func (rl *RateLimiter) CheckConnection(ip string) Result {
+	ip = ipKey(ip)
 	rl.connMu.Lock()
 	defer rl.connMu.Unlock()
 
@@ -447,6 +562,7 @@ func (rl *RateLimiter) CheckConnection(ip string) Result {
 
 // ReleaseConnection releases a connection slot when session ends
 func (rl *RateLimiter) ReleaseConnection(ip string) {
+	ip = ipKey(ip)
 	rl.connMu.Lock()
 	defer rl.connMu.Unlock()
 
@@ -458,6 +574,7 @@ func (rl *RateLimiter) ReleaseConnection(ip string) {
 
 // GetIPStats returns current rate limit stats for an IP
 func (rl *RateLimiter) GetIPStats(ip string) map[string]any {
+	ip = ipKey(ip)
 	rl.ipMu.RLock()
 	defer rl.ipMu.RUnlock()
 
@@ -559,11 +676,12 @@ func (rl *RateLimiter) cleanup() {
 
 // bbolt persistence for user daily quotas
 
-func (rl *RateLimiter) loadUserSentToday(user string) int64 {
+func (rl *RateLimiter) loadUserSentToday(user string) (int64, time.Time) {
 	if rl.bolt == nil {
-		return 0
+		return 0, time.Time{}
 	}
 	var count int64
+	var reset time.Time
 	_ = rl.bolt.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte("ratelimit_users"))
 		if bucket == nil {
@@ -577,12 +695,18 @@ func (rl *RateLimiter) loadUserSentToday(user string) int64 {
 			}
 			count = int64(c)
 		}
+		if v := bucket.Get([]byte(user + ":day_reset")); len(v) == 8 {
+			// #nosec G115 -- written by saveUserSentToday from UnixNano
+			reset = time.Unix(0, int64(binary.BigEndian.Uint64(v)))
+		}
 		return nil
 	})
-	return count
+	return count, reset
 }
 
-func (rl *RateLimiter) saveUserSentToday(user string, count int64) {
+// saveUserSentToday persists the daily count and, when known, the end of the
+// daily window it belongs to (F5105).
+func (rl *RateLimiter) saveUserSentToday(user string, count int64, reset time.Time) {
 	if rl.bolt == nil {
 		return
 	}
@@ -598,6 +722,15 @@ func (rl *RateLimiter) saveUserSentToday(user string, count int64) {
 		}
 		// #nosec G115 -- count is validated non-negative above
 		binary.BigEndian.PutUint64(buf[:], uint64(count))
-		return bucket.Put(key, buf[:])
+		if err := bucket.Put(key, buf[:]); err != nil {
+			return err
+		}
+		if reset.IsZero() {
+			return nil
+		}
+		var resetBuf [8]byte
+		// #nosec G115 -- UnixNano of a current wall-clock time is positive
+		binary.BigEndian.PutUint64(resetBuf[:], uint64(reset.UnixNano()))
+		return bucket.Put([]byte(user+":day_reset"), resetBuf[:])
 	})
 }
