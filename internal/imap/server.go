@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -357,10 +358,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	// Send greeting with capability advertisement
 	caps := defaultCapabilities()
-	session.WriteResponse("*", "OK [CAPABILITY IMAP4rev2 IMAP4rev1 "+strings.Join(caps, " ")+"] uMailServer ready")
+	session.WriteResponse("*", "OK [CAPABILITY "+strings.Join(caps, " ")+"] uMailServer ready")
 
 	// Handle commands
 	session.Handle()
+
+	// Handle returns on LOGOUT, Stop, or a read error (peer gone, read
+	// deadline, over-long line); only the first two closed the socket.
+	_ = session.conn.Close()
 
 	// Cleanup
 	s.sessionsMu.Lock()
@@ -502,6 +507,10 @@ func (s *Session) Handle() {
 			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout)) // Best-effort deadline
 		}
 		line, err := s.readLine()
+		if errors.Is(err, errLineTooLong) {
+			s.WriteData("BYE Command line too long")
+			return
+		}
 		if err != nil {
 			s.stateMu.RLock()
 			stillActive := s.state != StateLoggedOut
@@ -525,13 +534,31 @@ func (s *Session) Handle() {
 	}
 }
 
-// readLine reads a line from the connection
+// maxCommandLineLength bounds one command line (CRLF included); literals are
+// read separately. 64 KiB matches common server defaults (Dovecot).
+const maxCommandLineLength = 64 * 1024
+
+// errLineTooLong is returned by readLine when a line exceeds maxCommandLineLength.
+var errLineTooLong = errors.New("command line too long")
+
+// readLine reads a line from the connection, refusing lines longer than
+// maxCommandLineLength so a client cannot make the server buffer without bound.
 func (s *Session) readLine() (string, error) {
-	line, err := s.reader.ReadString('\n')
-	if err != nil {
-		return "", err
+	var line []byte
+	for {
+		chunk, err := s.reader.ReadSlice('\n')
+		if len(line)+len(chunk) > maxCommandLineLength {
+			return "", errLineTooLong
+		}
+		line = append(line, chunk...)
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(string(line), "\r\n"), nil
 	}
-	return strings.TrimRight(line, "\r\n"), nil
 }
 
 // setWriteDeadline sets the write deadline if configured.

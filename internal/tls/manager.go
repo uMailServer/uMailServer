@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ type Manager struct {
 	logger      *slog.Logger
 	certManager *autocert.Manager
 	certCache   map[string]*tls.Certificate
+	certSrc     map[string]certSource // files each certCache entry was loaded from (F5187)
 	certMu      sync.RWMutex
 	certDir     string
 }
@@ -57,6 +59,7 @@ func NewManager(config Config, logger *slog.Logger) (*Manager, error) {
 		config:    config,
 		logger:    logger,
 		certCache: make(map[string]*tls.Certificate),
+		certSrc:   make(map[string]certSource),
 		certDir:   "./certs",
 	}
 
@@ -126,15 +129,83 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 // attacker-controlled and arrives before any authentication.
 const defaultCertCacheKey = "\x00default-cert"
 
+// fileStamp identifies one version of a certificate or key file on disk.
+type fileStamp struct {
+	mod  time.Time
+	size int64
+}
+
+// certSource records the files a cached certificate was loaded from, so a
+// certificate replaced on disk (certbot, manual renewal) is picked up without
+// a restart (F5187).
+type certSource struct {
+	certPath, keyPath   string
+	certStamp, keyStamp fileStamp
+}
+
+func statFile(path string) (fileStamp, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}, err
+	}
+	return fileStamp{mod: fi.ModTime(), size: fi.Size()}, nil
+}
+
+// normalizeServerName lowercases the SNI value (host names are
+// case-insensitive, RFC 6066 section 3 / RFC 4343, F5185) and returns "" for
+// anything that is not a plain host name, so an attacker-controlled SNI can
+// never be used as a path component outside certDir (F5186).
+func normalizeServerName(serverName string) string {
+	name := strings.ToLower(strings.TrimSuffix(serverName, "."))
+	if name == "" || name[0] == '.' || strings.Contains(name, "..") {
+		return ""
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '.' && c != '_' {
+			return ""
+		}
+	}
+	return name
+}
+
+// cachedCertificate returns the cached certificate for key. fresh is false
+// when the files it was loaded from have changed since, in which case the
+// caller should reload and may fall back to the returned (stale) certificate
+// if the reload fails. If the files cannot be stat'ed the cached copy is kept.
+func (m *Manager) cachedCertificate(key string) (cert *tls.Certificate, fresh bool) {
+	m.certMu.RLock()
+	cert, ok := m.certCache[key]
+	src, hasSrc := m.certSrc[key]
+	m.certMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if !hasSrc {
+		return cert, true
+	}
+	cs, cerr := statFile(src.certPath)
+	ks, kerr := statFile(src.keyPath)
+	if cerr != nil || kerr != nil {
+		return cert, true
+	}
+	return cert, cs == src.certStamp && ks == src.keyStamp
+}
+
 // getManualCertificate loads a certificate from file
 func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, error) {
+	name := normalizeServerName(serverName)
+
 	// Check cache first (read lock)
-	m.certMu.RLock()
-	if cert, ok := m.certCache[serverName]; ok {
-		m.certMu.RUnlock()
-		return cert, nil
+	var stale *tls.Certificate
+	if name != "" {
+		if cert, fresh := m.cachedCertificate(name); cert != nil {
+			if fresh {
+				return cert, nil
+			}
+			stale = cert
+		}
 	}
-	m.certMu.RUnlock()
 
 	// Determine cert paths
 	certPath := m.config.CertFile
@@ -142,9 +213,9 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 
 	// If server-specific certs exist, use those
 	specific := false
-	if serverName != "" {
-		specificCert := filepath.Join(m.certDir, serverName+".crt")
-		specificKey := filepath.Join(m.certDir, serverName+".key")
+	if name != "" {
+		specificCert := filepath.Join(m.certDir, name+".crt")
+		specificKey := filepath.Join(m.certDir, name+".key")
 
 		if _, err := os.Stat(specificCert); err == nil {
 			if _, err := os.Stat(specificKey); err == nil {
@@ -157,11 +228,12 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 
 	// Resolve per-domain certificates before consulting the shared fallback.
 	if !specific {
-		m.certMu.RLock()
-		cert, ok := m.certCache[defaultCertCacheKey]
-		m.certMu.RUnlock()
-		if ok {
-			return cert, nil
+		stale = nil
+		if cert, fresh := m.cachedCertificate(defaultCertCacheKey); cert != nil {
+			if fresh {
+				return cert, nil
+			}
+			stale = cert
 		}
 	}
 
@@ -169,9 +241,20 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 		return nil, fmt.Errorf("no certificate configured for %s", serverName)
 	}
 
+	// Stamp the files before reading them, so a write racing with the load is
+	// detected as a change on the next handshake rather than missed.
+	certStamp, cerr := statFile(certPath)
+	keyStamp, kerr := statFile(keyPath)
+
 	// Load certificate
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
+		if stale != nil {
+			// A renewal may be mid-write (cert updated, key not yet): keep
+			// serving the previous pair and retry on the next handshake.
+			m.logger.Warn("Reloading changed certificate failed; serving previous one", "cert", certPath, "error", err)
+			return stale, nil
+		}
 		return nil, fmt.Errorf("failed to load certificate: %w", err)
 	}
 
@@ -179,11 +262,19 @@ func (m *Manager) getManualCertificate(serverName string) (*tls.Certificate, err
 	// under their own name; the fallback certificate gets one shared slot, so
 	// the cache is bounded by the number of domains that actually have a
 	// certificate plus one, and cannot be flooded with attacker-chosen names.
-	m.certMu.Lock()
+	key := defaultCertCacheKey
 	if specific {
-		m.certCache[serverName] = &cert
+		key = name
+	}
+	m.certMu.Lock()
+	m.certCache[key] = &cert
+	if cerr == nil && kerr == nil {
+		if m.certSrc == nil {
+			m.certSrc = make(map[string]certSource)
+		}
+		m.certSrc[key] = certSource{certPath: certPath, keyPath: keyPath, certStamp: certStamp, keyStamp: keyStamp}
 	} else {
-		m.certCache[defaultCertCacheKey] = &cert
+		delete(m.certSrc, key)
 	}
 	m.certMu.Unlock()
 
@@ -328,6 +419,13 @@ func (m *Manager) GetCertificateStatus() []CertificateStatus {
 		// Try to load and check certificate
 		certPath := filepath.Join(m.certDir, domain+".crt")
 		data, err := os.ReadFile(filepath.Clean(certPath))
+		if os.IsNotExist(err) {
+			// ACME certificates live in the autocert DirCache under the bare
+			// domain name (key PEM followed by the chain), F5188.
+			if acmeData, acmeErr := os.ReadFile(filepath.Join(m.certDir, domain)); acmeErr == nil {
+				data, err = acmeData, nil
+			}
+		}
 		if err != nil {
 			status.Error = err.Error()
 			statuses = append(statuses, status)
@@ -367,11 +465,18 @@ type CertificateStatus struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// parseCertificate parses a certificate from PEM data
+// parseCertificate parses the first CERTIFICATE block from PEM data, skipping
+// any preceding blocks such as the private key in an autocert cache entry.
 func parseCertificate(data []byte) (*x509.Certificate, error) {
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, fmt.Errorf("failed to parse certificate PEM")
+	var block *pem.Block
+	for {
+		block, data = pem.Decode(data)
+		if block == nil {
+			return nil, fmt.Errorf("failed to parse certificate PEM")
+		}
+		if block.Type == "CERTIFICATE" {
+			break
+		}
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)

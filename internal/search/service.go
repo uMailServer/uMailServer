@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -306,7 +307,13 @@ func generatePreview(content string, maxLen int) string {
 	if len(content) <= maxLen {
 		return content
 	}
-	return content[:maxLen] + "..."
+	// Cut on a rune boundary so a multi-byte character is never split into
+	// invalid UTF-8 (F5197).
+	cut := maxLen
+	for cut > 0 && !utf8.RuneStart(content[cut]) {
+		cut--
+	}
+	return content[:cut] + "..."
 }
 
 // extractTextContent extracts text content from message data
@@ -334,8 +341,11 @@ func extractTextContent(data []byte) string {
 
 // stripHTML removes HTML tags from text
 func stripHTML(html string) string {
-	// Simple HTML tag removal
-	result := ""
+	// Simple HTML tag removal. A strings.Builder keeps this linear: the former
+	// per-rune string concatenation was quadratic, so one large inbound
+	// message stalled an index worker (and BuildIndex's service lock) (F5196).
+	var result strings.Builder
+	result.Grow(len(html))
 	inTag := false
 	for _, r := range html {
 		if r == '<' {
@@ -343,8 +353,8 @@ func stripHTML(html string) string {
 		} else if r == '>' {
 			inTag = false
 		} else if !inTag {
-			result += string(r)
+			result.WriteRune(r)
 		}
 	}
-	return result
+	return result.String()
 }

@@ -2,7 +2,8 @@
 
 **Scan Date:** 2026-04-13  
 **Scope:** Full Go backend codebase (`internal/`, `cmd/`, `embed.go`, `go.mod`)  
-**Methodology:** Multi-phase AI-assisted security audit — Recon, Hunt, Verify
+**Methodology:** Multi-phase AI-assisted security audit — Recon, Hunt, Verify  
+**Status Update:** 2026-10-07 — see [Remediation Status](#remediation-status-verified-2026-10-07); the finding descriptions below reflect the code as of the original scan.
 
 ---
 
@@ -28,6 +29,69 @@
 8. **HIGH** — Any authenticated user can list all accounts (`internal/api/server_accounts.go`)
 9. **HIGH** — Token blacklist is in-memory only, lost on restart (`internal/api/server_auth.go`)
 10. **HIGH** — `ratelimit.cleanupLoop` goroutine leak, no `Stop()` method (`internal/ratelimit/ratelimit.go`)
+
+---
+
+## Remediation Status (verified 2026-10-07)
+
+Each finding below was re-checked against the code on 2026-10-07. Totals: 43 ✅ Fixed, 8 🟡 Partial, 2 ⚪ Config-dependent, 1 🔴 Open. All four Critical findings are fixed. (The Executive Summary table above counts 59 findings; the report body describes 54, which is what this table covers.)
+
+| ID | Severity | Finding | Status | Evidence | Commit |
+|----|----------|---------|--------|----------|--------|
+| 1.1 | Critical | Missing auth on `/api/v1/auth/refresh` | ✅ Fixed | Refresh route behind authMiddleware (`internal/api/server.go`) | b8a52b3 |
+| 1.2 | Critical | SSE endpoint `/api/v1/events` has no auth | ✅ Fixed | `/api/v1/events` wrapped in authMiddleware | b8a52b3 |
+| 1.3 | High | JWT `alg` none not explicitly rejected | 🟡 Partial | `none` rejected everywhere; AdminServer `withAuth` (`internal/api/admin.go`) still accepts any HMAC alg, not only HS256 | b8a52b3 |
+| 1.4 | High | `listAccounts` allows horizontal privilege escalation | ✅ Fixed | Non-admins see only their own account | b8a52b3 |
+| 1.5 | High | `updateAccount` allows privilege escalation via empty auth context | ✅ Fixed | Empty auth user rejected; `is_admin` change requires admin | b8a52b3 |
+| 1.6 | Medium | Weak password policy | ✅ Fixed | 8–128 chars with upper/lower/digit/special (`internal/api/validators.go`) | b8a52b3 |
+| 1.7 | Medium | Rate-limit config PUT lacks bounds validation | ✅ Fixed | Every field bounded 1–10,000,000 | 61c8511 |
+| 1.8 | Medium | Login rate limit is IP-only and bypassable | ✅ Fixed | Per-account limit plus IP exponential backoff | b8a52b3 |
+| 1.9 | Medium | API rate limit skipped for auth endpoints | ✅ Fixed | Only `/health` skips the API rate limit | ba899ce |
+| 1.10 | High | SMTP inbound allows AUTH over plaintext if `AllowInsecure` is set | ✅ Fixed | AUTH without TLS refused; port 25 never allows it | 89d9cc2 |
+| 1.11 | High | POP3 USER/PASS allowed over plaintext | ✅ Fixed | POP3 requires TLS; USER/PASS rejected otherwise | 89d9cc2 |
+| 1.12 | Medium | APOP uses MD5 and is vulnerable to offline cracking | 🟡 Partial | APOP removed, but unsalted SHA-256(password) is still stored as `APOPHash` | f69702d |
+| 1.13 | Medium | TOTP not rate-limited | ✅ Fixed | Per-account TOTP lockout (5 failures / 5 min) | b8a52b3 |
+| 1.14 | High | TOTP secret stored in plaintext | ✅ Fixed | AES-256-GCM with PBKDF2 key (`internal/auth/totp_crypto.go`) | b8a52b3 |
+| 1.15 | Low | TOTP replay within time window | ✅ Fixed | Last-used step check plus atomic `ConsumeTOTPStep` | 8f0c09d |
+| 1.16 | Medium | JWT secret rotation never prunes old secrets | ✅ Fixed | At most 5 JWT secret versions kept | b8a52b3 |
+| 1.17 | High | Token blacklist is in-memory only | 🟡 Partial | Revocations persisted to bbolt; but if the DB write fails the in-memory fallback is never consulted | b8a52b3 |
+| 1.18 | High | Refresh token endpoint does not validate old token before revocation | 🟡 Partial | Refresh authenticated and revokes the old header token; cookie tokens not revoked; no absolute session lifetime | d11c08e |
+| 1.19 | High | LDAP anonymous bind possible when `BindDN` is empty | ✅ Fixed | Empty `bind_dn` rejected when LDAP is enabled | 61c8511 |
+| 1.20 | Medium | LDAP credentials exposed in config | 🟡 Partial | `json:"-"` on `auth.LDAPConfig` but not on `config.LDAPConfig`; no code path serializes it today | 61c8511 |
+| 1.21 | Medium | LDAP user filter injection risk via configuration | ✅ Fixed | `validateUserFilter` enforces one `%s` and balanced parentheses | 61c8511 |
+| 2.1 | High | SMTP Header Injection (CRLF) in `handleMailSend` | ✅ Fixed | `sanitizeHeaderValue` strips CR/LF from Subject/To/Cc/Bcc | 61c8511 |
+| 2.2 | Low | CORS wildcard origin risk | ⚪ Config-dependent | Main API never matches `*`; SSE and MCP still echo `*` if configured. Default: no CORS | — |
+| 3.1 | Medium | APOP authentication uses broken MD5 hash | ✅ Fixed | APOP/MD5 code removed from POP3 | f69702d |
+| 3.2 | Medium | Predictable POP3 session ID generation | ✅ Fixed | Session IDs from `crypto/rand` | 89d9cc2 |
+| 3.3 | Low | CRAM-MD5 uses HMAC-MD5 | ✅ Fixed | CRAM-MD5 no longer advertised; rejected with 504 | 89d9cc2 |
+| 3.4 | Low | LDAP TLS allows `InsecureSkipVerify` | ⚪ Config-dependent | `skip_verify` off by default, logs a warning when enabled | 61c8511 |
+| 3.5 | Low | Validation errors exposed directly to API clients | ✅ Fixed | Generic validation messages returned to clients | b8a52b3 |
+| 3.6 | Low | Log file created with overly permissive mode | ✅ Fixed | Log file opened `0o600` | 89d9cc2 |
+| 3.7 | Low | CardDAV metadata updated with permissive mode | ✅ Fixed | CardDAV writes use `0o600` | 89d9cc2 |
+| 3.8 | Low | CalDAV metadata updated with permissive mode | ✅ Fixed | CalDAV writes use `0o600` | 89d9cc2 |
+| 3.9 | Low | bbolt databases lack encryption at rest | 🟡 Partial | DB files `0o600`, TOTP secrets encrypted; DKIM private keys still plaintext; no encryption at rest | — |
+| 3.10 | Info | Outdated APOP Hash comment | ✅ Fixed | Comment corrected | b8a52b3 |
+| 4.1 | Critical | Double-lock deadlock in vacation reply cleanup | ✅ Fixed | Deadlock fixed in ee09a71; a follow-up unlocked-map regression fixed in deee1cf | ee09a71, deee1cf |
+| 4.2 | High | Quota update race condition | ✅ Fixed | `IncrementQuota` does read-modify-write in one bbolt tx | b8a52b3 |
+| 4.3 | High | TOCTOU race in `MessageStore.StoreMessage` | ✅ Fixed | `O_EXCL` create; a failed write can still leave a partial file | ee09a71 |
+| 4.4 | High | `countMessageRefs` violates caller-holds-lock contract | ✅ Fixed | Production path uses `countMessageRefsUnsafe` under the lock | ee09a71 |
+| 4.5 | High | Unbounded goroutine creation in `deliverLocal` | ✅ Fixed | Push/vacation goroutines bounded by `bgSem` | ee09a71 |
+| 4.6 | High | `ratelimit.cleanupLoop` goroutine leak | ✅ Fixed | `Stop()` and `stopCh` added | ee09a71 |
+| 4.7 | High | Unhandled panic in IMAP MDN goroutine | ✅ Fixed | MDN goroutine recovers panics (silently, without logging) | ee09a71 |
+| 4.8 | High | Unhandled panic in push notification goroutine | ✅ Fixed | Push goroutine recovers and logs panics | — |
+| 4.9 | High | Unhandled panic in vacation reply goroutine | ✅ Fixed | Vacation goroutine recovers and logs panics | 5f3feb7 |
+| 4.10 | Medium | Notification hub timer pressure | ✅ Fixed | Non-blocking send, no `time.After` per notification | ee09a71 |
+| 4.11 | Medium | `Manager.mu` held across I/O in `Enqueue` | ✅ Fixed | Message file written before taking `m.mu` | ee09a71 |
+| 4.12 | Medium | `acquireMXConn` holds pool lock during network reset | ✅ Fixed | Pool lock released before `Reset()` | ee09a71 |
+| 4.13 | Medium | IMAP MDN goroutine without lifecycle tracking | ✅ Fixed | MDN goroutines bounded by `mdnSem` (50) | ee09a71 |
+| 4.14 | Medium | HTTP servers lack explicit shutdown | ✅ Fixed | CalDAV/CardDAV/JMAP servers shut down in `server_stop.go` | ee09a71 |
+| 4.15 | Medium | Queue manager ignores context cancellation | 🔴 Open | Context checked only in worker/sweeper loops; MX loop, dial and MX lookup ignore it (`internal/queue/manager.go`) | — |
+| 4.16 | High | Unclosed bbolt databases in error paths | 🟡 Partial | `db` and IMAP mailstore close on error; not audited for every open path | b8a52b3, ee09a71 |
+| 4.17 | Medium | MX connection pool leak on panic | ✅ Fixed | `withMXConn` releases via defer; pooled-path panic now reported as an error | ee09a71, 3b3feaf |
+| 4.18 | Medium | Temporary files in Maildir may leak | 🟡 Partial | Sync/rename failures remove the tmp file; an `os.WriteFile` failure still leaves a partial tmp file (`internal/store/maildir.go`) | — |
+| 4.19 | High | `QuotaUsed` integer overflow without check | ✅ Fixed | Overflow check inside `IncrementQuota` | b8a52b3 |
+| 4.20 | Medium | Message size limits not enforced before hash/storage | ✅ Fixed | 100 MB limit checked before hashing | ee09a71 |
+| 4.21 | Low | Weak hash in config watcher | ✅ Fixed | Config watcher uses SHA-256 | 89d9cc2 |
 
 ---
 

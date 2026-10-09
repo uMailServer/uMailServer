@@ -3,6 +3,8 @@
 ## Değerlendirme Tarihi
 2026-05-01 (Updated after implementation)
 
+> **2026-10-07 düzeltmesi:** Bu belgedeki bazı "✅" iddiaları kodla uyuşmuyordu (Helm chart hiç eklenmemiş). Gerçek eksikler aşağıdaki "Eksik Alanlar" tablosuna eklendi; güvenlik bulgularının güncel durumu için `SECURITY-REPORT.md`'deki Durum sütununa bakın.
+
 ---
 
 ## Güçlü Yanlar
@@ -11,7 +13,7 @@
 |------|-------|-------|
 | Test Coverage | ✅ | Tüm paketlerde %77-99 arası coverage, 35+ paket test ediliyor |
 | Build | ✅ | `go build ./...` başarılı, tüm testler geçiyor |
-| Security | ✅ | P0 güvenlik açıkları giderilmiş (son iki commit), CORS wildcard yasak, CSRF koruması var |
+| Security | ✅ | Kritik bulgular kapatıldı, CORS wildcard yasak, CSRF koruması var — bulgu bazında durum `SECURITY-REPORT.md`'de |
 | Health Checks | ✅ | `/health`, `/health/live`, `/health/ready` endpoint'leri mevcut |
 | Backup/Restore | ✅ | Şifreli AES-256-GCM backup sistemi mevcut (`internal/cli/backup.go`) |
 | CI/CD | ✅ | 5 GitHub workflow var: CI, backup-restore, docker, fuzz, release |
@@ -21,7 +23,6 @@
 | Monitoring Dashboards | ✅ | Grafana dashboard tanımları eklendi |
 | IMAP SUBSCRIBE/UNSUBSCRIBE | ✅ | Implement edildi |
 | IMAP LSUB | ✅ | Doğru implementasyon - sadece subscribed mailbox'ları döndürüyor |
-| Kubernetes Helm Chart | ✅ | `deploy/helm/umailserver/` Helm chart oluşturuldu |
 
 ---
 
@@ -69,11 +70,7 @@ internal/imap/commands.go:
    - `handleLsub` doğru implementasyon - sadece subscribed mailbox'ları döndürüyor
    - Mailstore interface güncellendi
 
-5. **Kubernetes Helm Chart** oluşturuldu
-   - Deployment, Service, Ingress, PVC, ConfigMap, Secret
-   - ServiceAccount, NetworkPolicy, PodDisruptionBudget
-   - HorizontalPodAutoscaler, ServiceMonitor
-   - Konum: `deploy/helm/umailserver/`
+5. ~~**Kubernetes Helm Chart**~~ — bu madde hatalıydı: `deploy/helm/` dizini repoya hiç eklenmedi. Ayrıca bbolt tek düğüm gerektirdiği için HPA'lı bir chart mevcut mimariyle çalışmaz.
 
 ---
 
@@ -84,6 +81,13 @@ internal/imap/commands.go:
 | Eksik | Öncelik | Dosya/Konum | Açıklama |
 |-------|---------|-------------|----------|
 | IMAP SCORE Extension | 🟡 Orta | - | SCORE extension desteklenmiyor |
+| Webmail API bağlantısı | 🔴 Yüksek | `webmail/src/pages/` | Inbox, folder, email-detail, compose, contacts vb. mock veriyle çalışıyor |
+| Push / Vacation REST | 🔴 Yüksek | `internal/server/server_api.go` | `api.NewServer` push servisi ve vacation manager almıyor; uç noktalar hiçbir şey kaydetmiyor |
+| Kullanıcı filtreleri | 🔴 Yüksek | `internal/api/filters.go` | Filtreler kaydediliyor ama teslimat yolunda uygulanmıyor |
+| Admin Settings | 🟡 Orta | `web/admin/src/pages/Settings.tsx` | Kaydet butonu API çağırmıyor |
+| Okunup kullanılmayan config alanları | 🟡 Orta | `internal/config` | `Spam.Enabled`, `Spam.Bayesian.*`, `RateLimit.SMTPPerMinute/Hour`, `Storage.Sync` vb. |
+| Çok düğüm / HA | 🟡 Orta | `internal/cluster` | Cluster paketi hiç başlatılmıyor; bbolt tek düğüm. Issue #1 |
+| Helm chart | 🟢 Düşük | `deploy/` | Yok; tek düğüm kısıtıyla (replicas: 1, HPA yok) yazılmalı |
 
 ---
 

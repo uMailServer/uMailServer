@@ -37,8 +37,25 @@ func (a *pop3MailstoreAdapter) ListMessages(user string) ([]*pop3.Message, error
 	return result, nil
 }
 
+// The pop3 package addresses messages by 1-based message number (RFC 1939
+// §4), which is the INBOX sequence number; the methods below use it as is.
+// They used to add 1, so RETR n read message n+1 and DELE n removed message
+// n+1 (F4977).
+
+// pop3SeqSet converts a 1-based POP3 message number to an IMAP sequence set.
+func pop3SeqSet(index int) (string, error) {
+	if index < 1 {
+		return "", fmt.Errorf("message not found")
+	}
+	return fmt.Sprintf("%d", index), nil
+}
+
 func (a *pop3MailstoreAdapter) GetMessage(user string, index int) (*pop3.Message, error) {
-	msgs, err := a.mailstore.FetchMessages(user, "INBOX", fmt.Sprintf("%d", index+1), []string{"RFC822.SIZE"})
+	seq, err := pop3SeqSet(index)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := a.mailstore.FetchMessages(user, "INBOX", seq, []string{"RFC822.SIZE"})
 	if err != nil || len(msgs) == 0 {
 		return nil, fmt.Errorf("message not found")
 	}
@@ -51,16 +68,34 @@ func (a *pop3MailstoreAdapter) GetMessage(user string, index int) (*pop3.Message
 }
 
 func (a *pop3MailstoreAdapter) GetMessageData(user string, index int) ([]byte, error) {
-	msgs, err := a.mailstore.FetchMessages(user, "INBOX", fmt.Sprintf("%d", index+1), []string{"RFC822"})
+	seq, err := pop3SeqSet(index)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := a.mailstore.FetchMessages(user, "INBOX", seq, []string{"RFC822"})
 	if err != nil || len(msgs) == 0 {
 		return nil, fmt.Errorf("message not found")
 	}
 	return msgs[0].Data, nil
 }
 
+// DeleteMessage removes message number index from the maildrop. pop3 calls
+// it in the UPDATE state, highest number first, and relies on the removal
+// (RFC 1939 §6): flagging \Deleted alone left the message in the maildrop
+// for every later session (F4977).
 func (a *pop3MailstoreAdapter) DeleteMessage(user string, index int) error {
-	seqSet := fmt.Sprintf("%d", index+1)
-	return a.mailstore.StoreFlags(user, "INBOX", seqSet, []string{"\\Deleted"}, imap.FlagAdd)
+	seq, err := pop3SeqSet(index)
+	if err != nil {
+		return err
+	}
+	msgs, err := a.mailstore.FetchMessages(user, "INBOX", seq, []string{"FLAGS"})
+	if err != nil || len(msgs) == 0 {
+		return fmt.Errorf("message not found")
+	}
+	if err := a.mailstore.StoreFlags(user, "INBOX", seq, []string{"\\Deleted"}, imap.FlagAdd); err != nil {
+		return err
+	}
+	return a.mailstore.ExpungeUIDs(user, "INBOX", []uint32{msgs[0].UID})
 }
 
 func (a *pop3MailstoreAdapter) GetMessageCount(user string) (int, error) {
@@ -81,8 +116,9 @@ func (a *pop3MailstoreAdapter) GetMessageSize(user string, index int) (int64, er
 
 // indexJob represents a search indexing task.
 type indexJob struct {
-	email string
-	uid   uint32
+	email  string
+	folder string // mailbox the UID belongs to; "" means INBOX
+	uid    uint32
 }
 
 // runIndexWorker processes search indexing jobs.
@@ -94,8 +130,15 @@ func (s *Server) runIndexWorker() {
 		}
 	}()
 	for job := range s.indexWork {
-		if err := s.searchSvc.IndexMessage(job.email, "INBOX", job.uid); err != nil {
-			s.logger.Error("Failed to index message for search", "email", job.email, "uid", job.uid, "error", err)
+		// UIDs are per folder: indexing a Junk or Sieve-filed UID as INBOX
+		// re-indexed an unrelated INBOX message and left the delivered one
+		// unsearchable (F5118).
+		folder := job.folder
+		if folder == "" {
+			folder = "INBOX"
+		}
+		if err := s.searchSvc.IndexMessage(job.email, folder, job.uid); err != nil {
+			s.logger.Error("Failed to index message for search", "email", job.email, "folder", folder, "uid", job.uid, "error", err)
 		}
 	}
 }

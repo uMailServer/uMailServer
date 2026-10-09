@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/auth"
@@ -47,7 +48,8 @@ func (s *Server) startInboundSMTP() {
 
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
 	smtpServer.SetAuthHandler(s.authenticate)
-	smtpServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
+	// Inbound mail honours the pipeline's spam verdict (F4975).
+	smtpServer.SetDeliveryHandlerWithNotify(s.deliverInboundWithNotify)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken (CVE-2022-37454, etc.)
 	// smtpServer.SetUserSecretHandler(s.getUserSecret)
 	smtpServer.SetLoginResultHandler(s.protoLoginHandler("smtp"))
@@ -85,6 +87,13 @@ func (s *Server) startInboundSMTP() {
 		s.logger.Info("DMARC reporting enabled", "org", s.config.DMARC.OrgName)
 	}
 
+	// Sender-supplied X-Spam-* headers are neutralised before any stage
+	// runs, so only the verdict this server adds can file mail into Junk
+	// (F4975).
+	pipeline.AddStage(spamHeaderGuardStage{})
+	// Relay policy first: an unauthenticated client on the MX port may only
+	// send to local domains (F4880).
+	pipeline.AddStage(&relayPolicyStage{isLocalDomain: s.isLocalDomain})
 	pipeline.AddStage(smtp.NewAuthSPFStage(spfChecker, s.logger))
 	pipeline.AddStage(smtp.NewAuthDKIMStage(dkimVerifier, s.logger))
 	pipeline.AddStage(dmarcStage)
@@ -118,16 +127,8 @@ func (s *Server) startInboundSMTP() {
 
 	// Sieve mail filtering (if sieve manager available)
 	if s.sieveManager != nil {
-		sieveStage := smtp.NewSieveStage(s.sieveManager)
-		sieveStage.SetVacationHandler(s.handleSieveVacation)
-		pipeline.AddStage(sieveStage)
+		pipeline.AddStage(smtp.NewSieveStage(s.sieveManager))
 	}
-
-	// S/MIME processing stage
-	pipeline.AddStage(smtp.NewSMIMEStage(s.smimeKeystore))
-
-	// OpenPGP processing stage
-	pipeline.AddStage(smtp.NewOpenPGPStage(s.openpgpKeystore))
 
 	// Antivirus scanning stage
 	if s.config.AV.Enabled {
@@ -149,6 +150,62 @@ func (s *Server) startInboundSMTP() {
 	}()
 	s.smtpServer = smtpServer
 	s.logger.Info("SMTP server started", "addr", smtpAddr)
+}
+
+// relayPolicyStage refuses to relay for unauthenticated clients: without
+// it the inbound MX server queued mail for any external recipient, making
+// the server an open relay (F4880). Authenticated sessions may still relay.
+type relayPolicyStage struct {
+	isLocalDomain func(domain string) bool
+}
+
+func (r *relayPolicyStage) Name() string { return "RelayPolicy" }
+
+func (r *relayPolicyStage) Process(ctx *smtp.MessageContext) smtp.PipelineResult {
+	if ctx.Authenticated {
+		return smtp.ResultAccept
+	}
+	for _, rcpt := range ctx.To {
+		_, domain := parseEmail(rcpt)
+		if domain == "" || !r.isLocalDomain(domain) {
+			ctx.Rejected = true
+			ctx.RejectionCode = 550
+			ctx.RejectionMessage = "5.7.1 Relaying denied"
+			return smtp.ResultReject
+		}
+	}
+	return smtp.ResultAccept
+}
+
+// spamHeaderGuardStage renames every X-Spam-* header the client sent to
+// X-Orig-*, so that a sender cannot forge the spam verdict that
+// deliverInboundWithNotify routes on (F4975). The rename is done in place,
+// keeping the length: the session prepends its own headers to the same
+// message bytes it handed the pipeline. Parsed copies are dropped from
+// ctx.Headers so later stages (Sieve) do not see the forged values either.
+type spamHeaderGuardStage struct{}
+
+func (spamHeaderGuardStage) Name() string { return "SpamHeaderGuard" }
+
+func (spamHeaderGuardStage) Process(ctx *smtp.MessageContext) smtp.PipelineResult {
+	forEachHeaderField(ctx.Data, func(name string, start, _ int) {
+		if isSpamHeaderName(name) {
+			copy(ctx.Data[start:], "X-Orig-")
+		}
+	})
+	for k := range ctx.Headers {
+		if isSpamHeaderName(k) {
+			delete(ctx.Headers, k)
+		}
+	}
+	return smtp.ResultAccept
+}
+
+// isLocalDomain reports whether mail for domain is delivered locally, using
+// the same test as deliverMessageWithNotify (an existing, active domain).
+func (s *Server) isLocalDomain(domain string) bool {
+	d, err := s.database.GetDomain(strings.ToLower(domain))
+	return err == nil && d != nil && d.IsActive
 }
 
 // startSubmissionSMTP creates and starts the submission (587) server.

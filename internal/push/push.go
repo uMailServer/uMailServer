@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,12 @@ type NotificationAction struct {
 	Title  string `json:"title"`
 	Icon   string `json:"icon,omitempty"`
 }
+
+// pushHTTPClient bounds every request to a push service. webpush-go otherwise
+// uses &http.Client{} with no timeout, so an endpoint chosen by a subscriber
+// that never answers would block the sender forever (F5182). Transport is
+// left nil so http.DefaultTransport is used.
+var pushHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // Service manages push notifications
 type Service struct {
@@ -149,6 +156,16 @@ func (s *Service) Subscribe(userID string, sub *Subscription) error {
 	sub.CreatedAt = time.Now()
 	sub.UpdatedAt = time.Now()
 
+	// A push endpoint identifies exactly one browser subscription (RFC 8030),
+	// so a re-registration replaces the previous record instead of adding a
+	// duplicate that would deliver every notification again (F5181). The
+	// endpoint now belongs to userID, even if another user registered it.
+	for id, existing := range s.subscriptions {
+		if id != sub.ID && existing.Endpoint == sub.Endpoint {
+			s.removeLocked(id)
+		}
+	}
+
 	// Store subscription
 	s.subscriptions[sub.ID] = sub
 
@@ -179,22 +196,7 @@ func (s *Service) Unsubscribe(userID, subscriptionID string) error {
 		return fmt.Errorf("subscription not found")
 	}
 
-	// Remove from subscriptions map
-	delete(s.subscriptions, subscriptionID)
-
-	// Remove from user's subscription list
-	userSubList := s.userSubs[userID]
-	for i, id := range userSubList {
-		if id == subscriptionID {
-			s.userSubs[userID] = append(userSubList[:i], userSubList[i+1:]...)
-			break
-		}
-	}
-
-	// Remove from disk
-	if err := s.deleteSubscriptionFile(subscriptionID); err != nil {
-		s.logger.Warn("Failed to delete subscription file", "error", err)
-	}
+	s.removeLocked(subscriptionID)
 
 	s.logger.Info("Push subscription removed",
 		"user", userID,
@@ -202,6 +204,27 @@ func (s *Service) Unsubscribe(userID, subscriptionID string) error {
 	)
 
 	return nil
+}
+
+// removeLocked deletes a subscription from memory and disk. s.mu must be held.
+func (s *Service) removeLocked(subscriptionID string) {
+	sub, exists := s.subscriptions[subscriptionID]
+	if !exists {
+		return
+	}
+	delete(s.subscriptions, subscriptionID)
+
+	userSubList := s.userSubs[sub.UserID]
+	for i, id := range userSubList {
+		if id == subscriptionID {
+			s.userSubs[sub.UserID] = append(userSubList[:i], userSubList[i+1:]...)
+			break
+		}
+	}
+
+	if err := s.deleteSubscriptionFile(subscriptionID); err != nil {
+		s.logger.Warn("Failed to delete subscription file", "error", err)
+	}
 }
 
 // GetUserSubscriptions returns all subscriptions for a user
@@ -245,6 +268,7 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 		VAPIDPublicKey:  s.config.VAPIDPublicKey,
 		VAPIDPrivateKey: s.config.VAPIDPrivateKey,
 		TTL:             30,
+		HTTPClient:      pushHTTPClient,
 	}
 
 	resp, err := webpush.SendNotification(payload, webSub, options)
@@ -258,6 +282,12 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 		// Subscription is no longer valid, remove it
 		_ = s.Unsubscribe(sub.UserID, sub.ID)
 		return fmt.Errorf("subscription expired")
+	}
+
+	// Any other non-2xx answer (400, 403 VAPID rejection, 413, 429, 5xx)
+	// means the notification was not accepted (F5180).
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("push service returned HTTP %d", resp.StatusCode)
 	}
 
 	return nil
@@ -507,21 +537,7 @@ func (s *Service) CleanExpiredSubscriptions() error {
 	}
 
 	for _, id := range toDelete {
-		if sub, exists := s.subscriptions[id]; exists {
-			delete(s.subscriptions, id)
-
-			// Remove from user's list
-			userID := sub.UserID
-			userSubList := s.userSubs[userID]
-			for i, sid := range userSubList {
-				if sid == id {
-					s.userSubs[userID] = append(userSubList[:i], userSubList[i+1:]...)
-					break
-				}
-			}
-
-			_ = s.deleteSubscriptionFile(id)
-		}
+		s.removeLocked(id)
 	}
 
 	if len(toDelete) > 0 {

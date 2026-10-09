@@ -348,10 +348,16 @@ func (p *Parser) parseArgument() (Value, error) {
 		p.pos++
 	}
 	if start == p.pos {
-		return nil, nil
+		// F5005: returning (nil, nil) here leaves p.pos unchanged, so the
+		// caller's argument loop never progresses and Parse spins forever.
+		return nil, fmt.Errorf("unexpected character %q at position %d", ch, p.pos)
 	}
 
-	return &StringValue{Value: p.input[start:p.pos]}, nil
+	word := p.input[start:p.pos]
+	if strings.EqualFold(word, "text") && p.pos < p.length && p.input[p.pos] == ':' {
+		return p.parseMultiline()
+	}
+	return &StringValue{Value: word}, nil
 }
 
 func (p *Parser) parseString() (*StringValue, error) {
@@ -360,37 +366,65 @@ func (p *Parser) parseString() (*StringValue, error) {
 	}
 	p.pos++ // skip opening quote
 
+	// F5038: RFC 5228 §2.4.2 defines only \\ and \" ; any other escaped
+	// character stands for itself ("\n" is "n"). A string must be closed.
 	var builder strings.Builder
 	for p.pos < p.length {
 		ch := p.input[p.pos]
-		if ch == '\\' && p.pos+1 < p.length {
-			// Escaped character
+		switch {
+		case ch == '\\' && p.pos+1 < p.length:
 			p.pos++
-			switch p.input[p.pos] {
-			case 'n':
-				builder.WriteByte('\n')
-			case 'r':
-				builder.WriteByte('\r')
-			case 't':
-				builder.WriteByte('\t')
-			case '\\':
-				builder.WriteByte('\\')
-			case '"':
-				builder.WriteByte('"')
-			default:
-				builder.WriteByte(p.input[p.pos])
-			}
+			builder.WriteByte(p.input[p.pos])
 			p.pos++
-		} else if ch == '"' {
+		case ch == '"':
 			p.pos++ // skip closing quote
-			break
-		} else {
+			return &StringValue{Value: builder.String()}, nil
+		default:
 			builder.WriteByte(ch)
 			p.pos++
 		}
 	}
 
-	return &StringValue{Value: builder.String()}, nil
+	return nil, fmt.Errorf("unterminated quoted string")
+}
+
+// parseMultiline parses the body of an RFC 5228 §2.4.2 multi-line string;
+// p.pos is at the ':' after "text". F5039. The string ends at a line holding
+// only "."; a leading ".." is dot-unstuffed to ".". Line endings are kept.
+func (p *Parser) parseMultiline() (*StringValue, error) {
+	p.pos++ // skip ':'
+	for p.pos < p.length && (p.input[p.pos] == ' ' || p.input[p.pos] == '\t') {
+		p.pos++
+	}
+	if p.pos < p.length && p.input[p.pos] == '#' {
+		for p.pos < p.length && p.input[p.pos] != '\n' {
+			p.pos++
+		}
+	} else if p.pos < p.length && p.input[p.pos] == '\r' {
+		p.pos++
+	}
+	if p.pos >= p.length || p.input[p.pos] != '\n' {
+		return nil, fmt.Errorf("expected end of line after text: at position %d", p.pos)
+	}
+	p.pos++
+
+	var builder strings.Builder
+	for p.pos < p.length {
+		end := strings.IndexByte(p.input[p.pos:], '\n')
+		if end < 0 {
+			break
+		}
+		line := p.input[p.pos : p.pos+end+1]
+		p.pos += end + 1
+		if strings.TrimRight(line, "\r\n") == "." {
+			return &StringValue{Value: builder.String(), IsLiteral: true}, nil
+		}
+		if strings.HasPrefix(line, "..") {
+			line = line[1:]
+		}
+		builder.WriteString(line)
+	}
+	return nil, fmt.Errorf("unterminated multi-line string")
 }
 
 func (p *Parser) parseStringList() (*ListValue, error) {
@@ -450,6 +484,23 @@ func (p *Parser) parseNumber() (*NumberValue, error) {
 	value := p.input[start:p.pos]
 	var n int64
 	_, _ = fmt.Sscanf(value, "%d", &n)
+
+	// F5006: RFC 5228 §2.4.1 number = 1*DIGIT [QUANTIFIER], QUANTIFIER = "K" / "M" / "G".
+	if p.pos < p.length {
+		shift := 0
+		switch p.input[p.pos] {
+		case 'K', 'k':
+			shift = 10
+		case 'M', 'm':
+			shift = 20
+		case 'G', 'g':
+			shift = 30
+		}
+		if shift != 0 && (p.pos+1 >= p.length || !isAlnumUnderscore(p.input[p.pos+1])) {
+			p.pos++
+			n <<= shift
+		}
+	}
 
 	return &NumberValue{Value: n}, nil
 }

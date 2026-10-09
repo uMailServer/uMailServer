@@ -29,6 +29,14 @@ var idCounter uint64
 // mirroring handleUpload's upload budget.
 const maxJMAPAPIRequestBodySize = 32 << 20 // 32 MiB
 
+// maxCallsInRequest and maxObjectsInGet are the limits advertised in the
+// session's urn:ietf:params:jmap:core capability; RFC 8620 §3.6.1 and §5.1
+// require the server to reject requests that exceed them (F4995, F4996).
+const (
+	maxCallsInRequest = 16
+	maxObjectsInGet   = 256
+)
+
 // Server represents a JMAP server
 type Server struct {
 	logger          *slog.Logger
@@ -122,7 +130,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleSession(w, r)
 	case path == "/jmap/api":
 		s.handleAPI(w, r)
-	case path == "/jmap/upload":
+	case path == "/jmap/upload" || strings.HasPrefix(path, "/jmap/upload/"):
 		s.handleUpload(w, r)
 	case strings.HasPrefix(path, "/jmap/download"):
 		s.handleDownload(w, r)
@@ -260,10 +268,27 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Process method calls
+	// RFC 8620 §3.6.1: a request exceeding maxCallsInRequest is rejected
+	// as a whole with a limit error (F4995).
+	if len(request.MethodCalls) > maxCallsInRequest {
+		s.sendJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"type":   "urn:ietf:params:jmap:error:limit",
+			"status": http.StatusBadRequest,
+			"limit":  "maxCallsInRequest",
+		})
+		return
+	}
+
+	// Process method calls, resolving RFC 8620 §3.7 result references
+	// against the responses already produced in this request (F4997).
 	var responses []Response
 	for _, call := range request.MethodCalls {
-		response := s.processMethodCall(user, call)
+		var response Response
+		if resolved, errResp, ok := resolveResultReferences(call, responses); ok {
+			response = s.processMethodCall(user, resolved)
+		} else {
+			response = errResp
+		}
 		responses = append(responses, response)
 	}
 
@@ -289,6 +314,16 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F5149: the session advertises uploadUrl /jmap/upload/{accountId}.
+	// When the account segment is present it must be the caller's own
+	// account, matching the download endpoint's ownership check.
+	if rest := strings.TrimPrefix(r.URL.Path, "/jmap/upload"); rest != "" && rest != "/" {
+		if strings.Trim(rest, "/") != user {
+			s.sendError(w, http.StatusForbidden, "forbidden", nil)
+			return
+		}
+	}
+
 	// Read upload data (limit to 50MB to prevent DoS)
 	limitedReader := http.MaxBytesReader(w, r.Body, 50<<20)
 	data, err := io.ReadAll(limitedReader)
@@ -298,10 +333,20 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Generate blob ID
+	// F5149: persist the blob so its blobId can be used afterwards (RFC 8620
+	// §6.1), e.g. by Email/import, which resolves blobIds through the
+	// message store. The store is content-addressed and its id is the
+	// blobId. Without a store (test wiring) the id is only computed.
 	blobID := generateBlobID(data)
+	if s.msgStore != nil {
+		id, err := s.msgStore.StoreMessage(user, data)
+		if err != nil {
+			s.sendError(w, http.StatusInternalServerError, "serverFail", nil)
+			return
+		}
+		blobID = id
+	}
 
-	// Store blob (in production, store to blob storage)
 	s.logger.Debug("Upload received",
 		"user", user,
 		"blobID", blobID,
@@ -438,6 +483,25 @@ func (s *Server) processMethodCall(user string, call MethodCall) Response {
 // dispatchMethodCall is the core method dispatch shared by traced and untraced
 // processing.
 func (s *Server) dispatchMethodCall(user string, call MethodCall) Response {
+	// RFC 8620 §5.1 / RFC 8621 §5.1: more ids than maxObjectsInGet MUST be
+	// answered with requestTooLarge (F4996).
+	idsKey := ""
+	switch call.Name {
+	case "Mailbox/get", "Email/get", "Thread/get", "Identity/get":
+		idsKey = "ids"
+	case "SearchSnippet/get":
+		idsKey = "emailIds"
+	}
+	if idsKey != "" {
+		if ids, ok := call.Args[idsKey].([]interface{}); ok && len(ids) > maxObjectsInGet {
+			return Response{
+				Name: "error",
+				Args: map[string]interface{}{"type": "requestTooLarge"},
+				ID:   call.ID,
+			}
+		}
+	}
+
 	switch call.Name {
 	// Mailbox methods
 	case "Mailbox/get":
@@ -498,6 +562,135 @@ func (s *Server) dispatchMethodCall(user string, call MethodCall) Response {
 			ID:   call.ID,
 		}
 	}
+}
+
+// resolveResultReferences replaces every "#name" argument (RFC 8620 §3.7
+// ResultReference) with the value selected from an earlier response in the
+// same request. An unresolvable reference — unknown call id, name mismatch
+// (including a call that failed with an error response), or a bad path —
+// yields an invalidResultReference error instead of running the method with
+// the argument silently missing (F4997).
+func resolveResultReferences(call MethodCall, prior []Response) (MethodCall, Response, bool) {
+	fail := func(errType, desc string) (MethodCall, Response, bool) {
+		return call, Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": errType, "description": desc},
+			ID:   call.ID,
+		}, false
+	}
+	var args map[string]interface{}
+	for key, val := range call.Args {
+		if !strings.HasPrefix(key, "#") {
+			continue
+		}
+		name := key[1:]
+		if _, dup := call.Args[name]; dup {
+			return fail("invalidArguments", "argument "+name+" given both directly and as a result reference")
+		}
+		ref, _ := val.(map[string]interface{})
+		resultOf, _ := ref["resultOf"].(string)
+		refName, _ := ref["name"].(string)
+		path, pathOK := ref["path"].(string)
+		if resultOf == "" || refName == "" || !pathOK {
+			return fail("invalidResultReference", "malformed result reference for "+name)
+		}
+		var target *Response
+		for i := range prior {
+			if prior[i].ID == resultOf {
+				target = &prior[i]
+				break
+			}
+		}
+		if target == nil || target.Name != refName {
+			return fail("invalidResultReference", "no "+refName+" response with call id "+resultOf)
+		}
+		raw, err := json.Marshal(target.Args)
+		if err != nil {
+			return fail("invalidResultReference", "unencodable referenced result")
+		}
+		var doc interface{}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return fail("invalidResultReference", "unencodable referenced result")
+		}
+		value, ok := evalResultPointer(doc, path)
+		if !ok {
+			return fail("invalidResultReference", "path "+path+" does not resolve")
+		}
+		if args == nil {
+			args = make(map[string]interface{}, len(call.Args))
+			for k, v := range call.Args {
+				args[k] = v
+			}
+		}
+		delete(args, key)
+		args[name] = value
+	}
+	if args != nil {
+		call.Args = args
+	}
+	return call, Response{}, true
+}
+
+// evalResultPointer evaluates an RFC 6901 JSON Pointer extended with the
+// RFC 8620 §3.7 "*" array wildcard (results are flattened one level).
+func evalResultPointer(doc interface{}, path string) (interface{}, bool) {
+	if path == "" {
+		return doc, true
+	}
+	if !strings.HasPrefix(path, "/") {
+		return nil, false
+	}
+	tokens := strings.Split(path[1:], "/")
+	for i, t := range tokens {
+		tokens[i] = strings.ReplaceAll(strings.ReplaceAll(t, "~1", "/"), "~0", "~")
+	}
+	return evalResultTokens(doc, tokens)
+}
+
+func evalResultTokens(doc interface{}, tokens []string) (interface{}, bool) {
+	if len(tokens) == 0 {
+		return doc, true
+	}
+	tok, rest := tokens[0], tokens[1:]
+	switch v := doc.(type) {
+	case map[string]interface{}:
+		child, ok := v[tok]
+		if !ok {
+			return nil, false
+		}
+		return evalResultTokens(child, rest)
+	case []interface{}:
+		if tok == "*" {
+			out := []interface{}{}
+			for _, item := range v {
+				r, ok := evalResultTokens(item, rest)
+				if !ok {
+					return nil, false
+				}
+				if arr, isArr := r.([]interface{}); isArr {
+					out = append(out, arr...)
+				} else {
+					out = append(out, r)
+				}
+			}
+			return out, true
+		}
+		idx := 0
+		if tok == "" || (len(tok) > 1 && tok[0] == '0') {
+			return nil, false
+		}
+		for _, c := range tok {
+			if c < '0' || c > '9' {
+				return nil, false
+			}
+			idx = idx*10 + int(c-'0')
+			if idx >= len(v) {
+				return nil, false
+			}
+		}
+		return evalResultTokens(v[idx], rest)
+	}
+	return nil, false
 }
 
 // authenticate authenticates a request

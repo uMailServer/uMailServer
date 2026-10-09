@@ -10,7 +10,7 @@ import (
 )
 
 // Start starts all server components
-func (s *Server) Start() error {
+func (s *Server) Start() (err error) {
 	s.logger.Info("Starting uMailServer",
 		"hostname", s.config.Server.Hostname,
 		"data_dir", s.config.Server.DataDir,
@@ -22,6 +22,16 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to create PID file: %w", err)
 	}
 	s.logger.Debug("PID file created")
+
+	// F4915: a failure past this point must not leave the PID file, the
+	// queue, SMTP listeners or background goroutines running. Roll back
+	// everything started so far; Stop is safe on a partially started server.
+	defer func() {
+		if err != nil {
+			s.logger.Error("Start failed; rolling back started components", "error", err)
+			_ = s.Stop()
+		}
+	}()
 
 	// Initialize queue manager
 	queueDir := filepath.Join(s.config.Server.DataDir, "queue")

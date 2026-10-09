@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
+	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/tracing"
 	"github.com/umailserver/umailserver/internal/webhook"
@@ -129,6 +130,16 @@ func (s *Server) deliverMessage(from string, to []string, data []byte) error {
 // deliverMessageWithNotify is like deliverMessageWithSieve but also forwards per-recipient
 // DSN NOTIFY preferences so that queue entries carry the correct bounce-suppression flags.
 func (s *Server) deliverMessageWithNotify(from string, to []string, notify []string, data []byte) error {
+	return s.deliverMessageToFolder(from, to, notify, data, "")
+}
+
+// deliverMessageToFolder is deliverMessageWithNotify with the local folder
+// ("" for INBOX) chosen by the caller.
+func (s *Server) deliverMessageToFolder(from string, to []string, notify []string, data []byte, folder string) error {
+	if !s.beginDelivery() {
+		return errServerStopping
+	}
+	defer s.deliveries.Done()
 	ctx := context.Background()
 	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
 		var span trace.Span
@@ -140,15 +151,22 @@ func (s *Server) deliverMessageWithNotify(from string, to []string, notify []str
 		defer span.End()
 	}
 
-	var errs []error
-	for _, recipient := range to {
+	var failed []rcptFailure
+	delivered := 0
+	for i, recipient := range to {
 		user, domain := parseEmail(recipient)
+		rcptNotify := ""
+		if i < len(notify) {
+			rcptNotify = notify[i]
+		}
 
 		domainData, err := s.database.GetDomain(domain)
 		if err != nil || domainData == nil || !domainData.IsActive {
 			if relayErr := s.relayMessageWithNotify(from, recipient, notify, data); relayErr != nil {
 				s.logger.Error("Failed to relay message", "to", recipient, "error", relayErr)
-				errs = append(errs, fmt.Errorf("relay %s: %w", recipient, relayErr))
+				failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("relay %s: %w", recipient, relayErr)})
+			} else {
+				delivered++
 			}
 			continue
 		}
@@ -165,14 +183,174 @@ func (s *Server) deliverMessageWithNotify(from string, to []string, notify []str
 			}
 		}
 
-		if err := s.deliverLocal(user, domain, from, data, ""); err != nil {
+		// The mailbox owner's Sieve script decides the folder, redirects,
+		// discard or reject (F5115); without a script this is deliverLocal.
+		if err := s.deliverLocalFiltered(user, domain, recipient, from, rcptNotify, data, folder); err != nil {
 			s.logger.Error("Failed to deliver locally", "user", user, "domain", domain, "error", err)
-			errs = append(errs, fmt.Errorf("deliver %s: %w", recipient, err))
+			failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("deliver %s: %w", recipient, err), local: err})
+		} else {
+			delivered++
 		}
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("delivery had %d failure(s): %w", len(errs), errors.Join(errs...))
+	return s.settleDelivery(from, data, delivered, failed)
+}
+
+// deliverInboundWithNotify is the delivery handler of the inbound (MX)
+// server. Its pipeline marks spam-verdict mail with X-Spam-Status: Yes
+// after spamHeaderGuardStage has renamed any such header the sender
+// supplied, so the header is the server's own verdict here and the message
+// is filed into the recipient's Junk folder (F4975). Submission servers keep
+// deliverMessageWithNotify, which never reads the header.
+func (s *Server) deliverInboundWithNotify(from string, to []string, notify []string, data []byte) error {
+	folder := ""
+	if hasSpamVerdict(data) {
+		folder = "Junk"
+	}
+	return s.deliverMessageToFolder(from, to, notify, data, folder)
+}
+
+// isSpamHeaderName reports whether a header field name belongs to the
+// X-Spam-* family whose values only this server may set.
+func isSpamHeaderName(name string) bool {
+	return len(name) >= len("X-Spam-") && strings.EqualFold(name[:len("X-Spam-")], "X-Spam-")
+}
+
+// forEachHeaderField calls fn for every header field of the message header
+// block (up to the first empty line), with the field name and the byte
+// offsets of the line in data. Continuation lines are skipped.
+func forEachHeaderField(data []byte, fn func(name string, start, end int)) {
+	for start := 0; start < len(data); {
+		end := start
+		for end < len(data) && data[end] != '\n' {
+			end++
+		}
+		line := data[start:end]
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if len(line) == 0 {
+			return
+		}
+		if line[0] != ' ' && line[0] != '\t' {
+			if colon := strings.IndexByte(string(line), ':'); colon > 0 {
+				fn(strings.TrimRight(string(line[:colon]), " \t"), start, end)
+			}
+		}
+		start = end + 1
+	}
+}
+
+// hasSpamVerdict reports whether the header block carries
+// X-Spam-Status: Yes.
+func hasSpamVerdict(data []byte) bool {
+	found := false
+	forEachHeaderField(data, func(name string, start, end int) {
+		if found || !strings.EqualFold(name, "X-Spam-Status") {
+			return
+		}
+		line := string(data[start:end])
+		value := strings.TrimSpace(line[strings.IndexByte(line, ':')+1:])
+		found = len(value) >= 3 && strings.EqualFold(value[:3], "yes")
+	})
+	return found
+}
+
+// errServerStopping is returned for a delivery attempted while the server is
+// stopping; the SMTP session answers it with a transient 451.
+var errServerStopping = errors.New("server is shutting down")
+
+// beginDelivery registers an in-flight delivery, or reports false once Stop
+// has begun (F4976). A true result must be paired with s.deliveries.Done().
+func (s *Server) beginDelivery() bool {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	if s.deliveryClosed {
+		return false
+	}
+	s.deliveries.Add(1)
+	return true
+}
+
+// rcptFailure records one recipient that could not be delivered or queued.
+type rcptFailure struct {
+	rcpt   string
+	notify string // RFC 3461 NOTIFY value given for this recipient, if any
+	err    error
+	local  error  // the deliverLocal error, when the failure was local
+	diag   string // Diagnostic-Code for the DSN; "" picks one from local
+}
+
+// settleDelivery turns per-recipient outcomes into the single result the
+// SMTP DATA reply can carry (F4875). When nothing was delivered an error is
+// returned and the client's retry cannot duplicate anything. Once some
+// recipients have the message, failing the transaction makes the client
+// retry every recipient and duplicates the mail to those already served, so
+// the message is accepted and each failed recipient is reported to the
+// sender with a failure DSN instead. If that report cannot be queued the
+// error is returned: a duplicate is preferable to a silently lost recipient.
+func (s *Server) settleDelivery(from string, data []byte, delivered int, failed []rcptFailure) error {
+	if len(failed) == 0 {
+		return nil
+	}
+	errs := make([]error, 0, len(failed))
+	for _, f := range failed {
+		errs = append(errs, f.err)
+	}
+	joined := fmt.Errorf("delivery had %d failure(s): %w", len(errs), errors.Join(errs...))
+	if delivered == 0 {
+		return joined
+	}
+	if err := s.bounceFailedRecipients(from, data, failed); err != nil {
+		return fmt.Errorf("%w; failure report not queued: %v", joined, err)
+	}
+	s.logger.Warn("Partial delivery accepted; failed recipients reported to sender",
+		"from", from, "delivered", delivered, "failed", len(failed), "error", joined)
+	return nil
+}
+
+// bounceFailedRecipients queues one failure DSN per failed recipient back to
+// the sender. A null-sender message is never bounced (RFC 5321 §4.5.5) and a
+// recipient that asked for NOTIFY=NEVER gets no report (RFC 3461).
+func (s *Server) bounceFailedRecipients(from string, data []byte, failed []rcptFailure) error {
+	if from == "" {
+		return nil
+	}
+	if s.queue == nil {
+		return errors.New("queue not available")
+	}
+	for _, f := range failed {
+		if queue.ParseDSNNotify(f.notify).HasNotify(queue.DSNNotifyNever) {
+			continue
+		}
+		// Keep internal error text (paths, keys) out of the report.
+		diag := "smtp; 550 5.0.0 local delivery failed"
+		if f.diag != "" {
+			diag = f.diag
+		} else if f.local != nil && strings.HasPrefix(f.local.Error(), "quota exceeded") {
+			diag = "smtp; 552 5.2.2 mailbox full"
+		}
+		dsn := &queue.DSN{
+			ReportedDomain: "umailserver",
+			ReportedName:   "umailserver",
+			ArrivalDate:    time.Now(),
+			OriginalFrom:   from,
+			OriginalTo:     f.rcpt,
+			Recipient: queue.DSNRecipient{
+				Original: f.rcpt,
+				Notify:   queue.DSNNotifyNever,
+				Ret:      queue.DSNRetHeaders,
+			},
+			RemoteMTA: "umailserver",
+			MessageID: queue.GenerateMessageID(),
+		}
+		msg, err := queue.GenerateFailureDSN(dsn, data, queue.DSNRetHeaders, diag)
+		if err != nil {
+			return fmt.Errorf("generate DSN for %s: %w", f.rcpt, err)
+		}
+		if _, err := s.queue.Enqueue("", []string{from}, msg); err != nil {
+			return fmt.Errorf("queue DSN for %s: %w", f.rcpt, err)
+		}
 	}
 	return nil
 }
@@ -192,6 +370,10 @@ func (s *Server) relayMessageWithNotify(from, to string, notify []string, data [
 }
 
 func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, sieveActions []string) error {
+	if !s.beginDelivery() {
+		return errServerStopping
+	}
+	defer s.deliveries.Done()
 	// Create tracing span if tracing is enabled
 	ctx := context.Background()
 	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
@@ -239,7 +421,8 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 		}
 	}
 
-	var errs []error
+	var failed []rcptFailure
+	delivered := 0
 	for _, recipient := range to {
 		user, domain := parseEmail(recipient)
 
@@ -247,7 +430,9 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 		if err != nil || domainData == nil || !domainData.IsActive {
 			if relayErr := s.relayMessage(from, recipient, data); relayErr != nil {
 				s.logger.Error("Failed to relay message", "to", recipient, "error", relayErr)
-				errs = append(errs, fmt.Errorf("relay %s: %w", recipient, relayErr))
+				failed = append(failed, rcptFailure{rcpt: recipient, err: fmt.Errorf("relay %s: %w", recipient, relayErr)})
+			} else {
+				delivered++
 			}
 			continue
 		}
@@ -268,14 +453,13 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 		// Deliver with optional target folder from sieve
 		if err := s.deliverLocal(user, domain, from, data, targetFolder); err != nil {
 			s.logger.Error("Failed to deliver locally", "user", user, "domain", domain, "error", err)
-			errs = append(errs, fmt.Errorf("deliver %s: %w", recipient, err))
+			failed = append(failed, rcptFailure{rcpt: recipient, err: fmt.Errorf("deliver %s: %w", recipient, err), local: err})
+		} else {
+			delivered++
 		}
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("delivery had %d failure(s): %w", len(errs), errors.Join(errs...))
-	}
-	return nil
+	return s.settleDelivery(from, data, delivered, failed)
 }
 
 // relayMessage relays a message to a remote server
@@ -329,6 +513,13 @@ func addMailLoopHeader(data []byte, addr string) []byte {
 
 // deliverLocal delivers a message to a local mailbox
 func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFolders ...string) error {
+	return s.deliverLocalHop(user, domain, from, data, true, targetFolders...)
+}
+
+// deliverLocalHop is deliverLocal with the catch-all redirect allowed at most
+// once: the catch-all target itself is delivered with allowCatchAll=false, so
+// a target that is missing or inactive fails instead of recursing (F4877).
+func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCatchAll bool, targetFolders ...string) error {
 	email := user + "@" + domain
 
 	// Determine target folder - default to INBOX if not specified
@@ -339,17 +530,19 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 
 	// Check if user exists
 	account, err := s.database.GetAccount(domain, user)
-	if err != nil {
-		return fmt.Errorf("user does not exist: %s", email)
-	}
-
-	if account == nil || !account.IsActive {
-		// Check catch-all target for the domain
-		if domainData, derr := s.database.GetDomain(domain); derr == nil && domainData != nil && domainData.CatchAllTarget != "" {
-			tUser, tDomain := parseEmail(domainData.CatchAllTarget)
-			if tUser != "" && tDomain != "" {
-				return s.deliverLocal(tUser, tDomain, from, data, targetFolders...)
+	if err != nil || account == nil || !account.IsActive {
+		// The catch-all covers mailboxes that do not exist as well as
+		// inactive ones (F4876).
+		if allowCatchAll {
+			if domainData, derr := s.database.GetDomain(domain); derr == nil && domainData != nil && domainData.CatchAllTarget != "" {
+				tUser, tDomain := parseEmail(domainData.CatchAllTarget)
+				if tUser != "" && tDomain != "" {
+					return s.deliverLocalHop(tUser, tDomain, from, data, false, targetFolders...)
+				}
 			}
+		}
+		if err != nil {
+			return fmt.Errorf("user does not exist: %s", email)
 		}
 		return fmt.Errorf("user does not exist or is not active: %s", email)
 	}
@@ -361,29 +554,42 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 
 	// Handle mail forwarding (before storing, so we skip local store if not keeping copy)
 	if account.ForwardTo != "" {
-		// Check for forwarding loop
-		loopAddrs := getMailLoopHeaders(data)
-		for _, loopAddr := range loopAddrs {
+		// Check for forwarding loop. A looped message is not forwarded
+		// again; it falls through to the local store so it is neither lost
+		// nor left holding the quota reserved above (F4878).
+		looped := false
+		for _, loopAddr := range getMailLoopHeaders(data) {
 			if strings.EqualFold(loopAddr, email) {
-				s.logger.Warn("Forwarding loop detected, skipping forward", "from", from, "to", email)
-				return nil
+				looped = true
+				break
 			}
 		}
 		// Add this sender to the loop tracking header
 		dataWithLoop := addMailLoopHeader(data, email)
-		forwardTargets := strings.Split(account.ForwardTo, ",")
-		for _, fwd := range forwardTargets {
-			fwd = strings.TrimSpace(fwd)
-			if fwd == "" {
-				continue
-			}
-			if s.queue != nil {
+		forwarded, forwardFailed := 0, false
+		if looped {
+			s.logger.Warn("Forwarding loop detected, skipping forward and keeping local copy", "from", from, "to", email)
+		} else {
+			for _, fwd := range strings.Split(account.ForwardTo, ",") {
+				fwd = strings.TrimSpace(fwd)
+				if fwd == "" {
+					continue
+				}
+				if s.queue == nil {
+					forwardFailed = true
+					continue
+				}
 				if _, err := s.queue.Enqueue(email, []string{fwd}, dataWithLoop); err != nil {
 					s.logger.Error("Failed to enqueue forwarded message", "from", email, "to", fwd, "error", err)
+					forwardFailed = true
+					continue
 				}
+				forwarded++
 			}
 		}
-		if !account.ForwardKeepCopy {
+		// Drop the local copy only when every forward was queued; otherwise
+		// keep it so the message is not lost (F4879).
+		if !account.ForwardKeepCopy && forwarded > 0 && !forwardFailed {
 			// Release the quota we reserved since we're not storing locally
 			s.database.IncrementQuota(domain, user, -int64(len(data)))
 			s.logger.Debug("Message forwarded (no local copy)",
@@ -410,6 +616,14 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 
 	// Store metadata and index message for search
 	if s.storageDB != nil {
+		// A folder other than INBOX (Junk, a Sieve fileinto target) may not
+		// exist yet; create it so it gets a UIDVALIDITY before the first UID
+		// is assigned (F4975). CreateMailbox is a no-op for an existing one.
+		if folder != "INBOX" {
+			if err := s.storageDB.CreateMailbox(email, folder); err != nil {
+				s.logger.Error("Failed to create delivery folder", "email", email, "folder", folder, "error", err)
+			}
+		}
 		uid, uidErr := s.storageDB.GetNextUID(email, folder)
 		if uidErr == nil {
 			subject, fromAddr, toAddr, dateStr := parseBasicHeaders(data)
@@ -446,7 +660,7 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 
 			if s.searchSvc != nil {
 				select {
-				case s.indexWork <- indexJob{email: email, uid: uid}:
+				case s.indexWork <- indexJob{email: email, folder: folder, uid: uid}:
 				default:
 					s.logger.Warn("Search index queue full, dropping index job", "email", email, "uid", uid)
 				}

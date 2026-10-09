@@ -246,6 +246,9 @@ func (s *Server) Serve(listener net.Listener) error {
 	s.listenersMu.Lock()
 	s.listeners = append(s.listeners, listener)
 	s.listenersMu.Unlock()
+	// Serve owns the listener once it returns: if Stop already ran it never
+	// saw this listener, so it would otherwise stay bound. (F5056)
+	defer func() { _ = listener.Close() }()
 	s.running.Store(true)
 
 	s.logger.Info("SMTP server listening",
@@ -318,6 +321,17 @@ func (s *Server) handleConnection(conn net.Conn) {
 	metrics.Get().SMTPConnection()
 
 	s.connMu.Lock()
+	// Stop closes the shutdown channel before it closes the registered
+	// sessions under connMu, so a connection that reaches this point after
+	// Stop is not in the map Stop walked: refuse it here instead of serving
+	// it on a stopped server. (F5057)
+	select {
+	case <-s.shutdown:
+		s.connMu.Unlock()
+		_ = conn.Close()
+		return
+	default:
+	}
 	s.connections[session.ID()] = session
 	s.connMu.Unlock()
 

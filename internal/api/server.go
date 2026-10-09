@@ -114,6 +114,7 @@ type Server struct {
 	// JWT secret versioning for rotation support
 	jwtSecrets map[string]string // kid -> secret
 	currentKid string            // active key ID
+	jwtMu      sync.RWMutex      // guards jwtSecrets and currentKid (F4847)
 
 	// Draining state for zero-downtime deployment
 	draining atomic.Bool
@@ -183,32 +184,18 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		sseServer.SetCorsOrigin(strings.Join(config.CorsOrigins, ","))
 	}
 
-	// Capture jwtSecrets and currentKid for closure
-	secrets := jwtSecrets
-	kid := currentKid
+	// F4847: resolve keys through the server so rotation is seen under jwtMu.
+	// srv is assigned below, before any request can reach this closure.
+	var srv *Server
 	sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) {
-		parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-			}
-			// Try kid-based secret lookup first
-			if kid, ok := t.Header["kid"].(string); ok && kid != "" {
-				if kidSecret, ok := secrets[kid]; ok {
-					return []byte(kidSecret), nil
-				}
-			}
-			// Fall back to current kid
-			if secret, ok := secrets[kid]; ok {
-				return []byte(secret), nil
-			}
-			// Last resort: try legacy JWTSecret only if not disabled
-			if !config.DisableLegacyJWT {
-				return []byte(config.JWTSecret), nil
-			}
-			return nil, fmt.Errorf("unknown signing key")
-		})
+		parsed, err := jwt.Parse(token, srv.jwtKey)
 		if err != nil || !parsed.Valid {
 			return "", false, fmt.Errorf("invalid token")
+		}
+		// F4936: the SSE handler may authenticate a different token than the
+		// cookie authMiddleware checked, so honour logout revocation here too.
+		if srv.IsTokenRevoked(fmt.Sprintf("%x", sha256.Sum256([]byte(token)))) {
+			return "", false, fmt.Errorf("token has been revoked")
 		}
 		claims, ok := parsed.Claims.(jwt.MapClaims)
 		if !ok {
@@ -216,6 +203,11 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		}
 		user, _ = claims["sub"].(string)
 		isAdmin, _ = claims["admin"].(bool)
+		// F5029: honour the account's current active/admin state.
+		isAdmin, active := srv.sessionAccountState(user, isAdmin)
+		if !active {
+			return "", false, fmt.Errorf("account is disabled")
+		}
 		return user, isAdmin, nil
 	})
 
@@ -230,7 +222,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		logger.Warn("failed to initialize audit logger", "error", err)
 	}
 
-	return &Server{
+	srv = &Server{
 		db:             database,
 		logger:         logger,
 		config:         config,
@@ -244,6 +236,14 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		currentKid:     currentKid,
 		stopCh:         make(chan struct{}),
 	}
+	// The vacation endpoints must persist through the real disk-backed
+	// manager (see vacation.go). Without this wiring vacationMgr stays nil
+	// and setVacationConfig's placeholder silently discards successful PUTs
+	// while GET keeps returning hardcoded defaults.
+	if config.DataDir != "" {
+		srv.vacationMgr = newProductionVacationManager(config.DataDir, logger)
+	}
+	return srv
 }
 
 // NewServerWithInterfaces creates a new admin API server with injectable interfaces for testing
@@ -288,29 +288,18 @@ func NewServerWithInterfaces(
 		sseServer.SetCorsOrigin(strings.Join(config.CorsOrigins, ","))
 	}
 
-	// Capture jwtSecrets and currentKid for closure
-	secrets := jwtSecrets
-	kid := currentKid
+	// F4847: resolve keys through the server so rotation is seen under jwtMu.
+	// srv is assigned below, before any request can reach this closure.
+	var srv *Server
 	sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) {
-		parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-			}
-			if t.Header["kid"] != nil {
-				if kidSecret, ok := secrets[t.Header["kid"].(string)]; ok {
-					return []byte(kidSecret), nil
-				}
-			}
-			if secret, ok := secrets[kid]; ok {
-				return []byte(secret), nil
-			}
-			if !config.DisableLegacyJWT {
-				return []byte(config.JWTSecret), nil
-			}
-			return nil, fmt.Errorf("unknown signing key")
-		})
+		parsed, err := jwt.Parse(token, srv.jwtKey)
 		if err != nil || !parsed.Valid {
 			return "", false, fmt.Errorf("invalid token")
+		}
+		// F4936: the SSE handler may authenticate a different token than the
+		// cookie authMiddleware checked, so honour logout revocation here too.
+		if srv.IsTokenRevoked(fmt.Sprintf("%x", sha256.Sum256([]byte(token)))) {
+			return "", false, fmt.Errorf("token has been revoked")
 		}
 		claims, ok := parsed.Claims.(jwt.MapClaims)
 		if !ok {
@@ -318,6 +307,11 @@ func NewServerWithInterfaces(
 		}
 		user, _ = claims["sub"].(string)
 		isAdmin, _ = claims["admin"].(bool)
+		// F5029: honour the account's current active/admin state.
+		isAdmin, active := srv.sessionAccountState(user, isAdmin)
+		if !active {
+			return "", false, fmt.Errorf("account is disabled")
+		}
 		return user, isAdmin, nil
 	})
 
@@ -341,7 +335,7 @@ func NewServerWithInterfaces(
 		logger.Warn("failed to initialize audit logger", "error", err)
 	}
 
-	return &Server{
+	srv = &Server{
 		db:             database,
 		logger:         logger,
 		config:         config,
@@ -358,6 +352,7 @@ func NewServerWithInterfaces(
 		currentKid:     currentKid,
 		stopCh:         make(chan struct{}),
 	}
+	return srv
 }
 
 // ServeHTTP implements the http.Handler interface
@@ -745,26 +740,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Validate token
-		token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			// Try kid-based secret lookup first
-			if kid, ok := token.Header["kid"].(string); ok && kid != "" {
-				if kidSecret, ok := s.jwtSecrets[kid]; ok {
-					return []byte(kidSecret), nil
-				}
-			}
-			// Fall back to current kid
-			if secret, ok := s.jwtSecrets[s.currentKid]; ok {
-				return []byte(secret), nil
-			}
-			// Last resort: try legacy JWTSecret only if not disabled
-			if !s.config.DisableLegacyJWT {
-				return []byte(s.config.JWTSecret), nil
-			}
-			return nil, fmt.Errorf("unknown signing key")
-		}, jwt.WithValidMethods([]string{"HS256"}))
+		token, err := jwt.Parse(tokenStr, s.jwtKey, jwt.WithValidMethods([]string{"HS256"}))
 
 		if err != nil || !token.Valid {
 			s.sendError(w, http.StatusUnauthorized, "invalid token")
@@ -785,12 +761,64 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// F5029: the claims are a snapshot from issue time; the account's
+		// current state decides whether the session is live and admin.
+		sub, _ := claims["sub"].(string)
+		claimAdmin, _ := claims["admin"].(bool)
+		isAdmin, active := s.sessionAccountState(sub, claimAdmin)
+		if !active {
+			s.sendError(w, http.StatusUnauthorized, "account is disabled")
+			return
+		}
+
 		// Add claims to context
 		ctx := context.WithValue(r.Context(), "user", claims["sub"])
-		ctx = context.WithValue(ctx, "isAdmin", claims["admin"])
+		ctx = context.WithValue(ctx, "isAdmin", isAdmin)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// jwtKey resolves the HMAC key for a token: its kid, else the current kid,
+// else (unless disabled) the legacy secret. F4847: read under jwtMu because
+// handleJWTRotate mutates jwtSecrets/currentKid while requests are served.
+func (s *Server) jwtKey(token *jwt.Token) (interface{}, error) {
+	if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+	}
+	if secret, ok := s.lookupJWTSecret(token); ok {
+		return secret, nil
+	}
+	// Last resort: try legacy JWTSecret only if not disabled
+	if !s.config.DisableLegacyJWT {
+		return []byte(s.config.JWTSecret), nil
+	}
+	return nil, fmt.Errorf("unknown signing key")
+}
+
+// lookupJWTSecret returns the versioned secret for the token's kid, else for
+// the current kid, read under jwtMu (F4847).
+func (s *Server) lookupJWTSecret(token *jwt.Token) ([]byte, bool) {
+	s.jwtMu.RLock()
+	defer s.jwtMu.RUnlock()
+	// Try kid-based secret lookup first
+	if kid, ok := token.Header["kid"].(string); ok && kid != "" {
+		if kidSecret, ok := s.jwtSecrets[kid]; ok {
+			return []byte(kidSecret), true
+		}
+	}
+	// Fall back to current kid
+	if secret, ok := s.jwtSecrets[s.currentKid]; ok {
+		return []byte(secret), true
+	}
+	return nil, false
+}
+
+// signingKey returns the current key ID and its secret under jwtMu (F4847).
+func (s *Server) signingKey() (string, []byte) {
+	s.jwtMu.RLock()
+	defer s.jwtMu.RUnlock()
+	return s.currentKid, []byte(s.jwtSecrets[s.currentKid])
 }
 
 // adminMiddleware wraps a handler to require admin role.

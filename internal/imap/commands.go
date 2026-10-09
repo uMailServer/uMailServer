@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -636,12 +637,14 @@ func (s *Session) handleExamine(args []string) error {
 		return nil
 	}
 
-	mailbox, err := s.server.mailstore.SelectMailbox(s.user, mailboxName)
+	mailbox, err := s.examineMailbox(mailboxName)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
 	}
 
+	// RFC 3501 §6.3.2: EXAMINE selects the mailbox read-only (F5068).
+	mailbox.ReadOnly = true
 	s.selected = mailbox
 	s.stateMu.Lock()
 	s.state = StateSelected
@@ -668,6 +671,22 @@ func (s *Session) handleExamine(args []string) error {
 
 	s.WriteResponse(s.tag, "OK [READ-ONLY] EXAMINE completed")
 	return nil
+}
+
+// mailboxExaminer is implemented by mailstores that can report a mailbox's
+// state without the side effects of SELECT (clearing \Recent).
+type mailboxExaminer interface {
+	ExamineMailbox(user, mailbox string) (*Mailbox, error)
+}
+
+// examineMailbox reads mailbox state for EXAMINE and STATUS, which must not
+// change it (RFC 3501 §6.3.2, §6.3.10) (F5215). Mailstores without a
+// side-effect-free primitive fall back to SelectMailbox.
+func (s *Session) examineMailbox(name string) (*Mailbox, error) {
+	if ex, ok := s.server.mailstore.(mailboxExaminer); ok {
+		return ex.ExamineMailbox(s.user, name)
+	}
+	return s.server.mailstore.SelectMailbox(s.user, name)
 }
 
 // CREATE command
@@ -936,29 +955,9 @@ func (s *Session) handleLsub(args []string) error {
 }
 
 // matchMailboxPattern checks if a mailbox name matches an IMAP pattern
+// ('*' and '%' wildcards, RFC 3501 §6.3.8) (F5219).
 func matchMailboxPattern(name, pattern string) bool {
-	if pattern == "*" {
-		return true
-	}
-
-	// Handle * wildcard at end
-	if strings.HasSuffix(pattern, "*") {
-		prefix := pattern[:len(pattern)-1]
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-
-	// Handle * wildcard at start
-	if strings.HasPrefix(pattern, "*") {
-		suffix := pattern[1:]
-		if strings.HasSuffix(name, suffix) {
-			return true
-		}
-	}
-
-	// Exact match
-	return name == pattern
+	return imapWildcardMatch(name, pattern)
 }
 
 // STATUS command
@@ -976,8 +975,8 @@ func (s *Session) handleStatus(args []string) error {
 		return nil
 	}
 
-	// Get mailbox info
-	mailbox, err := s.server.mailstore.SelectMailbox(s.user, mailboxName)
+	// Get mailbox info without ending \Recent (F5215)
+	mailbox, err := s.examineMailbox(mailboxName)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
@@ -1132,7 +1131,7 @@ func (s *Session) handleAppend(args []string, line string) error {
 		}
 
 		sizeStr := restStr[litIdx+1 : litIdx+litEnd]
-		nextSize, err := strconv.Atoi(sizeStr)
+		nextSize, hasPlus, err := parseLiteralSize(sizeStr)
 		if err != nil {
 			break
 		}
@@ -1140,6 +1139,13 @@ func (s *Session) handleAppend(args []string, line string) error {
 		// Consume what we peeked (including the {size} part)
 		discard := make([]byte, litIdx+litEnd+1)
 		s.reader.Read(discard)
+		// RFC 3501 literal syntax: "{n}" CRLF precedes the octets; the CRLF is
+		// not part of the message.
+		if s.reader.Buffered() >= 2 {
+			if crlf, _ := s.reader.Peek(2); string(crlf) == "\r\n" {
+				_, _ = s.reader.Discard(2)
+			}
+		}
 
 		if nextSize > maxAppendSize {
 			s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
@@ -1148,9 +1154,6 @@ func (s *Session) handleAppend(args []string, line string) error {
 			}
 			return nil
 		}
-
-		// Check if non-synchronizing (has + suffix)
-		hasPlus := strings.Contains(restStr[litIdx:litIdx+litEnd+1], "+")
 
 		if !hasPlus {
 			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", nextSize))
@@ -1214,12 +1217,60 @@ func (s *Session) parseAppendParams(args []string, line string) ([]string, time.
 	}
 
 	sizeStr := line[literalStart+1 : literalStart+literalEnd]
-	size, err := strconv.Atoi(sizeStr)
+	size, _, err := parseLiteralSize(sizeStr)
 	if err != nil {
 		return flags, date, 0, fmt.Errorf("invalid literal size")
 	}
 
+	// RFC 3501 §6.3.11: an optional date-time sets the INTERNALDATE (F5216).
+	if dt, ok, err := appendDateTime(line[:literalStart]); err != nil {
+		return flags, date, 0, err
+	} else if ok {
+		date = dt
+	}
+
 	return flags, date, size, nil
+}
+
+// appendDateTime extracts the optional APPEND date-time, the quoted string
+// that ends the arguments before the literal ("dd-Mon-yyyy hh:mm:ss +zzzz",
+// day space- or zero-padded). ok is false when the last argument is not a
+// quoted string (e.g. the flag list, or a quoted mailbox name with no date).
+func appendDateTime(prefix string) (time.Time, bool, error) {
+	prefix = strings.TrimRight(prefix, " ")
+	if !strings.HasSuffix(prefix, "\"") {
+		return time.Time{}, false, nil
+	}
+	open := strings.LastIndex(prefix[:len(prefix)-1], "\"")
+	if open < 0 {
+		return time.Time{}, false, nil
+	}
+	// A quoted mailbox name directly after the command (no flags, no date)
+	// is not a date-time: it is preceded by the command word "APPEND".
+	before := strings.Fields(prefix[:open])
+	if len(before) > 0 && strings.EqualFold(before[len(before)-1], "APPEND") {
+		return time.Time{}, false, nil
+	}
+	dt, err := time.Parse("2-Jan-2006 15:04:05 -0700", strings.TrimSpace(prefix[open+1:len(prefix)-1]))
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("invalid date-time")
+	}
+	return dt, true, nil
+}
+
+// parseLiteralSize parses the text between the braces of an IMAP literal
+// marker: "n" (synchronizing) or "n+" (RFC 7888 LITERAL+, non-synchronizing).
+// n must be plain decimal digits, so negative or signed sizes are rejected.
+func parseLiteralSize(spec string) (size int, nonSync bool, err error) {
+	if strings.HasSuffix(spec, "+") {
+		spec = strings.TrimSuffix(spec, "+")
+		nonSync = true
+	}
+	n, err := strconv.ParseUint(spec, 10, 32) // digits only: no sign accepted
+	if err != nil {
+		return 0, false, fmt.Errorf("invalid literal size")
+	}
+	return int(n), nonSync, nil
 }
 
 // NAMESPACE command
@@ -1419,11 +1470,15 @@ func (s *Session) handleCheck() error {
 
 // CLOSE command - RFC 3501: implicit EXPUNGE before deselecting
 func (s *Session) handleClose() error {
-	if s.selected != nil && s.server.mailstore != nil {
+	// RFC 3501 §6.4.2: no messages are removed when the mailbox was
+	// selected by EXAMINE (F5068).
+	if s.selected != nil && !s.selected.ReadOnly && s.server.mailstore != nil {
 		_ = s.server.mailstore.Expunge(s.user, s.selected.Name)
 	}
 	s.selected = nil
+	s.stateMu.Lock()
 	s.state = StateAuthenticated
+	s.stateMu.Unlock()
 	s.WriteResponse(s.tag, "OK CLOSE completed")
 	return nil
 }
@@ -1450,6 +1505,9 @@ func (s *Session) handleExpunge() error {
 		}
 		return nil
 	}
+	if s.rejectReadOnly() {
+		return nil
+	}
 
 	// Before expunging, find messages with \Deleted flag to report their
 	// sequence numbers via untagged EXPUNGE responses.
@@ -1468,6 +1526,24 @@ func (s *Session) handleExpunge() error {
 		tracing.SetIntAttribute(span, "expunge.deleted_count", len(deletedSeqs))
 	}
 
+	// The onExpunge hook (search index removal) is keyed by UID, so resolve
+	// the deleted sequence numbers to UIDs while they are still valid.
+	var deletedUIDs []uint32
+	if s.server.onExpunge != nil && len(deletedSeqs) > 0 {
+		msgs, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
+		if err == nil {
+			uidBySeq := make(map[uint32]uint32, len(msgs))
+			for _, m := range msgs {
+				uidBySeq[m.SeqNum] = m.UID
+			}
+			for _, seq := range deletedSeqs {
+				if uid, ok := uidBySeq[seq]; ok {
+					deletedUIDs = append(deletedUIDs, uid)
+				}
+			}
+		}
+	}
+
 	err = s.server.mailstore.Expunge(s.user, s.selected.Name)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
@@ -1478,13 +1554,10 @@ func (s *Session) handleExpunge() error {
 		return nil
 	}
 
-	// Notify search index about expunged messages
-	// Sequence numbers map 1:1 to position, so seq=N means the Nth message.
-	// We pass sequence numbers as identifiers — search index uses folder+uid keys,
-	// so this is a best-effort cleanup.
+	// Notify search index about expunged messages, by UID.
 	if s.server.onExpunge != nil {
-		for _, seq := range deletedSeqs {
-			s.server.onExpunge(s.user, s.selected.Name, seq)
+		for _, uid := range deletedUIDs {
+			s.server.onExpunge(s.user, s.selected.Name, uid)
 		}
 	}
 
@@ -1904,6 +1977,13 @@ func (s *Session) handleUIDThread(args []string, line string) error {
 
 // FETCH command
 func (s *Session) handleFetch(args []string, line string) error {
+	return s.fetch(args, line, false)
+}
+
+// fetch implements FETCH and, with uidCmd, UID FETCH: RFC 3501 §6.4.8
+// requires the UID item in every FETCH response caused by a UID command,
+// whether or not the client asked for it (F5217).
+func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 	ctx := context.Background()
 
 	// Create tracing span
@@ -1955,8 +2035,30 @@ func (s *Session) handleFetch(args []string, line string) error {
 		tracing.SetIntAttribute(span, "fetch.message_count", len(messages))
 	}
 
+	// RFC 3501 §6.4.5: a non-PEEK BODY[section] sets \Seen (unless the
+	// mailbox was opened with EXAMINE).
+	setsSeen := false
+	for _, item := range fetchItems {
+		if it, ok := parseBodySectionItem(item); ok && !it.peek {
+			setsSeen = true
+		}
+	}
+	if setsSeen && !s.selected.ReadOnly {
+		for _, msg := range messages {
+			if !hasFlag(msg.Flags, "\\Seen") {
+				if err := s.server.mailstore.StoreFlags(s.user, s.selected.Name, strconv.FormatUint(uint64(msg.SeqNum), 10), []string{"\\Seen"}, FlagAdd); err == nil {
+					msg.Flags = append(msg.Flags, "\\Seen")
+				}
+			}
+		}
+	}
+
+	respItems := fetchItems
+	if uidCmd && !hasFetchItem(fetchItems, "UID") {
+		respItems = append([]string{"UID"}, fetchItems...)
+	}
 	for _, msg := range messages {
-		fetchResponse := formatFetchResponse(msg, fetchItems)
+		fetchResponse := formatFetchResponse(msg, respItems)
 		s.WriteData(fmt.Sprintf("%d FETCH (%s)", msg.SeqNum, fetchResponse))
 	}
 
@@ -1968,8 +2070,24 @@ func (s *Session) handleFetch(args []string, line string) error {
 	return nil
 }
 
+// hasFetchItem reports whether items contains name (case-insensitive).
+func hasFetchItem(items []string, name string) bool {
+	for _, it := range items {
+		if strings.EqualFold(it, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // STORE command
 func (s *Session) handleStore(args []string) error {
+	return s.store(args, false)
+}
+
+// store implements STORE and, with uidCmd, UID STORE, whose untagged FETCH
+// responses must carry the UID (RFC 3501 §6.4.8) (F5217).
+func (s *Session) store(args []string, uidCmd bool) error {
 	ctx := context.Background()
 
 	// Create tracing span
@@ -1996,6 +2114,10 @@ func (s *Session) handleStore(args []string) error {
 		if span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "no mailbox selected")
 		}
+		return nil
+	}
+
+	if s.rejectReadOnly() {
 		return nil
 	}
 
@@ -2043,7 +2165,11 @@ func (s *Session) handleStore(args []string) error {
 		messages, fetchErr := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, []string{"FLAGS"})
 		if fetchErr == nil {
 			for _, msg := range messages {
-				s.WriteData(fmt.Sprintf("%d FETCH (FLAGS (%s))", msg.SeqNum, strings.Join(msg.Flags, " ")))
+				uidItem := ""
+				if uidCmd {
+					uidItem = fmt.Sprintf("UID %d ", msg.UID)
+				}
+				s.WriteData(fmt.Sprintf("%d FETCH (%sFLAGS (%s))", msg.SeqNum, uidItem, strings.Join(msg.Flags, " ")))
 			}
 		}
 	}
@@ -2093,13 +2219,33 @@ func (s *Session) handleMove(args []string) error {
 		return nil
 	}
 
+	if s.rejectReadOnly() {
+		return nil
+	}
+
 	seqSet := args[0]
 	destMailbox := strings.Trim(args[1], "\"'")
+
+	// RFC 6851 §3.3: MOVE behaves as COPY + STORE \Deleted + UID EXPUNGE of
+	// the moved messages, so record their UIDs before they are flagged.
+	moved := map[uint32]bool{}
+	if msgs, ferr := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, nil); ferr == nil {
+		for _, m := range msgs {
+			moved[m.UID] = true
+		}
+	}
 
 	err := s.server.mailstore.MoveMessages(s.user, s.selected.Name, destMailbox, seqSet)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
+	}
+
+	if ux, ok := s.server.mailstore.(uidExpunger); ok && len(moved) > 0 {
+		if err := s.expungeUIDSubset(ux, func(uid uint32) bool { return moved[uid] }); err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
+		}
 	}
 
 	s.WriteResponse(s.tag, "OK MOVE completed")
@@ -2188,7 +2334,7 @@ func (s *Session) handleUIDFetch(args []string, line string) error {
 		return nil
 	}
 	rest := append([]string{seqSet}, args[1:]...)
-	return s.handleFetch(rest, line)
+	return s.fetch(rest, line, true)
 }
 
 func (s *Session) handleUIDStore(args []string) error {
@@ -2202,7 +2348,7 @@ func (s *Session) handleUIDStore(args []string) error {
 		return nil
 	}
 	rest := append([]string{seqSet}, args[1:]...)
-	return s.handleStore(rest)
+	return s.store(rest, true)
 }
 
 func (s *Session) handleUIDCopy(args []string) error {
@@ -2238,8 +2384,111 @@ func (s *Session) handleUIDSearch(args []string, line string) error {
 	return s.handleSearchWithUIDs(args, line, true)
 }
 
+// rejectReadOnly answers NO and returns true when the selected mailbox was
+// opened with EXAMINE: RFC 3501 §6.3.2 forbids changes to its permanent
+// state (STORE, EXPUNGE, UID EXPUNGE, MOVE's source removal) (F5068).
+func (s *Session) rejectReadOnly() bool {
+	if s.selected != nil && s.selected.ReadOnly {
+		s.WriteResponse(s.tag, "NO [READ-ONLY] Mailbox is selected read-only")
+		return true
+	}
+	return false
+}
+
+// uidExpunger is the optional mailstore primitive that expunges only the
+// given \Deleted UIDs (implemented by BboltMailstore).
+type uidExpunger interface {
+	ExpungeUIDs(user, mailbox string, uids []uint32) error
+}
+
+// expungeUIDSubset permanently removes the \Deleted messages of the selected
+// mailbox whose UID satisfies want, fires onExpunge per UID and sends the
+// untagged EXPUNGE responses (highest sequence number first).
+func (s *Session) expungeUIDSubset(ux uidExpunger, want func(uid uint32) bool) error {
+	deletedSeqs, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, SearchCriteria{Deleted: true})
+	if err != nil || len(deletedSeqs) == 0 {
+		return err
+	}
+	msgs, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
+	if err != nil {
+		return err
+	}
+	uidBySeq := make(map[uint32]uint32, len(msgs))
+	for _, m := range msgs {
+		uidBySeq[m.SeqNum] = m.UID
+	}
+	var seqs, uids []uint32
+	for _, seq := range deletedSeqs {
+		if uid, ok := uidBySeq[seq]; ok && want(uid) {
+			seqs = append(seqs, seq)
+			uids = append(uids, uid)
+		}
+	}
+	if len(uids) == 0 {
+		return nil
+	}
+	if err := ux.ExpungeUIDs(s.user, s.selected.Name, uids); err != nil {
+		return err
+	}
+	if s.server.onExpunge != nil {
+		for _, uid := range uids {
+			s.server.onExpunge(s.user, s.selected.Name, uid)
+		}
+	}
+	sort.Slice(seqs, func(i, j int) bool { return seqs[i] > seqs[j] })
+	for _, seq := range seqs {
+		s.WriteData(fmt.Sprintf("%d EXPUNGE", seq))
+	}
+	return nil
+}
+
+// handleUIDExpunge implements RFC 4315 §2.1 UID EXPUNGE <uid-set>: only the
+// \Deleted messages whose UID is in the set are removed.
 func (s *Session) handleUIDExpunge(args []string) error {
-	// UID EXPUNGE with sequence set
+	if len(args) < 1 {
+		s.WriteResponse(s.tag, "BAD UID EXPUNGE requires a UID set")
+		return nil
+	}
+	if s.server.mailstore == nil || s.selected == nil {
+		s.WriteResponse(s.tag, "NO No mailbox selected")
+		return nil
+	}
+	if s.rejectReadOnly() {
+		return nil
+	}
+	ranges, err := ParseSequenceSet(args[0])
+	if err != nil {
+		s.WriteResponse(s.tag, "BAD Invalid UID set")
+		return nil
+	}
+	ux, ok := s.server.mailstore.(uidExpunger)
+	if !ok {
+		s.WriteResponse(s.tag, "NO UID EXPUNGE not supported by this mailstore")
+		return nil
+	}
+	msgs, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	var maxUID uint32
+	for _, m := range msgs {
+		if m.UID > maxUID {
+			maxUID = m.UID
+		}
+	}
+	inSet := func(uid uint32) bool {
+		for _, r := range ranges {
+			if r.Contains(uid, maxUID) {
+				return true
+			}
+		}
+		return false
+	}
+	if err := s.expungeUIDSubset(ux, inSet); err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
 	s.WriteResponse(s.tag, "OK UID EXPUNGE completed")
 	return nil
 }
@@ -2646,10 +2895,25 @@ func parseSearchCriteria(args []string) SearchCriteria {
 				}
 				i++
 			}
+		default:
+			// RFC 3501 §6.4.4: a bare sequence-set is a search key (F5218).
+			if isSequenceSetToken(arg) {
+				criteria.SeqSet = arg
+			}
 		}
 	}
 
 	return criteria
+}
+
+// isSequenceSetToken reports whether tok is a syntactically valid IMAP
+// sequence-set (digits, ':', ',', '*').
+func isSequenceSetToken(tok string) bool {
+	if tok == "" || strings.Trim(tok, "0123456789:,*") != "" {
+		return false
+	}
+	_, err := ParseSequenceSet(tok)
+	return err == nil
 }
 
 // parseIMAPDate parses an IMAP date in format "DD-Mon-YYYY" (e.g., "01-Jan-2024")
@@ -2667,7 +2931,8 @@ func parseFetchItems(args []string) []string {
 		itemsStr = itemsStr[1 : len(itemsStr)-1]
 	}
 
-	return strings.Fields(itemsStr)
+	// Bracket-aware split: BODY[HEADER.FIELDS (FROM TO)] is one item (F5067).
+	return splitFetchItems(itemsStr)
 }
 
 func parseFlags(flagsStr string) []string {
@@ -2676,8 +2941,10 @@ func parseFlags(flagsStr string) []string {
 
 	flags := []string{}
 	for _, f := range strings.Fields(flagsStr) {
-		f = strings.Trim(f, "\\")
-		if f != "" {
+		// Keep the leading backslash: "\Deleted" is a system flag, "Deleted"
+		// is an unrelated keyword (RFC 3501 §2.3.2). Stripping it made STORE
+		// +FLAGS (\Deleted) invisible to EXPUNGE and SEARCH (F5066).
+		if f != "" && f != "\\" {
 			flags = append(flags, f)
 		}
 	}
@@ -2709,6 +2976,10 @@ func formatFetchResponse(msg *Message, items []string) string {
 				imapQuotedString(msg.Subject), imapQuotedString(msg.Date),
 				imapQuotedString(msg.From), imapQuotedString(fromLocal), imapQuotedString(fromDomain),
 				imapQuotedString(msg.To), imapQuotedString(toLocal), imapQuotedString(toDomain)))
+		default:
+			if it, ok := parseBodySectionItem(item); ok {
+				parts = append(parts, it.format(msg.Data))
+			}
 		}
 	}
 

@@ -37,9 +37,14 @@ type Manager struct {
 	logger    *slog.Logger
 	configs   map[string]*Config // key: email address
 	mu        sync.RWMutex
-	sentCache map[string]map[string]time.Time // user -> sender -> last sent time
+	sentCache map[string]map[string]time.Time // user -> normalized sender -> last sent time
+	pruneAt   map[string]int                  // user -> sentCache size that triggers the next prune
 	cacheMu   sync.RWMutex
 }
+
+// minPruneSize is the per-user dedup record count below which expired
+// records are not swept (F5208).
+const minPruneSize = 1024
 
 // NewManager creates a new vacation manager
 func NewManager(dataDir string, logger *slog.Logger) *Manager {
@@ -52,6 +57,7 @@ func NewManager(dataDir string, logger *slog.Logger) *Manager {
 		logger:    logger,
 		configs:   make(map[string]*Config),
 		sentCache: make(map[string]map[string]time.Time),
+		pruneAt:   make(map[string]int),
 	}
 
 	// Load existing configs
@@ -107,7 +113,17 @@ func (m *Manager) SetConfig(email string, config *Config) error {
 	if err := m.saveConfig(email, config); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
-	m.configs[email] = config
+	// Store a copy so later changes to the caller's value neither bypass this
+	// method nor hide a change from startsNewVacation.
+	stored := *config
+	stored.ExcludeAddresses = append([]string(nil), config.ExcludeAddresses...)
+	prev := m.configs[email]
+	m.configs[email] = &stored
+	if stored.Enabled && startsNewVacation(prev, &stored) {
+		// A new absence (re-enabled, or new text or period) must reach senders
+		// who were answered about the previous one (F5209, RFC 5230 §4.2).
+		m.forgetReplies(email)
+	}
 
 	m.logger.Info("Vacation config updated",
 		"email", email,
@@ -119,176 +135,198 @@ func (m *Manager) SetConfig(email string, config *Config) error {
 
 // ShouldSendAutoReply checks if auto-reply should be sent
 func (m *Manager) ShouldSendAutoReply(user, sender string, headers map[string]string) bool {
-	m.mu.RLock()
-	config, ok := m.configs[user]
-	m.mu.RUnlock()
-
-	if !ok || !config.Enabled {
+	config, ok := m.eligibleConfig(user, sender, headers)
+	if !ok {
 		return false
-	}
-
-	// Check date range
-	now := time.Now()
-	if !config.StartDate.IsZero() && now.Before(config.StartDate) {
-		return false
-	}
-	if !config.EndDate.IsZero() && now.After(config.EndDate) {
-		return false
-	}
-
-	// Check exclude addresses
-	for _, addr := range config.ExcludeAddresses {
-		if addr == sender {
-			return false
-		}
-	}
-
-	// Check headers for mailing list
-	if config.IgnoreLists {
-		if headers["List-Id"] != "" || headers["List-Unsubscribe"] != "" {
-			return false
-		}
-		if headers["Precedence"] == "list" || headers["Precedence"] == "bulk" {
-			return false
-		}
-	}
-
-	// Check headers for bulk mail
-	if config.IgnoreBulk {
-		if headers["Precedence"] == "bulk" || headers["Precedence"] == "junk" {
-			return false
-		}
-		if headers["X-Mailer"] == "MassMailer" {
-			return false
-		}
-	}
-
-	// Don't reply to auto-generated messages
-	if headers["Auto-Submitted"] != "" && headers["Auto-Submitted"] != "no" {
-		return false
-	}
-	if headers["X-Auto-Response-Suppress"] != "" {
-		return false
-	}
-
-	// Don't reply if this address already appears in the mail loop chain
-	if loopHeader := headers["X-Mail-Loop"]; loopHeader != "" {
-		for _, addr := range strings.Split(loopHeader, ",") {
-			if strings.EqualFold(strings.TrimSpace(addr), user) {
-				return false
-			}
-		}
 	}
 
 	// Check send interval (don't spam the same sender)
 	m.cacheMu.RLock()
-	userCache, ok := m.sentCache[user]
-	if !ok {
-		m.cacheMu.RUnlock()
-		return true
-	}
-	lastSent, ok := userCache[sender]
+	lastSent, ok := m.sentCache[user][normalizeAddress(sender)]
 	m.cacheMu.RUnlock()
 
-	if ok && time.Since(lastSent) < config.SendInterval {
-		return false
-	}
-
-	return true
+	return !ok || time.Since(lastSent) >= config.SendInterval
 }
 
 // CheckAndRecordAutoReply atomically checks if auto-reply should be sent and records it.
 // This prevents race conditions where two concurrent deliveries could both pass the check
 // before either records the send (VULN-007).
 func (m *Manager) CheckAndRecordAutoReply(user, sender string, headers map[string]string) bool {
-	m.mu.RLock()
-	config, ok := m.configs[user]
-	m.mu.RUnlock()
-
-	if !ok || !config.Enabled {
+	config, ok := m.eligibleConfig(user, sender, headers)
+	if !ok {
 		return false
-	}
-
-	// Check date range
-	now := time.Now()
-	if !config.StartDate.IsZero() && now.Before(config.StartDate) {
-		return false
-	}
-	if !config.EndDate.IsZero() && now.After(config.EndDate) {
-		return false
-	}
-
-	// Check exclude addresses
-	for _, addr := range config.ExcludeAddresses {
-		if addr == sender {
-			return false
-		}
-	}
-
-	// Check headers for mailing list
-	if config.IgnoreLists {
-		if headers["List-Id"] != "" || headers["List-Unsubscribe"] != "" {
-			return false
-		}
-		if headers["Precedence"] == "list" || headers["Precedence"] == "bulk" {
-			return false
-		}
-	}
-
-	// Check headers for bulk mail
-	if config.IgnoreBulk {
-		if headers["Precedence"] == "bulk" || headers["Precedence"] == "junk" {
-			return false
-		}
-		if headers["X-Mailer"] == "MassMailer" {
-			return false
-		}
-	}
-
-	// Don't reply to auto-generated messages
-	if headers["Auto-Submitted"] != "" && headers["Auto-Submitted"] != "no" {
-		return false
-	}
-	if headers["X-Auto-Response-Suppress"] != "" {
-		return false
-	}
-
-	// Don't reply if this address already appears in the mail loop chain
-	if loopHeader := headers["X-Mail-Loop"]; loopHeader != "" {
-		for _, addr := range strings.Split(loopHeader, ",") {
-			if strings.EqualFold(strings.TrimSpace(addr), user) {
-				return false
-			}
-		}
 	}
 
 	// Atomically check send interval and record
 	m.cacheMu.Lock()
 	defer m.cacheMu.Unlock()
 
-	if m.sentCache[user] == nil {
-		m.sentCache[user] = make(map[string]time.Time)
-	}
-
-	lastSent, ok := m.sentCache[user][sender]
-	if ok && time.Since(lastSent) < config.SendInterval {
+	key := normalizeAddress(sender)
+	if lastSent, ok := m.sentCache[user][key]; ok && time.Since(lastSent) < config.SendInterval {
 		return false
 	}
-
-	m.sentCache[user][sender] = time.Now()
+	m.recordLocked(user, key, config.SendInterval)
 	return true
 }
 
 // RecordAutoReplySent records that an auto-reply was sent
 // Deprecated: Use CheckAndRecordAutoReply instead for atomic check-and-record.
 func (m *Manager) RecordAutoReplySent(user, sender string) {
+	m.mu.RLock()
+	var interval time.Duration
+	if config, ok := m.configs[user]; ok {
+		interval = config.SendInterval
+	}
+	m.mu.RUnlock()
+
 	m.cacheMu.Lock()
 	defer m.cacheMu.Unlock()
+	m.recordLocked(user, normalizeAddress(sender), interval)
+}
 
-	if m.sentCache[user] == nil {
-		m.sentCache[user] = make(map[string]time.Time)
+// recordLocked stores the send time for sender and, once the user's records
+// have grown past the prune threshold, drops those older than interval so
+// the store stays bounded by the senders seen within one interval (F5208).
+// The caller holds cacheMu.
+func (m *Manager) recordLocked(user, sender string, interval time.Duration) {
+	userCache := m.sentCache[user]
+	if userCache == nil {
+		userCache = make(map[string]time.Time)
+		m.sentCache[user] = userCache
 	}
-	m.sentCache[user][sender] = time.Now()
+	now := time.Now()
+	userCache[sender] = now
+
+	if len(userCache) < max(m.pruneAt[user], minPruneSize) || interval <= 0 {
+		return
+	}
+	for addr, sent := range userCache {
+		if now.Sub(sent) >= interval {
+			delete(userCache, addr)
+		}
+	}
+	m.pruneAt[user] = 2 * len(userCache)
+}
+
+// forgetReplies drops the dedup records of user.
+func (m *Manager) forgetReplies(user string) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	delete(m.sentCache, user)
+	delete(m.pruneAt, user)
+}
+
+// startsNewVacation reports whether next describes a different absence than
+// prev: previously disabled or absent, or changed text or period.
+func startsNewVacation(prev, next *Config) bool {
+	return prev == nil || !prev.Enabled ||
+		prev.Subject != next.Subject || prev.Message != next.Message ||
+		prev.HTMLMessage != next.HTMLMessage ||
+		!prev.StartDate.Equal(next.StartDate) || !prev.EndDate.Equal(next.EndDate)
+}
+
+// eligibleConfig returns the user's config when every check other than the
+// per-sender interval allows a reply to sender.
+func (m *Manager) eligibleConfig(user, sender string, headers map[string]string) (*Config, bool) {
+	m.mu.RLock()
+	config, ok := m.configs[user]
+	m.mu.RUnlock()
+
+	if !ok || !config.Enabled {
+		return nil, false
+	}
+
+	// Check date range
+	now := time.Now()
+	if !config.StartDate.IsZero() && now.Before(config.StartDate) {
+		return nil, false
+	}
+	if !config.EndDate.IsZero() && now.After(config.EndDate) {
+		return nil, false
+	}
+
+	// RFC 3834 §2: never answer a null return path, and do not answer
+	// mailer daemons or list owner/request addresses (F5206).
+	addr := normalizeAddress(sender)
+	if isAutomatedSender(addr) {
+		return nil, false
+	}
+
+	// Check exclude addresses (case-insensitive, F5207)
+	for _, excluded := range config.ExcludeAddresses {
+		if normalizeAddress(excluded) == addr {
+			return nil, false
+		}
+	}
+
+	// Header values such as Precedence are case-insensitive (F5206).
+	precedence := strings.ToLower(strings.TrimSpace(headers["Precedence"]))
+
+	// Check headers for mailing list
+	if config.IgnoreLists {
+		if headers["List-Id"] != "" || headers["List-Unsubscribe"] != "" {
+			return nil, false
+		}
+		if precedence == "list" || precedence == "bulk" {
+			return nil, false
+		}
+	}
+
+	// Check headers for bulk mail
+	if config.IgnoreBulk {
+		if precedence == "bulk" || precedence == "junk" {
+			return nil, false
+		}
+		if headers["X-Mailer"] == "MassMailer" {
+			return nil, false
+		}
+	}
+
+	// Don't reply to auto-generated messages
+	if autoSubmitted := strings.TrimSpace(headers["Auto-Submitted"]); autoSubmitted != "" && !strings.EqualFold(autoSubmitted, "no") {
+		return nil, false
+	}
+	if headers["X-Auto-Response-Suppress"] != "" {
+		return nil, false
+	}
+
+	// Don't reply if this address already appears in the mail loop chain
+	if loopHeader := headers["X-Mail-Loop"]; loopHeader != "" {
+		for _, loopAddr := range strings.Split(loopHeader, ",") {
+			if strings.EqualFold(strings.TrimSpace(loopAddr), user) {
+				return nil, false
+			}
+		}
+	}
+
+	return config, true
+}
+
+// normalizeAddress returns sender in the form used for comparisons: without
+// surrounding whitespace or angle brackets, lower-cased. Mail systems treat
+// addresses case-insensitively in practice, so "Bob@B.com" and "bob@b.com"
+// are one correspondent (F5207).
+func normalizeAddress(sender string) string {
+	addr := strings.TrimSpace(sender)
+	if strings.HasPrefix(addr, "<") && strings.HasSuffix(addr, ">") {
+		addr = strings.TrimSpace(addr[1 : len(addr)-1])
+	}
+	return strings.ToLower(addr)
+}
+
+// isAutomatedSender reports whether a normalized address is one RFC 3834 §2
+// says must (null path) or should not receive an automatic response.
+func isAutomatedSender(addr string) bool {
+	if addr == "" {
+		return true
+	}
+	local := addr
+	if at := strings.LastIndex(addr, "@"); at >= 0 {
+		local = addr[:at]
+	}
+	return local == "mailer-daemon" ||
+		strings.HasPrefix(local, "owner-") ||
+		strings.HasSuffix(local, "-request")
 }
 
 // GetAutoReplyMessage gets the auto-reply message for a user
@@ -404,6 +442,7 @@ func (m *Manager) DeleteConfig(email string) error {
 	defer m.mu.Unlock()
 
 	delete(m.configs, email)
+	m.forgetReplies(email)
 
 	path := filepath.Join(m.dataDir, sanitizeFilename(email)+".json")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

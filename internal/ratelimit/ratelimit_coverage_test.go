@@ -30,19 +30,19 @@ func TestRateLimiter_WithBoltDB(t *testing.T) {
 	}
 
 	// Verify persisted data
-	count := rl.loadUserSentToday("testuser")
+	count, _ := rl.loadUserSentToday("testuser")
 	t.Logf("loadUserSentToday count: %d", count)
 
 	// Save some sent today count
-	rl.saveUserSentToday("testuser", 100)
-	count = rl.loadUserSentToday("testuser")
+	rl.saveUserSentToday("testuser", 100, time.Time{})
+	count, _ = rl.loadUserSentToday("testuser")
 	if count != 100 {
 		t.Errorf("Expected 100, got %d", count)
 	}
 
 	// Reset
-	rl.saveUserSentToday("testuser", 0)
-	count = rl.loadUserSentToday("testuser")
+	rl.saveUserSentToday("testuser", 0, time.Time{})
+	count, _ = rl.loadUserSentToday("testuser")
 	if count != 0 {
 		t.Errorf("Expected 0 after reset, got %d", count)
 	}
@@ -121,10 +121,10 @@ func TestRateLimiter_SaveAndLoadUserSentToday(t *testing.T) {
 	rl := New(db, cfg)
 
 	// Directly test user quota persistence
-	rl.saveUserSentToday("user1", 50)
-	rl.saveUserSentToday("user1", 75) // Should overwrite
+	rl.saveUserSentToday("user1", 50, time.Time{})
+	rl.saveUserSentToday("user1", 75, time.Time{}) // Should overwrite
 
-	count := rl.loadUserSentToday("user1")
+	count, _ := rl.loadUserSentToday("user1")
 	if count != 75 {
 		t.Errorf("Expected 75, got %d", count)
 	}
@@ -134,7 +134,7 @@ func TestRateLimiter_LoadUserSentToday_NilBolt(t *testing.T) {
 	cfg := DefaultConfig()
 	rl := New(nil, cfg)
 
-	count := rl.loadUserSentToday("anyuser")
+	count, _ := rl.loadUserSentToday("anyuser")
 	if count != 0 {
 		t.Errorf("Expected 0 for nil bolt, got %d", count)
 	}
@@ -145,7 +145,7 @@ func TestRateLimiter_SaveUserSentToday_NilBolt(t *testing.T) {
 	rl := New(nil, cfg)
 
 	// Should not panic with nil bolt
-	rl.saveUserSentToday("anyuser", 100)
+	rl.saveUserSentToday("anyuser", 100, time.Time{})
 }
 
 func TestRateLimiter_CheckRecipients(t *testing.T) {

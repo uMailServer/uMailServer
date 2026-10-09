@@ -1688,9 +1688,11 @@ func TestHandleUIDExpunge(t *testing.T) {
 		t.Errorf("handleUIDExpunge failed: %v", err)
 	}
 
+	// F4955: UID EXPUNGE is no longer a stub that always says OK; without a
+	// selected mailbox it must fail (see uid_expunge_move_test.go).
 	written := mock.Written()
-	if !strings.Contains(written, "OK") {
-		t.Errorf("expected OK response, got: %s", written)
+	if !strings.Contains(written, "A1 NO") {
+		t.Errorf("expected NO response without a selected mailbox, got: %s", written)
 	}
 }
 

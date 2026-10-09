@@ -42,7 +42,7 @@ func TestCanonicalizeBodyRelaxed_RFCExamples(t *testing.T) {
 		{
 			name:  "all-whitespace line becomes empty",
 			input: "   \t  \r\n",
-			want:  "\r\n",
+			want:  "", // F5076: only empty lines → empty body (RFC 6376 §3.4.4)
 		},
 		{
 			name:  "no trailing CRLF gains one",
@@ -137,8 +137,10 @@ func BenchmarkCanonicalizeBodyRelaxed_OldImpl_64KB(b *testing.B) {
 }
 
 func oldCanonicalizeBodyRelaxed(body []byte) []byte {
+	// F5076: the reference also follows RFC 6376 §3.4.4 for an empty body
+	// (or one of only empty lines): the canonical form is empty, not CRLF.
 	if len(body) == 0 {
-		return []byte("\r\n")
+		return []byte{}
 	}
 	var result strings.Builder
 	lines := strings.Split(string(body), "\n")
@@ -157,6 +159,9 @@ func oldCanonicalizeBodyRelaxed(body []byte) []byte {
 	}
 	for strings.HasSuffix(s, "\r\n\r\n") {
 		s = s[:len(s)-2]
+	}
+	if s == "\r\n" {
+		return []byte{} // F5076
 	}
 	return []byte(s)
 }

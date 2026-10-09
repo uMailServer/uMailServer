@@ -5,6 +5,7 @@ package auth
 // GetPublicKeyForDNS is used by the same CLI to display DNS records.
 
 import (
+	"context"
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -57,6 +58,9 @@ var (
 	whitespaceRegex = regexp.MustCompile(`[ \t]+`)
 	bTagRegex       = regexp.MustCompile(`b=([^;]*)`)
 )
+
+// dkimDNSTimeout bounds a DKIM public key lookup (F5075).
+const dkimDNSTimeout = 10 * time.Second
 
 // DKIMSignature represents a parsed DKIM-Signature header
 type DKIMSignature struct {
@@ -264,6 +268,19 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 		return DKIMFail, sig, fmt.Errorf("unsupported algorithm: %s", sig.Algorithm)
 	}
 
+	// F5077: RFC 6376 §6.1.1 — a signature whose h= does not include From
+	// MUST be ignored (PERMFAIL).
+	fromSigned := false
+	for _, h := range sig.SignedHeaders {
+		if h == "from" {
+			fromSigned = true
+			break
+		}
+	}
+	if !fromSigned {
+		return DKIMPERMError, sig, errors.New("from field not signed")
+	}
+
 	// Fetch public key from DNS
 	pubKey, keyType, err := v.fetchPublicKey(sig.Domain, sig.Selector)
 	if err != nil {
@@ -288,7 +305,7 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 
 	// Verify signature
 	canonicalHeaders := canonicalizeHeaders(headers, sig.SignedHeaders, sig.HeaderCanon)
-	sigData := canonicalHeaders + dkimHeaderWithoutSig(dkimHeader)
+	sigData := canonicalHeaders + dkimSignatureFieldForHash(dkimHeader, sig.HeaderCanon)
 
 	switch keyType {
 	case "ed25519":
@@ -484,14 +501,12 @@ func parseCopiedHeaders(s string) map[string]string {
 
 // canonicalizeBody canonicalizes the message body
 func canonicalizeBody(body []byte, canon string) []byte {
-	switch canon {
-	case "relaxed":
+	// F4889: "simple" (and the default) must run simple canonicalization;
+	// an empty case used to return the raw body.
+	if canon == "relaxed" {
 		return canonicalizeBodyRelaxed(body)
-	case "simple":
-	default:
-		return canonicalizeBodySimple(body)
 	}
-	return body
+	return canonicalizeBodySimple(body)
 }
 
 // canonicalizeBodySimple implements simple body canonicalization
@@ -529,8 +544,10 @@ func canonicalizeBodySimple(body []byte) []byte {
 // string. For a 50 MB message this avoids the previous O(N) string-slice
 // allocation and the regex replacement cost on every signed delivery.
 func canonicalizeBodyRelaxed(body []byte) []byte {
+	// F5076: RFC 6376 §3.4.4 — unlike simple, relaxed canonicalizes an empty
+	// body to the empty string (bh=47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=).
 	if len(body) == 0 {
-		return []byte("\r\n")
+		return []byte{}
 	}
 
 	// Output is bounded above by len(body)+2 — collapse/trim only shrinks.
@@ -589,6 +606,10 @@ func canonicalizeBodyRelaxed(body []byte) []byte {
 	for hasDoubleCRLFSuffix(out) {
 		out = out[:len(out)-2]
 	}
+	// F5076: a body of only empty lines is empty after §3.4.4 step c.
+	if len(out) == 2 {
+		return out[:0]
+	}
 	return out
 }
 
@@ -607,6 +628,10 @@ func hasDoubleCRLFSuffix(b []byte) bool {
 // canonicalizeHeaders canonicalizes headers for signing/verification
 func canonicalizeHeaders(headers map[string][]string, signedHeaders []string, canon string) string {
 	var result strings.Builder
+	// F4891: RFC 6376 §5.4.2 — each h= entry consumes one instance of the
+	// field, starting from the bottom-most; entries beyond the number of
+	// instances (oversigning) contribute nothing.
+	used := make(map[string]int)
 
 	for _, headerName := range signedHeaders {
 		headerNameLower := strings.ToLower(headerName)
@@ -622,10 +647,12 @@ func canonicalizeHeaders(headers map[string][]string, signedHeaders []string, ca
 			}
 		}
 
-		for _, value := range values {
-			canonHeader := canonicalizeHeader(headerName, value, canon)
-			result.WriteString(canonHeader)
+		idx := len(values) - 1 - used[headerNameLower]
+		used[headerNameLower]++
+		if idx < 0 {
+			continue
 		}
+		result.WriteString(canonicalizeHeader(headerName, values[idx], canon))
 	}
 
 	return result.String()
@@ -719,6 +746,20 @@ func dkimHeaderWithoutSig(header string) string {
 	return bTagRegex.ReplaceAllString(header, "b=")
 }
 
+// dkimSignatureFieldForHash returns the DKIM-Signature header field as it
+// enters the hash (RFC 6376 §3.7): canonicalized with the header
+// canonicalization, b= value emptied, and no trailing CRLF (F4890).
+func dkimSignatureFieldForHash(value, canon string) string {
+	if len(value) >= len("DKIM-Signature:") && strings.EqualFold(value[:len("DKIM-Signature:")], "DKIM-Signature:") {
+		value = value[len("DKIM-Signature:"):]
+	}
+	value = dkimHeaderWithoutSig(value)
+	if canon == "relaxed" {
+		return strings.TrimSuffix(canonicalizeHeaderRelaxed("dkim-signature", value), "\r\n")
+	}
+	return "DKIM-Signature: " + strings.TrimLeft(value, " \t")
+}
+
 // buildHeader builds the complete DKIM-Signature header
 func (s *DKIMSigner) buildHeader(sig *DKIMSignature) string {
 	return "v=1; " +
@@ -732,17 +773,12 @@ func (s *DKIMSigner) buildHeader(sig *DKIMSignature) string {
 		"b=" + sig.Signature
 }
 
-// buildHeaderWithoutSig builds the DKIM-Signature header without b= value
+// buildHeaderWithoutSig builds the DKIM-Signature header field, with an
+// empty b= value, exactly as it enters the hash (F4890).
 func (s *DKIMSigner) buildHeaderWithoutSig(sig *DKIMSignature) string {
-	return "v=1; " +
-		"a=" + sig.Algorithm + "; " +
-		"c=" + sig.Canonicalize + "; " +
-		"d=" + sig.Domain + "; " +
-		"s=" + sig.Selector + "; " +
-		"t=" + fmt.Sprintf("%d", sig.Timestamp) + "; " +
-		"bh=" + sig.BodyHash + "; " +
-		"h=" + strings.Join(sig.SignedHeaders, ":") + "; " +
-		"b=" + "\r\n"
+	unsigned := *sig
+	unsigned.Signature = ""
+	return dkimSignatureFieldForHash(s.buildHeader(&unsigned), sig.HeaderCanon)
 }
 
 // signRSA signs data with RSA-SHA256
@@ -757,7 +793,9 @@ func signRSA(privateKey *rsa.PrivateKey, data []byte) (string, error) {
 
 // signEd25519 signs data using Ed25519
 func signEd25519(privateKey ed25519.PrivateKey, data []byte) (string, error) {
-	signature := ed25519.Sign(privateKey, data)
+	// F4892: RFC 8463 §3 — Ed25519 (PureEdDSA) signs the SHA-256 hash.
+	hash := sha256.Sum256(data)
+	signature := ed25519.Sign(privateKey, hash[:])
 	return base64.StdEncoding.EncodeToString(signature), nil
 }
 
@@ -784,7 +822,9 @@ func verifyEd25519Signature(publicKey ed25519.PublicKey, data []byte, signatureB
 		return fmt.Errorf("failed to decode signature: %w", err)
 	}
 
-	if !ed25519.Verify(publicKey, data, signature) {
+	// F4892: RFC 8463 §3 — the signed message is SHA-256(hash input).
+	hash := sha256.Sum256(data)
+	if !ed25519.Verify(publicKey, hash[:], signature) {
 		return fmt.Errorf("ed25519 verification failed")
 	}
 
@@ -810,8 +850,17 @@ func (v *DKIMVerifier) fetchPublicKey(domain, selector string) (any, string, err
 	// DNS query: selector._domainkey.domain
 	query := fmt.Sprintf("%s._domainkey.%s", selector, domain)
 
-	// Look up TXT record
-	txtRecords, err := net.LookupTXT(query)
+	// F5075: look up through the injected resolver (as SPF/DMARC/ARC do),
+	// bounded by a deadline; net.LookupTXT bypassed it and had no timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), dkimDNSTimeout)
+	defer cancel()
+	var txtRecords []string
+	var err error
+	if v.resolver != nil {
+		txtRecords, err = v.resolver.LookupTXT(ctx, query)
+	} else {
+		txtRecords, err = net.DefaultResolver.LookupTXT(ctx, query)
+	}
 	if err != nil {
 		return nil, "", err
 	}

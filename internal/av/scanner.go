@@ -159,7 +159,10 @@ func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 		} else {
 			result.Virus = "unknown"
 		}
-	} else if strings.HasSuffix(response, "ERROR") {
+	} else if response != "stream: OK" {
+		// Only "stream: OK" means the data was scanned and found clean; an
+		// ERROR or any other reply (UNKNOWN COMMAND, a non-clamd peer) means
+		// it was not scanned and must not be reported as clean (F5107).
 		return nil, fmt.Errorf("ClamAV error: %s", response)
 	}
 

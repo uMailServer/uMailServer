@@ -358,9 +358,11 @@ func TestDKIMVerify_AllErrorPaths_Cov4(t *testing.T) {
 			header:     "v=1; a=rsa-sha1; d=example.com; s=sel; bh=abc; b=xyz",
 			wantResult: DKIMFail,
 		},
+		// F5077: h=from added so this case still reaches the key lookup
+		// (a signature without From in h= is now a PERMFAIL).
 		{
 			name:       "unsupported algorithm ed25519",
-			header:     "v=1; a=ed25519-sha256; d=example.com; s=sel; bh=abc; b=xyz",
+			header:     "v=1; a=ed25519-sha256; d=example.com; s=sel; h=from; bh=abc; b=xyz",
 			wantResult: DKIMFail,
 		},
 		{

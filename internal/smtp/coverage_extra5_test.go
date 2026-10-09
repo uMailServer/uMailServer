@@ -973,7 +973,8 @@ func TestHandleBDAT_ZeroSizeNonLastThenLast(t *testing.T) {
 	if deliveredData == nil {
 		t.Fatal("Expected delivered data")
 	}
-	if string(deliveredData) != "Hello" {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if bdatPayload(deliveredData) != "Hello" {
 		t.Errorf("Expected delivered data 'Hello', got %q", string(deliveredData))
 	}
 }

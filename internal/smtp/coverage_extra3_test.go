@@ -482,7 +482,8 @@ func TestHandleBDAT_MultipleChunksThenLastWithPipeline(t *testing.T) {
 	if deliveredData == nil {
 		t.Fatal("Expected delivered data")
 	}
-	if !strings.HasPrefix(string(deliveredData), "Subject: Test\r\n\r\nBody content") {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if !strings.HasPrefix(bdatPayload(deliveredData), "Subject: Test\r\n\r\nBody content") {
 		t.Errorf("Expected combined message data, got: %q", string(deliveredData))
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/circuitbreaker"
@@ -77,8 +78,22 @@ func NewManager(database *db.DB, secret string) *Manager {
 		cbManager:      circuitbreaker.NewManager(),
 		sem:            make(chan struct{}, 50), // Limit concurrent webhook deliveries
 	}
+	// The SSRF guard is enforced again on the address actually dialed
+	// (F5175/F5176): isValidWebhookURL resolves the host once, but the
+	// transport resolves it again, so a DNS answer that changes between the
+	// two (rebinding) or any other route to a blocked address is refused at
+	// connect time. No proxy is used: a proxy would hide the real target.
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: m.dialControl}
 	m.client = &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext:           dialer.DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
 		// The SSRF guard in send() only validates the operator-configured URL.
 		// A redirect could otherwise bounce the signed payload at an internal
 		// host that isValidWebhookURL never saw, so every hop is re-checked
@@ -178,15 +193,14 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		}
 	}()
 
-	// Validate URL and resolve DNS (DNS rebinding protection)
-	valid, resolvedIP := m.isValidWebhookURL(hook.URL)
-	if !valid {
+	// Validate URL; the dialer re-checks every address it connects to.
+	// hook is shared by concurrent deliveries, so it is not written here
+	// (F5177).
+	if valid, _ := m.isValidWebhookURL(hook.URL); !valid {
 		fmt.Printf("webhook: invalid URL (SSRF protection): %s\n", hook.URL)
 		*finalErr = fmt.Errorf("invalid webhook URL")
 		return
 	}
-	// Cache resolved IP for this delivery
-	hook.ResolvedIP = resolvedIP
 
 	// Get circuit breaker for this webhook URL
 	cb := m.cbManager.Get(hook.URL)
@@ -304,7 +318,7 @@ func (m *Manager) isValidWebhookURL(rawURL string) (bool, string) {
 	// Block private IP ranges (direct IP in URL)
 	ip := net.ParseIP(hostname)
 	if ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		if isBlockedIP(ip) {
 			return false, ""
 		}
 		// Public IP - use it directly
@@ -323,12 +337,39 @@ func (m *Manager) isValidWebhookURL(rawURL string) (bool, string) {
 
 	// Validate resolved IP is not private (prevent DNS rebinding to internal IPs)
 	resolved := net.ParseIP(resolvedIP)
-	if resolved == nil || resolved.IsLoopback() || resolved.IsPrivate() ||
-		resolved.IsLinkLocalUnicast() || resolved.IsLinkLocalMulticast() {
+	if resolved == nil || isBlockedIP(resolved) {
 		return false, ""
 	}
 
 	return true, resolvedIP
+}
+
+// isBlockedIP reports whether ip is an address webhooks must not reach.
+// The unspecified address (0.0.0.0, ::) is included because connecting to it
+// reaches the local host (F5175).
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
+// dialControl runs after DNS resolution with the concrete address being
+// connected to, so it sees the address the request really goes to.
+func (m *Manager) dialControl(_, address string, _ syscall.RawConn) error {
+	m.mu.RLock()
+	allowPrivate := m.allowPrivateIP
+	m.mu.RUnlock()
+	if allowPrivate {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("webhook: bad dial address %q: %w", address, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || isBlockedIP(ip) {
+		return fmt.Errorf("webhook: dial to %s rejected by SSRF check", address)
+	}
+	return nil
 }
 
 // sign creates HMAC signature

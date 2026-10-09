@@ -342,9 +342,12 @@ func TestCheckLoginRateLimit_UnderLimit(t *testing.T) {
 func TestCheckLoginRateLimit_AtLimit(t *testing.T) {
 	server := NewServer(nil, nil, Config{JWTSecret: "test"})
 
-	// Make 5 attempts (at limit)
+	// Record 5 failures (at limit). F5027: the IP limiter counts failures
+	// only (recordLoginFailure); checkLoginRateLimit no longer counts
+	// attempts itself, so successful logins do not lock out a shared IP.
 	for i := 0; i < 5; i++ {
 		server.checkLoginRateLimit("192.168.1.1")
+		server.recordLoginFailure("192.168.1.1")
 	}
 
 	// 6th attempt should be blocked

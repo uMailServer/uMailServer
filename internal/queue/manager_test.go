@@ -1693,9 +1693,8 @@ func TestSignWithDKIM_ValidPKCS1Key(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// The signature value is prepended before the original message.
-	// It starts with "v=1; a=rsa-sha256; ..." based on buildHeader.
-	if !bytes.HasPrefix(signed, []byte("v=1;")) {
+	// The DKIM-Signature header field (name and value) is prepended (F4925).
+	if !bytes.HasPrefix(signed, []byte("DKIM-Signature: v=1;")) {
 		t.Errorf("expected signed message to start with DKIM signature data, got prefix: %q", string(signed[:80]))
 	}
 	// The original message should follow after the signature header line
@@ -1720,7 +1719,7 @@ func TestSignWithDKIM_ValidPKCS8Key(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !bytes.HasPrefix(signed, []byte("v=1;")) {
+	if !bytes.HasPrefix(signed, []byte("DKIM-Signature: v=1;")) {
 		t.Errorf("expected signed message to start with DKIM signature data, got prefix: %q", string(signed[:80]))
 	}
 	if !bytes.Contains(signed, []byte("From: user@example.com")) {

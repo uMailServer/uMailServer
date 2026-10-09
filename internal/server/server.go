@@ -69,10 +69,6 @@ type Server struct {
 	jmapHTTPServer    *http.Server
 	metricsHTTPServer *http.Server
 
-	// S/MIME and OpenPGP keystores
-	smimeKeystore   *smtp.SMIMEKeystore
-	openpgpKeystore *smtp.OpenPGPKeystore
-
 	// LDAP authentication client (optional, nil if LDAP disabled)
 	ldapClient *auth.LDAPClient
 
@@ -94,6 +90,12 @@ type Server struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	stopOnce sync.Once
+
+	// In-flight SMTP deliveries (F4976): Stop sets deliveryClosed and waits
+	// for deliveries before closing indexWork and the databases.
+	deliveryMu     sync.Mutex
+	deliveryClosed bool
+	deliveries     sync.WaitGroup
 }
 
 // New creates a new Server instance
@@ -150,8 +152,6 @@ func New(cfg *config.Config) (*Server, error) {
 		ctx:             ctx,
 		cancel:          cancel,
 		sieveManager:    sieve.NewManager(),
-		smimeKeystore:   smtp.NewSMIMEKeystore(),
-		openpgpKeystore: smtp.NewOpenPGPKeystore(),
 		bgSem:           make(chan struct{}, 100),
 	}
 

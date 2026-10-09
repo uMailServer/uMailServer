@@ -19,7 +19,7 @@ func TestAuditRegressionF15(t *testing.T) {
 		var body string
 		server := &Server{config: &Config{MaxMessageSize: 1024, MaxRecipients: 10}, onDeliver: func(from string, rcpt []string, data []byte) error {
 			to = append([]string(nil), rcpt...)
-			body = string(data)
+			body = bdatPayload(data) // generated Message-ID stripped (F5055)
 			return nil
 		}}
 		s := NewSession(a, server)

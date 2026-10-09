@@ -800,9 +800,10 @@ func TestDKIMBuildHeaderWithoutSig(t *testing.T) {
 	if !strings.Contains(header, "b=") {
 		t.Error("buildHeaderWithoutSig should contain b= (empty)")
 	}
-	// Should end with \r\n for signing
-	if !strings.HasSuffix(header, "\r\n") {
-		t.Errorf("buildHeaderWithoutSig should end with CRLF, got: %q", header)
+	// RFC 6376 §3.7 (F4890): the DKIM-Signature field is hashed with its
+	// name and without a trailing CRLF.
+	if !strings.HasPrefix(header, "DKIM-Signature:") || strings.HasSuffix(header, "\r\n") {
+		t.Errorf("buildHeaderWithoutSig should be the field without trailing CRLF, got: %q", header)
 	}
 }
 

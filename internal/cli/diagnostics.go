@@ -16,6 +16,17 @@ import (
 type Diagnostics struct {
 	config    *config.Config
 	tlsConfig *tls.Config // optional override for TLS verification (used by tests)
+	// dial is an optional override for outbound TCP dials (used by tests to
+	// route host:port to a loopback listener). nil means net.DialTimeout.
+	dial func(network, address string, timeout time.Duration) (net.Conn, error)
+}
+
+// dialTCP dials address over TCP through the optional test seam.
+func (d *Diagnostics) dialTCP(address string, timeout time.Duration) (net.Conn, error) {
+	if d.dial != nil {
+		return d.dial("tcp", address, timeout)
+	}
+	return net.DialTimeout("tcp", address, timeout)
 }
 
 // NewDiagnostics creates new diagnostics
@@ -164,10 +175,25 @@ func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
 	}
 
 	expected := fmt.Sprintf("v=spf1 mx a:%s -all", hostname)
+	// RFC 7208 4.5: an SPF record is "v=spf1" terminated by SP or end of
+	// record, and more than one such record is a permerror (no SPF policy).
+	var spfRecords []string
 	for _, txt := range txtRecords {
-		if !strings.HasPrefix(txt, "v=spf1") {
-			continue
+		if txt == "v=spf1" || strings.HasPrefix(txt, "v=spf1 ") {
+			spfRecords = append(spfRecords, txt)
 		}
+	}
+	if len(spfRecords) > 1 {
+		return DNSCheckResult{
+			RecordType: "SPF",
+			RecordName: domain,
+			Expected:   expected,
+			Found:      strings.Join(spfRecords, " | "),
+			Status:     "fail",
+			Message:    "Multiple SPF records found (RFC 7208 permerror); publish exactly one",
+		}
+	}
+	for _, txt := range spfRecords {
 		// Token-based mechanism match: whole tokens only, so unrelated
 		// records (e.g. include:spf.mxhacker.example) do not pass on the
 		// "mx" substring.
@@ -246,15 +272,30 @@ func (d *Diagnostics) checkDMARC(domain string) DNSCheckResult {
 		}
 	}
 
+	// RFC 7489 6.6.3: more than one DMARC record means policy discovery
+	// terminates and receivers apply no DMARC policy at all.
+	var dmarcRecords []string
 	for _, txt := range txtRecords {
 		if strings.HasPrefix(txt, "v=DMARC1") {
-			return DNSCheckResult{
-				RecordType: "DMARC",
-				RecordName: record,
-				Found:      txt,
-				Status:     "pass",
-				Message:    "DMARC record found",
-			}
+			dmarcRecords = append(dmarcRecords, txt)
+		}
+	}
+	if len(dmarcRecords) > 1 {
+		return DNSCheckResult{
+			RecordType: "DMARC",
+			RecordName: record,
+			Found:      strings.Join(dmarcRecords, " | "),
+			Status:     "warning",
+			Message:    "Multiple DMARC records found; receivers apply no DMARC policy (RFC 7489 6.6.3)",
+		}
+	}
+	if len(dmarcRecords) == 1 {
+		return DNSCheckResult{
+			RecordType: "DMARC",
+			RecordName: record,
+			Found:      dmarcRecords[0],
+			Status:     "pass",
+			Message:    "DMARC record found",
 		}
 	}
 
@@ -378,11 +419,14 @@ func (d *Diagnostics) CheckTLS(hostname string) (*TLSCheckResult, error) {
 // checkSMTPTLS checks SMTP TLS
 func (d *Diagnostics) checkSMTPTLS(hostname string) (*TLSCheckResult, error) {
 	// Connect to SMTP server
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:587", hostname), 10*time.Second)
+	conn, err := d.dialTCP(fmt.Sprintf("%s:587", hostname), 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to SMTP: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	// Bound the whole conversation (greeting, EHLO, STARTTLS handshake):
+	// the dial timeout covers only the TCP connect.
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	// Create SMTP client
 	client, err := smtp.NewClient(conn, hostname)
@@ -750,7 +794,7 @@ func (d *Diagnostics) checkSMTPConnectivity(hostname string) (*SMTPCheckResult, 
 	issues := []string{}
 
 	// Try connecting to port 25 (MX)
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:25", hostname), 10*time.Second)
+	conn, err := d.dialTCP(fmt.Sprintf("%s:25", hostname), 10*time.Second)
 	if err != nil {
 		result.Message = fmt.Sprintf("SMTP port 25 not reachable: %v", err)
 		issues = append(issues, "SMTP: Port 25 unreachable - remote servers may not be able to deliver mail")
@@ -769,15 +813,19 @@ func (d *Diagnostics) checkSMTPConnectivity(hostname string) (*SMTPCheckResult, 
 		return result, issues
 	}
 	greeting := strings.TrimSpace(string(buf[:n]))
+	// RFC 5321 4.2: only a 220 greeting accepts transactions; 554 (or any
+	// other code) means remote servers cannot deliver here.
+	if !strings.HasPrefix(greeting, "220") {
+		result.Message = fmt.Sprintf("SMTP port 25 refused service, greeting: %s", greeting)
+		issues = append(issues, fmt.Sprintf("SMTP: Port 25 greeting is not 220 (%s) - remote servers cannot deliver mail", greeting))
+		return result, issues
+	}
 	result.Message = fmt.Sprintf("SMTP reachable, greeting: %s", greeting)
 
-	// Try STARTTLS on port 587
-	tlsConfig := &tls.Config{ServerName: hostname}
-	starttlsConn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", fmt.Sprintf("%s:587", hostname), tlsConfig)
-	if err != nil {
-		result.STARTTLS = false
-	} else {
-		defer starttlsConn.Close()
+	// Port 587 is STARTTLS submission (RFC 6409): speak SMTP and upgrade
+	// with STARTTLS. Implicit TLS here always failed against the plaintext
+	// greeting of a correctly configured server.
+	if tlsResult, err := d.checkSMTPTLS(hostname); err == nil && tlsResult.Valid {
 		result.STARTTLS = true
 	}
 

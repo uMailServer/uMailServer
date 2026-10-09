@@ -12,14 +12,26 @@ import (
 func (s *Server) Stop() error {
 	s.logger.Info("Stopping uMailServer...")
 
-	// Remove PID file
+	// Remove PID file, but only when it records this process (F4916): a
+	// Server that never started, or whose Start lost the PID file to another
+	// live instance, must not delete that instance's PID file.
 	pidFile := NewPIDFile(s.config.Server.DataDir)
-	if err := pidFile.Remove(); err != nil {
-		s.logger.Debug("Failed to remove PID file", "error", err)
+	if pid, err := pidFile.Read(); err == nil && pid == os.Getpid() {
+		if err := pidFile.Remove(); err != nil {
+			s.logger.Debug("Failed to remove PID file", "error", err)
+		}
 	}
 
 	// Signal cancellation
 	s.cancel()
+
+	// Refuse new deliveries and wait for those in flight (F4976): SMTP
+	// sessions outlive smtp.Server.Stop, and a delivery finishing after
+	// indexWork or the databases are closed panics or loses the message.
+	s.deliveryMu.Lock()
+	s.deliveryClosed = true
+	s.deliveryMu.Unlock()
+	s.deliveries.Wait()
 
 	// Close search indexing work queue to drain workers (once only)
 	s.stopOnce.Do(func() { close(s.indexWork) })
