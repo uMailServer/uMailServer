@@ -125,7 +125,7 @@ func (bm *BackupManager) Backup(backupPath string) error {
 		if err != nil {
 			return fmt.Errorf("failed to encrypt backup: %w", err)
 		}
-		if err := os.WriteFile(backupFile, encrypted, 0o600); err != nil {
+		if err := writeNewFile(backupFile, encrypted); err != nil {
 			return fmt.Errorf("failed to write encrypted backup: %w", err)
 		}
 	} else {
@@ -133,13 +133,28 @@ func (bm *BackupManager) Backup(backupPath string) error {
 		fmt.Printf("WARNING: Backup is NOT ENCRYPTED. Sensitive data may be exposed.\n")
 		fmt.Printf("         Use SetPassword() to enable AES-256-GCM encryption.\n")
 
-		if err := os.WriteFile(backupFile, tarData, 0o600); err != nil {
+		if err := writeNewFile(backupFile, tarData); err != nil {
 			return fmt.Errorf("failed to write backup: %w", err)
 		}
 	}
 
 	fmt.Printf("Backup completed successfully: %s\n", backupFile)
 	return nil
+}
+
+// writeNewFile writes data to a file that must not already exist. Backup file
+// names have one-second resolution, so a second backup in the same second
+// must fail rather than truncate the earlier one (F4858).
+func writeNewFile(path string, data []byte) error {
+	f, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // encryptBackup encrypts tar.gz data using AES-256-GCM with scrypt key derivation
@@ -495,6 +510,34 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		fmt.Printf("Backup contains %d files with integrity hashes\n", len(expectedHashes))
 	}
 
+	// Extract into a private staging directory and publish it as restore_temp
+	// only after every member was written and verified, so a failed restore
+	// leaves no partial tree behind (F4855). An existing non-empty
+	// restore_temp holds an earlier restore; merging into it would mix stale
+	// files with this backup, so refuse instead (F4856).
+	restoreDir := filepath.Join(bm.config.Server.DataDir, "..", "restore_temp")
+	if entries, err := os.ReadDir(restoreDir); err == nil {
+		if len(entries) > 0 {
+			return fmt.Errorf("restore directory %s already exists and is not empty; move or remove it first", restoreDir)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect restore directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(restoreDir), 0o750); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+	baseRestoreDir, err := os.MkdirTemp(filepath.Dir(restoreDir), ".restore_temp-")
+	if err != nil {
+		return fmt.Errorf("failed to create staging directory: %w", err)
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = os.RemoveAll(baseRestoreDir)
+		}
+	}()
+	seen := make(map[string]bool)
+
 	// Re-create reader from tarData for extraction
 	gr, err = gzip.NewReader(strings.NewReader(string(tarData)))
 	if err != nil {
@@ -520,7 +563,6 @@ func (bm *BackupManager) Restore(backupFile string) error {
 			return fmt.Errorf("invalid filename in tar: %s - path traversal detected", header.Name)
 		}
 
-		baseRestoreDir := filepath.Join(bm.config.Server.DataDir, "..", "restore_temp")
 		targetPath := filepath.Join(baseRestoreDir, sanitizedName)
 
 		// Unconditional path traversal check: resolve and ensure target stays within base directory
@@ -590,6 +632,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 				computedHash := hex.EncodeToString(h.Sum(nil))
 				for _, expected := range expectedHashes {
 					if expected.Path == header.Name {
+						seen[expected.Path] = true
 						if computedHash != expected.Hash {
 							// #nosec G703 -- targetPath validated before extraction with filepath.Abs/Clean and prefix check
 							_ = os.Remove(targetPath)
@@ -603,6 +646,26 @@ func (bm *BackupManager) Restore(backupFile string) error {
 			}
 		}
 	}
+
+	// Every file the manifest declares must have been restored (F4857).
+	for _, expected := range expectedHashes {
+		if !seen[expected.Path] {
+			return fmt.Errorf("integrity check failed: %s is declared in the manifest but missing from the backup", expected.Path)
+		}
+	}
+
+	if err := os.Chmod(baseRestoreDir, 0o750); err != nil {
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+	// An empty leftover restore_temp may be replaced; Remove fails on a
+	// non-empty directory, so content created concurrently is never lost.
+	if err := os.Remove(restoreDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("restore directory %s is not empty: %w", restoreDir, err)
+	}
+	if err := os.Rename(baseRestoreDir, restoreDir); err != nil {
+		return fmt.Errorf("failed to publish restore directory: %w", err)
+	}
+	published = true
 
 	fmt.Println("Backup extracted to restore_temp/")
 	fmt.Println("To complete restore:")

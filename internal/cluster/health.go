@@ -27,6 +27,7 @@ func NewRedisHealthMonitor(redisURL, instanceID string) (*RedisHealthMonitor, er
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
+		client.Close()
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
@@ -161,16 +162,22 @@ func NewClusterManager(config *Config, redisURL string) (*ClusterManager, error)
 
 	leader, err := NewRedisLeaderElection(redisURL, config.InstanceID, config.LeaseTimeout)
 	if err != nil {
+		session.Close()
 		return nil, fmt.Errorf("failed to create leader election: %w", err)
 	}
 
 	lock, err := NewRedisDistributedLock(redisURL)
 	if err != nil {
+		session.Close()
+		leader.Close()
 		return nil, fmt.Errorf("failed to create distributed lock: %w", err)
 	}
 
 	health, err := NewRedisHealthMonitor(redisURL, config.InstanceID)
 	if err != nil {
+		session.Close()
+		leader.Close()
+		lock.Close()
 		return nil, fmt.Errorf("failed to create health monitor: %w", err)
 	}
 
