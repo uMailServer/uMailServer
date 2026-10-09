@@ -177,12 +177,19 @@ func (m *Manager) IsEnabled() bool {
 
 // Send creates and sends an alert
 func (m *Manager) Send(name string, severity Severity, message string, details map[string]interface{}) error {
+	return m.sendKeyed(name, name, severity, message, details)
+}
+
+// sendKeyed is Send with an explicit deduplication key. Alerts that share a
+// name but concern different subjects (e.g. two certificates) must use
+// distinct keys, or the first one suppresses the rest (F5178).
+func (m *Manager) sendKeyed(key, name string, severity Severity, message string, details map[string]interface{}) error {
 	if !m.config.Enabled {
 		return nil
 	}
 
 	// Check rate limiting
-	if !m.shouldSend(name) {
+	if !m.shouldSend(key) {
 		return nil
 	}
 
@@ -211,7 +218,7 @@ func (m *Manager) Send(name string, severity Severity, message string, details m
 		}
 	}
 
-	m.recordAlert(name)
+	m.recordAlert(key)
 
 	if len(errs) > 0 {
 		return errs[0]
@@ -342,7 +349,11 @@ func (m *Manager) isValidWebhookURL(rawURL string) bool {
 // sendEmail sends alert via SMTP
 func (m *Manager) sendEmail(alert Alert) error {
 	// Build email body
+	// RFC 5322 section 3.6 requires Date and From (F5179).
 	var body strings.Builder
+	fmt.Fprintf(&body, "Date: %s\r\n", alert.Timestamp.Format(time.RFC1123Z))
+	fmt.Fprintf(&body, "From: %s\r\n", m.config.FromAddress)
+	fmt.Fprintf(&body, "To: %s\r\n", strings.Join(m.config.ToAddresses, ", "))
 	fmt.Fprintf(&body, "Subject: [%s] uMailServer Alert: %s\r\n", strings.ToUpper(string(alert.Severity)), alert.Name)
 	body.WriteString("MIME-Version: 1.0\r\n")
 	body.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
@@ -377,7 +388,8 @@ func (m *Manager) sendEmail(alert Alert) error {
 // CheckDiskSpace checks disk usage and alerts if threshold exceeded
 func (m *Manager) CheckDiskSpace(usagePercent float64, path string) {
 	if usagePercent >= m.config.DiskThreshold {
-		_ = m.Send(
+		_ = m.sendKeyed(
+			"disk_space_critical:"+path,
 			"disk_space_critical",
 			SeverityCritical,
 			fmt.Sprintf("Disk usage is %.1f%% on %s", usagePercent, path),
@@ -389,7 +401,8 @@ func (m *Manager) CheckDiskSpace(usagePercent float64, path string) {
 		)
 	} else if usagePercent >= m.config.DiskThreshold-10 {
 		// Warning at 10% below threshold
-		_ = m.Send(
+		_ = m.sendKeyed(
+			"disk_space_warning:"+path,
 			"disk_space_warning",
 			SeverityWarning,
 			fmt.Sprintf("Disk usage is %.1f%% on %s", usagePercent, path),
@@ -438,7 +451,8 @@ func (m *Manager) CheckErrorRate(errorRate float64, window string) {
 // CheckTLSCertificate checks TLS certificate expiry and alerts if near expiry
 func (m *Manager) CheckTLSCertificate(domain string, daysUntilExpiry int) {
 	if daysUntilExpiry <= 0 {
-		_ = m.Send(
+		_ = m.sendKeyed(
+			"tls_certificate_expired:"+domain,
 			"tls_certificate_expired",
 			SeverityCritical,
 			fmt.Sprintf("TLS certificate for %s has EXPIRED", domain),
@@ -448,7 +462,8 @@ func (m *Manager) CheckTLSCertificate(domain string, daysUntilExpiry int) {
 			},
 		)
 	} else if daysUntilExpiry <= m.config.TLSWarningDays {
-		_ = m.Send(
+		_ = m.sendKeyed(
+			"tls_certificate_expiring:"+domain,
 			"tls_certificate_expiring",
 			SeverityWarning,
 			fmt.Sprintf("TLS certificate for %s expires in %d days", domain, daysUntilExpiry),
