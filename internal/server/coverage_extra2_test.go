@@ -255,7 +255,8 @@ func TestPop3Adapter_WithMessages(t *testing.T) {
 	if count != 3 {
 		t.Errorf("expected count=3, got %d", count)
 	}
-	for i := 0; i < 3; i++ {
+	// POP3 message numbers are 1-based (RFC 1939; F4977).
+	for i := 1; i <= 3; i++ {
 		msg, err := adapter.GetMessage("testuser", i)
 		if err != nil {
 			t.Errorf("GetMessage(%d) returned error: %v", i, err)
@@ -265,21 +266,21 @@ func TestPop3Adapter_WithMessages(t *testing.T) {
 			t.Errorf("GetMessage(%d) returned Index=%d", i, msg.Index)
 		}
 	}
-	data, err := adapter.GetMessageData("testuser", 0)
+	data, err := adapter.GetMessageData("testuser", 1)
 	if err != nil {
 		t.Fatalf("GetMessageData returned error: %v", err)
 	}
 	if len(data) == 0 {
 		t.Error("expected non-empty message data")
 	}
-	size, err := adapter.GetMessageSize("testuser", 0)
+	size, err := adapter.GetMessageSize("testuser", 1)
 	if err != nil {
 		t.Fatalf("GetMessageSize returned error: %v", err)
 	}
 	if size <= 0 {
 		t.Errorf("expected positive size, got %d", size)
 	}
-	err = adapter.DeleteMessage("testuser", 0)
+	err = adapter.DeleteMessage("testuser", 1)
 	if err != nil {
 		t.Logf("DeleteMessage returned error: %v", err)
 	}

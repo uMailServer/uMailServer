@@ -90,6 +90,12 @@ type Server struct {
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	stopOnce sync.Once
+
+	// In-flight SMTP deliveries (F4976): Stop sets deliveryClosed and waits
+	// for deliveries before closing indexWork and the databases.
+	deliveryMu     sync.Mutex
+	deliveryClosed bool
+	deliveries     sync.WaitGroup
 }
 
 // New creates a new Server instance
