@@ -120,3 +120,25 @@ func TestSessionClose_SynchronizedWithHandleCommand(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// TestHandleClose_SynchronizedWithClose guards the CLOSE command's state
+// transition: handleClose wrote s.state without stateMu while Server.Stop ->
+// Session.Close() writes it under stateMu from another goroutine. Fails under
+// -race if the lock is removed.
+func TestHandleClose_SynchronizedWithClose(t *testing.T) {
+	client, srv := net.Pipe()
+	defer client.Close()
+	go func() { _, _ = io.Copy(io.Discard, client) }()
+	s := NewSession(srv, NewServer(&Config{Addr: ":0"}, &mockMailstore{}))
+	s.state = StateSelected
+	s.selected = &Mailbox{Name: "INBOX"}
+	s.tag = "c1"
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); <-start; _ = s.handleClose() }()
+	go func() { defer wg.Done(); <-start; s.Close() }()
+	close(start)
+	wg.Wait()
+}

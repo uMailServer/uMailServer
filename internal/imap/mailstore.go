@@ -101,8 +101,20 @@ func (m *BboltMailstore) Authenticate(username, password string) (bool, error) {
 	return m.db.AuthenticateUser(username, password)
 }
 
-// SelectMailbox returns mailbox information
+// SelectMailbox returns mailbox information and ends the \Recent state of
+// its messages (SELECT).
 func (m *BboltMailstore) SelectMailbox(user, mailbox string) (*Mailbox, error) {
+	return m.mailboxInfo(user, mailbox, true)
+}
+
+// ExamineMailbox returns the same information as SelectMailbox without
+// clearing \Recent: EXAMINE and STATUS must not change the mailbox's
+// permanent state (RFC 3501 §6.3.2, §6.3.10) (F5215).
+func (m *BboltMailstore) ExamineMailbox(user, mailbox string) (*Mailbox, error) {
+	return m.mailboxInfo(user, mailbox, false)
+}
+
+func (m *BboltMailstore) mailboxInfo(user, mailbox string, clearRecent bool) (*Mailbox, error) {
 	// Get mailbox info from database
 	mb, err := m.db.GetMailbox(user, mailbox)
 	if err != nil {
@@ -117,8 +129,10 @@ func (m *BboltMailstore) SelectMailbox(user, mailbox string) (*Mailbox, error) {
 
 	// Clear \Recent flags when mailbox is selected (RFC 3501)
 	// Messages from previous sessions should no longer be marked \Recent
-	if err := m.db.ClearRecent(user, mailbox); err != nil {
-		return nil, err
+	if clearRecent {
+		if err := m.db.ClearRecent(user, mailbox); err != nil {
+			return nil, err
+		}
 	}
 
 	// Get highest modification sequence number (RFC 7162)
@@ -191,31 +205,44 @@ func (m *BboltMailstore) ListSubscribed(user string) ([]string, error) {
 	return m.db.ListSubscribed(user)
 }
 
-// matchPattern checks if a mailbox name matches an IMAP pattern
+// matchPattern checks if a mailbox name matches an IMAP LIST pattern.
 func matchPattern(name, pattern string) bool {
-	// Simple pattern matching
-	if pattern == "*" {
-		return true
-	}
+	return imapWildcardMatch(name, pattern)
+}
 
-	// Convert pattern to simple wildcard matching
-	// Replace * with .* and escape other special chars
-	// For now, implement basic matching
-	if strings.HasSuffix(pattern, "*") {
-		prefix := pattern[:len(pattern)-1]
-		if strings.HasPrefix(name, prefix) {
-			return true
+// imapWildcardMatch implements RFC 3501 §6.3.8 LIST wildcards: '*' matches
+// zero or more characters, '%' matches zero or more characters other than
+// the "/" hierarchy delimiter; everything else matches literally. Before
+// F5219 only a leading/trailing '*' was honoured, so LIST "" "%" matched
+// nothing. Dynamic programming over the pattern keeps this O(len(name) *
+// len(pattern)) for hostile patterns such as "*%*%*%...".
+func imapWildcardMatch(name, pattern string) bool {
+	// cur[i] reports whether pattern[:p] matches name[:i].
+	cur := make([]bool, len(name)+1)
+	next := make([]bool, len(name)+1)
+	cur[0] = true
+	for p := 0; p < len(pattern); p++ {
+		c := pattern[p]
+		for i := range next {
+			next[i] = false
 		}
-	}
-
-	if strings.HasPrefix(pattern, "*") {
-		suffix := pattern[1:]
-		if strings.HasSuffix(name, suffix) {
-			return true
+		switch c {
+		case '*', '%':
+			for i := 0; i <= len(name); i++ {
+				if cur[i] {
+					next[i] = true
+				} else if i > 0 && next[i-1] && (c == '*' || name[i-1] != '/') {
+					next[i] = true
+				}
+			}
+		default:
+			for i := 1; i <= len(name); i++ {
+				next[i] = cur[i-1] && name[i-1] == c
+			}
 		}
+		cur, next = next, cur
 	}
-
-	return name == pattern
+	return cur[len(name)]
 }
 
 // FetchMessages retrieves messages by sequence set
@@ -291,7 +318,7 @@ func (m *BboltMailstore) getMessage(user, mailbox string, seqNum, uid uint32, it
 	needsData := false
 	for _, item := range items {
 		item = strings.ToUpper(item)
-		if item == "RFC822" || item == "BODY" || strings.HasPrefix(item, "BODY[") {
+		if item == "RFC822" || item == "BODY" || strings.HasPrefix(item, "BODY[") || strings.HasPrefix(item, "BODY.PEEK[") {
 			needsData = true
 			break
 		}
@@ -502,6 +529,7 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 		return err
 	}
 
+	var released []string
 	for _, uid := range uids {
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
@@ -510,13 +538,71 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 
 		// Check if deleted
 		if hasFlag(meta.Flags, "\\Deleted") {
-			// Delete message
-			_ = m.msgStore.DeleteMessage(user, meta.MessageID)
-			_ = m.db.DeleteMessage(user, mailbox, uid)
+			if m.db.DeleteMessage(user, mailbox, uid) == nil {
+				released = append(released, meta.MessageID)
+			}
 		}
 	}
 
+	m.releaseBlobs(user, released)
 	return nil
+}
+
+// ExpungeUIDs removes only the messages whose UID is in uids and that carry
+// \Deleted (RFC 4315 UID EXPUNGE; also used to complete RFC 6851 MOVE).
+func (m *BboltMailstore) ExpungeUIDs(user, mailbox string, uids []uint32) error {
+	var released []string
+	for _, uid := range uids {
+		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
+		if err != nil {
+			continue
+		}
+		if hasFlag(meta.Flags, "\\Deleted") {
+			if m.db.DeleteMessage(user, mailbox, uid) == nil {
+				released = append(released, meta.MessageID)
+			}
+		}
+	}
+	m.releaseBlobs(user, released)
+	return nil
+}
+
+// releaseBlobs deletes the message files in ids that no metadata row of user
+// still references. Blobs are content-addressed (sha256 of the bytes), so a
+// COPY/MOVE destination or any identical message shares the file with the
+// expunged one (F5065). When the reference scan fails the files are kept:
+// leaking a blob is recoverable, deleting a live one is not.
+func (m *BboltMailstore) releaseBlobs(user string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	mailboxes, err := m.db.ListMailboxes(user)
+	if err != nil {
+		return
+	}
+	candidates := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		candidates[id] = true
+	}
+	for _, mb := range mailboxes {
+		uids, err := m.db.GetMessageUIDs(user, mb)
+		if err != nil {
+			return
+		}
+		for _, uid := range uids {
+			meta, err := m.db.GetMessageMetadata(user, mb, uid)
+			if err != nil {
+				return
+			}
+			delete(candidates, meta.MessageID)
+		}
+		if len(candidates) == 0 {
+			return
+		}
+	}
+	for id := range candidates {
+		_ = m.msgStore.DeleteMessage(user, id)
+	}
 }
 
 // parseMessageHeadersExtended extracts headers including threading info
@@ -717,11 +803,37 @@ func (m *BboltMailstore) SearchMessages(user, mailbox string, criteria SearchCri
 		return nil, err
 	}
 
+	// RFC 3501 §6.4.4: the sequence-set and UID <set> keys restrict the
+	// result like every other key; "*" is the last message / highest UID
+	// (F5218).
+	seqRanges, err := ParseSequenceSet(criteria.SeqSet)
+	if err != nil {
+		return nil, err
+	}
+	uidRanges, err := ParseSequenceSet(criteria.UIDSet)
+	if err != nil {
+		return nil, err
+	}
+	maxSeq := uint32(len(uids))
+	var maxUID uint32
+	for _, uid := range uids {
+		if uid > maxUID {
+			maxUID = uid
+		}
+	}
+
 	var results []uint32
 	seqNum := uint32(0)
 
 	for _, uid := range uids {
 		seqNum++
+
+		if criteria.SeqSet != "" && !inSeqRanges(seqRanges, seqNum, maxSeq) {
+			continue
+		}
+		if criteria.UIDSet != "" && !inSeqRanges(uidRanges, uid, maxUID) {
+			continue
+		}
 
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
@@ -744,6 +856,16 @@ func (m *BboltMailstore) SearchMessages(user, mailbox string, criteria SearchCri
 	}
 
 	return results, nil
+}
+
+// inSeqRanges reports whether n falls in any of ranges, with "*" = max.
+func inSeqRanges(ranges []SeqRange, n, hi uint32) bool {
+	for _, r := range ranges {
+		if r.Contains(n, hi) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesCriteria checks if a message matches search criteria
@@ -1053,6 +1175,14 @@ func (m *BboltMailstore) CopyMessages(user, sourceMailbox, destMailbox string, s
 
 // MoveMessages moves messages to another mailbox
 func (m *BboltMailstore) MoveMessages(user, sourceMailbox, destMailbox string, seqSet string) error {
+	// Snapshot the source UIDs before copying: when source == destination the
+	// copies are appended to the same list, and re-resolving the set ("*" in
+	// particular) afterwards would flag the new copies \Deleted too.
+	uids, err := m.db.GetMessageUIDs(user, sourceMailbox)
+	if err != nil {
+		return err
+	}
+
 	// First copy
 	if err := m.CopyMessages(user, sourceMailbox, destMailbox, seqSet); err != nil {
 		return err
@@ -1060,11 +1190,6 @@ func (m *BboltMailstore) MoveMessages(user, sourceMailbox, destMailbox string, s
 
 	// Then mark as deleted in source
 	ranges, err := ParseSequenceSet(seqSet)
-	if err != nil {
-		return err
-	}
-
-	uids, err := m.db.GetMessageUIDs(user, sourceMailbox)
 	if err != nil {
 		return err
 	}
