@@ -1,11 +1,12 @@
 name: Docker
 
 on:
+  # CI does not run on every push or pull request. It runs when a release
+  # tag (v*) is pushed, or when started by hand (Actions tab or
+  # `gh workflow run`). See docs/CONTRIBUTING.md, "CI and releases".
   push:
-    branches: [main, master]
     tags: ['v*']
-  pull_request:
-    branches: [main, master]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io

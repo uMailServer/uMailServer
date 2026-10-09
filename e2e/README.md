@@ -50,7 +50,10 @@ Test users and domains are defined in `fixtures/users.json`.
 
 ## CI Integration
 
-Tests run automatically in GitHub Actions. See `.github/workflows/ci.yml`.
+The E2E job in `.github/workflows/ci.yml` runs when a release tag (`v*`) is
+pushed or when CI is started by hand (`gh workflow run ci.yml --ref <branch>`).
+It does not run on every push or pull request; see
+`docs/CONTRIBUTING.md`, "CI and releases".
 
 ## Writing Tests
 
