@@ -263,6 +263,9 @@ func TestDeliverFullWithFakeServer(t *testing.T) {
 	mgr.dialSMTP = func(dialAddr string) (net.Conn, error) {
 		return net.DialTimeout("tcp", addr, 5*time.Second)
 	}
+	// example.com publishes a null MX (RFC 7505), which now fails permanently
+	// without connecting (F5158); use a fixed MX instead of live DNS.
+	mgr.resolver = fixedMXResolver{}
 
 	msgPath := filepath.Join(dataDir, "deliver-full.msg")
 	testMsg := []byte("From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: test\r\n\r\nFull deliver test\r\n")

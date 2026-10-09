@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,7 @@ type Manager struct {
 	shutdown     chan struct{}
 	stopOnce     sync.Once
 	mu           sync.RWMutex
+	claimMu      sync.Mutex // serializes the pending->sending claim in deliver (F4927)
 	metrics      *metrics.SimpleMetrics
 	logger       *slog.Logger
 	maxRetries   int
@@ -77,8 +79,12 @@ type Manager struct {
 	// DANE validator for TLS certificate validation
 	daneValidator *auth.DANEValidator
 
-	// Circuit breaker for MX delivery to prevent cascading failures
-	mxBreaker *circuitbreaker.CircuitBreaker
+	// Per-MX-host circuit breakers (keyed like mxPools, guarded by mu). One
+	// breaker per host: a shared breaker let one dead destination block
+	// delivery to every other domain (F5155). mxBreaker is the configuration
+	// each host's breaker is created with; nil disables breaking.
+	mxBreaker  *circuitbreaker.Config
+	mxBreakers map[string]*circuitbreaker.CircuitBreaker
 
 	// dialSMTP, if set, is used instead of net.DialTimeout for testing.
 	// It returns a net.Conn and is used by deliverToMX.
@@ -142,7 +148,14 @@ func (r *realDNSResolver) LookupMX(domain string) ([]string, error) {
 	}
 	var records []string
 	for _, mx := range mxRecords {
-		records = append(records, mx.Host)
+		// net.LookupMX returns absolute names ("mx.example.com."); MTA-STS
+		// patterns and TLS names are written without the root dot (F5157).
+		// A null MX (RFC 7505) stays ".".
+		host := mx.Host
+		if host != "." {
+			host = strings.TrimSuffix(host, ".")
+		}
+		records = append(records, host)
 	}
 	return records, nil
 }
@@ -175,6 +188,7 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 	if logger == nil {
 		logger = slog.Default()
 	}
+	breakerCfg := circuitbreaker.DefaultConfig()
 	return &Manager{
 		db:              db,
 		store:           store,
@@ -192,7 +206,8 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		mxPools:         make(map[string]*mxPool),
 		mtastsValidator: auth.NewMTASTSValidator(&realMTASTSDNSResolver{}),
 		daneValidator:   auth.NewDANEValidator(&realMTASTSDNSResolver{}),
-		mxBreaker:       circuitbreaker.New(circuitbreaker.DefaultConfig()),
+		mxBreaker:       &breakerCfg,
+		mxBreakers:      make(map[string]*circuitbreaker.CircuitBreaker),
 	}
 }
 
@@ -203,6 +218,10 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 	m.running.Store(true)
 
+	// A "sending" entry at startup was in flight when the previous process
+	// stopped or crashed; nothing else would ever pick it up again (F4926).
+	m.requeueInterruptedEntries()
+
 	// Create delivery channel and start worker pool
 	m.deliveryChan = make(chan *db.QueueEntry, m.workerCount*2)
 	for i := 0; i < m.workerCount; i++ {
@@ -211,6 +230,34 @@ func (m *Manager) Start(ctx context.Context) {
 
 	// Start periodic queue sweeper for retry entries
 	go m.queueSweeper(ctx)
+}
+
+// requeueInterruptedEntries makes entries left in "sending" by an interrupted
+// delivery eligible again. It runs before any worker starts, so no entry can
+// be in flight (bbolt allows one process per database file).
+func (m *Manager) requeueInterruptedEntries() {
+	if m.db == nil {
+		return
+	}
+	var ids []string
+	_ = m.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var entry db.QueueEntry
+		if json.Unmarshal(value, &entry) == nil && entry.Status == "sending" {
+			ids = append(ids, entry.ID)
+		}
+		return nil
+	})
+	for _, id := range ids {
+		entry, err := m.db.GetQueueEntry(id)
+		if err != nil || entry.Status != "sending" {
+			continue
+		}
+		entry.Status = "pending"
+		entry.NextRetry = time.Now()
+		if err := m.db.UpdateQueueEntry(entry); err != nil {
+			m.logger.Error("failed to requeue interrupted delivery", "error", err, "id", id)
+		}
+	}
 }
 
 // Stop stops the queue manager
@@ -507,8 +554,32 @@ func (m *Manager) processPendingEntries() {
 	m.sweepPendingEntries()
 }
 
+// claimEntry moves the stored entry from "pending" to "sending" and returns
+// the stored copy. It fails when the entry is gone or already claimed,
+// delivered or bounced: the same entry can be dispatched more than once
+// (Enqueue/RetryEntry and the sweeper), but only one copy may be delivered (F4927).
+func (m *Manager) claimEntry(id string) (*db.QueueEntry, bool) {
+	m.claimMu.Lock()
+	defer m.claimMu.Unlock()
+	cur, err := m.db.GetQueueEntry(id)
+	if err != nil || cur.Status != "pending" {
+		return nil, false
+	}
+	cur.Status = "sending"
+	if err := m.db.UpdateQueueEntry(cur); err != nil {
+		return nil, false
+	}
+	return cur, true
+}
+
 // deliver attempts to deliver a message
 func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
+	claimed, ok := m.claimEntry(entry.ID)
+	if !ok {
+		return
+	}
+	entry = claimed
+
 	if m.tracingProvider != nil && m.tracingProvider.IsEnabled() {
 		var span = m.startDeliverSpan(ctx, entry)
 		defer span.End()
@@ -520,10 +591,6 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 			m.handleDeliveryFailure(entry, fmt.Sprintf("panic during delivery: %v", r))
 		}
 	}()
-
-	// Update status to sending
-	entry.Status = "sending"
-	_ = m.db.UpdateQueueEntry(entry)
 
 	// Read message from disk
 	message, err := readFile(entry.MessagePath)
@@ -546,13 +613,32 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 		mxRecords = []string{domain}
 	}
 
+	// RFC 7505: a null MX means the domain accepts no mail; fail permanently
+	// without connecting instead of retrying for days (F5158).
+	if len(mxRecords) == 1 && (mxRecords[0] == "." || mxRecords[0] == "") {
+		m.failDelivery(entry, "556 5.1.10 recipient domain "+domain+" does not accept mail (null MX)", true)
+		return
+	}
+
 	// Try each MX server
 	delivered := false
+	permanent := false
 	var lastErr string
 
 	for _, mx := range mxRecords {
+		mx = strings.TrimSuffix(mx, ".")
+		if mx == "" {
+			continue
+		}
 		if err := m.deliverToMXTraced(ctx, entry.From, entry.To[0], message, mx); err != nil {
 			lastErr = err.Error()
+			// A 5yz reply is final (RFC 5321 §4.2.1); other MXs of the same
+			// domain are not asked and the entry is not retried (F5156).
+			var perm *permanentSMTPError
+			if errors.As(err, &perm) {
+				permanent = true
+				break
+			}
 			continue
 		}
 
@@ -565,8 +651,25 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 			m.logger.Error("delivery marked success but queue entry update failed", "error", err, "id", entry.ID)
 		}
 	} else {
-		m.handleDeliveryFailure(entry, lastErr)
+		m.failDelivery(entry, lastErr, permanent)
 	}
+}
+
+// permanentSMTPError is a 5yz reply to MAIL, RCPT or DATA: the remote MTA
+// rejected the transaction and retrying cannot change that (F5156).
+type permanentSMTPError struct{ err error }
+
+func (e *permanentSMTPError) Error() string { return e.err.Error() }
+func (e *permanentSMTPError) Unwrap() error { return e.err }
+
+// classifySMTPReply marks a 5yz reply error from the SMTP transaction as
+// permanent; everything else (4yz, I/O errors) stays temporary.
+func classifySMTPReply(err error) error {
+	var tp *textproto.Error
+	if errors.As(err, &tp) && tp.Code >= 500 && tp.Code <= 599 {
+		return &permanentSMTPError{err: err}
+	}
+	return err
 }
 
 // startDeliverSpan starts a queue.deliver span carrying envelope attributes.
@@ -708,16 +811,49 @@ func (m *Manager) releaseMXConn(mx string, client *smtp.Client, valid bool) {
 	}
 }
 
+// mxBreakerFor returns the circuit breaker of one MX host, or nil when
+// breaking is disabled.
+func (m *Manager) mxBreakerFor(mx string) *circuitbreaker.CircuitBreaker {
+	if m.mxBreaker == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mxBreakers == nil {
+		m.mxBreakers = make(map[string]*circuitbreaker.CircuitBreaker)
+	}
+	cb, ok := m.mxBreakers[mx]
+	if !ok {
+		cb = circuitbreaker.New(*m.mxBreaker)
+		m.mxBreakers[mx] = cb
+	}
+	return cb
+}
+
 // deliverToMX delivers a message to a specific MX server
 func (m *Manager) deliverToMX(ctx context.Context, from, to string, message []byte, mx string) error {
-	// Use circuit breaker to prevent cascading failures from bad MX hosts
-	if m.mxBreaker != nil {
-		err := m.mxBreaker.Execute(func() error {
-			return m.doDeliverToMX(ctx, from, to, message, mx)
-		})
-		return err
+	// Use a per-host circuit breaker so a failing MX host only stops
+	// deliveries to itself (F5155).
+	cb := m.mxBreakerFor(mx)
+	if cb == nil {
+		return m.doDeliverToMX(ctx, from, to, message, mx)
 	}
-	return m.doDeliverToMX(ctx, from, to, message, mx)
+	var rejected error
+	err := cb.Execute(func() error {
+		err := m.doDeliverToMX(ctx, from, to, message, mx)
+		var perm *permanentSMTPError
+		if errors.As(err, &perm) {
+			// The host answered: a 5yz rejection of one recipient is not
+			// a host failure and must not open the breaker.
+			rejected = err
+			return nil
+		}
+		return err
+	})
+	if rejected != nil {
+		return rejected
+	}
+	return err
 }
 
 // withMXConn acquires an MX connection, calls fn, and guarantees release.
@@ -734,7 +870,7 @@ func (m *Manager) withMXConn(mx string, fn func(*smtp.Client) error) (err error)
 		}
 	}
 
-	// For pooled connections: verify with RSET and always release
+	// For pooled connections: verify with RSET, replacing a dead one
 	if fromPool {
 		if rerr := client.Reset(); rerr != nil {
 			m.releaseMXConn(mx, client, false)
@@ -743,22 +879,17 @@ func (m *Manager) withMXConn(mx string, fn func(*smtp.Client) error) (err error)
 				return err
 			}
 		}
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("panic during MX delivery: %v", r)
-			}
-			m.releaseMXConn(mx, client, err == nil)
-		}()
-	} else {
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("panic during MX delivery: %v", r)
-			}
-			if client != nil {
-				_ = client.Close()
-			}
-		}()
 	}
+
+	// withMXConn is the only owner of the release: fn must not release client.
+	// A successful delivery returns the connection to the pool; any error or
+	// panic closes it.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic during MX delivery: %v", r)
+		}
+		m.releaseMXConn(mx, client, err == nil)
+	}()
 
 	return fn(client)
 }
@@ -802,7 +933,13 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			ServerName: mx,
 			MinVersion: tls.VersionTLS12,
 		}
-		if err := client.StartTLS(tlsConfig); err != nil {
+		// A reused pooled connection may already be TLS; STARTTLS again is a
+		// protocol error that remote MTAs reject.
+		var tlsErr error
+		if _, isTLS := client.TLSConnectionState(); !isTLS {
+			tlsErr = client.StartTLS(tlsConfig)
+		}
+		if err := tlsErr; err != nil {
 			if m.requireTLS {
 				return fmt.Errorf("STARTTLS required but failed: %w", err)
 			}
@@ -840,18 +977,18 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 
 		// Set sender (VERP-encoded for bounce tracking)
 		if err := client.Mail(envelopeSender); err != nil {
-			return err
+			return classifySMTPReply(err)
 		}
 
 		// Set recipient
 		if err := client.Rcpt(to); err != nil {
-			return err
+			return classifySMTPReply(err)
 		}
 
 		// Send data
 		w, err := client.Data()
 		if err != nil {
-			return err
+			return classifySMTPReply(err)
 		}
 
 		_, err = w.Write(message)
@@ -859,17 +996,9 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			return err
 		}
 
-		err = w.Close()
-		if err != nil {
-			// Return bad connection to pool (will be closed)
-			m.releaseMXConn(mx, client, false)
-			return err
-		}
-
-		// Successful delivery - return connection to pool for reuse
-		// Skip QUIT since we're keeping the connection alive
-		m.releaseMXConn(mx, client, true)
-		return nil
+		// withMXConn pools the connection on success and closes it on error;
+		// QUIT is skipped since we're keeping the connection alive
+		return classifySMTPReply(w.Close())
 	})
 }
 
@@ -943,13 +1072,20 @@ func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
 	}
 }
 
-// handleDeliveryFailure handles delivery failure with exponential backoff and jitter
+// handleDeliveryFailure handles a temporary delivery failure with exponential
+// backoff and jitter.
 func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
+	m.failDelivery(entry, errorMsg, false)
+}
+
+// failDelivery records a failed attempt. A permanent failure bounces at once;
+// a temporary one is retried until maxRetries is reached.
+func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent bool) {
 	entry.LastError = errorMsg
 	entry.RetryCount++
 
 	// Check if max retries reached
-	if entry.RetryCount >= m.maxRetries {
+	if permanent || entry.RetryCount >= m.maxRetries {
 		// Generate bounce
 		entry.Status = "bounced"
 	} else {
@@ -1000,9 +1136,10 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 
 // generateBounce generates a bounce message and delivers it back to the sender
 func (m *Manager) generateBounce(entry *db.QueueEntry) {
-	// Check if we should send DSN (NOTIFY never means no bounce)
-	if entry.Notify != 0 && int(entry.Notify)&int(DSNNotifyNever) != 0 {
-		// NOTIFY=NEVER - don't send anything
+	// RFC 3461 §4.1: without NOTIFY the default is FAILURE; with NOTIFY a
+	// failure DSN is sent only when FAILURE is listed (NEVER excludes it).
+	// NOTIFY=SUCCESS or DELAY alone must not produce a failure DSN (F5159).
+	if entry.Notify != 0 && (int(entry.Notify)&int(DSNNotifyNever) != 0 || int(entry.Notify)&int(DSNNotifyFailure) == 0) {
 		return
 	}
 
@@ -1358,7 +1495,8 @@ func (m *Manager) signWithDKIM(from string, message []byte) ([]byte, error) {
 	}
 
 	// Prepend DKIM-Signature header to the message
-	dkimHeader := signature + "\r\n"
+	// Sign returns only the field value; the field name is required (F4925).
+	dkimHeader := "DKIM-Signature: " + signature + "\r\n"
 	signedMessage := append([]byte(dkimHeader), message...)
 	return signedMessage, nil
 }
