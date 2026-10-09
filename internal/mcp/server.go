@@ -122,6 +122,9 @@ func (s *Server) checkRateLimit(ip string) bool {
 	return true
 }
 
+// maxRequestBodyBytes caps a single MCP request body (F5018).
+const maxRequestBodyBytes = 1 << 20
+
 // HandleHTTP handles MCP requests
 func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -138,7 +141,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != "POST" {
-		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		s.writeError(w, http.StatusMethodNotAllowed, rpcInvalidRequest, nil, "Method not allowed")
 		return
 	}
 
@@ -148,7 +151,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		ip = r.RemoteAddr
 	}
 	if !s.checkRateLimit(ip) {
-		s.writeError(w, http.StatusTooManyRequests, "Rate limit exceeded")
+		s.writeError(w, http.StatusTooManyRequests, rpcServerError, nil, "Rate limit exceeded")
 		return
 	}
 
@@ -167,14 +170,41 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 			ctx = context.WithValue(ctx, adminCtxKeyVal, true)
 		}
 		if !valid {
-			s.writeError(w, http.StatusUnauthorized, "Unauthorized")
+			s.writeError(w, http.StatusUnauthorized, rpcAccessDenied, nil, "Unauthorized")
 			return
 		}
 	}
 
+	// F5018: bound the body so an authenticated client cannot make the
+	// decoder buffer an arbitrarily large request.
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, rpcInvalidRequest, nil, "Request body too large")
+			return
+		}
+		// F5046: JSON-RPC 2.0 §5.1 parse error, id null.
+		s.writeError(w, http.StatusBadRequest, rpcParseError, nil, "Parse error")
+		return
+	}
 	var req MCPRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, http.StatusBadRequest, "Invalid JSON")
+	if err := json.Unmarshal(raw, &req); err != nil || !validRequestID(req.ID) {
+		// Well-formed JSON that is not a Request object (wrong member
+		// types, batch array, object/array id): §5.1 invalid request.
+		s.writeError(w, http.StatusBadRequest, rpcInvalidRequest, nil, "Invalid Request")
+		return
+	}
+	if req.JSONRPC != "2.0" || req.Method == "" {
+		s.writeError(w, http.StatusBadRequest, rpcInvalidRequest, req.ID, "Invalid Request")
+		return
+	}
+	// F5019: JSON-RPC notifications get no response; MCP over HTTP
+	// acknowledges them with 202 Accepted and an empty body.
+	if strings.HasPrefix(req.Method, "notifications/") {
+		w.Header().Del("Content-Type")
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
@@ -183,7 +213,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 			"mcp."+req.Method,
 			tracing.SpanKindServer,
 			attribute.String("mcp.method", req.Method),
-			attribute.Int("mcp.request_id", req.ID),
+			attribute.String("mcp.request_id", string(req.ID)),
 			attribute.String("ip", ip),
 		)
 		// tools/call benefits from the inner tool name on the same span;
@@ -212,13 +242,13 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	case "resources/list":
 		result = s.handleResourcesList()
 	case "resources/read":
-		result, err = s.handleResourceRead(req.Params)
+		result, err = s.handleResourceRead(ctx, req.Params)
 	case "prompts/list":
 		result = s.handlePromptsList()
 	case "prompts/get":
 		result, err = s.handlePromptGet(req.Params)
 	default:
-		s.writeError(w, http.StatusBadRequest, "Unknown method: "+req.Method)
+		s.writeError(w, http.StatusBadRequest, rpcMethodNotFound, req.ID, "Method not found: "+req.Method)
 		if span := otrace.SpanFromContext(ctx); span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "unknown method")
 		}
@@ -227,11 +257,17 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		slog.Error("mcp handler error", "method", req.Method, "error", err)
-		// Admin access errors return 403; all other errors return 500
-		if req.Method == "tools/call" && strings.Contains(err.Error(), "admin access required") {
-			s.writeError(w, http.StatusForbidden, err.Error())
-		} else {
-			s.writeError(w, http.StatusInternalServerError, err.Error())
+		// Admin access errors return 403; all other errors return 500.
+		// F5046: the JSON-RPC error carries the request id and a
+		// reserved/MCP error code instead of the HTTP status.
+		var re *rpcError
+		switch {
+		case errors.Is(err, errAdminRequired):
+			s.writeError(w, http.StatusForbidden, rpcAccessDenied, req.ID, err.Error())
+		case errors.As(err, &re):
+			s.writeError(w, http.StatusInternalServerError, re.code, req.ID, re.msg)
+		default:
+			s.writeError(w, http.StatusInternalServerError, rpcInternalError, req.ID, err.Error())
 		}
 		if span := otrace.SpanFromContext(ctx); span != nil {
 			tracing.SetStatus(span, tracing.StatusError, err.Error())
@@ -247,19 +283,65 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// JSON-RPC 2.0 §5.1 reserved error codes, plus MCP / implementation-defined
+// server error codes from the -32000..-32099 range (F5046).
+const (
+	rpcParseError       = -32700
+	rpcInvalidRequest   = -32600
+	rpcMethodNotFound   = -32601
+	rpcInvalidParams    = -32602
+	rpcInternalError    = -32603
+	rpcServerError      = -32000
+	rpcAccessDenied     = -32001
+	rpcResourceNotFound = -32002
+)
+
+// errAdminRequired is returned when a non-admin token calls an admin-only
+// tool or resource.
+var errAdminRequired = errors.New("admin access required")
+
+// rpcError is a handler error that maps to a specific JSON-RPC error code.
+type rpcError struct {
+	code int
+	msg  string
+}
+
+func (e *rpcError) Error() string { return e.msg }
+
+func invalidParams(format string, args ...any) error {
+	return &rpcError{code: rpcInvalidParams, msg: fmt.Sprintf(format, args...)}
+}
+
+// validRequestID reports whether id is absent or a JSON string, number or
+// null, the only id types JSON-RPC 2.0 §4 allows (F5047).
+func validRequestID(id json.RawMessage) bool {
+	if len(id) == 0 {
+		return true
+	}
+	switch c := id[0]; {
+	case c == '"', c == '-', c >= '0' && c <= '9':
+		return true
+	case string(id) == "null":
+		return true
+	}
+	return false
+}
+
 // Request/Response types
 type MCPRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params"`
+	JSONRPC string `json:"jsonrpc"`
+	// ID is kept raw so string and number ids round-trip unchanged (F5047).
+	ID     json.RawMessage `json:"id,omitempty"`
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
 }
 
 type MCPResponse struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *MCPError   `json:"error,omitempty"`
+	JSONRPC string `json:"jsonrpc"`
+	// ID echoes the request id; nil marshals as null (F5046).
+	ID     json.RawMessage `json:"id"`
+	Result interface{}     `json:"result,omitempty"`
+	Error  *MCPError       `json:"error,omitempty"`
 }
 
 type MCPError struct {
@@ -489,29 +571,45 @@ func (s *Server) handleToolsList() map[string]interface{} {
 }
 
 // adminTools is the set of tools that require admin privileges.
+// F5045: every tool that enumerates the domain/account directory is
+// admin-only, matching list_domains; otherwise list_accounts (whose
+// addresses contain every domain) bypasses the list_domains gate.
 var adminTools = map[string]struct{}{
-	"add_domain":     {},
-	"delete_domain":  {},
-	"add_account":    {},
-	"delete_account": {},
-	"flush_queue":    {},
-	"reload_config":  {},
-	"list_domains":   {},
+	"add_domain":       {},
+	"delete_domain":    {},
+	"add_account":      {},
+	"delete_account":   {},
+	"flush_queue":      {},
+	"reload_config":    {},
+	"list_domains":     {},
+	"list_accounts":    {},
+	"get_account_info": {},
+}
+
+// adminResources is the set of resources that require admin privileges
+// (F5045): they expose the same directory data as the admin-only tools.
+var adminResources = map[string]struct{}{
+	"umailserver://domains":  {},
+	"umailserver://accounts": {},
+}
+
+// isAdminCtx reports whether the request was authenticated with the admin
+// token.
+func isAdminCtx(ctx context.Context) bool {
+	isAdmin, ok := ctx.Value(adminCtxKeyVal).(bool)
+	return ok && isAdmin
 }
 
 // Handle tool call
 func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (map[string]interface{}, error) {
 	var req ToolCallRequest
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, err
+		return nil, invalidParams("invalid params: %v", err)
 	}
 
 	// Enforce RBAC: admin tools require isAdmin in context
-	if _, isAdminTool := adminTools[req.Name]; isAdminTool {
-		isAdmin, ok := ctx.Value(adminCtxKeyVal).(bool)
-		if !ok || !isAdmin {
-			return nil, fmt.Errorf("admin access required")
-		}
+	if _, isAdminTool := adminTools[req.Name]; isAdminTool && !isAdminCtx(ctx) {
+		return nil, errAdminRequired
 	}
 
 	switch req.Name {
@@ -576,8 +674,32 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 		return s.toolReloadConfig()
 
 	default:
-		return nil, fmt.Errorf("unknown tool: %s", req.Name)
+		return nil, invalidParams("unknown tool: %s", req.Name)
 	}
+}
+
+// validateDomainName rejects domain names that could escape storage paths
+// or key prefixes (F5017); mirrors the REST API boundary checks.
+func validateDomainName(name string) error {
+	if strings.Contains(name, "..") || strings.ContainsAny(name, "/\\\r\n\x00@") {
+		return fmt.Errorf("invalid domain name")
+	}
+	if len(name) > 253 {
+		return fmt.Errorf("domain name exceeds maximum length")
+	}
+	return nil
+}
+
+// validateEmailAddress rejects path-like or oversized address parts (F5017).
+func validateEmailAddress(localPart, domain string) error {
+	if localPart == "" || len(localPart) > 64 || strings.Contains(localPart, "..") ||
+		strings.ContainsAny(localPart, "/\\\r\n\x00") {
+		return fmt.Errorf("invalid email address")
+	}
+	if domain == "" || validateDomainName(domain) != nil {
+		return fmt.Errorf("invalid email address")
+	}
+	return nil
 }
 
 // Tool implementations
@@ -672,6 +794,9 @@ func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (ma
 	if name == "" {
 		return nil, fmt.Errorf("domain name is required")
 	}
+	if err := validateDomainName(name); err != nil {
+		return nil, err
+	}
 	if maxAccounts <= 0 {
 		maxAccounts = 100
 	}
@@ -681,6 +806,9 @@ func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (ma
 		MaxAccounts: maxAccounts,
 	}
 	if err := s.db.CreateDomain(domain); err != nil {
+		if errors.Is(err, db.ErrDomainExists) {
+			return nil, fmt.Errorf("domain already exists")
+		}
 		slog.Error("mcp tool error", "tool", "add_domain", "error", err)
 		return nil, fmt.Errorf("internal server error")
 	}
@@ -723,6 +851,9 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 	}
 	localPart := parts[0]
 	domain := parts[1]
+	if err := validateEmailAddress(localPart, domain); err != nil {
+		return nil, err
+	}
 
 	// Verify domain exists
 	domains, err := s.db.ListDomains()
@@ -924,11 +1055,16 @@ func (s *Server) toolReloadConfig() (map[string]interface{}, error) {
 // surfaces before WriteHeader — preventing the case where an encoding failure silently
 // drops the error body while leaving the client with the wrong status (e.g. a 401 body
 // sent with a 200 status because Encode's error was discarded).
-func (s *Server) writeError(w http.ResponseWriter, code int, message string) {
+//
+// httpStatus is the HTTP status; rpcCode is the JSON-RPC error code and id
+// the request id to echo (nil → null) (F5046).
+func (s *Server) writeError(w http.ResponseWriter, httpStatus, rpcCode int, id json.RawMessage, message string) {
+	code := httpStatus
 	resp := MCPResponse{
 		JSONRPC: "2.0",
+		ID:      id,
 		Error: &MCPError{
-			Code:    code,
+			Code:    rpcCode,
 			Message: message,
 		},
 	}
@@ -942,7 +1078,7 @@ func (s *Server) writeError(w http.ResponseWriter, code int, message string) {
 		body, err = json.Marshal(resp)
 		if err != nil {
 			// Even the fallback marshal failed — write a raw JSON literal.
-			body = []byte(`{"jsonrpc":"2.0","error":{"code":-32603,"message":"internal error"}}`)
+			body = []byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"internal error"}}`)
 		}
 		code = http.StatusInternalServerError
 	}
@@ -1024,10 +1160,13 @@ type ResourceReadRequest struct {
 	URI string `json:"uri"`
 }
 
-func (s *Server) handleResourceRead(params json.RawMessage) (map[string]interface{}, error) {
+func (s *Server) handleResourceRead(ctx context.Context, params json.RawMessage) (map[string]interface{}, error) {
 	var req ResourceReadRequest
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, err
+		return nil, invalidParams("invalid params: %v", err)
+	}
+	if _, adminOnly := adminResources[req.URI]; adminOnly && !isAdminCtx(ctx) {
+		return nil, errAdminRequired
 	}
 
 	switch req.URI {
@@ -1036,7 +1175,14 @@ func (s *Server) handleResourceRead(params json.RawMessage) (map[string]interfac
 		if err != nil {
 			return nil, err
 		}
-		data, _ := json.MarshalIndent(domains, "", "  ")
+		// F5015: never expose DKIM private keys through resources.
+		redacted := make([]db.DomainData, 0, len(domains))
+		for _, d := range domains {
+			c := *d
+			c.DKIMPrivateKey = ""
+			redacted = append(redacted, c)
+		}
+		data, _ := json.MarshalIndent(redacted, "", "  ")
 		return map[string]interface{}{"contents": []ResourceContent{
 			{URI: req.URI, Text: string(data), MimeType: "application/json"},
 		}}, nil
@@ -1051,7 +1197,16 @@ func (s *Server) handleResourceRead(params json.RawMessage) (map[string]interfac
 			accounts, _ := s.db.ListAccountsByDomain(d.Name)
 			allAccounts = append(allAccounts, accounts...)
 		}
-		data, _ := json.MarshalIndent(allAccounts, "", "  ")
+		// F5015: never expose credential material through resources.
+		redacted := make([]db.AccountData, 0, len(allAccounts))
+		for _, a := range allAccounts {
+			c := *a
+			c.PasswordHash = ""
+			c.APOPHash = ""
+			c.TOTPSecret = ""
+			redacted = append(redacted, c)
+		}
+		data, _ := json.MarshalIndent(redacted, "", "  ")
 		return map[string]interface{}{"contents": []ResourceContent{
 			{URI: req.URI, Text: string(data), MimeType: "application/json"},
 		}}, nil
@@ -1078,7 +1233,7 @@ func (s *Server) handleResourceRead(params json.RawMessage) (map[string]interfac
 		}}, nil
 
 	default:
-		return nil, fmt.Errorf("unknown resource: %s", req.URI)
+		return nil, &rpcError{code: rpcResourceNotFound, msg: "unknown resource: " + req.URI}
 	}
 }
 
@@ -1116,7 +1271,7 @@ type PromptGetRequest struct {
 func (s *Server) handlePromptGet(params json.RawMessage) (map[string]interface{}, error) {
 	var req PromptGetRequest
 	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, err
+		return nil, invalidParams("invalid params: %v", err)
 	}
 
 	switch req.Name {
@@ -1205,6 +1360,6 @@ Use 'umailserver check tls' and review admin panel security settings.`,
 		}}, nil
 
 	default:
-		return nil, fmt.Errorf("unknown prompt: %s", req.Name)
+		return nil, invalidParams("unknown prompt: %s", req.Name)
 	}
 }
