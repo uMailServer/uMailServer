@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/audit"
@@ -123,11 +124,23 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F5030: this route is outside the API rate limiter, so without a budget
+	// it is an unlimited oracle for the current password. Guesses share the
+	// per-account login budget (5 per 5 minutes), cleared on success.
+	emailKey := strings.ToLower(authUser)
+	if !s.checkAccountLoginRateLimit(emailKey) {
+		s.sendError(w, http.StatusTooManyRequests, "too many password attempts for this account")
+		return
+	}
+
 	// Re-authentication: the current password must match.
 	if matches, _ := s.verifyPassword(req.CurrentPassword, account.PasswordHash); !matches {
+		s.recordAccountLoginFailure(emailKey) // F5135: the check no longer counts attempts
+		s.auditLogger.LogLoginFailure(authUser, audit.ExtractIP(r), "password_change_wrong_current")
 		s.sendError(w, http.StatusForbidden, "current password is incorrect")
 		return
 	}
+	s.clearAccountLoginFailures(emailKey)
 
 	hashedPassword, err := s.hashPassword(req.NewPassword)
 	if err != nil {

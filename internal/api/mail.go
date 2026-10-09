@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -363,6 +364,13 @@ func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
 	}
 }
 
+// isBareAddress reports whether s is exactly one RFC 5322 addr-spec with no
+// display name, angle brackets or surrounding text (F5137).
+func isBareAddress(s string) bool {
+	addr, err := mail.ParseAddress(s)
+	return err == nil && addr.Name == "" && addr.Address == s
+}
+
 // sanitizeHeaderValue removes CR/LF characters to prevent SMTP header injection.
 func sanitizeHeaderValue(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\n", "")
@@ -413,10 +421,23 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate recipient count
-	if len(req.To) > 100 {
+	// Validate recipient count. F5136: the cap applies to every envelope
+	// recipient (To + Cc + Bcc); counting only To let Bcc carry any number.
+	if len(req.To)+len(req.CC)+len(req.BCC) > 100 {
 		h.sendError(w, http.StatusBadRequest, "Too many recipients (max 100)")
 		return
+	}
+
+	// F5137: every recipient becomes an SMTP envelope address (RCPT TO), so
+	// it must be a bare addr-spec. Anything else (empty, display-name form,
+	// trailing "> NOTIFY=..." ESMTP parameters) was queued verbatim.
+	for _, list := range [][]string{req.To, req.CC, req.BCC} {
+		for _, rcpt := range list {
+			if !isBareAddress(rcpt) {
+				h.sendError(w, http.StatusBadRequest, "Invalid recipient address")
+				return
+			}
+		}
 	}
 
 	// Validate subject length

@@ -24,6 +24,9 @@ func (s *Server) handleJWTRotate(w http.ResponseWriter, r *http.Request) {
 
 	// Add new secret to versions map, pruning old secrets to limit exposure
 	const maxJWTSecretVersions = 5
+	// F4847: jwtSecrets/currentKid are read by every authenticated request.
+	s.jwtMu.Lock()
+	defer s.jwtMu.Unlock()
 	s.jwtSecrets[newKid] = newSecret
 	s.currentKid = newKid
 	if len(s.jwtSecrets) > maxJWTSecretVersions {
@@ -73,6 +76,8 @@ func (s *Server) handleJWTStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return status (not the actual secrets for security)
+	s.jwtMu.RLock()
+	defer s.jwtMu.RUnlock()
 	activeKids := make([]string, 0, len(s.jwtSecrets))
 	for kid := range s.jwtSecrets {
 		activeKids = append(activeKids, kid)

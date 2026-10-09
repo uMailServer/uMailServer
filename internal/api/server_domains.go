@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -124,6 +125,10 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.db.CreateDomain(domain); err != nil {
+		if errors.Is(err, db.ErrDomainExists) { // F4938
+			s.sendError(w, http.StatusConflict, "domain already exists")
+			return
+		}
 		s.sendError(w, http.StatusInternalServerError, "failed to create domain")
 		return
 	}
