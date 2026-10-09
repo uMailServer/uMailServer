@@ -1,11 +1,12 @@
 name: CI
 
 on:
+  # CI does not run on every push or pull request. It runs when a release
+  # tag (v*) is pushed, or when started by hand (Actions tab or
+  # `gh workflow run`). See docs/CONTRIBUTING.md, "CI and releases".
   push:
-    branches: [main, master, develop]
     tags: ['v*']
-  pull_request:
-    branches: [main, master, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
