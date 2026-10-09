@@ -52,14 +52,15 @@ type StopAction struct {
 
 // VacationAction sends vacation auto-reply
 type VacationAction struct {
-	Subject   string
-	Body      string
-	Days      int
-	Seconds   int
-	Addresses []string
-	From      string
-	Mime      bool
-	Handle    string
+	Subject    string
+	Body       string
+	Days       int
+	Seconds    int
+	SecondsSet bool
+	Addresses  []string
+	From       string
+	Mime       bool
+	Handle     string
 }
 
 // SieveContext holds execution context
@@ -817,6 +818,7 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 		}
 	case "seconds":
 		// Next arg is the seconds number (RFC 5230 §4.1).
+		vacation.SecondsSet = true
 		if len(cmd.Arguments) > 0 {
 			if nv, ok := cmd.Arguments[0].(*NumberValue); ok {
 				vacation.Seconds = int(nv.Value)
@@ -881,6 +883,7 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 				}
 			case "seconds":
 				// Next arg is the seconds number.
+				vacation.SecondsSet = true
 				if argIdx+1 < len(cmd.Arguments) {
 					argIdx++
 					if nv, ok := cmd.Arguments[argIdx].(*NumberValue); ok {

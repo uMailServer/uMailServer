@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/mail"
 	"strings"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/sieve"
 )
@@ -126,9 +127,17 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 		keep = true
 	}
 
-	if out.vacation != nil && from != "" && folder != "Junk" &&
-		s.sieveManager.CheckAndRecordVacation(fmt.Sprintf("%q:%q", rcpt, from), out.vacation.Days) {
-		s.handleSieveVacation(from, rcpt, *out.vacation)
+	if out.vacation != nil && from != "" && folder != "Junk" {
+		// RFC 6131 §2: when the script specifies :seconds, that value is used
+		// instead of :days (:seconds 0 replies to every message); the days
+		// form keeps RFC 5230 semantics (24h floor inside the manager).
+		window := time.Duration(out.vacation.Days) * 24 * time.Hour
+		if out.vacation.SecondsSet {
+			window = time.Duration(out.vacation.Seconds) * time.Second
+		}
+		if s.sieveManager.CheckAndRecordVacationFor(fmt.Sprintf("%q:%q", rcpt, from), window) {
+			s.handleSieveVacation(from, rcpt, *out.vacation)
+		}
 	}
 
 	targets := make([]string, 0, len(out.folders)+1)

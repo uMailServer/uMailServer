@@ -245,19 +245,29 @@ func (m *Manager) RecordVacationSent(sender string) {
 
 // CheckAndRecordVacation atomically checks if we should send a vacation reply and records that we will.
 // This prevents race conditions where multiple goroutines could send vacation replies for the same sender.
+// Days-granular with a 24h floor (RFC 5230 :days semantics); use
+// CheckAndRecordVacationFor for RFC 6131 :seconds windows.
 func (m *Manager) CheckAndRecordVacation(sender string, days int) bool {
-	m.vacationCacheMu.Lock()
-	defer m.vacationCacheMu.Unlock()
-
-	// Minimum interval is 1 day regardless of user's preference
 	interval := time.Duration(days) * 24 * time.Hour
+	// Minimum interval is 1 day regardless of user's preference
 	if interval < 24*time.Hour {
 		interval = 24 * time.Hour
 	}
+	return m.CheckAndRecordVacationFor(sender, interval)
+}
 
-	lastSent, ok := m.vacationCache[sender]
-	if ok && time.Since(lastSent) < interval {
-		return false
+// CheckAndRecordVacationFor is the duration-aware form of CheckAndRecordVacation
+// (RFC 6131 :seconds): interval is honored exactly, and a window of 0 or less
+// replies to every delivery (":seconds 0" disables suppression).
+func (m *Manager) CheckAndRecordVacationFor(sender string, interval time.Duration) bool {
+	m.vacationCacheMu.Lock()
+	defer m.vacationCacheMu.Unlock()
+
+	if interval > 0 {
+		lastSent, ok := m.vacationCache[sender]
+		if ok && time.Since(lastSent) < interval {
+			return false
+		}
 	}
 
 	// LRU eviction: remove oldest 25% if at capacity
