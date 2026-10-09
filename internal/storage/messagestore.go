@@ -97,27 +97,46 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 		return "", err
 	}
 
-	// Check if already exists
-	file, err := os.OpenFile(filepath.Clean(msgPath), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// F5096: write and fsync a temp file in the same directory, then publish
+	// it under the content-addressed name with a hard link (atomic and
+	// non-overwriting). A failed or interrupted write therefore never leaves
+	// a truncated body under msgPath that later deliveries would dedup onto.
+	tmp, err := os.CreateTemp(filepath.Dir(msgPath), ".tmp-"+messageID+"-*")
 	if err != nil {
-		if os.IsExist(err) {
-			info, statErr := os.Stat(msgPath)
-			if statErr != nil {
-				return "", statErr
-			}
-			if !info.Mode().IsRegular() {
-				return "", fmt.Errorf("message path is not a regular file: %s", msgPath)
-			}
-			return messageID, nil // Already exists
-		}
 		return "", err
 	}
-	_, err = file.Write(data)
-	if closeErr := file.Close(); closeErr != nil && err == nil {
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
 	if err != nil {
 		return "", err
+	}
+
+	if err := os.Link(tmpPath, msgPath); err != nil {
+		if !os.IsExist(err) {
+			return "", err
+		}
+		info, statErr := os.Stat(msgPath)
+		if statErr != nil {
+			return "", statErr
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("message path is not a regular file: %s", msgPath)
+		}
+		if info.Size() == int64(len(data)) {
+			return messageID, nil // Already exists
+		}
+		// A body of the wrong size under a content hash is a leftover from a
+		// pre-F5096 partial write; replace it with the complete copy.
+		if err := os.Rename(tmpPath, msgPath); err != nil {
+			return "", err
+		}
 	}
 
 	return messageID, nil

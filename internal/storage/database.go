@@ -244,17 +244,24 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 		aclB := tx.Bucket([]byte("acl"))
 		if aclB != nil {
 			prefix := fmt.Sprintf("acl:%s:%s:", user, oldName)
+			// F5095: collect first, mutate after. Put/Delete on the bucket
+			// invalidate a live cursor (page splits/rebalances), which made
+			// the scan skip grants: they stayed on the old name and were
+			// missing on the new one.
+			type aclKV struct{ k, v []byte }
+			var moves []aclKV
 			c := aclB.Cursor()
 			for k, v := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, v = c.Next() {
-				parts := strings.SplitN(string(k), ":", 4)
-				if len(parts) == 4 {
-					newKey := fmt.Sprintf("acl:%s:%s:%s", user, newName, parts[3])
-					if err := aclB.Put([]byte(newKey), v); err != nil {
-						return err
-					}
-					if err := aclB.Delete(k); err != nil {
-						return err
-					}
+				moves = append(moves, aclKV{append([]byte(nil), k...), append([]byte(nil), v...)})
+			}
+			for _, m := range moves {
+				grantee := string(m.k[len(prefix):])
+				newKey := fmt.Sprintf("acl:%s:%s:%s", user, newName, grantee)
+				if err := aclB.Put([]byte(newKey), m.v); err != nil {
+					return err
+				}
+				if err := aclB.Delete(m.k); err != nil {
+					return err
 				}
 			}
 		}
