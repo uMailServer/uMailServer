@@ -40,7 +40,15 @@ func NewManager() *Manager {
 // CompileScript compiles a Sieve script string and returns the Script
 func (m *Manager) CompileScript(source string) (*Script, error) {
 	p := NewParser(source)
-	return p.Parse()
+	script, err := p.Parse()
+	if err != nil {
+		return nil, err
+	}
+	// F5036: a script requiring an unsupported extension is invalid.
+	if err := CheckRequires(script); err != nil {
+		return nil, err
+	}
+	return script, nil
 }
 
 // StoreScript stores a script for a user without activating it

@@ -809,7 +809,7 @@ func (er *errorReader) Read([]byte) (int, error) {
 
 func TestInterpreter_EvaluateTest_BooleanTest(t *testing.T) {
 	script := `
-		require "boolean";
+		# F5036: "boolean" is not a Sieve extension; requiring it is an error.
 		if true {
 			keep;
 		}
