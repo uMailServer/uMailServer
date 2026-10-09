@@ -326,6 +326,13 @@ func (s *Session) handleRCPT(arg string) error {
 		return s.WriteResponse(452, "4.5.3 Too many recipients")
 	}
 
+	// Apply the envelope policy installed with SetValidateHandler. (F4907)
+	if s.server.onValidate != nil {
+		if err := s.server.onValidate(s.mailFrom, []string{validated}); err != nil {
+			return s.WriteResponse(550, "5.7.1 Recipient rejected")
+		}
+	}
+
 	s.rcptTo = append(s.rcptTo, validated)
 	s.rcptToNotify = append(s.rcptToNotify, notify)
 	s.state = StateRcptTo
@@ -370,6 +377,7 @@ func (s *Session) handleDATA() error {
 	// Read message data
 	data, err := s.readData()
 	if err != nil {
+		s.resetTransaction()
 		if errors.Is(err, errMessageTooLarge) {
 			return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
 		}
@@ -385,17 +393,9 @@ func (s *Session) handleDATA() error {
 	s.data = data
 
 	// Run message through pipeline if configured
+	var pctx *MessageContext
 	if s.server.pipeline != nil {
-		var remoteIP net.IP
-		if host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String()); err == nil {
-			remoteIP = net.ParseIP(host)
-		}
-		// Fallback for Unix sockets or invalid addresses
-		if remoteIP == nil {
-			remoteIP = net.IPv4zero
-		}
-
-		ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)
+		ctx := NewMessageContext(s.clientIP(), s.mailFrom, s.rcptTo, data)
 		ctx.RemoteHost = s.helloDomain
 		ctx.TLS = s.isTLS
 		ctx.Authenticated = s.isAuth
@@ -414,7 +414,9 @@ func (s *Session) handleDATA() error {
 		}
 
 		result, err := s.server.pipeline.Process(ctx)
-		if err != nil {
+		// Process reports a stage rejection as ResultReject with a non-nil
+		// error; answer it with the stage's code below, not 451. (F4945)
+		if err != nil && result != ResultReject {
 			s.resetTransaction()
 			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 		}
@@ -440,77 +442,14 @@ func (s *Session) handleDATA() error {
 			data = append([]byte(spamHeader), data...)
 			s.data = data
 		}
-
-		// Add Authentication-Results header with SPF/DKIM/DMARC results
-		if ctx.SPFResult.Result != "" || ctx.DKIMResult.Domain != "" || ctx.DMARCResult.Result != "" {
-			var arParts []string
-			hostname := s.server.config.Hostname
-			if hostname == "" {
-				hostname = "localhost"
-			}
-			if ctx.SPFResult.Result != "" {
-				arParts = append(arParts, fmt.Sprintf("spf=%s smtp.mailfrom=%s", ctx.SPFResult.Result, ctx.SPFResult.Domain))
-			}
-			if ctx.DKIMResult.Domain != "" {
-				if ctx.DKIMResult.Valid {
-					arParts = append(arParts, fmt.Sprintf("dkim=pass header.d=%s", ctx.DKIMResult.Domain))
-				} else {
-					reason := ctx.DKIMResult.Error
-					if reason == "" {
-						reason = "verification failed"
-					}
-					arParts = append(arParts, fmt.Sprintf("dkim=fail reason=\"%s\" header.d=%s", reason, ctx.DKIMResult.Domain))
-				}
-			}
-			if ctx.DMARCResult.Result != "" {
-				arParts = append(arParts, fmt.Sprintf("dmarc=%s header.from=%s", ctx.DMARCResult.Result, s.mailFrom))
-			}
-			if len(arParts) > 0 {
-				arHeader := fmt.Sprintf("Authentication-Results: %s;\r\n\t%s\r\n", hostname, strings.Join(arParts, ";\r\n\t"))
-				data = append([]byte(arHeader), data...)
-				s.data = data
-			}
-		}
-
-		// Add X-Spam headers for all messages processed by pipeline
-		if ctx.SpamResult.Score > 0 {
-			spamScoreHeader := fmt.Sprintf("X-Spam-Score: %.1f\r\n", ctx.SpamResult.Score)
-			data = append([]byte(spamScoreHeader), data...)
-			s.data = data
-		}
-
-		// Add Received trace header
-		proto := "ESMTP"
-		if s.isTLS {
-			proto = "ESMTPS"
-		}
-		var received string
-		if len(s.rcptTo) > 0 {
-			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
-				s.helloDomain, remoteIP.String(), s.server.config.Hostname, proto, s.rcptTo[0],
-				time.Now().Format(time.RFC1123Z))
-		} else {
-			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
-				s.helloDomain, remoteIP.String(), s.server.config.Hostname, proto,
-				time.Now().Format(time.RFC1123Z))
-		}
-		data = append([]byte(received), data...)
-		s.data = data
+		data = s.applyJunkVerdict(ctx, result, data)
+		pctx = ctx
 	}
 
-	// Add Message-ID if not present. The search must be scoped to the header
-	// block: a "message-id:" occurring in the body is quoted text (ordinary
-	// in forwards and replies), not this message's identifier, and must not
-	// suppress the header. RFC 5322 §3.6.4.
-	headerScope := data
-	if idx := bytes.Index(data, []byte("\r\n\r\n")); idx >= 0 {
-		headerScope = data[:idx]
-	}
-	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
-		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), s.server.config.Hostname)
-		data = append([]byte(msgID), data...)
-		s.data = data
-	}
+	// Trace and result headers are added the same way for DATA and BDAT,
+	// with or without a pipeline. (F5055)
+	data = s.addTraceHeaders(pctx, data)
+	s.data = data
 
 	// Deliver message
 	if s.server.onDeliverWithNotify != nil {
@@ -534,6 +473,175 @@ func (s *Session) handleDATA() error {
 	return s.WriteResponse(250, "OK")
 }
 
+// applyJunkVerdict passes a ScoreStage "junk" verdict on to the delivery
+// handler, which otherwise cannot tell junk from inbox mail (F4946): the
+// message is flagged with X-Spam-Status (unless quarantine already added it)
+// and, when no sieve rule chose a folder, a fileinto:Junk action is added.
+func (s *Session) applyJunkVerdict(ctx *MessageContext, result PipelineResult, data []byte) []byte {
+	if ctx.SpamResult.Verdict != "junk" {
+		return data
+	}
+	if result != ResultQuarantine {
+		data = append([]byte(fmt.Sprintf("X-Spam-Status: Yes, score=%.1f\r\n", ctx.SpamScore)), data...)
+	}
+	for _, a := range s.sieveActions {
+		if strings.HasPrefix(a, "fileinto:") {
+			return data
+		}
+	}
+	s.sieveActions = append(append([]string(nil), s.sieveActions...), "fileinto:Junk")
+	return data
+}
+
+// clientIP returns the peer IP of the session, or 0.0.0.0 for Unix sockets
+// and unparsable addresses.
+func (s *Session) clientIP() net.IP {
+	var remoteIP net.IP
+	if host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String()); err == nil {
+		remoteIP = net.ParseIP(host)
+	}
+	if remoteIP == nil {
+		remoteIP = net.IPv4zero
+	}
+	return remoteIP
+}
+
+// addTraceHeaders prepends the headers this server adds to an accepted
+// message, whichever of DATA or BDAT carried it (F5055): when a pipeline ran
+// (ctx non-nil) Authentication-Results, X-Spam-Score and the RFC 5321 §4.4
+// Received trace header, and in every case a Message-ID if the header block
+// has none. Authentication-Results fields that already claim this
+// server's authserv-id are forged and are removed first (RFC 8601 §5, F5059).
+func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
+	hostname := s.server.config.Hostname
+	if hostname == "" {
+		hostname = "localhost"
+	}
+	data = removeOwnAuthResults(data, hostname)
+
+	if ctx != nil {
+		// Add Authentication-Results header with SPF/DKIM/DMARC results
+		var arParts []string
+		if ctx.SPFResult.Result != "" {
+			arParts = append(arParts, fmt.Sprintf("spf=%s smtp.mailfrom=%s", ctx.SPFResult.Result, ctx.SPFResult.Domain))
+		}
+		if ctx.DKIMResult.Domain != "" {
+			if ctx.DKIMResult.Valid {
+				arParts = append(arParts, fmt.Sprintf("dkim=pass header.d=%s", ctx.DKIMResult.Domain))
+			} else {
+				reason := ctx.DKIMResult.Error
+				if reason == "" {
+					reason = "verification failed"
+				}
+				arParts = append(arParts, fmt.Sprintf("dkim=fail reason=\"%s\" header.d=%s", reason, ctx.DKIMResult.Domain))
+			}
+		}
+		if ctx.DMARCResult.Result != "" {
+			arParts = append(arParts, fmt.Sprintf("dmarc=%s header.from=%s", ctx.DMARCResult.Result, s.mailFrom))
+		}
+		if len(arParts) > 0 {
+			arHeader := fmt.Sprintf("Authentication-Results: %s;\r\n\t%s\r\n", hostname, strings.Join(arParts, ";\r\n\t"))
+			data = append([]byte(arHeader), data...)
+		}
+
+		// Add X-Spam headers for all messages processed by pipeline
+		if ctx.SpamResult.Score > 0 {
+			spamScoreHeader := fmt.Sprintf("X-Spam-Score: %.1f\r\n", ctx.SpamResult.Score)
+			data = append([]byte(spamScoreHeader), data...)
+		}
+
+		// Add Received trace header
+		proto := "ESMTP"
+		if s.isTLS {
+			proto = "ESMTPS"
+		}
+		var received string
+		if len(s.rcptTo) > 0 {
+			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
+				s.helloDomain, s.clientIP().String(), s.server.config.Hostname, proto, s.rcptTo[0],
+				time.Now().Format(time.RFC1123Z))
+		} else {
+			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
+				s.helloDomain, s.clientIP().String(), s.server.config.Hostname, proto,
+				time.Now().Format(time.RFC1123Z))
+		}
+		data = append([]byte(received), data...)
+	}
+
+	// Add Message-ID if not present. The search must be scoped to the header
+	// block: a "message-id:" occurring in the body is quoted text (ordinary
+	// in forwards and replies), not this message's identifier, and must not
+	// suppress the header. RFC 5322 §3.6.4.
+	headerScope := data
+	if idx := bytes.Index(data, []byte("\r\n\r\n")); idx >= 0 {
+		headerScope = data[:idx]
+	}
+	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
+		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), s.server.config.Hostname)
+		data = append([]byte(msgID), data...)
+	}
+	return data
+}
+
+// removeOwnAuthResults returns data without the Authentication-Results header
+// fields (with their continuation lines) whose authserv-id is hostname. Only
+// this server may issue results under its own id; a sender-supplied one is a
+// forgery (RFC 8601 §5, F5059). data itself is not modified.
+func removeOwnAuthResults(data []byte, hostname string) []byte {
+	var out []byte
+	changed, dropping := false, false
+	for start := 0; start < len(data); {
+		end := bytes.IndexByte(data[start:], '\n')
+		if end < 0 {
+			end = len(data)
+		} else {
+			end += start + 1
+		}
+		line := data[start:end]
+		content := bytes.TrimRight(line, "\r\n")
+		if len(content) == 0 {
+			// End of the header block: the body is kept as is.
+			if !changed {
+				return data
+			}
+			return append(out, data[start:]...)
+		}
+		if content[0] != ' ' && content[0] != '\t' {
+			dropping = false
+			if colon := bytes.IndexByte(content, ':'); colon > 0 &&
+				strings.EqualFold(strings.TrimRight(string(content[:colon]), " \t"), "Authentication-Results") {
+				dropping = authServID(data[start+colon+1:]) == strings.ToLower(hostname)
+			}
+		}
+		if dropping {
+			if !changed {
+				out = append(make([]byte, 0, len(data)), data[:start]...)
+				changed = true
+			}
+		} else if changed {
+			out = append(out, line...)
+		}
+		start = end
+	}
+	if !changed {
+		return data
+	}
+	return out
+}
+
+// authServID returns the lower-cased authserv-id of an Authentication-Results
+// field value: the first token before ';', which may be folded across lines.
+func authServID(value []byte) string {
+	if semi := bytes.IndexByte(value, ';'); semi >= 0 {
+		value = value[:semi]
+	}
+	fields := strings.Fields(string(value))
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.ToLower(fields[0])
+}
+
 // errMessageTooLarge is returned by readData when the message exceeds the size limit
 var errMessageTooLarge = errors.New("message too large")
 
@@ -551,6 +659,16 @@ func (s *Session) readData() ([]byte, error) {
 	var data []byte
 	const maxLineLength = 1000 // RFC 5322: max 1000 bytes per line including CRLF
 
+	// A content error (overlong line, NUL, size limit) must not abandon the
+	// message mid-stream: the unread remainder would then be executed as
+	// SMTP commands. Record the first error, keep consuming (and discarding)
+	// lines up to the end-of-data indicator, and report it there. (F4905)
+	var contentErr error
+	// Dot handling applies only at the start of a line, i.e. after <CRLF>:
+	// <LF>.<CRLF> is not the end-of-data indicator (RFC 5321 §4.1.1.4), and
+	// treating it as one enables SMTP smuggling. (F4906)
+	atLineStart := true
+
 	for {
 		if s.server.config.ReadTimeout > 0 {
 			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.config.ReadTimeout))
@@ -560,29 +678,36 @@ func (s *Session) readData() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		dotLine := atLineStart && len(line) > 0 && line[0] == '.'
+		atLineStart = bytes.HasSuffix(line, []byte("\r\n"))
+
+		// Check for end of data marker
+		if dotLine && len(line) == 3 && line[1] == '\r' && line[2] == '\n' {
+			break
+		}
+		if contentErr != nil {
+			continue
+		}
 
 		// RFC 5322 line length limit check
 		lineLength := len(line)
-		if len(line) > 0 && line[0] == '.' {
+		if dotLine {
 			// The extra transparency dot does not count toward the line limit.
 			lineLength--
 		}
 		if lineLength > maxLineLength {
-			return nil, fmt.Errorf("line exceeds maximum length of %d bytes", maxLineLength)
+			contentErr = fmt.Errorf("line exceeds maximum length of %d bytes", maxLineLength)
+			continue
 		}
 
 		// Check for null bytes (security: prevent header injection)
 		if bytes.Contains(line, []byte{0}) {
-			return nil, fmt.Errorf("message contains null bytes")
-		}
-
-		// Check for end of data marker
-		if len(line) >= 3 && line[0] == '.' && line[1] == '\r' && line[2] == '\n' {
-			break
+			contentErr = fmt.Errorf("message contains null bytes")
+			continue
 		}
 
 		// Remove dot-stuffing (leading dot is doubled)
-		if len(line) > 0 && line[0] == '.' {
+		if dotLine {
 			line = line[1:]
 		}
 
@@ -590,10 +715,14 @@ func (s *Session) readData() ([]byte, error) {
 
 		// Check accumulated size during read to prevent memory exhaustion
 		if int64(len(data)) > s.server.config.MaxMessageSize {
-			return nil, fmt.Errorf("%w: message exceeds maximum size of %d bytes", errMessageTooLarge, s.server.config.MaxMessageSize)
+			contentErr = fmt.Errorf("%w: message exceeds maximum size of %d bytes", errMessageTooLarge, s.server.config.MaxMessageSize)
+			data = nil
 		}
 	}
 
+	if contentErr != nil {
+		return nil, contentErr
+	}
 	return data, nil
 }
 
@@ -604,7 +733,15 @@ func (s *Session) handleBDAT(arg string) error {
 
 	// Must have RCPT TO first
 	if s.state != StateRcptTo {
-		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
+		werr := s.WriteResponse(503, "5.5.1 Bad sequence of commands")
+		if parts := strings.Fields(arg); len(parts) > 0 {
+			if size, err := strconv.Atoi(parts[0]); err == nil {
+				if derr := s.discardBDATChunk(size); derr != nil && werr == nil {
+					werr = derr
+				}
+			}
+		}
+		return werr
 	}
 
 	// Parse: BDAT <size> [LAST]
@@ -634,7 +771,10 @@ func (s *Session) handleBDAT(arg string) error {
 	if int64(size) > s.server.config.MaxMessageSize-int64(s.bdatBuffer.Len()) {
 		s.bdatBuffer = nil
 		s.resetTransaction()
-		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
+		if err := s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size"); err != nil {
+			return err
+		}
+		return s.discardBDATChunk(size)
 	}
 
 	// Read chunk data
@@ -671,17 +811,9 @@ func (s *Session) handleBDAT(arg string) error {
 		s.data = data
 
 		// Run through pipeline if configured
+		var pctx *MessageContext
 		if s.server.pipeline != nil {
-			var remoteIP net.IP
-			if host, _, err := net.SplitHostPort(s.conn.RemoteAddr().String()); err == nil {
-				remoteIP = net.ParseIP(host)
-			}
-			// Fallback for Unix sockets or invalid addresses
-			if remoteIP == nil {
-				remoteIP = net.IPv4zero
-			}
-
-			ctx := NewMessageContext(remoteIP, s.mailFrom, s.rcptTo, data)
+			ctx := NewMessageContext(s.clientIP(), s.mailFrom, s.rcptTo, data)
 			ctx.RemoteHost = s.helloDomain
 			ctx.TLS = s.isTLS
 			ctx.Authenticated = s.isAuth
@@ -699,7 +831,7 @@ func (s *Session) handleBDAT(arg string) error {
 			}
 
 			result, err := s.server.pipeline.Process(ctx)
-			if err != nil {
+			if err != nil && result != ResultReject { // F4945
 				s.resetTransaction()
 				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 			}
@@ -723,7 +855,13 @@ func (s *Session) handleBDAT(arg string) error {
 				data = append([]byte(spamHeader), data...)
 				s.data = data
 			}
+			data = s.applyJunkVerdict(ctx, result, data)
+			pctx = ctx
 		}
+
+		// BDAT gets the same trace and result headers as DATA. (F5055)
+		data = s.addTraceHeaders(pctx, data)
+		s.data = data
 
 		// Deliver message
 		if s.server.onDeliverWithNotify != nil {
@@ -749,6 +887,27 @@ func (s *Session) handleBDAT(arg string) error {
 
 	// Non-last chunk — acknowledge and wait for more
 	return s.WriteResponse(250, "2.0.0 OK")
+}
+
+// discardBDATChunk consumes, without storing, the size octets that follow a
+// BDAT command the server refused. They are message content, never commands:
+// leaving them unread would make the command loop execute the chunk as SMTP
+// commands (RFC 3030 §2; F5058, the BDAT counterpart of F4905).
+func (s *Session) discardBDATChunk(size int) error {
+	if size <= 0 {
+		return nil
+	}
+	reader := s.reader
+	if reader == nil {
+		reader = bufio.NewReader(s.conn)
+	}
+	if s.server.config.ReadTimeout > 0 {
+		_ = s.conn.SetReadDeadline(time.Now().Add(s.server.config.ReadTimeout))
+	}
+	if _, err := io.CopyN(io.Discard, reader, int64(size)); err != nil {
+		return fmt.Errorf("failed to discard refused BDAT chunk: %w", err)
+	}
+	return nil
 }
 
 // handleRSET handles the RSET command

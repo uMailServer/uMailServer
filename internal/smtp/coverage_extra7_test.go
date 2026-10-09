@@ -1,35 +1,29 @@
 package smtp
 
 import (
+	"net"
 	"testing"
+
+	"github.com/umailserver/umailserver/internal/sieve"
 )
 
-// --- extractUserFromRecipient tests ---
+// These replaced the extractUserFromRecipient tests: the helper keyed
+// scripts by the recipient's local part, which selected another domain's
+// user's script (F5125). The stage no longer runs scripts at all; the
+// delivery handler runs each recipient's script.
 
-func TestExtractUserFromRecipient_Email(t *testing.T) {
-	result := extractUserFromRecipient("user@example.com")
-	if result != "user" {
-		t.Errorf("Expected 'user', got %q", result)
+func TestSieveStageAcceptsWhateverTheScriptSays(t *testing.T) {
+	m := sieve.NewManager()
+	for _, k := range []string{"user@example.com", "user"} {
+		if err := m.SetActiveScript(k, "s", "require \"reject\";\nreject \"no\";\n"); err != nil {
+			t.Fatalf("SetActiveScript(%q): %v", k, err)
+		}
 	}
-}
-
-func TestExtractUserFromRecipient_Empty(t *testing.T) {
-	result := extractUserFromRecipient("")
-	if result != "" {
-		t.Errorf("Expected empty string, got %q", result)
-	}
-}
-
-func TestExtractUserFromRecipient_BangFormat(t *testing.T) {
-	result := extractUserFromRecipient("user!otherdomain!mailbox")
-	if result != "user" {
-		t.Errorf("Expected 'user', got %q", result)
-	}
-}
-
-func TestExtractUserFromRecipient_NoAt(t *testing.T) {
-	result := extractUserFromRecipient("username")
-	if result != "username" {
-		t.Errorf("Expected 'username', got %q", result)
+	st := NewSieveStage(m)
+	for _, rcpt := range []string{"user@example.com", "user@other.example", "", "username", "user!otherdomain!mailbox"} {
+		ctx := NewMessageContext(net.ParseIP("192.0.2.1"), "s@x.org", []string{rcpt}, []byte("Subject: x\r\n\r\nb\r\n"))
+		if r := st.Process(ctx); r != ResultAccept || ctx.Rejected {
+			t.Errorf("%q: got %d rejected=%v", rcpt, r, ctx.Rejected)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"bufio"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -50,6 +51,13 @@ func TestHandleBDAT_RejectsSizeThatOverflowsLimit(t *testing.T) {
 					_ = session.handleBDAT(strconv.Itoa(tt.prime))
 				}()
 				drainSMTPResponse(t, reader)
+			}
+
+			// The server discards a refused chunk's octets (F5058); end the
+			// client's stream so that discard stops at EOF instead of waiting
+			// for an attacker-sized chunk that never comes.
+			if err := clientConn.(*net.TCPConn).CloseWrite(); err != nil {
+				t.Fatalf("close write: %v", err)
 			}
 
 			var resp string

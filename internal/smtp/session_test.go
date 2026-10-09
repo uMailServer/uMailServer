@@ -408,7 +408,8 @@ func TestHandleBDAT_LastFlag(t *testing.T) {
 	if len(deliveredTo) != 1 || deliveredTo[0] != "rcpt@example.com" {
 		t.Errorf("Expected delivered to ['rcpt@example.com'], got %v", deliveredTo)
 	}
-	if string(deliveredData) != chunkData {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if bdatPayload(deliveredData) != chunkData {
 		t.Errorf("Expected delivered data %q, got %q", chunkData, string(deliveredData))
 	}
 }
@@ -461,7 +462,8 @@ func TestHandleBDAT_ZeroSizeLastChunk(t *testing.T) {
 	}
 
 	// Should have delivered the data from the first chunk
-	if string(deliveredData) != chunkData {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if bdatPayload(deliveredData) != chunkData {
 		t.Errorf("Expected delivered data %q, got %q", chunkData, string(deliveredData))
 	}
 }
@@ -472,7 +474,11 @@ func TestHandleBDAT_WithoutPriorMailFrom(t *testing.T) {
 	defer clientConn.Close()
 
 	// Do NOT set state to StateRcptTo; leave at StateNew or StateGreeted
-	// so BDAT should be rejected with 503
+	// so BDAT should be rejected with 503. The refused chunk's 5 octets are
+	// still read and discarded (F5058), so the client sends them.
+	if _, err := clientConn.Write([]byte("HELLO")); err != nil {
+		t.Fatalf("write chunk: %v", err)
+	}
 	err := session.handleBDAT("5")
 	if err != nil {
 		t.Fatalf("handleBDAT returned error: %v", err)
@@ -499,6 +505,10 @@ func TestHandleBDAT_SizeExceeded(t *testing.T) {
 	// Set a very small max message size
 	session.server.config.MaxMessageSize = 10 // 10 bytes max
 
+	// The refused chunk is still read and discarded (F5058).
+	if _, err := clientConn.Write(make([]byte, 100)); err != nil {
+		t.Fatalf("write chunk: %v", err)
+	}
 	err := session.handleBDAT("100")
 	if err != nil {
 		t.Fatalf("handleBDAT returned error: %v", err)
@@ -805,9 +815,9 @@ func TestHandleDATA_WithPipelineReject(t *testing.T) {
 
 	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp2, _ := reader.ReadString('\n')
-	// Pipeline.Process returns error for reject, so handleDATA returns 451
-	if !strings.HasPrefix(resp2, "451") {
-		t.Errorf("Expected 451 for pipeline error, got: %s", resp2)
+	// A stage rejection is a permanent 550, not a 451 local error (F4945).
+	if !strings.HasPrefix(resp2, "550") {
+		t.Errorf("Expected 550 for pipeline reject, got: %s", resp2)
 	}
 }
 
@@ -1133,9 +1143,9 @@ func TestHandleBDAT_LastWithPipelineReject(t *testing.T) {
 	n, _ := clientConn.Read(buf)
 	response := string(buf[:n])
 
-	// Pipeline.Process returns error for reject, so BDAT returns 451
-	if !strings.Contains(response, "451") {
-		t.Errorf("Expected 451 for pipeline reject in BDAT, got: %q", response)
+	// A stage rejection is a permanent 550, not a 451 local error (F4945).
+	if !strings.HasPrefix(response, "550") {
+		t.Errorf("Expected 550 for pipeline reject in BDAT, got: %q", response)
 	}
 }
 
@@ -1352,8 +1362,8 @@ func TestHandleDATA_PipelineRejectCustomCode(t *testing.T) {
 	defer session.Close()
 	defer clientConn.Close()
 
-	// Pipeline.Process returns (ResultReject, error) for reject stages.
-	// handleDATA checks err first and returns 451. This tests that path.
+	// Pipeline.Process returns (ResultReject, error) for reject stages;
+	// handleDATA must answer with the rejection code, not 451 (F4945).
 	logger := &testLogger{}
 	pipeline := NewPipeline(logger)
 	pipeline.AddStage(&rejectStage{})
@@ -1372,8 +1382,8 @@ func TestHandleDATA_PipelineRejectCustomCode(t *testing.T) {
 
 	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
-	if !strings.Contains(resp, "451") {
-		t.Errorf("Expected 451 for pipeline error, got: %s", resp)
+	if !strings.HasPrefix(resp, "550") {
+		t.Errorf("Expected 550 for pipeline reject, got: %s", resp)
 	}
 }
 

@@ -291,20 +291,11 @@ func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
 		return ResultAccept // No rate limiting configured
 	}
 
-	// For authenticated users, check user-based rate limits
+	// The recipient limit is checked first: it is stateless, and a message
+	// refused for too many recipients was never sent. (F5128)
+	user := ""
 	if ctx.Authenticated && ctx.Username != "" {
-		result := s.limiter.CheckUser(ctx.Username)
-		if !result.Allowed {
-			ctx.Rejected = true
-			ctx.RejectionCode = 421
-			ctx.RejectionMessage = result.Reason
-			if result.RetryAfter > 0 {
-				ctx.RejectionMessage = fmt.Sprintf("%s (retry in %ds)", ctx.RejectionMessage, result.RetryAfter)
-			}
-			return ResultReject
-		}
-
-		// Also check recipient limit for authenticated users
+		user = ctx.Username
 		if len(ctx.To) > 0 {
 			recipResult := s.limiter.CheckRecipients(ctx.Username, len(ctx.To))
 			if !recipResult.Allowed {
@@ -316,25 +307,16 @@ func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
 		}
 	}
 
-	// For all connections, check IP-based rate limits
-	result := s.limiter.CheckIP(ctx.RemoteIP.String())
+	// User (authenticated only), IP and global limits are checked together
+	// and the message is counted against them only if all allow it, so an
+	// IP or global refusal does not spend the user's daily quota. (F5205)
+	result := s.limiter.CheckMessage(user, ctx.RemoteIP.String())
 	if !result.Allowed {
 		ctx.Rejected = true
 		ctx.RejectionCode = 421
 		ctx.RejectionMessage = result.Reason
 		if result.RetryAfter > 0 {
 			ctx.RejectionMessage = fmt.Sprintf("%s (retry in %ds)", ctx.RejectionMessage, result.RetryAfter)
-		}
-		return ResultReject
-	}
-
-	// Check global rate limits (applies to all messages regardless of user/IP)
-	if globalResult := s.limiter.CheckGlobal(); !globalResult.Allowed {
-		ctx.Rejected = true
-		ctx.RejectionCode = 421
-		ctx.RejectionMessage = globalResult.Reason
-		if globalResult.RetryAfter > 0 {
-			ctx.RejectionMessage = fmt.Sprintf("%s (retry in %ds)", ctx.RejectionMessage, globalResult.RetryAfter)
 		}
 		return ResultReject
 	}

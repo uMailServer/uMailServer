@@ -659,7 +659,8 @@ func TestCoverBDAT_LastChunkWithDelivery(t *testing.T) {
 	if deliveredFrom != "sender@example.com" {
 		t.Errorf("expected from 'sender@example.com', got %q", deliveredFrom)
 	}
-	if deliveredData != "Hello" {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if bdatPayload(deliveredData) != "Hello" {
 		t.Errorf("expected data 'Hello', got %q", deliveredData)
 	}
 	if len(deliveredTo) != 1 || deliveredTo[0] != "rcpt@example.com" {
@@ -741,7 +742,8 @@ func TestCoverBDAT_MultiChunk(t *testing.T) {
 	}
 	<-done2
 
-	if deliveredData != "HelloWorld" {
+	// BDAT now adds the same headers as DATA (F5055); compare the client payload.
+	if bdatPayload(deliveredData) != "HelloWorld" {
 		t.Errorf("expected delivered data 'HelloWorld', got %q", deliveredData)
 	}
 }
