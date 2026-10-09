@@ -127,9 +127,7 @@ func (s *Server) startInboundSMTP() {
 
 	// Sieve mail filtering (if sieve manager available)
 	if s.sieveManager != nil {
-		sieveStage := smtp.NewSieveStage(s.sieveManager)
-		sieveStage.SetVacationHandler(s.handleSieveVacation)
-		pipeline.AddStage(sieveStage)
+		pipeline.AddStage(smtp.NewSieveStage(s.sieveManager))
 	}
 
 	// Antivirus scanning stage

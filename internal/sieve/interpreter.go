@@ -325,7 +325,7 @@ func (i *Interpreter) executeCommands(cmds []Command) ([]Action, error) {
 		cmd := &cmds[idx]
 		switch cmd.Name {
 		case "if":
-			inChain, chainTaken = true, false
+			inChain = true
 		case "elsif", "else":
 			if !inChain {
 				return nil, fmt.Errorf("%s without preceding if", cmd.Name)

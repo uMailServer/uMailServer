@@ -278,7 +278,7 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 		}
 	}
 	if !fromSigned {
-		return DKIMPERMError, sig, errors.New("From field not signed")
+		return DKIMPERMError, sig, errors.New("from field not signed")
 	}
 
 	// Fetch public key from DNS

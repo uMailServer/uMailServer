@@ -2969,11 +2969,6 @@ func formatFetchResponse(msg *Message, items []string) string {
 			parts = append(parts, fmt.Sprintf("RFC822 {%d}\r\n%s", len(msg.Data), string(msg.Data)))
 		case "BODY", "BODYSTRUCTURE":
 			parts = append(parts, fmt.Sprintf("BODYSTRUCTURE (\"TEXT\" \"PLAIN\" NIL NIL NIL \"7BIT\" %d 0)", msg.Size))
-		default:
-			if it, ok := parseBodySectionItem(item); ok {
-				parts = append(parts, it.format(msg.Data))
-			}
-			continue
 		case "ENVELOPE":
 			fromLocal, fromDomain := splitAddress(msg.From)
 			toLocal, toDomain := splitAddress(msg.To)
@@ -2981,6 +2976,10 @@ func formatFetchResponse(msg *Message, items []string) string {
 				imapQuotedString(msg.Subject), imapQuotedString(msg.Date),
 				imapQuotedString(msg.From), imapQuotedString(fromLocal), imapQuotedString(fromDomain),
 				imapQuotedString(msg.To), imapQuotedString(toLocal), imapQuotedString(toDomain)))
+		default:
+			if it, ok := parseBodySectionItem(item); ok {
+				parts = append(parts, it.format(msg.Data))
+			}
 		}
 	}
 

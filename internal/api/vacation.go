@@ -278,7 +278,7 @@ type productionVacationManager struct {
 // delegating to the manager, and never returns a nil slice so the JSON
 // shape of an empty listing stays [] rather than null.
 func (m productionVacationManager) ListActive() ([]string, error) {
-	list := m.Manager.ListActiveVacations()
+	list := m.ListActiveVacations()
 	if list == nil {
 		return []string{}, nil
 	}
