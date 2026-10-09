@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -220,6 +221,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 	create, _ := args["create"].(map[string]interface{})
 	update, _ := args["update"].(map[string]interface{})
 	destroy, _ := args["destroy"].([]interface{})
+	onDestroyRemoveEmails, _ := args["onDestroyRemoveEmails"].(bool)
 
 	created := make(map[string]Mailbox)
 	notCreated := make(map[string]interface{})
@@ -281,6 +283,15 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 
 		// Check for rename
 		if newName, ok := updateData["name"].(string); ok && newName != "" && newName != oldName {
+			// F5146: Mailbox/get advertises INBOX with mayRename=false, so
+			// a rename must be refused instead of moving the inbox away.
+			if oldName == "INBOX" {
+				notUpdated[key] = map[string]interface{}{
+					"type":        "forbidden",
+					"description": "The inbox cannot be renamed",
+				}
+				continue
+			}
 			if err := s.db.RenameMailbox(user, oldName, newName); err != nil {
 				notUpdated[key] = map[string]interface{}{
 					"type":        "serverFail",
@@ -300,6 +311,31 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 			if !s.mailboxExists(user, name) {
 				notDestroyed[idStr] = map[string]interface{}{"type": "notFound"}
 				continue
+			}
+			// F5146: INBOX is advertised with mayDelete=false.
+			if name == "INBOX" {
+				notDestroyed[idStr] = map[string]interface{}{
+					"type":        "forbidden",
+					"description": "The inbox cannot be destroyed",
+				}
+				continue
+			}
+			// F5145: RFC 8621 §2.5 - a mailbox that still has emails may only
+			// be destroyed when onDestroyRemoveEmails is true; otherwise the
+			// destroy fails with mailboxHasEmail and nothing is removed.
+			if !onDestroyRemoveEmails {
+				uids, err := s.db.GetMessageUIDs(user, name)
+				if err != nil {
+					notDestroyed[idStr] = map[string]interface{}{
+						"type":        "serverFail",
+						"description": s.safeError("GetMessageUIDs", err),
+					}
+					continue
+				}
+				if len(uids) > 0 {
+					notDestroyed[idStr] = map[string]interface{}{"type": "mailboxHasEmail"}
+					continue
+				}
 			}
 			if err := s.db.DeleteMailbox(user, name); err != nil {
 				notDestroyed[idStr] = map[string]interface{}{
@@ -423,13 +459,7 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 	// negative and make the ids loop a negative-index panic, so floor it at
 	// 0 first.
 	total := len(fullIDs)
-	start := int(position)
-	if start < 0 {
-		start = 0
-	}
-	if start > total {
-		start = total
-	}
+	start := resolveQueryPosition(position, total)
 	end := start + int(limit)
 	if end > total {
 		end = total
@@ -446,12 +476,34 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 			"accountId":           accountID,
 			"queryState":          queryState,
 			"canCalculateChanges": false,
-			"position":            int(position),
+			"position":            start,
 			"total":               total,
 			"ids":                 ids,
 		},
 		ID: call.ID,
 	}
+}
+
+// resolveQueryPosition maps a client-supplied /query position onto a
+// 0-based start index in a result of total ids (RFC 8620 §5.5). A negative
+// position is an offset from the end: it is added to total and, if still
+// negative, clamped to 0 (F5147). The result is also capped at total, so
+// slicing with it can never go out of bounds.
+func resolveQueryPosition(position float64, total int) int {
+	// Compare as floats first: converting an out-of-range float to int is
+	// implementation-defined, and a huge position must not wrap negative.
+	// Fractions truncate toward zero, so -0.5 is position 0.
+	position = math.Trunc(position)
+	if position >= float64(total) {
+		return total
+	}
+	if position < 0 {
+		if position <= -float64(total) {
+			return 0
+		}
+		return total + int(position)
+	}
+	return int(position)
 }
 
 // runEmailQuery computes the full ordered result of an Email/query for a
@@ -1649,6 +1701,23 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 	}
 
 	since := storage.ParseChangeState(sinceState)
+
+	// F5148: a sinceState newer than the account's current state (a token
+	// from before a restore, or forged) cannot be answered (RFC 8620 §5.2).
+	// Echoing it back as newState would make the client skip every change
+	// recorded below that sequence, so fail with cannotCalculateChanges and
+	// let the client resync.
+	if current, err := s.db.CurrentChangeState(user); err == nil && since > storage.ParseChangeState(current) {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{
+				"type":        "cannotCalculateChanges",
+				"description": "sinceState is newer than the current state",
+			},
+			ID: call.ID,
+		}
+	}
+
 	entries, hasMore, lastSeq, err := s.db.GetChangesSince(user, ct, since, int(maxChanges))
 	if err != nil {
 		return Response{
@@ -1899,16 +1968,7 @@ func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
 	})
 
 	total := len(threadIDs)
-	// position is a client-supplied offset and may arrive negative. Clamping
-	// only the upper bound would leave start negative and make
-	// threadIDs[start:end] a slice-bounds panic, so floor it at 0 first.
-	start := int(position)
-	if start < 0 {
-		start = 0
-	}
-	if start > total {
-		start = total
-	}
+	start := resolveQueryPosition(position, total)
 	end := start + int(limit)
 	if end > total {
 		end = total
@@ -1922,7 +1982,7 @@ func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
 			"accountId":           accountID,
 			"queryState":          queryState,
 			"canCalculateChanges": false,
-			"position":            int(position),
+			"position":            start,
 			"total":               total,
 			"ids":                 ids,
 		},
@@ -2111,13 +2171,7 @@ func (s *Server) handleIdentityQuery(user string, call MethodCall) Response {
 	})
 
 	total := len(ids)
-	start := int(position)
-	if start < 0 {
-		start = 0
-	}
-	if start > len(ids) {
-		start = len(ids)
-	}
+	start := resolveQueryPosition(position, total)
 	ids = ids[start:]
 	if !calculateTotal {
 		total = 0

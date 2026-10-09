@@ -3,8 +3,9 @@ package jmap
 // Regression tests for the Email/query negative-offset defect: handleEmailQuery
 // cast the client-supplied `position` to int and clamped only the upper bound,
 // so position: -1 drove a negative index into the ids slice (slice-bounds
-// panic, per-request). The Thread/query sibling had the identical bug and was
-// fixed by flooring start at zero; this pins the same contract for Email/query.
+// panic, per-request). F5147 later corrected the semantics: per RFC 8620
+// §5.5 a negative position is an offset from the end of the results (added
+// to total, then clamped at 0), not a request for the first page.
 
 import (
 	"bytes"
@@ -134,7 +135,7 @@ func emailQueryPost(t *testing.T, ts *httptest.Server, position float64) (int, m
 	return int(args["total"].(float64)), args, ids
 }
 
-func TestEmailQueryNegativePositionFloorsToZero(t *testing.T) {
+func TestEmailQueryNegativePositionIsOffsetFromEnd(t *testing.T) {
 	ts := newEmailQueryServer(t)
 
 	// Control: position 0 returns both messages in storage order.
@@ -149,15 +150,17 @@ func TestEmailQueryNegativePositionFloorsToZero(t *testing.T) {
 		t.Fatalf("CONTROL FAILED (harness): position 1 = total %d ids %v", total, ids)
 	}
 
-	// The defect: a negative position must floor to the first page.
-	total, _, ids = emailQueryPost(t, ts, -1)
-	if total != 2 || len(ids) != 2 || ids[0] != "m1" || ids[1] != "m2" {
-		t.Fatalf("FAIL: position -1 = total %d ids %v, want the first page of 2", total, ids)
+	// F5147: RFC 8620 §5.5 - a negative position is an offset from the end
+	// of the results (added to total), so -1 selects the last message and
+	// the response position is its 0-based index. It must not panic.
+	total, args, ids := emailQueryPost(t, ts, -1)
+	if total != 2 || len(ids) != 1 || ids[0] != "m2" || args["position"] != float64(1) {
+		t.Fatalf("FAIL: position -1 = total %d ids %v position %v, want [m2] at position 1", total, ids, args["position"])
 	}
 
-	// Far-negative offsets behave identically.
-	total, _, ids = emailQueryPost(t, ts, -100)
-	if total != 2 || len(ids) != 2 {
-		t.Fatalf("FAIL: position -100 = total %d ids %v, want the first page of 2", total, ids)
+	// Offsets past the start clamp to 0 and return the first page.
+	total, args, ids = emailQueryPost(t, ts, -100)
+	if total != 2 || len(ids) != 2 || args["position"] != float64(0) {
+		t.Fatalf("FAIL: position -100 = total %d ids %v position %v, want the first page of 2 at position 0", total, ids, args["position"])
 	}
 }
