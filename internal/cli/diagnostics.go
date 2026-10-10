@@ -654,7 +654,7 @@ func (d *Diagnostics) CheckDeliverability(domain string) (*DeliverabilityResult,
 	} else {
 		failCount := 0
 		for _, issue := range result.Issues {
-			if strings.Contains(issue, "[fail]") || strings.HasPrefix(issue, "DNS [SPF]") || strings.HasPrefix(issue, "DNS [MX]") {
+			if isCriticalDeliverabilityIssue(issue) {
 				failCount++
 			}
 		}
@@ -668,6 +668,23 @@ func (d *Diagnostics) CheckDeliverability(domain string) (*DeliverabilityResult,
 	}
 
 	return result, nil
+}
+
+// isCriticalDeliverabilityIssue reports whether an issue string produced by
+// CheckDeliverability makes the domain undeliverable. Any failed DNS record, an
+// unreachable/refusing port 25 and an RBL listing are critical; they were
+// previously scored only as "warning" (exit code 0). An inconclusive RBL lookup
+// stays a warning (F6217).
+func isCriticalDeliverabilityIssue(issue string) bool {
+	switch {
+	case strings.HasPrefix(issue, "DNS ["):
+		return true
+	case strings.HasPrefix(issue, "SMTP: Port 25"):
+		return true
+	case strings.HasPrefix(issue, "RBL [") && !strings.Contains(issue, "lookup failed"):
+		return true
+	}
+	return false
 }
 
 // defaultRBLServers returns the default RBL servers to check
@@ -886,6 +903,9 @@ func PrintDeliverabilityResults(r *DeliverabilityResult) {
 			if res.Listed {
 				sym = "✗"
 				scolor = "\033[31m"
+			} else if res.Score == "inconclusive" {
+				sym = "⚠"
+				scolor = "\033[33m"
 			}
 			fmt.Printf("  %s%s%s %s: %s\n", scolor, sym, reset, res.Server, res.Message)
 		}

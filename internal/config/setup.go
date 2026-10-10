@@ -164,6 +164,18 @@ func (w *SetupWizard) Save(path string) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
+// readLine reads one line of input. A final line without a trailing newline
+// is returned as data with a nil error (io.EOF is reported only when nothing
+// was read), so `printf 'answer' | umailserver serve` does not lose the last
+// answer (F6218).
+func (w *SetupWizard) readLine() (string, error) {
+	line, err := w.reader.ReadString('\n')
+	if err != nil && errors.Is(err, io.EOF) && line != "" {
+		return line, nil
+	}
+	return line, err
+}
+
 // askString asks for a string input with default value
 func (w *SetupWizard) askString(prompt, defaultVal string) (string, error) {
 	if defaultVal != "" {
@@ -172,7 +184,7 @@ func (w *SetupWizard) askString(prompt, defaultVal string) (string, error) {
 		fmt.Printf("%s: ", prompt)
 	}
 
-	input, err := w.reader.ReadString('\n')
+	input, err := w.readLine()
 	if err != nil {
 		return "", err
 	}
@@ -194,7 +206,7 @@ func (w *SetupWizard) askBool(prompt string, defaultVal bool) bool {
 
 	fmt.Printf("%s [%s]: ", prompt, defaultStr)
 
-	input, err := w.reader.ReadString('\n')
+	input, err := w.readLine()
 	if err != nil {
 		return defaultVal
 	}
@@ -205,14 +217,21 @@ func (w *SetupWizard) askBool(prompt string, defaultVal bool) bool {
 		return defaultVal
 	}
 
-	return input == "y" || input == "yes"
+	switch input {
+	case "y", "yes":
+		return true
+	case "n", "no":
+		return false
+	}
+	fmt.Printf("Unrecognized answer %q, using default\n", input)
+	return defaultVal
 }
 
 // askInt asks for an integer
 func (w *SetupWizard) askInt(prompt string, defaultVal int) int {
 	fmt.Printf("%s [%d]: ", prompt, defaultVal)
 
-	input, err := w.reader.ReadString('\n')
+	input, err := w.readLine()
 	if err != nil {
 		return defaultVal
 	}
@@ -223,7 +242,7 @@ func (w *SetupWizard) askInt(prompt string, defaultVal int) int {
 	}
 
 	val, err := strconv.Atoi(input)
-	if err != nil {
+	if err != nil || val < 1 || val > 65535 {
 		fmt.Printf("Invalid number, using default: %d\n", defaultVal)
 		return defaultVal
 	}
@@ -252,7 +271,7 @@ func (w *SetupWizard) askChoice(prompt string, options []string, defaultVal stri
 
 	fmt.Printf("Selection [%d]: ", defaultIdx)
 
-	input, err := w.reader.ReadString('\n')
+	input, err := w.readLine()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			return defaultVal, nil
