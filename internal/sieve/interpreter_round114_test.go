@@ -51,14 +51,14 @@ func TestF5961_RedirectDedupAndBareAddress(t *testing.T) {
 // F5962: :days 0 must not disable reply suppression.
 func TestF5962_VacationDaysFloor(t *testing.T) {
 	msg := &MessageContext{Headers: map[string][]string{}}
-	acts, err := ExecuteScript(`vacation :days 0 "away";`, msg)
+	acts, err := ExecuteScript(`require ["vacation"]; vacation :days 0 "away";`, msg)
 	if err != nil || len(acts) != 1 {
 		t.Fatalf("%v %#v", err, acts)
 	}
 	if d := acts[0].(VacationAction).Days; d != 1 {
 		t.Fatalf("FAIL: Days = %d, want 1", d)
 	}
-	acts, _ = ExecuteScript(`vacation :seconds 0 "away";`, msg)
+	acts, _ = ExecuteScript(`require ["vacation", "vacation-seconds"]; vacation :seconds 0 "away";`, msg)
 	if acts[0].(VacationAction).SecondsSet != true {
 		t.Fatal("seconds lost")
 	}

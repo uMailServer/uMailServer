@@ -8,7 +8,7 @@ import (
 
 func TestInterpreter_FileintoWithCreateTag(t *testing.T) {
 	// Test fileinto with :create flag
-	script := `fileinto :create "Trash";`
+	script := `require ["fileinto", "mailbox"]; fileinto :create "Trash";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -43,6 +43,7 @@ func TestInterpreter_ElsifConditionSkipped(t *testing.T) {
 	// Test elsif when parent condition was true
 	// First if matches, elsif should be skipped
 	script := `
+require ["fileinto"];
 	if header :contains "subject" "match" {
 		keep;
 	} elsif header :contains "subject" "nomatch" {

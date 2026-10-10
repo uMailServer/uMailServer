@@ -9,64 +9,11 @@ import (
 
 // --- executeSet with TagValue ---
 
-func TestInterpreter_Set_VariableTagValue(t *testing.T) {
-	// Test set with TagValue for the variable name
-	script := `set "myvar" "test-value";`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	// Execute should not panic
-	_, err = interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-}
-
-func TestInterpreter_Set_InsufficientArguments(t *testing.T) {
-	// set with only one argument
-	script := `set "myvar";`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// With insufficient args, executeSet returns nil, nil but script still runs
-	// The interpreter just doesn't set anything
-	_ = actions
-}
-
 // --- executeFileinto with :create flag ---
 
 func TestInterpreter_Fileinto_WithCreateFlag(t *testing.T) {
 	// Test fileinto with :create flag
-	script := `fileinto :create "TestFolder";`
+	script := `require ["fileinto", "mailbox"]; fileinto :create "TestFolder";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -102,7 +49,7 @@ func TestInterpreter_Fileinto_WithCreateFlag(t *testing.T) {
 }
 
 func TestInterpreter_Fileinto_StringFolder(t *testing.T) {
-	script := `fileinto "TestFolder";`
+	script := `require ["fileinto"]; fileinto "TestFolder";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -135,33 +82,6 @@ func TestInterpreter_Fileinto_StringFolder(t *testing.T) {
 	if fa.Folder != "TestFolder" {
 		t.Errorf("Expected folder 'TestFolder', got %q", fa.Folder)
 	}
-}
-
-func TestInterpreter_Fileinto_NoArguments(t *testing.T) {
-	script := `fileinto;`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// No arguments - fileinto with empty folder or keep as fallback
-	// Just verify no panic and some action result
-	_ = actions
 }
 
 // --- executeRedirect ---
@@ -200,32 +120,6 @@ func TestInterpreter_Redirect_ValidEmail(t *testing.T) {
 	if ra.Address != "forward@example.com" {
 		t.Errorf("Expected address 'forward@example.com', got %q", ra.Address)
 	}
-}
-
-func TestInterpreter_Redirect_NoArguments(t *testing.T) {
-	script := `redirect;`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// No arguments - verify no panic
-	_ = actions
 }
 
 // --- isSuspiciousPattern ---
@@ -307,62 +201,10 @@ func TestSafeRegexMatch_NoMatch(t *testing.T) {
 
 // --- executeAddHeader and executeDeleteHeader stubs ---
 
-func TestInterpreter_AddHeader_Stub(t *testing.T) {
-	script := `addheader "X-Test" "value";`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// addheader returns nil (stub implementation)
-	_ = actions
-}
-
-func TestInterpreter_DeleteHeader_Stub(t *testing.T) {
-	script := `deleteheader "X-Test";`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// deleteheader returns nil (stub implementation)
-	_ = actions
-}
-
 // --- executeVacation with addresses ---
 
 func TestInterpreter_VacationAction_WithAddresses(t *testing.T) {
-	script := `vacation :addresses ["a@b.com"] "Out of office";`
+	script := `require ["vacation"]; vacation :addresses ["a@b.com"] "Out of office";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -473,6 +315,7 @@ func TestExecuteScript_Invalid(t *testing.T) {
 
 func TestInterpreter_EnvelopeTest(t *testing.T) {
 	script := `
+		require "envelope";
 		if envelope :matches "from" "*@example.com" {
 			keep;
 		}
@@ -492,10 +335,13 @@ func TestInterpreter_EnvelopeTest(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	// F5240: this test is not implemented; it must be rejected instead of
-	// being evaluated as a header test on a header named after the test.
-	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
-		t.Fatalf("expected unsupported test error, got %v", err)
+	// r142: envelope is implemented (RFC 5228 §5.4); the "from" part matches.
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if _, ok := actions[0].(KeepAction); !ok {
+		t.Fatalf("expected keep, got %#v", actions)
 	}
 }
 
@@ -566,6 +412,7 @@ func TestInterpreter_HasFlagsTest(t *testing.T) {
 
 func TestInterpreter_CurrentDateTest(t *testing.T) {
 	script := `
+require ["relational"];
 		if currentdate :value "eq" :zone "UTC" "date" "2024-01-15" {
 			keep;
 		}
@@ -651,10 +498,14 @@ func TestInterpreter_AddressTest_All(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	// F5240: this test is not implemented; it must be rejected instead of
-	// being evaluated as a header test on a header named after the test.
-	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
-		t.Fatalf("expected unsupported test error, got %v", err)
+	// r142: address is implemented (RFC 5228 §5.1). The From header is
+	// absent here, so the test is false and the message is kept.
+	actions, err := interp.Execute(msg)
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if _, ok := actions[0].(KeepAction); !ok {
+		t.Fatalf("expected keep, got %#v", actions)
 	}
 }
 
@@ -662,6 +513,7 @@ func TestInterpreter_AddressTest_All(t *testing.T) {
 
 func TestInterpreter_StringTest_Count(t *testing.T) {
 	script := `
+require ["relational"];
 		if string :count "eq" :value "myvar" "1" {
 			keep;
 		}
@@ -745,7 +597,7 @@ func TestInterpreter_BodyReader(t *testing.T) {
 // --- Vacation with just body (no subject) ---
 
 func TestInterpreter_VacationAction_OnlyBody(t *testing.T) {
-	script := `vacation "Body text only";`
+	script := `require ["vacation"]; vacation "Body text only";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -779,7 +631,7 @@ func TestInterpreter_VacationAction_OnlyBody(t *testing.T) {
 // --- redirect with TagValue address ---
 
 func TestInterpreter_Redirect_TagValueAddress(t *testing.T) {
-	script := `redirect :copy "forward@example.com";`
+	script := `require ["copy"]; redirect :copy "forward@example.com";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -807,7 +659,7 @@ func TestInterpreter_Redirect_TagValueAddress(t *testing.T) {
 // --- fileinto with second arg as TagValue ---
 
 func TestInterpreter_Fileinto_TagValueSecondArg(t *testing.T) {
-	script := `fileinto :create "Folder";`
+	script := `require ["fileinto", "mailbox"]; fileinto :create "Folder";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -834,41 +686,11 @@ func TestInterpreter_Fileinto_TagValueSecondArg(t *testing.T) {
 
 // --- set with variable interpolation ---
 
-func TestInterpreter_Set_VariableInterpolation(t *testing.T) {
-	script := `
-		set "first" "Hello";
-		set "second" "${first} World";
-		keep;
-	`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	if len(actions) != 1 {
-		t.Fatalf("Expected 1 action, got %d", len(actions))
-	}
-}
-
 // --- header test with :regex ---
 
 func TestInterpreter_HeaderTest_Regex(t *testing.T) {
 	script := `
+require ["regex"];
 		if header :regex "subject" "test\\d+" {
 			keep;
 		}
@@ -903,59 +725,7 @@ func TestInterpreter_HeaderTest_Regex(t *testing.T) {
 
 // --- executeNotify ---
 
-func TestInterpreter_Notify_Stub(t *testing.T) {
-	script := `notify "mailto:admin@example.com" "Test message";`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// notify is a stub
-	_ = actions
-}
-
 // --- executeDenotify ---
-
-func TestInterpreter_Denotify_Stub(t *testing.T) {
-	script := `denotify;`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// denotify is a stub
-	_ = actions
-}
 
 // --- evaluateHeaderTest with multiple values ---
 

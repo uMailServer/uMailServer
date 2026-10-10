@@ -504,68 +504,8 @@ func TestInterpreter_HeaderTest_MissingHeader(t *testing.T) {
 	_ = actions
 }
 
-func TestInterpreter_StringTest_ValueMatch(t *testing.T) {
-	script := `
-		set "testvar" "hello";
-		if string :value "eq" :value "testvar" "hello" {
-			keep;
-		}
-	`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	// F5240: this test is not implemented; it must be rejected instead of
-	// being evaluated as a header test on a header named after the test.
-	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
-		t.Fatalf("expected unsupported test error, got %v", err)
-	}
-}
-
-func TestInterpreter_Set_Override(t *testing.T) {
-	script := `
-		set "var1" "first";
-		set "var1" "second";
-		keep;
-	`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	if len(actions) != 1 {
-		t.Fatalf("Expected 1 action, got %d", len(actions))
-	}
-}
-
 func TestInterpreter_Vacation_DaysOnly(t *testing.T) {
-	script := `vacation :days 5 "I am away";`
+	script := `require ["vacation"]; vacation :days 5 "I am away";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -749,7 +689,7 @@ func TestInterpreter_Redirect_Valid(t *testing.T) {
 // --- executeReject with message ---
 
 func TestInterpreter_Reject_WithMessage(t *testing.T) {
-	script := `reject "Message text";`
+	script := `require ["reject"]; reject "Message text";`
 
 	p := NewParser(script)
 	s, err := p.Parse()

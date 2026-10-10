@@ -44,6 +44,7 @@ type Parser struct {
 	input  string
 	pos    int
 	length int
+	depth  int
 }
 
 // AST node types
@@ -53,6 +54,7 @@ type Node interface {
 
 type Script struct {
 	Commands []Command
+	exts     env // required extensions; set by Validate/Compile
 }
 
 type Command struct {
@@ -73,6 +75,10 @@ type Value interface{}
 type StringValue struct {
 	Value     string
 	IsLiteral bool
+	// Quoted is set for "..." strings and Bare for unquoted identifiers
+	// (test names); the compiler uses them to tell `"header"` from `header`.
+	Quoted bool
+	Bare   bool
 }
 
 // NumberValue is an integer
@@ -90,6 +96,16 @@ type ListValue struct {
 	Values []string
 }
 
+// TestListValue is the parenthesised, comma separated test list of allof and
+// anyof (RFC 5228 §3.1.2); each test is kept as its flat argument sequence.
+type TestListValue struct {
+	Tests [][]Value
+}
+
+// MaxNesting bounds block, test-list and not nesting so a hostile script
+// cannot exhaust the stack (RFC 5228 §2.10.? implementation limit).
+const MaxNesting = 32
+
 // Test represents a Sieve test
 type Test interface{}
 
@@ -103,7 +119,8 @@ type TestCommand struct {
 type HeaderTest struct {
 	Headers    []string
 	KeyList    []string
-	MatchType  string // :is, :contains, :matches
+	MatchType  string // :is, :contains, :matches, :regex, :count, :value
+	Relation   string // gt ge lt le eq ne for :count / :value
 	Comparator string
 }
 
@@ -269,6 +286,11 @@ func (p *Parser) parseBlock() (*Block, error) {
 	if p.pos >= p.length || p.input[p.pos] != '{' {
 		return nil, fmt.Errorf("expected '{' at position %d", p.pos)
 	}
+	if p.depth >= MaxNesting {
+		return nil, fmt.Errorf("blocks nested deeper than %d levels", MaxNesting)
+	}
+	p.depth++
+	defer func() { p.depth-- }()
 	p.pos++ // skip '{'
 
 	block := &Block{Commands: []Command{}}
@@ -344,6 +366,11 @@ func (p *Parser) parseArgument() (Value, error) {
 		return p.parseString()
 	}
 
+	// Test list of allof/anyof
+	if ch == '(' {
+		return p.parseTestList()
+	}
+
 	// Literal string (multiline)
 	if ch == '[' {
 		return p.parseStringList()
@@ -369,7 +396,61 @@ func (p *Parser) parseArgument() (Value, error) {
 	if strings.EqualFold(word, "text") && p.pos < p.length && p.input[p.pos] == ':' {
 		return p.parseMultiline()
 	}
-	return &StringValue{Value: word}, nil
+	return &StringValue{Value: word, Bare: true}, nil
+}
+
+// parseTestList parses "(" test *("," test) ")". p.pos is at the '('.
+func (p *Parser) parseTestList() (*TestListValue, error) {
+	if p.depth >= MaxNesting {
+		return nil, fmt.Errorf("tests nested deeper than %d levels", MaxNesting)
+	}
+	p.depth++
+	defer func() { p.depth-- }()
+	p.pos++ // skip '('
+
+	list := &TestListValue{}
+	afterComma := false
+	for {
+		p.skipWhitespaceAndComments()
+		if p.pos >= p.length {
+			return nil, fmt.Errorf("unclosed test list")
+		}
+		if p.input[p.pos] == ')' {
+			if len(list.Tests) == 0 || afterComma {
+				return nil, fmt.Errorf("empty test in test list")
+			}
+			p.pos++
+			return list, nil
+		}
+		if !isAlpha(p.input[p.pos]) {
+			return nil, fmt.Errorf("expected test name at position %d", p.pos)
+		}
+		var test []Value
+		for {
+			p.skipWhitespaceAndComments()
+			if p.pos >= p.length {
+				return nil, fmt.Errorf("unclosed test list")
+			}
+			ch := p.input[p.pos]
+			if ch == ',' || ch == ')' {
+				break
+			}
+			if ch == ';' || ch == '{' || ch == '}' {
+				return nil, fmt.Errorf("unexpected %q in test list at position %d", ch, p.pos)
+			}
+			arg, err := p.parseArgument()
+			if err != nil {
+				return nil, err
+			}
+			test = append(test, arg)
+		}
+		list.Tests = append(list.Tests, test)
+		afterComma = false
+		if p.input[p.pos] == ',' {
+			p.pos++
+			afterComma = true
+		}
+	}
 }
 
 func (p *Parser) parseString() (*StringValue, error) {
@@ -390,7 +471,7 @@ func (p *Parser) parseString() (*StringValue, error) {
 			p.pos++
 		case ch == '"':
 			p.pos++ // skip closing quote
-			return &StringValue{Value: builder.String()}, nil
+			return &StringValue{Value: builder.String(), Quoted: true}, nil
 		default:
 			builder.WriteByte(ch)
 			p.pos++

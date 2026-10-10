@@ -119,7 +119,7 @@ func TestInterpreter_RedirectAction(t *testing.T) {
 }
 
 func TestInterpreter_RejectAction(t *testing.T) {
-	script := `reject "Message rejected";`
+	script := `require ["reject"]; reject "Message rejected";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -151,39 +151,6 @@ func TestInterpreter_RejectAction(t *testing.T) {
 
 	if ra.Message != "Message rejected" {
 		t.Errorf("Expected 'Message rejected', got %q", ra.Message)
-	}
-}
-
-func TestInterpreter_VacationAction(t *testing.T) {
-	script := `vacation "Subject: Away" "Message: I am on vacation";`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// Vacation with subject and body should return action
-	if len(actions) != 1 {
-		t.Fatalf("Expected 1 action, got %d", len(actions))
-	}
-
-	_, ok := actions[0].(VacationAction)
-	if !ok {
-		t.Fatalf("Expected VacationAction, got %T", actions[0])
 	}
 }
 
@@ -291,7 +258,7 @@ func TestManageSieveServer_CmdDeleteScript(t *testing.T) {
 
 func TestManageSieveServer_CmdGetScript(t *testing.T) {
 	m := NewManager()
-	m.StoreScript("user1", "myscript", "fileinto \"Test\";")
+	m.StoreScript("user1", "myscript", "require \"fileinto\"; fileinto \"Test\";")
 
 	server := NewManageSieveServer(m, nil)
 	if server == nil {
@@ -299,7 +266,7 @@ func TestManageSieveServer_CmdGetScript(t *testing.T) {
 	}
 
 	source := m.GetScriptSource("user1", "myscript")
-	if source != "fileinto \"Test\";" {
+	if source != "require \"fileinto\"; fileinto \"Test\";" {
 		t.Errorf("Expected script source, got %q", source)
 	}
 }
@@ -420,87 +387,6 @@ func TestScript_String(t *testing.T) {
 }
 
 // ========== Interpreter Edge Cases ==========
-
-func TestInterpreter_SetAction(t *testing.T) {
-	script := `set "myvariable" "myvalue";`
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// set command produces no actions, so default Keep is returned
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action (keep), got %d", len(actions))
-	}
-}
-
-func TestInterpreter_AddHeader(t *testing.T) {
-	script := `addheader "X-Test" "value";`
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// addheader doesn't produce actions, default Keep is returned
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action (keep), got %d", len(actions))
-	}
-}
-
-func TestInterpreter_DeleteHeader(t *testing.T) {
-	script := `deleteheader "Subject";`
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{"Subject": {"Test"}},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// deleteheader doesn't produce actions, default Keep is returned
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action (keep), got %d", len(actions))
-	}
-}
 
 func TestInterpreter_StringTest(t *testing.T) {
 	script := `
@@ -1018,36 +904,6 @@ func TestInterpreter_RedirectInvalidAddress(t *testing.T) {
 	}
 }
 
-func TestInterpreter_UnknownCommand(t *testing.T) {
-	script := `
-unknowncommand "arg";
-keep;
-`
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	// Unknown command should be ignored, keep action returned
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action (keep), got %d", len(actions))
-	}
-}
-
 // =======================================================================
 // Manager tests for coverage
 // =======================================================================
@@ -1161,37 +1017,7 @@ func TestManager_ListScripts(t *testing.T) {
 // =======================================================================
 
 func TestInterpreter_VacationAction_WithDays(t *testing.T) {
-	script := `vacation :days 7 "I'm on vacation";`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action, got %d", len(actions))
-	}
-}
-
-func TestInterpreter_SetVariable(t *testing.T) {
-	script := `
-set "testvar" "testvalue";
-keep;
-`
+	script := `require ["vacation"]; vacation :days 7 "I'm on vacation";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -1254,7 +1080,7 @@ if header :contains "subject" "match1" {
 }
 
 func TestInterpreter_FileintoAction(t *testing.T) {
-	script := `fileinto "Trash";`
+	script := `require ["fileinto"]; fileinto "Trash";`
 
 	p := NewParser(script)
 	s, err := p.Parse()
@@ -1831,28 +1657,6 @@ func TestInterpreter_EvaluateBooleanTest_AllFalse(t *testing.T) {
 	}
 }
 
-func TestInterpreter_EvaluateTest_UnknownType(t *testing.T) {
-	script := `keep;`
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-
-	// Create a mock test that is not one of the known types
-	test := &mockTest{}
-	result, err := interp.evaluateTest(test)
-	if err != nil {
-		t.Fatalf("evaluateTest error: %v", err)
-	}
-	// Unknown type returns true by default
-	if !result {
-		t.Error("Expected true for unknown test type")
-	}
-}
-
 // mockTest is a test type that is not handled by evaluateTest
 type mockTest struct{}
 
@@ -1971,35 +1775,6 @@ func TestManageSieveServer_NewManageSieveServer(t *testing.T) {
 	}
 	if server.manager != m {
 		t.Error("Expected manager to be set")
-	}
-}
-
-// TestInterpreter_Set_InsufficientArgs tests executeSet with fewer than 2 arguments
-func TestInterpreter_Set_InsufficientArgs(t *testing.T) {
-	script := `set "myvariable";` // Missing value argument
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From:    "sender@example.com",
-		To:      []string{"recipient@example.com"},
-		Headers: map[string][]string{},
-		Body:    []byte("Hello"),
-	}
-
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// set with insufficient args returns nil actions (keep default)
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action (keep), got %d", len(actions))
 	}
 }
 

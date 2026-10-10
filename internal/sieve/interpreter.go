@@ -21,17 +21,31 @@ type MessageContext struct {
 
 	// Original message size
 	Size int64
+
+	// BodyIsFullMessage is set by callers whose Body still holds the header
+	// block (the whole RFC 5322 message); the body test then skips it.
+	// Without it the interpreter detects that case when Body starts with the
+	// very header block Headers was parsed from.
+	BodyIsFullMessage bool
 }
 
 // Action represents a Sieve action
 type Action interface{}
 
 // KeepAction keeps the message in inbox
-type KeepAction struct{}
+type KeepAction struct {
+	// Flags are the IMAP flags to set (RFC 5232), space separated.
+	Flags string
+}
 
 // FileintoAction moves message to folder
 type FileintoAction struct {
 	Folder string
+	// Copy (:copy, RFC 3894) files a copy and does not cancel the implicit
+	// keep; Flags (:flags / internal flags, RFC 5232) are the IMAP flags to
+	// set, space separated.
+	Copy  bool
+	Flags string
 }
 
 // RejectAction rejects the message
@@ -45,6 +59,8 @@ type DiscardAction struct{}
 // RedirectAction forwards to address
 type RedirectAction struct {
 	Address string
+	// Copy (:copy, RFC 3894) forwards a copy; the implicit keep stays.
+	Copy bool
 }
 
 // StopAction stops processing
@@ -80,6 +96,10 @@ type Interpreter struct {
 	timeout     time.Duration // Timeout for regex matching to prevent ReDoS
 	redirected  []string      // addresses already redirected this run (F5961)
 	stopped     bool          // set by "stop"; ends the whole script (F5035)
+	flags       []string      // imap4flags internal variable
+	ops         int           // operations charged this run (maxRunOps)
+	sinceClock  int
+	deadline    time.Time
 }
 
 // NewInterpreter creates a new Sieve interpreter
@@ -124,34 +144,9 @@ func globMatch(glob, value string, timeout time.Duration) (bool, error) {
 // matchRegexp compiles pattern through the LRU cache and matches it against
 // value with a timeout.
 func matchRegexp(pattern, value string, timeout time.Duration) (bool, error) {
-	// Try to get from cache first with proper locking
-	regexCache.Lock()
-	re, ok := regexCache.patterns[pattern]
-	if ok {
-		regexCache.Unlock()
-	} else {
-		// Validate and compile
-		var err error
-		re, err = regexp.Compile(pattern)
-		if err != nil {
-			regexCache.Unlock()
-			return false, fmt.Errorf("invalid regex pattern: %w", err)
-		}
-
-		// LRU eviction if at capacity
-		if len(regexCache.patterns) >= regexCache.maxSize {
-			// Remove oldest 25% (250 entries)
-			removeCount := regexCache.maxSize / 4
-			for i := 0; i < removeCount && len(regexCache.accessOrder) > 0; i++ {
-				oldest := regexCache.accessOrder[0]
-				regexCache.accessOrder = regexCache.accessOrder[1:]
-				delete(regexCache.patterns, oldest)
-			}
-		}
-
-		regexCache.patterns[pattern] = re
-		regexCache.accessOrder = append(regexCache.accessOrder, pattern)
-		regexCache.Unlock()
+	re, err := compileCached(pattern)
+	if err != nil {
+		return false, err
 	}
 
 	// Use context with timeout for proper cancellation
@@ -204,40 +199,104 @@ func isSuspiciousPattern(pattern string) bool {
 	return false
 }
 
-// Execute runs the Sieve script and returns actions
-func (i *Interpreter) Execute(msg *MessageContext) ([]Action, error) {
+// Execute runs the Sieve script and returns actions. Any run-time error
+// (RFC 5228 §2.10.6) is logged and returned together with the implicit keep,
+// and no partial actions are returned (callers such as Manager.ProcessMessage log it), so mail is never lost.
+func (i *Interpreter) Execute(msg *MessageContext) (actions []Action, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("sieve: internal error: %v", r)
+		}
+		if err != nil {
+			actions = []Action{KeepAction{}}
+		}
+	}()
+
 	i.ctx = &SieveContext{
 		MessageContext: msg,
 		Variables:      make(map[string]string),
 	}
-
 	i.stopped = false
 	i.redirected = nil
-
-	// Set built-in variables
+	i.flags = nil
+	i.ops, i.sinceClock = 0, 0
+	i.deadline = time.Now().Add(maxRunDuration * time.Second)
 	i.setBuiltInVariables()
 
-	// Process require statements first
-	for _, cmd := range i.script.Commands {
-		if cmd.Name == "require" {
-			if err := i.processRequire(&cmd); err != nil {
-				return nil, err
-			}
+	exts := i.script.exts
+	if exts == nil {
+		if exts, err = checkScript(i.script); err != nil {
+			return nil, err
 		}
 	}
+	i.extensions = exts
 
-	// Execute commands
-	actions, err := i.executeCommands(i.script.Commands)
+	all, err := i.executeCommands(i.script.Commands)
 	if err != nil {
 		return nil, err
 	}
-	actions = dropCancelledDiscard(actions)
-	if len(actions) > 0 {
-		return actions, nil
+	all = dropCancelledDiscard(all)
+	if err := checkActions(all); err != nil {
+		return nil, err
 	}
+	if len(all) == 0 {
+		return []Action{KeepAction{}}, nil
+	}
+	return keepWithCopies(all), nil
+}
 
-	// Default: keep
-	return []Action{KeepAction{}}, nil
+// checkActions rejects action sets RFC 5228/5429 forbid together and bounds
+// the number of actions a script may produce.
+func checkActions(all []Action) error {
+	if len(all) > maxActions {
+		return fmt.Errorf("script produced more than %d actions", maxActions)
+	}
+	redirects, reject, delivers := 0, false, false
+	for _, a := range all {
+		switch v := a.(type) {
+		case RedirectAction:
+			redirects++
+			delivers = true
+		case FileintoAction, KeepAction:
+			delivers = true
+		case RejectAction:
+			reject = true
+			_ = v
+		}
+	}
+	if redirects > maxRedirects {
+		return fmt.Errorf("script redirects to more than %d addresses", maxRedirects)
+	}
+	if reject && delivers {
+		return fmt.Errorf("reject conflicts with keep/fileinto/redirect")
+	}
+	return nil
+}
+
+// keepWithCopies restores the implicit keep when the only deliveries are
+// :copy actions (RFC 3894 §3): they do not cancel it.
+func keepWithCopies(all []Action) []Action {
+	hasCopy := false
+	for _, a := range all {
+		switch v := a.(type) {
+		case FileintoAction:
+			if !v.Copy {
+				return all
+			}
+			hasCopy = true
+		case RedirectAction:
+			if !v.Copy {
+				return all
+			}
+			hasCopy = true
+		case KeepAction, DiscardAction, RejectAction:
+			return all
+		}
+	}
+	if hasCopy {
+		all = append(all, KeepAction{Flags: ""})
+	}
+	return all
 }
 
 // dropCancelledDiscard removes discard when the script also keeps, files or
@@ -267,65 +326,6 @@ func (i *Interpreter) setBuiltInVariables() {
 	i.ctx.Variables["environment"] = "Sieve"
 	i.ctx.Variables["spamtest"] = "0"
 	i.ctx.Variables["virustest"] = "0"
-}
-
-// supportedExtensions lists the capabilities this interpreter implements.
-// RFC 5228 §3.2: requiring anything else must fail the script. F5036.
-// F5343: "variables" (RFC 5229) is not listed: ${name} expansion and the
-// string test are not implemented, so requiring it must fail the script.
-var supportedExtensions = map[string]bool{
-	"fileinto":                   true,
-	"reject":                     true,
-	"vacation":                   true,
-	"vacation-seconds":           true,
-	"comparator-i;octet":         true,
-	"comparator-i;ascii-casemap": true,
-}
-
-// requireExtensions returns the extension names named by a require command,
-// or an error if any of them is not supported.
-func requireExtensions(cmd *Command) ([]string, error) {
-	var exts []string
-	for _, arg := range cmd.Arguments {
-		switch v := arg.(type) {
-		case *StringValue:
-			exts = append(exts, v.Value)
-		case *ListValue:
-			exts = append(exts, v.Values...)
-		default:
-			return nil, fmt.Errorf("require: invalid argument")
-		}
-	}
-	for _, ext := range exts {
-		if !supportedExtensions[ext] {
-			return nil, fmt.Errorf("require: unsupported extension %q", ext)
-		}
-	}
-	return exts, nil
-}
-
-// CheckRequires validates every top-level require of a parsed script.
-func CheckRequires(s *Script) error {
-	for idx := range s.Commands {
-		if s.Commands[idx].Name == "require" {
-			if _, err := requireExtensions(&s.Commands[idx]); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (i *Interpreter) processRequire(cmd *Command) error {
-	exts, err := requireExtensions(cmd)
-	if err != nil {
-		return err
-	}
-	for _, ext := range exts {
-		i.extensions[ext] = true
-		i.requireDone[ext] = false
-	}
-	return nil
 }
 
 // executeCommands runs a command sequence. F5008: if/elsif/else form one
@@ -377,34 +377,109 @@ func (i *Interpreter) executeCommands(cmds []Command) ([]Action, error) {
 }
 
 func (i *Interpreter) executeCommand(cmd *Command) ([]Action, error) {
+	if err := i.tick(1); err != nil {
+		return nil, err
+	}
 	switch cmd.Name {
 	case "if", "elsif":
 		return i.executeIf(cmd)
 	case "require":
 		return nil, nil // Already processed
+	}
+	pa, err := compileCommand(cmd, i.extensions)
+	if err != nil {
+		return nil, err
+	}
+	switch cmd.Name {
 	case "stop":
 		i.stopped = true
 		return []Action{StopAction{}}, nil
 	case "discard":
 		return []Action{DiscardAction{}}, nil
 	case "keep":
-		return []Action{KeepAction{}}, nil
+		return []Action{KeepAction{Flags: i.actionFlags(pa)}}, nil
 	case "fileinto":
-		return i.executeFileinto(cmd)
+		return i.executeFileinto(cmd, pa)
 	case "redirect":
-		return i.executeRedirect(cmd)
+		return i.executeRedirect(cmd, pa)
 	case "reject":
-		return i.executeReject(cmd)
+		return []Action{RejectAction{Message: pa.pos[0].(*StringValue).Value}}, nil
 	case "vacation":
 		return i.executeVacation(cmd)
-	case "set":
-		return i.executeSet(cmd)
-	case "addheader":
-		return i.executeAddHeader(cmd)
-	case "deleteheader":
-		return i.executeDeleteHeader(cmd)
-	default:
-		return nil, nil // Unknown command, ignore
+	case "addflag", "setflag", "removeflag":
+		i.editFlags(cmd.Name, listOf(pa.pos[0]))
+		return nil, nil
+	}
+	return nil, fmt.Errorf("unknown command %q", cmd.Name)
+}
+
+// actionFlags returns the IMAP flags of a keep/fileinto: the :flags argument
+// if given, else the internal variable (RFC 5232 §3).
+func (i *Interpreter) actionFlags(pa parsedArgs) string {
+	if pa.has("flags") {
+		return strings.Join(normFlags(listOf(pa.tags["flags"])), " ")
+	}
+	return strings.Join(i.flags, " ")
+}
+
+// normFlags splits space separated flag strings and drops invalid names and
+// duplicates (RFC 5232 §4: invalid flags are ignored).
+func normFlags(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range in {
+		for _, f := range strings.Fields(s) {
+			if !validFlag(f) || seen[strings.ToLower(f)] {
+				continue
+			}
+			seen[strings.ToLower(f)] = true
+			out = append(out, f)
+			if len(out) >= maxFlags {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func validFlag(f string) bool {
+	if len(f) > 64 {
+		return false
+	}
+	body := strings.TrimPrefix(f, `\`)
+	if body == "" {
+		return false
+	}
+	for idx := 0; idx < len(body); idx++ {
+		c := body[idx]
+		if c <= ' ' || c >= 0x7f || strings.IndexByte("(){%*\"]\\", c) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (i *Interpreter) editFlags(op string, list []string) {
+	add := normFlags(list)
+	switch op {
+	case "setflag":
+		i.flags = add
+	case "addflag":
+		i.flags = normFlags(append(append([]string{}, i.flags...), add...))
+	case "removeflag":
+		var keep []string
+		for _, f := range i.flags {
+			drop := false
+			for _, r := range add {
+				if strings.EqualFold(f, r) {
+					drop = true
+				}
+			}
+			if !drop {
+				keep = append(keep, f)
+			}
+		}
+		i.flags = keep
 	}
 }
 
@@ -447,138 +522,7 @@ type existsTest []string
 // parseTestCommand builds the test of an if/elsif. F5006: a test that cannot
 // be parsed is an error, never an implicit "true".
 func (i *Interpreter) parseTestCommand(args []Value) (Test, error) {
-	if len(args) > 0 {
-		if sv, ok := args[0].(*StringValue); ok {
-			switch strings.ToLower(sv.Value) {
-			case "true", "false":
-				if len(args) != 1 {
-					return nil, fmt.Errorf("%s test takes no arguments", sv.Value)
-				}
-				return constTest(strings.EqualFold(sv.Value, "true")), nil
-			case "not":
-				// F5240: RFC 5228 §5.8.
-				inner, err := i.parseTestCommand(args[1:])
-				if err != nil {
-					return nil, err
-				}
-				return notTest{inner}, nil
-			case "exists":
-				// F5240: RFC 5228 §5.5.
-				if len(args) == 2 {
-					switch v := args[1].(type) {
-					case *StringValue:
-						return existsTest{v.Value}, nil
-					case *ListValue:
-						return existsTest(v.Values), nil
-					}
-				}
-				return nil, fmt.Errorf("malformed exists test")
-			case "header":
-			case "size":
-				if len(args) == 3 {
-					tag, okTag := args[1].(*TagValue)
-					num, okNum := args[2].(*NumberValue)
-					if okTag && okNum && (strings.EqualFold(tag.Value, "over") || strings.EqualFold(tag.Value, "under")) {
-						return &SizeTest{Relation: ":" + strings.ToLower(tag.Value), Size: num.Value}, nil
-					}
-				}
-				return nil, fmt.Errorf("malformed size test")
-			default:
-				// F5240: an unimplemented test (address, envelope, ...) must not
-				// be evaluated as a header test on a header named after it.
-				return nil, fmt.Errorf("unsupported test %q", sv.Value)
-			}
-		}
-	}
-	test, err := i.parseHeaderTest(args)
-	if err != nil {
-		return nil, err
-	}
-	if test == nil {
-		return nil, fmt.Errorf("unsupported or malformed test")
-	}
-	return test, nil
-}
-
-// parseHeaderTest parses a header test from command arguments
-// Format: header [:contains|:is|:matches] <header-names> <key-list>
-func (i *Interpreter) parseHeaderTest(args []Value) (Test, error) {
-	if len(args) < 2 {
-		return nil, nil
-	}
-
-	var matchType string
-	var headers []string
-	var keys []string
-
-	argIdx := 0
-
-	// First arg could be "header" string or a tag like :contains
-	// F5342: identifiers are case-insensitive (RFC 5228 §2.1).
-	if str, ok := args[argIdx].(*StringValue); ok && strings.EqualFold(str.Value, "header") {
-		argIdx++
-	}
-
-	// Next args may be match-type and :comparator tags, in any order.
-	var comparator string
-	for argIdx < len(args) {
-		tag, ok := args[argIdx].(*TagValue)
-		if !ok {
-			break
-		}
-		argIdx++
-		if strings.EqualFold(tag.Value, "comparator") {
-			var sv *StringValue
-			if argIdx < len(args) {
-				sv, _ = args[argIdx].(*StringValue)
-			}
-			if sv == nil {
-				return nil, fmt.Errorf(":comparator requires a string argument")
-			}
-			comparator = sv.Value
-			argIdx++
-			continue
-		}
-		matchType = tag.Value
-	}
-
-	// Next arg(s) are header names
-	for argIdx < len(args) {
-		switch arg := args[argIdx].(type) {
-		case *StringValue:
-			if len(headers) == 0 {
-				headers = []string{arg.Value}
-			} else {
-				keys = append(keys, arg.Value)
-			}
-			argIdx++
-		case *ListValue:
-			if len(headers) == 0 {
-				headers = arg.Values
-			} else {
-				keys = append(keys, arg.Values...)
-			}
-			argIdx++
-		default:
-			argIdx++
-		}
-	}
-
-	if len(headers) == 0 || len(keys) == 0 {
-		return nil, nil
-	}
-
-	// F5243: RFC 5228 §2.7.1 default match type is :is.
-	if matchType == "" {
-		matchType = "is"
-	}
-
-	return &HeaderTest{
-		Headers:    headers,
-		KeyList:    keys,
-		MatchType:  ":" + matchType,
-		Comparator: comparator,
-	}, nil
+	return buildTest(args, i.extensions, 0)
 }
 
 func (i *Interpreter) parseTest(arg Value) (Test, error) {
@@ -593,20 +537,53 @@ func (i *Interpreter) parseTest(arg Value) (Test, error) {
 }
 
 func (i *Interpreter) evaluateTest(test Test) (bool, error) {
+	if err := i.tick(1); err != nil {
+		return false, err
+	}
 	switch t := test.(type) {
 	case *HeaderTest:
 		return i.evaluateHeaderTest(t)
+	case *addressTest:
+		return i.evaluateAddressTest(t)
+	case *envelopeTest:
+		return i.evaluateEnvelopeTest(t)
+	case *bodyTest:
+		return i.evaluateBodyTest(t)
+	case *hasflagTest:
+		return i.evaluateHasflagTest(t)
 	case *StringTest:
 		return i.evaluateStringTest(t)
 	case *SizeTest:
 		return i.evaluateSizeTest(t)
 	case *BooleanTest:
 		return i.evaluateBooleanTest(t)
+	case allOfTest:
+		for _, sub := range t {
+			ok, err := i.evaluateTest(sub)
+			if err != nil || !ok {
+				return false, err
+			}
+		}
+		return true, nil
+	case anyOfTest:
+		for _, sub := range t {
+			ok, err := i.evaluateTest(sub)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				return true, nil
+			}
+		}
+		return false, nil
 	case constTest:
 		return bool(t), nil
 	case notTest:
 		result, err := i.evaluateTest(t.Test)
-		return !result, err
+		if err != nil {
+			return false, err
+		}
+		return !result, nil
 	case existsTest:
 		for _, name := range t {
 			found := false
@@ -622,20 +599,8 @@ func (i *Interpreter) evaluateTest(test Test) (bool, error) {
 		}
 		return true, nil
 	default:
-		return true, nil
+		return false, fmt.Errorf("unknown test type %T", test)
 	}
-}
-
-// asciiLower folds only ASCII letters, as the i;ascii-casemap comparator
-// (RFC 4790 §9.2) requires.
-func asciiLower(s string) string {
-	b := []byte(s)
-	for idx, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[idx] = c + ('a' - 'A')
-		}
-	}
-	return string(b)
 }
 
 // globToRegexp converts a Sieve :matches key (RFC 5228 §2.7.1) into an
@@ -666,60 +631,15 @@ func globToRegexp(glob string) string {
 
 func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 	// F5010: RFC 5228 §2.7.3 default comparator is i;ascii-casemap.
-	fold := true
-	switch t.Comparator {
-	case "", "i;ascii-casemap":
-	case "i;octet":
-		fold = false
-	default:
-		return false, fmt.Errorf("unsupported comparator %q", t.Comparator)
+	cmp, err := normComparator(t.Comparator)
+	if err != nil {
+		return false, err
 	}
-	cmp := func(s string) string {
-		if fold {
-			return asciiLower(s)
-		}
-		return s
+	ms := matchSpec{Type: strings.TrimPrefix(t.MatchType, ":"), Relation: t.Relation, Comparator: cmp}
+	if ms.Type == "" {
+		ms.Type = "is"
 	}
-
-	// Search headers case-insensitively
-	for headerKey, values := range i.ctx.Headers {
-		headerKeyLower := strings.ToLower(headerKey)
-		for _, headerName := range t.Headers {
-			if headerKeyLower != strings.ToLower(headerName) {
-				continue
-			}
-			for _, rawValue := range values {
-				value := cmp(rawValue)
-				switch t.MatchType {
-				case ":is", "is", "":
-					for _, key := range t.KeyList {
-						if value == cmp(key) {
-							return true, nil
-						}
-					}
-				case ":contains", "contains":
-					for _, key := range t.KeyList {
-						if strings.Contains(value, cmp(key)) {
-							return true, nil
-						}
-					}
-				case ":matches", "matches":
-					for _, key := range t.KeyList {
-						matched, err := globMatch(cmp(key), value, i.timeout)
-						if err != nil {
-							// Log the error but don't fail the entire filter
-							// Just return false for this test
-							return false, nil
-						}
-						if matched {
-							return true, nil
-						}
-					}
-				}
-			}
-		}
-	}
-	return false, nil
+	return i.matchValues(ms, i.headerValues(t.Headers), t.KeyList)
 }
 
 func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {
@@ -797,24 +717,8 @@ func (i *Interpreter) evaluateBooleanTest(t *BooleanTest) (bool, error) {
 	return false, nil
 }
 
-func (i *Interpreter) executeFileinto(cmd *Command) ([]Action, error) {
-	if len(cmd.Arguments) == 0 {
-		return nil, nil
-	}
-
-	var folder string
-	switch arg := cmd.Arguments[0].(type) {
-	case *StringValue:
-		folder = arg.Value
-	case *TagValue:
-		// Tagged argument like :create
-		if len(cmd.Arguments) > 1 {
-			if str, ok := cmd.Arguments[1].(*StringValue); ok {
-				folder = str.Value
-			}
-		}
-	}
-
+func (i *Interpreter) executeFileinto(cmd *Command, pa parsedArgs) ([]Action, error) {
+	folder := pa.pos[0].(*StringValue).Value
 	if folder == "" {
 		return nil, nil
 	}
@@ -824,10 +728,10 @@ func (i *Interpreter) executeFileinto(cmd *Command) ([]Action, error) {
 	// (including NUL, CR, LF) or ".." segments would otherwise be created
 	// verbatim as mailboxes by the delivery layer.
 	if !validFileintoFolder(folder) {
-		return []Action{KeepAction{}}, nil
+		return []Action{KeepAction{Flags: i.actionFlags(pa)}}, nil
 	}
 
-	return []Action{FileintoAction{Folder: folder}}, nil
+	return []Action{FileintoAction{Folder: folder, Copy: pa.has("copy"), Flags: i.actionFlags(pa)}}, nil
 }
 
 // validFileintoFolder reports whether a fileinto target is a usable mailbox
@@ -850,22 +754,12 @@ func validFileintoFolder(name string) bool {
 	return true
 }
 
-func (i *Interpreter) executeRedirect(cmd *Command) ([]Action, error) {
-	if len(cmd.Arguments) == 0 {
-		return nil, nil
-	}
-
-	var address string
-	switch arg := cmd.Arguments[0].(type) {
-	case *StringValue:
-		address = arg.Value
-	}
-
+func (i *Interpreter) executeRedirect(cmd *Command, pa parsedArgs) ([]Action, error) {
+	address := pa.pos[0].(*StringValue).Value
 	if address == "" {
 		return nil, nil
 	}
 
-	// Validate email address
 	parsed, err := mail.ParseAddress(address)
 	if err != nil {
 		return nil, fmt.Errorf("invalid redirect address: %s", address)
@@ -880,21 +774,7 @@ func (i *Interpreter) executeRedirect(cmd *Command) ([]Action, error) {
 	}
 	i.redirected = append(i.redirected, address)
 
-	return []Action{RedirectAction{Address: address}}, nil
-}
-
-func (i *Interpreter) executeReject(cmd *Command) ([]Action, error) {
-	if len(cmd.Arguments) == 0 {
-		return []Action{DiscardAction{}}, nil
-	}
-
-	var message string
-	switch arg := cmd.Arguments[0].(type) {
-	case *StringValue:
-		message = arg.Value
-	}
-
-	return []Action{RejectAction{Message: message}}, nil
+	return []Action{RedirectAction{Address: address, Copy: pa.has("copy")}}, nil
 }
 
 func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
@@ -994,36 +874,6 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 	}
 
 	return []Action{vacation}, nil
-}
-
-func (i *Interpreter) executeSet(cmd *Command) ([]Action, error) {
-	if len(cmd.Arguments) < 2 {
-		return nil, nil
-	}
-
-	var name, value string
-	if tag, ok := cmd.Arguments[0].(*TagValue); ok {
-		name = tag.Value
-	}
-	if str, ok := cmd.Arguments[1].(*StringValue); ok {
-		value = str.Value
-	}
-
-	if name != "" {
-		i.ctx.Variables[name] = value
-	}
-
-	return nil, nil
-}
-
-func (i *Interpreter) executeAddHeader(cmd *Command) ([]Action, error) {
-	// Add header to message - would need to modify message in pipeline
-	return nil, nil
-}
-
-func (i *Interpreter) executeDeleteHeader(cmd *Command) ([]Action, error) {
-	// Delete header from message - would need to modify message in pipeline
-	return nil, nil
 }
 
 // ExecuteScript is a convenience function

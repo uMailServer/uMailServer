@@ -28,28 +28,28 @@ func TestExecuteVacation_TagParsing(t *testing.T) {
 			// but the current loop does NOT advance for tag arguments, so "5"
 			// is consumed again as a NumberValue and Days is NOT set.
 			name:        "days tag sets Days field",
-			script:      `vacation :days 5 "Body only";`,
+			script:      `require ["vacation"]; vacation :days 5 "Body only";`,
 			wantDays:    5,
 			wantSubject: "",
 			wantBody:    "Body only",
 		},
 		{
 			name:        "subject tag sets Subject field",
-			script:      `vacation :subject "My Subject" "Body text";`,
+			script:      `require ["vacation"]; vacation :subject "My Subject" "Body text";`,
 			wantDays:    7, // default
 			wantSubject: "My Subject",
 			wantBody:    "Body text",
 		},
 		{
 			name:        "both subject and days tags",
-			script:      `vacation :subject "OOO" :days 3 "Back soon";`,
+			script:      `require ["vacation"]; vacation :subject "OOO" :days 3 "Back soon";`,
 			wantDays:    3,
 			wantSubject: "OOO",
 			wantBody:    "Back soon",
 		},
 		{
 			name:     "days tag with mime flag",
-			script:   `vacation :mime :days 1 "On vacation";`,
+			script:   `require ["vacation"]; vacation :mime :days 1 "On vacation";`,
 			wantDays: 1,
 			wantBody: "On vacation",
 		},
