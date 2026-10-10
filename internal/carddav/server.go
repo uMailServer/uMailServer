@@ -67,6 +67,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handle does the auth+dispatch work; ServeHTTP wraps it in a tracing span.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	// RFC 6764 §6: the bootstrap path is answered before authentication, with
+	// a redirect to the DAV context root (F5664).
+	if r.URL.Path == wellKnownCardDAV {
+		http.Redirect(w, r, davRoot, http.StatusMovedPermanently)
+		return
+	}
+
 	// Authenticate request
 	username, password, ok := r.BasicAuth()
 	if !ok {
@@ -223,6 +230,12 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 			// Continue with empty propfind (allprop)
 		}
 	}
+	// DAV:prop selects properties, DAV:propname lists names only; allprop (or
+	// no body) returns everything (RFC 4918 §9.1, F5662).
+	req := requestFromProp(propfind.Prop)
+	if propfind.PropName != nil {
+		req = &propRequest{nameOnly: true}
+	}
 
 	// Determine depth
 	depth := r.Header.Get("Depth")
@@ -240,12 +253,24 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 		if !s.propfindTarget(w, multistatus, username, rel, depth) {
 			return
 		}
-		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-		w.WriteHeader(http.StatusMultiStatus)
-		output, _ := xml.MarshalIndent(multistatus, "", "  ")
-		_, _ = w.Write([]byte(xml.Header))
-		_, _ = w.Write(output)
+		s.writeMultistatus(w, multistatus, req)
 		return
+	}
+
+	// PROPFIND on the principal URL describes the principal itself (F5663).
+	if rel, ok := strings.CutPrefix(r.URL.Path, "/dav/principals/"); ok {
+		if strings.TrimSuffix(rel, "/") != username {
+			s.sendError(w, http.StatusNotFound, "principal not found")
+			return
+		}
+		multistatus.Responses = append(multistatus.Responses, s.buildPrincipalResponse(username))
+		s.writeMultistatus(w, multistatus, req)
+		return
+	}
+
+	// Context root: names the principal (current-user-principal, F5663).
+	if r.URL.Path == "/" || r.URL.Path == "/dav/" {
+		multistatus.Responses = append(multistatus.Responses, s.buildRootResponse(r.URL.Path, username))
 	}
 
 	// Root principal
@@ -289,12 +314,7 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.WriteHeader(http.StatusMultiStatus)
-
-	output, _ := xml.MarshalIndent(multistatus, "", "  ")
-	_, _ = w.Write([]byte(xml.Header))
-	_, _ = w.Write(output)
+	s.writeMultistatus(w, multistatus, req)
 }
 
 // propfindTarget appends the PROPFIND responses for a request-URI naming one
@@ -421,12 +441,12 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.WriteHeader(http.StatusMultiStatus)
-
-	output, _ := xml.MarshalIndent(multistatus, "", "  ")
-	_, _ = w.Write([]byte(xml.Header))
-	_, _ = w.Write(output)
+	// Honour DAV:prop of the REPORT body (F5662).
+	reqProp := query.Prop
+	if multiget != nil {
+		reqProp = multiget.Prop
+	}
+	s.writeMultistatus(w, multistatus, requestFromProp(reqProp))
 }
 
 // reportRootName returns the local name of the REPORT body's root element,
@@ -704,70 +724,6 @@ func (s *Server) handleMkCol(w http.ResponseWriter, r *http.Request, username st
 	w.WriteHeader(http.StatusCreated)
 }
 
-// handleProppatch handles PROPPATCH requests
-func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, username string) {
-	// Extract address book ID from URL path
-	path := strings.TrimPrefix(r.URL.Path, "/dav/addressbooks/")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 1 || parts[0] == "" {
-		s.sendError(w, http.StatusBadRequest, "invalid addressbook ID")
-		return
-	}
-	addressbookID := parts[0]
-
-	// Read and parse PROPPATCH request
-	body, ok := s.readBody(w, r)
-	if !ok {
-		return
-	}
-
-	// Get current address book
-	ab, err := s.storage.GetAddressbook(username, addressbookID)
-	if err != nil || ab == nil {
-		s.sendError(w, http.StatusNotFound, "addressbook not found")
-		return
-	}
-
-	// Parse property update
-	var proppatch struct {
-		XMLName xml.Name `xml:"propertyupdate"`
-		Set     *struct {
-			Prop []struct {
-				XMLName xml.Name
-				Value   string `xml:",chardata"`
-			} `xml:"prop"`
-		} `xml:"set"`
-		Remove *struct {
-			Prop []struct {
-				XMLName xml.Name
-			} `xml:"prop"`
-		} `xml:"remove"`
-	}
-
-	if err := xml.Unmarshal(body, &proppatch); err == nil {
-		// Handle set operations
-		if proppatch.Set != nil {
-			for _, prop := range proppatch.Set.Prop {
-				switch prop.XMLName.Local {
-				case "displayname":
-					ab.Name = prop.Value
-				case "addressbook-description":
-					ab.Description = prop.Value
-				}
-			}
-		}
-	}
-
-	// Update address book
-	if err := s.storage.UpdateAddressbook(username, ab); err != nil {
-		s.logger.Error("Failed to update addressbook", "error", err)
-		s.sendError(w, http.StatusInternalServerError, "failed to update addressbook")
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
 // destinationWritable enforces the RFC 4918 §10.6 Overwrite header for
 // MOVE/COPY: with "Overwrite: F" an existing destination must not be
 // replaced and the request fails with 412 (F5483). Callers hold writeMu so
@@ -993,12 +949,13 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 // buildPrincipalResponse builds a response for the principal resource
 func (s *Server) buildPrincipalResponse(username string) Response {
 	return Response{
-		Href: fmt.Sprintf("/dav/principals/%s/", username),
+		Href: principalHref(username),
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        \u003ccollection/\u003e\n        \u003cprincipal/\u003e\n      "},
-				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: username},
-				{XMLName: xml.Name{Space: "CARDDAV:", Local: "addressbook-home-set"}, Value: "<href>/dav/addressbooks/</href>"},
+				rawProp(nsDAV, "resourcetype", `<collection xmlns="DAV:"/><principal xmlns="DAV:"/>`),
+				textProp(nsDAV, "displayname", username),
+				rawProp(nsCardDAV, "addressbook-home-set", hrefElement("/dav/addressbooks/")),
+				currentUserPrincipal(username),
 			},
 			Status: "HTTP/1.1 200 OK",
 		}},
@@ -1013,8 +970,9 @@ func (s *Server) buildAddressbookHomeResponse(username string) Response {
 		Href: "/dav/addressbooks/",
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<collection/>"},
-				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: "Address Book"},
+				rawProp(nsDAV, "resourcetype", `<collection xmlns="DAV:"/>`),
+				textProp(nsDAV, "displayname", "Address Book"),
+				currentUserPrincipal(username),
 			},
 			Status: "HTTP/1.1 200 OK",
 		}},
@@ -1037,12 +995,15 @@ func (s *Server) buildAddressbookResponse(username string, ab *Addressbook) Resp
 		Href: fmt.Sprintf("/dav/addressbooks/%s/", ab.ID),
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <collection/>\n        <addressbook xmlns=\"urn:ietf:params:xml:ns:carddav\"/>\n      "},
-				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: ab.Name},
-				{XMLName: xml.Name{Space: "CARDDAV:", Local: "addressbook-description"}, Value: ab.Description},
+				rawProp(nsDAV, "resourcetype", `<collection xmlns="DAV:"/><addressbook xmlns="`+nsCardDAV+`"/>`),
+				textProp(nsDAV, "displayname", ab.Name),
+				textProp(nsCardDAV, "addressbook-description", ab.Description),
 				// Nanosecond precision: a whole-second ctag hid changes made
 				// within the same second from ctag-based sync (F5481).
-				{XMLName: xml.Name{Space: "DAV:", Local: "getctag"}, Value: fmt.Sprintf("\"%d\"", ab.Modified.UnixNano())},
+				textProp(nsCalServer, "getctag", fmt.Sprintf("\"%d\"", ab.Modified.UnixNano())),
+				supportedReportSet(),
+				supportedCollationSet(),
+				currentUserPrincipal(username),
 			},
 			Status: "HTTP/1.1 200 OK",
 		}},
@@ -1052,14 +1013,17 @@ func (s *Server) buildAddressbookResponse(username string, ab *Addressbook) Resp
 // buildContactResponse builds a PROPFIND/REPORT response for a contact
 func (s *Server) buildContactResponse(username, addressbookID, uid, vcardData string) Response {
 	// Request convention: "/dav/addressbooks/{addressbookID}/{uid}.vcf" (no username segment).
+	props := []Property{
+		rawProp(nsDAV, "resourcetype", ""),
+		textProp(nsDAV, "getcontenttype", "text/vcard; charset=utf-8"),
+		textProp(nsDAV, "getetag", s.storage.GetETag(username, addressbookID, uid)),
+	}
+	props = append(props, s.contactMetaProps(username, addressbookID, uid, vcardData)...)
+	props = append(props, textProp(nsCardDAV, "address-data", vcardData))
 	return Response{
 		Href: fmt.Sprintf("/dav/addressbooks/%s/%s.vcf", addressbookID, uid),
 		Propstat: []Propstat{{
-			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "getcontenttype"}, Value: "text/vcard; charset=utf-8"},
-				{XMLName: xml.Name{Space: "DAV:", Local: "getetag"}, Value: s.storage.GetETag(username, addressbookID, uid)},
-				{XMLName: xml.Name{Space: "CARDDAV:", Local: "address-data"}, Value: vcardData},
-			},
+			Prop:   props,
 			Status: "HTTP/1.1 200 OK",
 		}},
 	}
@@ -1108,20 +1072,28 @@ func (s *Server) extractUIDFromVCard(vcardData string) string {
 
 // Propfind represents a PROPFIND request
 type Propfind struct {
-	XMLName xml.Name  `xml:"propfind"`
-	AllProp *struct{} `xml:"allprop,omitempty"`
-	Prop    *Prop     `xml:"prop,omitempty"`
+	XMLName  xml.Name  `xml:"propfind"`
+	AllProp  *struct{} `xml:"allprop,omitempty"`
+	PropName *struct{} `xml:"propname,omitempty"`
+	Prop     *Prop     `xml:"prop,omitempty"`
 }
 
-// Prop represents properties
+// Prop represents properties. Names holds the child element names of a parsed
+// request (see UnmarshalXML), which select the properties to return.
 type Prop struct {
-	XMLName xml.Name `xml:"prop"`
-	Inner   []byte   `xml:",innerxml"`
+	XMLName xml.Name   `xml:"prop"`
+	Inner   []byte     `xml:",innerxml"`
+	Names   []xml.Name `xml:"-"`
 }
 
 // Multistatus represents a 207 Multi-Status response
+//
+// Xmlns is the default namespace declaration of the document; the response,
+// href, propstat, prop and status elements below carry no prefix and inherit
+// DAV: from it (RFC 4918 §14, F5660).
 type Multistatus struct {
 	XMLName   xml.Name   `xml:"multistatus"`
+	Xmlns     string     `xml:"xmlns,attr,omitempty"`
 	XMLNSDav  string     `xml:"xmlns:dav,attr,omitempty"`
 	XMLNSCard string     `xml:"xmlns:card,attr,omitempty"`
 	Responses []Response `xml:"response"`
@@ -1143,10 +1115,13 @@ type Propstat struct {
 	Status  string     `xml:"status"`
 }
 
-// Property represents a single property
+// Property represents a single property: Value is character data, Raw is a
+// fragment of nested elements written verbatim (used for resourcetype and
+// the href-valued properties). A property sets one of the two.
 type Property struct {
 	XMLName xml.Name `xml:""`
 	Value   string   `xml:",chardata"`
+	Raw     string   `xml:",innerxml"`
 }
 
 // AddressbookQuery represents an addressbook-query REPORT (RFC 6352 §10.3).

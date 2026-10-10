@@ -146,7 +146,7 @@ func TestDeliverWithFlags_MultipleFlags_Cov3(t *testing.T) {
 	s := NewMaildirStore(tmpDir)
 
 	msg := []byte("Subject: Multi Flags\r\n\r\nBody")
-	flags := "SRFTD"
+	flags := "DFRST" // F5725: Maildir info flags are in ASCII order
 	fn, err := s.DeliverWithFlags("example.com", "testuser", "INBOX", msg, flags)
 	if err != nil {
 		t.Fatalf("DeliverWithFlags with multiple flags failed: %v", err)

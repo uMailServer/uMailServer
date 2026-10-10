@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -49,10 +50,25 @@ func splitFlags(filename string) (baseName, flags string) {
 
 // joinFlags joins base name with flags
 func joinFlags(baseName, flags string) string {
+	flags = canonicalFlags(flags)
 	if flags == "" {
 		return baseName
 	}
 	return baseName + flagSeparator() + flags
+}
+
+// canonicalFlags returns flags in ASCII order without duplicates, as the
+// Maildir spec requires for the info field after ":2," (F5725).
+func canonicalFlags(flags string) string {
+	b := []byte(flags)
+	sort.Slice(b, func(i, j int) bool { return b[i] < b[j] })
+	out := b[:0]
+	for i, c := range b {
+		if i == 0 || c != b[i-1] {
+			out = append(out, c)
+		}
+	}
+	return string(out)
 }
 
 // NewMaildirStore creates a new Maildir store
@@ -65,7 +81,8 @@ func NewMaildirStore(baseDir string) *MaildirStore {
 // validatePathParts checks that domain and user don't contain path traversal sequences.
 func validatePathParts(domain, user string) error {
 	for _, s := range []string{domain, user} {
-		if s == "" || s == ".." || strings.ContainsAny(s, "/\\") {
+		// F5726: "." collapses a path level (domain) or aliases a parent dir.
+		if s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\\") {
 			return fmt.Errorf("invalid path component: %q", s)
 		}
 	}
@@ -176,6 +193,7 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 
 	// Write file
 	if err := os.WriteFile(tmpPath, msg, 0o600); err != nil {
+		_ = os.Remove(tmpPath) // F5724: don't strand a partial body in tmp/
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
@@ -218,6 +236,7 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 
 	// Write file
 	if err := os.WriteFile(tmpPath, msg, 0o600); err != nil {
+		_ = os.Remove(tmpPath) // F5724: don't strand a partial body in tmp/
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 

@@ -200,9 +200,22 @@ func (s *Session) HandleCommand(line string) error {
 	}
 }
 
+// validHelloArg reports whether arg is a single token free of the characters
+// that would let it forge structure in the Received trace field it is copied
+// into (whitespace, control characters, ';', parentheses, angle brackets;
+// F5677). Hostnames and address literals pass.
+func validHelloArg(arg string) bool {
+	for _, r := range arg {
+		if r <= ' ' || r == 0x7f || strings.ContainsRune(";()<>", r) {
+			return false
+		}
+	}
+	return true
+}
+
 // handleEHLO handles the EHLO command
 func (s *Session) handleEHLO(arg string) error {
-	if arg == "" {
+	if arg == "" || !validHelloArg(arg) {
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
@@ -254,7 +267,7 @@ func (s *Session) handleEHLO(arg string) error {
 
 // handleHELO handles the HELO command (legacy)
 func (s *Session) handleHELO(arg string) error {
-	if arg == "" {
+	if arg == "" || !validHelloArg(arg) {
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
@@ -297,12 +310,95 @@ func (s *Session) handleMAIL(arg string) error {
 		from = validated
 	}
 
+	if code, msg := s.checkMailParams(arg); code != 0 {
+		return s.WriteResponse(code, msg)
+	}
+
 	s.resetTransaction()
 	s.mailFrom = from
 	s.mailFromRet = ret
 	s.state = StateMailFrom
 
 	return s.WriteResponse(250, "OK")
+}
+
+// mailParamFields returns the ESMTP parameters after the path of a MAIL FROM /
+// RCPT TO argument (everything after the first space-separated token).
+func mailParamFields(arg string) []string {
+	if i := strings.IndexByte(arg, ':'); i >= 0 {
+		arg = arg[i+1:]
+	}
+	fields := strings.Fields(arg)
+	if len(fields) == 0 {
+		return nil
+	}
+	return fields[1:]
+}
+
+// checkMailParams validates the MAIL FROM parameters this server advertises
+// (RFC 1870 SIZE, RFC 6152 BODY, RFC 6531 SMTPUTF8, RFC 3461 RET/ENVID,
+// RFC 4954 AUTH). It returns a reply code and text, or 0 when acceptable.
+// A declared SIZE over the limit is refused here, before the client sends
+// the message (RFC 1870 §6; F5672); invalid or unknown parameters are
+// refused instead of silently ignored (F5673).
+func (s *Session) checkMailParams(arg string) (int, string) {
+	for _, field := range mailParamFields(arg) {
+		key, val, _ := strings.Cut(field, "=")
+		switch strings.ToUpper(key) {
+		case "SIZE":
+			n, err := strconv.ParseInt(val, 10, 64)
+			if err != nil || n < 0 {
+				return 501, "5.5.4 Invalid SIZE parameter"
+			}
+			if max := s.server.config.MaxMessageSize; max > 0 && n > max {
+				return 552, "5.3.4 Message size exceeds fixed maximum message size"
+			}
+		case "BODY":
+			if v := strings.ToUpper(val); v != "7BIT" && v != "8BITMIME" {
+				return 501, "5.5.4 Invalid BODY parameter"
+			}
+		case "RET":
+			if v := strings.ToUpper(val); v != "FULL" && v != "HDRS" {
+				return 501, "5.5.4 Invalid RET parameter"
+			}
+		case "ENVID", "AUTH":
+			if val == "" {
+				return 501, "5.5.4 Invalid " + strings.ToUpper(key) + " parameter"
+			}
+		case "SMTPUTF8":
+		default:
+			return 555, "5.5.4 Unsupported MAIL FROM parameter"
+		}
+	}
+	return 0, ""
+}
+
+// checkRcptParams validates the RCPT TO parameters of RFC 3461: NOTIFY
+// (NEVER, or a list of SUCCESS/FAILURE/DELAY; NEVER excludes the others) and
+// ORCPT (addr-type;address). It returns a reply code and text, or 0 (F5673).
+func checkRcptParams(arg string) (int, string) {
+	for _, field := range mailParamFields(arg) {
+		key, val, _ := strings.Cut(field, "=")
+		switch strings.ToUpper(key) {
+		case "NOTIFY":
+			items := strings.Split(strings.ToUpper(val), ",")
+			for _, it := range items {
+				if it != "NEVER" && it != "SUCCESS" && it != "FAILURE" && it != "DELAY" {
+					return 501, "5.5.4 Invalid NOTIFY parameter"
+				}
+				if it == "NEVER" && len(items) > 1 {
+					return 501, "5.5.4 NOTIFY=NEVER cannot be combined with other values"
+				}
+			}
+		case "ORCPT":
+			if t, a, ok := strings.Cut(val, ";"); !ok || t == "" || a == "" {
+				return 501, "5.5.4 Invalid ORCPT parameter"
+			}
+		default:
+			return 555, "5.5.4 Unsupported RCPT TO parameter"
+		}
+	}
+	return 0, ""
 }
 
 // handleRCPT handles the RCPT TO command
@@ -325,6 +421,10 @@ func (s *Session) handleRCPT(arg string) error {
 	validated, err := ValidateEmail(to)
 	if err != nil {
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
+	}
+
+	if code, msg := checkRcptParams(arg); code != 0 {
+		return s.WriteResponse(code, msg)
 	}
 
 	// Check max recipients
@@ -365,8 +465,9 @@ func (s *Session) handleDATA() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	// Must have RCPT TO first
-	if s.state != StateRcptTo {
+	// Must have RCPT TO first; DATA may not follow a BDAT chunk of the same
+	// transaction (RFC 3030 §3, F5676).
+	if s.state != StateRcptTo || s.bdatBuffer != nil {
 		if span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "bad sequence of commands")
 		}
@@ -561,14 +662,22 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 		if s.isTLS {
 			proto = "ESMTPS"
 		}
+		// The "for" clause names a recipient only when there is exactly one:
+		// with several it would disclose one (possibly Bcc) recipient to all
+		// the others (RFC 5321 §4.4, F5674). An IPv6 peer is written as an
+		// address literal (RFC 5321 §4.1.3, F5678).
+		ipLit := s.clientIP().String()
+		if s.clientIP().To4() == nil {
+			ipLit = "IPv6:" + ipLit
+		}
 		var received string
-		if len(s.rcptTo) > 0 {
+		if len(s.rcptTo) == 1 {
 			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
-				s.helloDomain, s.clientIP().String(), s.server.config.Hostname, proto, s.rcptTo[0],
+				s.helloDomain, ipLit, s.server.config.Hostname, proto, s.rcptTo[0],
 				time.Now().Format(time.RFC1123Z))
 		} else {
 			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
-				s.helloDomain, s.clientIP().String(), s.server.config.Hostname, proto,
+				s.helloDomain, ipLit, s.server.config.Hostname, proto,
 				time.Now().Format(time.RFC1123Z))
 		}
 		data = append([]byte(received), data...)
@@ -680,15 +789,18 @@ func (s *Session) readData() ([]byte, error) {
 			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.config.ReadTimeout))
 		}
 
-		line, err := reader.ReadBytes('\n')
+		// Read through a bounded reader: ReadBytes would buffer an
+		// unterminated line without limit, defeating the size and line
+		// limits below (F5671).
+		line, total, endsCRLF, err := readBoundedLine(reader, maxLineLength+1)
 		if err != nil {
 			return nil, err
 		}
 		dotLine := atLineStart && len(line) > 0 && line[0] == '.'
-		atLineStart = bytes.HasSuffix(line, []byte("\r\n"))
+		atLineStart = endsCRLF
 
 		// Check for end of data marker
-		if dotLine && len(line) == 3 && line[1] == '\r' && line[2] == '\n' {
+		if dotLine && total == 3 && line[1] == '\r' && line[2] == '\n' {
 			break
 		}
 		if contentErr != nil {
@@ -696,7 +808,7 @@ func (s *Session) readData() ([]byte, error) {
 		}
 
 		// RFC 5322 line length limit check
-		lineLength := len(line)
+		lineLength := total
 		if dotLine {
 			// The extra transparency dot does not count toward the line limit.
 			lineLength--
@@ -717,7 +829,15 @@ func (s *Session) readData() ([]byte, error) {
 			line = line[1:]
 		}
 
-		data = append(data, line...)
+		// A bare LF ends the line like CRLF for every consumer except the
+		// header parsers, which split on CRLF: normalise it so stages see
+		// the headers the recipient will (F5670).
+		if n := len(line); n > 0 && line[n-1] == '\n' && (n == 1 || line[n-2] != '\r') {
+			data = append(data, line[:n-1]...)
+			data = append(data, '\r', '\n')
+		} else {
+			data = append(data, line...)
+		}
 
 		// Check accumulated size during read to prevent memory exhaustion
 		if int64(len(data)) > s.server.config.MaxMessageSize {
@@ -730,6 +850,53 @@ func (s *Session) readData() ([]byte, error) {
 		return nil, contentErr
 	}
 	return data, nil
+}
+
+// readBoundedLine reads one line terminated by '\n' from r without buffering
+// more than keep bytes of it: the rest is consumed and dropped. It returns the
+// retained prefix, the full length of the line and whether it ended in CRLF.
+// An unterminated line of any length therefore costs O(keep) memory (F5671).
+func readBoundedLine(r *bufio.Reader, keep int) (line []byte, total int, endsCRLF bool, err error) {
+	var prev byte
+	for {
+		chunk, e := r.ReadSlice('\n')
+		if room := keep - len(line); room > 0 {
+			if room > len(chunk) {
+				room = len(chunk)
+			}
+			line = append(line, chunk[:room]...)
+		}
+		total += len(chunk)
+		switch {
+		case e == nil:
+			n := len(chunk)
+			endsCRLF = (n >= 2 && chunk[n-2] == '\r') || (n == 1 && prev == '\r')
+			return line, total, endsCRLF, nil
+		case errors.Is(e, bufio.ErrBufferFull):
+			prev = chunk[len(chunk)-1]
+		default:
+			return nil, total, false, e
+		}
+	}
+}
+
+// normalizeBareLF returns data with every LF not preceded by CR turned into CRLF.
+func normalizeBareLF(data []byte) []byte {
+	var out []byte
+	for i, b := range data {
+		if b == '\n' && (i == 0 || data[i-1] != '\r') {
+			if out == nil {
+				out = append(make([]byte, 0, len(data)+16), data[:i]...)
+			}
+			out = append(out, '\r', '\n')
+		} else if out != nil {
+			out = append(out, b)
+		}
+	}
+	if out == nil {
+		return data
+	}
+	return out
 }
 
 // handleBDAT handles the BDAT command (RFC 3030)
@@ -785,7 +952,6 @@ func (s *Session) handleBDAT(arg string) error {
 
 	// Read chunk data
 	if size > 0 {
-		chunk := make([]byte, size)
 		// Read through the session's buffered reader so chunk octets already
 		// consumed by its read-ahead (CHUNKING + PIPELINING: RFC 3030 allows
 		// BDAT pipelined with MAIL/RCPT, so the client may send the chunk
@@ -796,16 +962,16 @@ func (s *Session) handleBDAT(arg string) error {
 		if reader == nil {
 			reader = bufio.NewReader(s.conn)
 		}
-		_, err := io.ReadFull(reader, chunk)
-		if err != nil {
+		// Grow the buffer as octets arrive instead of allocating the
+		// declared size up front (F5675).
+		if _, err := io.CopyN(s.bdatBuffer, reader, int64(size)); err != nil {
 			return fmt.Errorf("failed to read BDAT chunk: %w", err)
 		}
-		s.bdatBuffer.Write(chunk)
 	}
 
 	if isLast {
 		// Final chunk — process the complete message
-		data := s.bdatBuffer.Bytes()
+		data := normalizeBareLF(s.bdatBuffer.Bytes()) // F5670
 		s.bdatBuffer = nil
 
 		// Check total message size

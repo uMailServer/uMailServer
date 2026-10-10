@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // errInvalidPath is returned when a user-provided path component contains
@@ -16,7 +17,8 @@ var errInvalidPath = errors.New("invalid path component: contains separator or t
 
 // validatePathComponent checks that s does not contain path separators or "..".
 func validatePathComponent(s string) error {
-	if s == "" || s == ".." || strings.ContainsAny(s, "/\\") {
+	// F5721: "." resolves to the store root, outside any user's directory.
+	if s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\\") {
 		return errInvalidPath
 	}
 	return nil
@@ -52,6 +54,86 @@ func isValidMessageID(messageID string) bool {
 // MessageStore handles storage of raw message data
 type MessageStore struct {
 	basePath string
+	// quotaLocks serializes the usage-check-then-store step of
+	// StoreMessageWithQuota per user (F5720).
+	quotaLocks sync.Map // user -> *sync.Mutex
+}
+
+// ErrQuotaExceeded is matched (errors.Is) by every *QuotaExceededError.
+// Callers can map it to SMTP 452 (temporary) or 552 (permanent) and IMAP
+// [OVERQUOTA].
+var ErrQuotaExceeded = errors.New("quota exceeded")
+
+// QuotaExceededError reports a store refused because it would push a user
+// past their byte limit.
+type QuotaExceededError struct {
+	User  string
+	Used  int64
+	Need  int64
+	Limit int64
+}
+
+func (e *QuotaExceededError) Error() string {
+	return fmt.Sprintf("quota exceeded for %s: used %d + %d > limit %d", e.User, e.Used, e.Need, e.Limit)
+}
+
+// Is makes errors.Is(err, ErrQuotaExceeded) true.
+func (e *QuotaExceededError) Is(target error) bool { return target == ErrQuotaExceeded }
+
+// UserUsage returns the bytes of stored message bodies for user, recounted
+// from disk (so deletes are always reflected). In-flight ".tmp-" files are
+// not counted. A user with no data uses 0 bytes.
+func (s *MessageStore) UserUsage(user string) (int64, error) {
+	if err := validatePathComponent(user); err != nil {
+		return 0, err
+	}
+	var used int64
+	err := filepath.Walk(filepath.Join(s.basePath, user), func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if info.Mode().IsRegular() && !strings.HasPrefix(info.Name(), ".tmp-") {
+			used += info.Size()
+		}
+		return nil
+	})
+	return used, err
+}
+
+// StoreMessageWithQuota is StoreMessage with a per-user byte limit
+// (limit <= 0 means unlimited). The usage check and the store are serialized
+// per user, so concurrent calls cannot jointly exceed the limit. Content that
+// is already stored adds no bytes and is always accepted. Writers that use
+// plain StoreMessage are not serialized with this path.
+func (s *MessageStore) StoreMessageWithQuota(user string, data []byte, limit int64) (string, error) {
+	if err := validatePathComponent(user); err != nil {
+		return "", err
+	}
+	if limit <= 0 {
+		return s.StoreMessage(user, data)
+	}
+	m, _ := s.quotaLocks.LoadOrStore(user, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
+	hash := sha256.Sum256(data)
+	messageID := hex.EncodeToString(hash[:])
+	if info, err := os.Stat(filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID)); err == nil &&
+		info.Mode().IsRegular() && info.Size() == int64(len(data)) {
+		return messageID, nil
+	}
+	used, err := s.UserUsage(user)
+	if err != nil {
+		return "", err
+	}
+	if used+int64(len(data)) > limit {
+		return "", &QuotaExceededError{User: user, Used: used, Need: int64(len(data)), Limit: limit}
+	}
+	return s.StoreMessage(user, data)
 }
 
 // NewMessageStore creates a new message store

@@ -1,10 +1,15 @@
 package sieve
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"sync"
 	"time"
+
+	"go.etcd.io/bbolt"
 )
 
 // StoredScript holds both source and compiled script
@@ -19,6 +24,11 @@ type Manager struct {
 	scripts       map[string]map[string]*StoredScript // userID -> scriptName -> stored script
 	activeScripts map[string]string                   // userID -> activeScriptName
 	scriptsMu     sync.RWMutex
+
+	// store persists every user's scripts when attached (AttachStore); nil
+	// keeps the manager memory-only. Guarded by scriptsMu. F5630.
+	store *bbolt.DB
+	warn  func(msg string, args ...any)
 
 	// Vacation cache: prevents spamming the same sender (LRU with max 10000 entries)
 	vacationCache    map[string]time.Time
@@ -106,38 +116,36 @@ func (m *Manager) storeScript(userID, scriptName, source string, enforceQuota bo
 		return err
 	}
 
-	m.scriptsMu.Lock()
-	defer m.scriptsMu.Unlock()
-
-	if enforceQuota {
-		if err := m.checkScriptQuotaLocked(userID, scriptName, len(source)); err != nil {
-			return err
+	return m.mutateUser(userID, func() error {
+		if enforceQuota {
+			if err := m.checkScriptQuotaLocked(userID, scriptName, len(source)); err != nil {
+				return err
+			}
 		}
-	}
-	if m.scripts[userID] == nil {
-		m.scripts[userID] = make(map[string]*StoredScript)
-	}
-	m.scripts[userID][scriptName] = &StoredScript{
-		Name:   scriptName,
-		Source: source,
-		Script: script,
-	}
-	return nil
+		if m.scripts[userID] == nil {
+			m.scripts[userID] = make(map[string]*StoredScript)
+		}
+		m.scripts[userID][scriptName] = &StoredScript{
+			Name:   scriptName,
+			Source: source,
+			Script: script,
+		}
+		return nil
+	})
 }
 
 // SetActiveScriptByName sets the active script for a user by name
 func (m *Manager) SetActiveScriptByName(userID string, scriptName string) error {
-	m.scriptsMu.Lock()
-	defer m.scriptsMu.Unlock()
-
-	if userScripts, ok := m.scripts[userID]; ok {
-		if _, exists := userScripts[scriptName]; !exists {
-			return fmt.Errorf("script %q not found", scriptName)
+	return m.mutateUser(userID, func() error {
+		if userScripts, ok := m.scripts[userID]; ok {
+			if _, exists := userScripts[scriptName]; !exists {
+				return fmt.Errorf("script %q not found", scriptName)
+			}
+			m.activeScripts[userID] = scriptName
+			return nil
 		}
-		m.activeScripts[userID] = scriptName
-		return nil
-	}
-	return fmt.Errorf("no scripts found for user")
+		return fmt.Errorf("no scripts found for user")
+	})
 }
 
 // SetActiveScript sets the active script for a user (stores script with given name and activates)
@@ -180,14 +188,17 @@ func (m *Manager) HasActiveScript(userID string) bool {
 
 // DeleteScript removes a script for a user (by name)
 func (m *Manager) DeleteScript(userID string, scriptName string) {
-	m.scriptsMu.Lock()
-	defer m.scriptsMu.Unlock()
-
-	if userScripts, ok := m.scripts[userID]; ok {
-		delete(userScripts, scriptName)
-		if m.activeScripts[userID] == scriptName {
-			delete(m.activeScripts, userID)
+	err := m.mutateUser(userID, func() error {
+		if userScripts, ok := m.scripts[userID]; ok {
+			delete(userScripts, scriptName)
+			if m.activeScripts[userID] == scriptName {
+				delete(m.activeScripts, userID)
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		m.warnf("Sieve script delete was not persisted", "user", userID, "script", scriptName, "error", err)
 	}
 }
 
@@ -197,55 +208,57 @@ var (
 	errScriptNotFound = errors.New("script does not exist")
 	errScriptActive   = errors.New("script is active")
 	errScriptExists   = errors.New("script already exists")
+	// errScriptStorage wraps a failure to persist a change; the change is
+	// rolled back. F5630.
+	errScriptStorage = errors.New("script storage failure")
 )
 
 // deleteInactiveScript removes a script unless it is the active one
 // (RFC 5804 §2.10). Check and delete happen under one lock so a concurrent
 // SETACTIVE cannot make the deleted script active. F5463.
 func (m *Manager) deleteInactiveScript(userID, scriptName string) error {
-	m.scriptsMu.Lock()
-	defer m.scriptsMu.Unlock()
-
-	if _, ok := m.scripts[userID][scriptName]; !ok {
-		return errScriptNotFound
-	}
-	if active, ok := m.activeScripts[userID]; ok && active == scriptName {
-		return errScriptActive
-	}
-	delete(m.scripts[userID], scriptName)
-	return nil
+	return m.mutateUser(userID, func() error {
+		if _, ok := m.scripts[userID][scriptName]; !ok {
+			return errScriptNotFound
+		}
+		if active, ok := m.activeScripts[userID]; ok && active == scriptName {
+			return errScriptActive
+		}
+		delete(m.scripts[userID], scriptName)
+		return nil
+	})
 }
 
 // deactivateScript leaves the user with no active script (SETACTIVE "",
 // RFC 5804 §2.8). F5464.
-func (m *Manager) deactivateScript(userID string) {
-	m.scriptsMu.Lock()
-	defer m.scriptsMu.Unlock()
-	delete(m.activeScripts, userID)
+func (m *Manager) deactivateScript(userID string) error {
+	return m.mutateUser(userID, func() error {
+		delete(m.activeScripts, userID)
+		return nil
+	})
 }
 
 // renameScript renames a script; an active script stays active under its new
 // name (RFC 5804 §2.11.1). F5465.
 func (m *Manager) renameScript(userID, oldName, newName string) error {
-	m.scriptsMu.Lock()
-	defer m.scriptsMu.Unlock()
-
-	userScripts := m.scripts[userID]
-	stored, ok := userScripts[oldName]
-	if !ok {
-		return errScriptNotFound
-	}
-	if _, exists := userScripts[newName]; exists {
-		return errScriptExists
-	}
-	renamed := *stored
-	renamed.Name = newName
-	userScripts[newName] = &renamed
-	delete(userScripts, oldName)
-	if active, ok := m.activeScripts[userID]; ok && active == oldName {
-		m.activeScripts[userID] = newName
-	}
-	return nil
+	return m.mutateUser(userID, func() error {
+		userScripts := m.scripts[userID]
+		stored, ok := userScripts[oldName]
+		if !ok {
+			return errScriptNotFound
+		}
+		if _, exists := userScripts[newName]; exists {
+			return errScriptExists
+		}
+		renamed := *stored
+		renamed.Name = newName
+		userScripts[newName] = &renamed
+		delete(userScripts, oldName)
+		if active, ok := m.activeScripts[userID]; ok && active == oldName {
+			m.activeScripts[userID] = newName
+		}
+		return nil
+	})
 }
 
 // ListScripts returns all script names for a user
@@ -420,4 +433,158 @@ func (m *Manager) GetVacationInterval(days int) time.Duration {
 func (m *Manager) ValidateScript(source string) error {
 	_, err := m.CompileScript(source)
 	return err
+}
+
+// Persistence (F5630). Scripts, vacation rules included, live in the accounts
+// bbolt database as one JSON record per user in scriptsBucket, so filters and
+// the active-script choice survive a restart. The record is new; it never
+// changes an existing record's format.
+const (
+	scriptsBucket       = "sieve_scripts"
+	scriptRecordVersion = 1
+)
+
+type scriptRecord struct {
+	Version int                 `json:"v"`
+	Active  string              `json:"active,omitempty"`
+	Scripts []scriptRecordEntry `json:"scripts"`
+}
+
+type scriptRecordEntry struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+}
+
+// AttachStore loads every persisted user record from bolt and, from then on,
+// saves each change to a user's scripts atomically before it is acknowledged.
+// It is idempotent: a second call is a no-op. Corrupt records, and scripts
+// that no longer compile, are skipped with a warning and never abort the load.
+// Users already present in memory are not overwritten. warn may be nil.
+func (m *Manager) AttachStore(bolt *bbolt.DB, warn func(msg string, args ...any)) error {
+	if bolt == nil {
+		return errors.New("sieve: nil store")
+	}
+	m.scriptsMu.Lock()
+	defer m.scriptsMu.Unlock()
+	if m.store != nil {
+		return nil
+	}
+	if warn != nil {
+		m.warn = warn
+	}
+	err := bolt.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(scriptsBucket))
+		if err != nil {
+			return err
+		}
+		return b.ForEach(func(k, v []byte) error {
+			m.loadRecordLocked(string(k), v)
+			return nil
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("sieve: load scripts: %w", err)
+	}
+	m.store = bolt
+	return nil
+}
+
+// StoreAttached reports whether AttachStore has completed.
+func (m *Manager) StoreAttached() bool {
+	m.scriptsMu.RLock()
+	defer m.scriptsMu.RUnlock()
+	return m.store != nil
+}
+
+func (m *Manager) warnf(msg string, args ...any) {
+	if m.warn != nil {
+		m.warn(msg, args...)
+		return
+	}
+	slog.Warn(msg, args...)
+}
+
+// loadRecordLocked installs one persisted user record; the caller holds
+// scriptsMu. A bad record or script is skipped, not fatal.
+func (m *Manager) loadRecordLocked(userID string, raw []byte) {
+	if _, loaded := m.scripts[userID]; loaded {
+		return
+	}
+	var rec scriptRecord
+	if err := json.Unmarshal(raw, &rec); err != nil || rec.Version != scriptRecordVersion {
+		m.warnf("Ignoring unreadable Sieve script record", "user", userID, "error", err, "version", rec.Version)
+		return
+	}
+	scripts := make(map[string]*StoredScript, len(rec.Scripts))
+	for _, e := range rec.Scripts {
+		script, err := m.CompileScript(e.Source)
+		if err != nil {
+			m.warnf("Ignoring Sieve script that no longer compiles", "user", userID, "script", e.Name, "error", err)
+			continue
+		}
+		scripts[e.Name] = &StoredScript{Name: e.Name, Source: e.Source, Script: script}
+	}
+	if len(scripts) == 0 {
+		return
+	}
+	m.scripts[userID] = scripts
+	if _, ok := scripts[rec.Active]; ok && rec.Active != "" {
+		m.activeScripts[userID] = rec.Active
+	} else if rec.Active != "" {
+		m.warnf("Persisted active Sieve script is missing, none active", "user", userID, "script", rec.Active)
+	}
+}
+
+// mutateUser runs fn, which changes userID's scripts, under the write lock.
+// fn must make no change when it returns an error. With a store attached the
+// user's resulting record is saved in one bolt transaction; if that fails the
+// change is rolled back and the error wraps errScriptStorage, so memory never
+// runs ahead of disk.
+func (m *Manager) mutateUser(userID string, fn func() error) error {
+	m.scriptsMu.Lock()
+	defer m.scriptsMu.Unlock()
+	if m.store == nil || userID == "" {
+		return fn()
+	}
+	prevScripts, hadScripts := m.scripts[userID]
+	prevScripts = maps.Clone(prevScripts)
+	prevActive, hadActive := m.activeScripts[userID]
+	if err := fn(); err != nil {
+		return err
+	}
+	if err := m.saveUserLocked(userID); err != nil {
+		if hadScripts {
+			m.scripts[userID] = prevScripts
+		} else {
+			delete(m.scripts, userID)
+		}
+		if hadActive {
+			m.activeScripts[userID] = prevActive
+		} else {
+			delete(m.activeScripts, userID)
+		}
+		return fmt.Errorf("%w: %v", errScriptStorage, err)
+	}
+	return nil
+}
+
+// saveUserLocked writes (or, when nothing is left, removes) userID's record.
+func (m *Manager) saveUserLocked(userID string) error {
+	scripts := m.scripts[userID]
+	if len(scripts) == 0 {
+		return m.store.Update(func(tx *bbolt.Tx) error {
+			return tx.Bucket([]byte(scriptsBucket)).Delete([]byte(userID))
+		})
+	}
+	rec := scriptRecord{Version: scriptRecordVersion, Active: m.activeScripts[userID]}
+	for name, stored := range scripts {
+		rec.Scripts = append(rec.Scripts, scriptRecordEntry{Name: name, Source: stored.Source})
+	}
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	return m.store.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket([]byte(scriptsBucket)).Put([]byte(userID), raw)
+	})
 }

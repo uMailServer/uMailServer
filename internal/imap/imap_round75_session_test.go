@@ -16,6 +16,14 @@ import (
 // "panic=" line instead of killing the test binary. INBOX is not selected.
 func round75Session(t *testing.T, msgs ...string) func(string) []string {
 	t.Helper()
+	run, _ := round75SessionStore(t, msgs...)
+	return run
+}
+
+// round75SessionStore is round75Session that also returns the mailstore, so
+// tests can inject storage failures behind the session.
+func round75SessionStore(t *testing.T, msgs ...string) (func(string) []string, *BboltMailstore) {
+	t.Helper()
 	ms, err := NewBboltMailstore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +92,7 @@ func round75Session(t *testing.T, msgs ...string) func(string) []string {
 				t.Fatalf("no tagged reply to %q (got %q)", line, out)
 			}
 		}
-	}
+	}, ms
 }
 
 // round75Line returns the first line with prefix, or a marker plus all lines.

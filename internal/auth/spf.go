@@ -154,7 +154,8 @@ func (c *SPFChecker) lookupSPF(ctx context.Context, domain string) (string, erro
 	var found string
 	count := 0
 	for _, record := range txtRecords {
-		if record == "v=spf1" || strings.HasPrefix(record, "v=spf1 ") {
+		// F5700: the version tag is case-insensitive (RFC 7208 §4.5, RFC 5234).
+		if len(record) >= 6 && strings.EqualFold(record[:6], "v=spf1") && (len(record) == 6 || record[6] == ' ') {
 			found = record
 			count++
 		}
@@ -276,6 +277,11 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 		if lim.lookups > spfMaxDNSTerms {
 			return SPFPermError, "Too many DNS lookups"
 		}
+		// F5703: redirect is a domain-spec; expand its macros.
+		redirect, err := spfExpand(redirect, ip, domain, sender)
+		if err != nil {
+			return SPFPermError, err.Error()
+		}
 		record, err := c.lookupSPF(ctx, redirect)
 		if err != nil {
 			if isTemporaryError(err) {
@@ -297,30 +303,53 @@ func (c *SPFChecker) evaluateMechanism(ctx context.Context, ip net.IP, domain, s
 		return true, false, nil
 
 	case "ip4":
+		// F5704: an invalid ip4 value is a syntax error (RFC 7208 §4.6).
+		if !spfValidIPSpec(m.value, false) {
+			return false, false, &spfPermError{"invalid ip4 value"}
+		}
 		return c.evaluateIP4(ip, m.value), false, nil
 
 	case "ip6":
+		if !spfValidIPSpec(m.value, true) {
+			return false, false, &spfPermError{"invalid ip6 value"}
+		}
 		return c.evaluateIP6(ip, m.value), false, nil
 
 	case "a":
-		return c.evaluateA(ctx, ip, m.value, domain, lim.lookups, lim.voids)
+		spec, err := spfExpandDualCIDR(m.value, ip, domain, sender)
+		if err != nil {
+			return false, false, err
+		}
+		return c.evaluateA(ctx, ip, spec, domain, lim.lookups, lim.voids)
 
 	case "mx":
-		return c.evaluateMX(ctx, ip, m.value, domain, lim.lookups, lim.voids)
+		spec, err := spfExpandDualCIDR(m.value, ip, domain, sender)
+		if err != nil {
+			return false, false, err
+		}
+		return c.evaluateMX(ctx, ip, spec, domain, lim.lookups, lim.voids)
 
 	case "ptr":
 		// PTR is discouraged in SPF, return false
 		return false, false, nil
 
 	case "exists":
-		return c.evaluateExists(ctx, m.value, lim.lookups, lim.voids)
+		spec, err := spfExpand(m.value, ip, domain, sender)
+		if err != nil {
+			return false, false, err
+		}
+		return c.evaluateExists(ctx, spec, lim.lookups, lim.voids)
 
 	case "include":
-		return c.evaluateInclude(ctx, ip, m.value, sender, lim)
+		spec, err := spfExpand(m.value, ip, domain, sender)
+		if err != nil {
+			return false, false, err
+		}
+		return c.evaluateInclude(ctx, ip, spec, sender, lim)
 
 	default:
 		// F5414: RFC 7208 §5 — an unrecognised mechanism is a permerror.
-		return false, false, errors.New("unknown SPF mechanism")
+		return false, false, &spfPermError{"unknown SPF mechanism"}
 	}
 }
 
@@ -401,7 +430,7 @@ func spfSplitDualCIDR(value string) (string, int, int, error) {
 	if i := strings.Index(value, "//"); i >= 0 {
 		n, err := strconv.Atoi(value[i+2:])
 		if err != nil || n < 0 || n > 128 {
-			return "", 0, 0, fmt.Errorf("invalid ip6-cidr-length in %q", value)
+			return "", 0, 0, &spfPermError{fmt.Sprintf("invalid ip6-cidr-length in %q", value)}
 		}
 		v6len = n
 		value = value[:i]
@@ -409,7 +438,7 @@ func spfSplitDualCIDR(value string) (string, int, int, error) {
 	if i := strings.LastIndex(value, "/"); i >= 0 {
 		n, err := strconv.Atoi(value[i+1:])
 		if err != nil || n < 0 || n > 32 {
-			return "", 0, 0, fmt.Errorf("invalid ip4-cidr-length in %q", value)
+			return "", 0, 0, &spfPermError{fmt.Sprintf("invalid ip4-cidr-length in %q", value)}
 		}
 		v4len = n
 		value = value[:i]
@@ -458,7 +487,7 @@ func (c *SPFChecker) evaluateMX(ctx context.Context, ip net.IP, value, domain st
 		// F5415: RFC 7208 §4.6.4 — one mx term MUST NOT query more than 10
 		// address records; exceeding the limit is a permerror.
 		if i >= spfMaxMXHosts {
-			return false, false, errors.New("too many MX hosts for mx mechanism")
+			return false, false, &spfPermError{"too many MX hosts for mx mechanism"}
 		}
 		mxIPs, err := c.resolver.LookupIP(ctx, mx.Host)
 		if err != nil {
@@ -480,7 +509,7 @@ func (c *SPFChecker) evaluateMX(ctx context.Context, ip net.IP, value, domain st
 
 // evaluateExists checks if a domain exists
 func (c *SPFChecker) evaluateExists(ctx context.Context, value string, lookups, voidLookups int) (bool, bool, error) {
-	_, err := c.resolver.LookupIP(ctx, value)
+	ips, err := c.resolver.LookupIP(ctx, value)
 	if err != nil {
 		if isTemporaryError(err) {
 			return false, false, err
@@ -488,7 +517,15 @@ func (c *SPFChecker) evaluateExists(ctx context.Context, value string, lookups, 
 		return false, true, nil // Void lookup
 	}
 
-	return true, false, nil
+	// F5701: RFC 7208 §5.7 — exists matches only when an A record comes
+	// back; an empty (or AAAA-only) answer is a void lookup, not a match.
+	for _, a := range ips {
+		if a.To4() != nil {
+			return true, false, nil
+		}
+	}
+
+	return false, true, nil
 }
 
 // evaluateInclude includes another domain's SPF record
@@ -500,7 +537,7 @@ func (c *SPFChecker) evaluateInclude(ctx context.Context, ip net.IP, domain, sen
 		}
 		// F4886: RFC 7208 §5.2 — an included domain without an SPF record
 		// ("none") is a permerror, not a non-match.
-		return false, false, fmt.Errorf("include target %s has no SPF record", domain)
+		return false, false, &spfPermError{fmt.Sprintf("include target %s has no SPF record", domain)}
 	}
 
 	// F4885: nested lookups and voids accumulate in the shared counters.
@@ -508,7 +545,7 @@ func (c *SPFChecker) evaluateInclude(ctx context.Context, ip net.IP, domain, sen
 
 	// Propagate permanent errors from nested evaluation
 	if result == SPFPermError {
-		return false, false, errors.New(explanation)
+		return false, false, &spfPermError{explanation}
 	}
 	if result == SPFTempError {
 		return false, false, errors.New("DNS lookup failed")
@@ -716,6 +753,18 @@ func isTemporaryError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// F5702: our own syntax/evaluation errors embed sender-controlled text
+	// (domain names, record values); never classify them by their message.
+	var pe *spfPermError
+	if errors.As(err, &pe) {
+		return false
+	}
+	// F5702: a resolver error is classified by its type; its message embeds
+	// the queried name ("lookup timeout-corp.example: no such host").
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTimeout || dnsErr.IsTemporary
+	}
 	// Check for net.Error with Timeout() method
 	var netErr net.Error
 	if errors.As(err, &netErr) {
@@ -733,4 +782,192 @@ func isTemporaryError(err error) bool {
 	errMsg := err.Error()
 	return strings.Contains(errMsg, "timeout") ||
 		strings.Contains(errMsg, "temporary")
+}
+
+// spfPermError marks an SPF evaluation failure that is a permanent error
+// (RFC 7208 §2.6.7) regardless of what its message contains (F5702).
+type spfPermError struct{ msg string }
+
+func (e *spfPermError) Error() string { return e.msg }
+
+// spfValidIPSpec reports whether value is a syntactically valid ip4/ip6
+// mechanism argument: an address of the right family with an optional
+// prefix length (F5704).
+func spfValidIPSpec(value string, v6 bool) bool {
+	if strings.Contains(value, ":") != v6 {
+		return false
+	}
+	if strings.Contains(value, "/") {
+		_, _, err := net.ParseCIDR(value)
+		return err == nil
+	}
+	return net.ParseIP(value) != nil
+}
+
+// spfExpandDualCIDR expands the macros of an a/mx domain-spec while keeping
+// its dual-cidr-length suffix verbatim (F5703).
+func spfExpandDualCIDR(value string, ip net.IP, domain, sender string) (string, error) {
+	host, _, _, err := spfSplitDualCIDR(value)
+	if err != nil {
+		return "", err
+	}
+	exp, err := spfExpand(host, ip, domain, sender)
+	if err != nil {
+		return "", err
+	}
+	return exp + value[len(host):], nil
+}
+
+// spfExpand expands RFC 7208 §7 macros in a domain-spec (F5703). Letters
+// c, r and t are only valid in exp text and are rejected here; h and p have
+// no data in this API and expand to "unknown" (§7.3).
+func spfExpand(spec string, ip net.IP, domain, sender string) (string, error) {
+	if !strings.Contains(spec, "%") {
+		return spec, nil
+	}
+	bad := func() (string, error) { return "", &spfPermError{"invalid SPF macro"} }
+	local, sdomain := "postmaster", domain
+	if sender != "" {
+		if i := strings.LastIndex(sender, "@"); i >= 0 {
+			if i > 0 {
+				local = sender[:i]
+			}
+			sdomain = sender[i+1:]
+		} else {
+			sdomain = sender
+		}
+	}
+	var out strings.Builder
+	for i := 0; i < len(spec); i++ {
+		if spec[i] != '%' {
+			out.WriteByte(spec[i])
+			continue
+		}
+		i++
+		if i >= len(spec) {
+			return bad()
+		}
+		switch spec[i] {
+		case '%':
+			out.WriteByte('%')
+		case '_':
+			out.WriteByte(' ')
+		case '-':
+			out.WriteString("%20")
+		case '{':
+			end := strings.IndexByte(spec[i:], '}')
+			if end < 0 || end < 2 {
+				return bad()
+			}
+			body := spec[i+1 : i+end]
+			i += end
+			letter := body[0]
+			var val string
+			switch letter | 0x20 {
+			case 's':
+				val = local + "@" + sdomain
+			case 'l':
+				val = local
+			case 'o':
+				val = sdomain
+			case 'd':
+				val = domain
+			case 'i':
+				val = spfMacroIP(ip)
+			case 'v':
+				val = "ip6"
+				if ip.To4() != nil {
+					val = "in-addr"
+				}
+			case 'h', 'p':
+				val = "unknown"
+			default:
+				return bad()
+			}
+			rest := body[1:]
+			digits := 0
+			j := 0
+			for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+				digits = digits*10 + int(rest[j]-'0')
+				j++
+				if digits > 128 {
+					return bad()
+				}
+			}
+			if j > 0 && digits == 0 {
+				return bad()
+			}
+			reverse := false
+			if j < len(rest) && (rest[j] == 'r' || rest[j] == 'R') {
+				reverse = true
+				j++
+			}
+			delims := rest[j:]
+			if delims == "" {
+				delims = "."
+			}
+			for _, d := range delims {
+				if !strings.ContainsRune(".-+,/_=", d) {
+					return bad()
+				}
+			}
+			parts := strings.FieldsFunc(val, func(r rune) bool { return strings.ContainsRune(delims, r) })
+			if val != "" && len(parts) == 0 {
+				parts = []string{""}
+			}
+			if reverse {
+				for a, b := 0, len(parts)-1; a < b; a, b = a+1, b-1 {
+					parts[a], parts[b] = parts[b], parts[a]
+				}
+			}
+			if digits > 0 && digits < len(parts) {
+				parts = parts[len(parts)-digits:]
+			}
+			val = strings.Join(parts, ".")
+			if letter >= 'A' && letter <= 'Z' {
+				val = spfURLEscape(val)
+			}
+			out.WriteString(val)
+		default:
+			return bad()
+		}
+	}
+	res := out.String()
+	// §7.3: an expansion over 253 characters drops leading labels.
+	for len(res) > 253 {
+		k := strings.IndexByte(res, '.')
+		if k < 0 {
+			break
+		}
+		res = res[k+1:]
+	}
+	return res, nil
+}
+
+// spfMacroIP renders the client IP for %{i}: dotted quad, or 32
+// dot-separated nibbles for IPv6 (RFC 7208 §7.3).
+func spfMacroIP(ip net.IP) string {
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	const hexd = "0123456789abcdef"
+	parts := make([]string, 0, 32)
+	for _, b := range ip.To16() {
+		parts = append(parts, string(hexd[b>>4]), string(hexd[b&15]))
+	}
+	return strings.Join(parts, ".")
+}
+
+// spfURLEscape percent-encodes everything outside the RFC 3986 unreserved set.
+func spfURLEscape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.' || c == '_' || c == '~' {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }

@@ -428,10 +428,10 @@ func TestGetETag(t *testing.T) {
 	cal := &Calendar{ID: "test-cal", Name: "Test Calendar"}
 	_ = storage.CreateCalendar("user1@example.com", cal)
 
-	// Get ETag for non-existent event (should generate UUID)
+	// An unreadable resource has no ETag; a random one is never invented (F5655)
 	etag := storage.GetETag("user1@example.com", "test-cal", "nonexistent")
-	if etag == "" {
-		t.Error("GetETag() should return non-empty for non-existent")
+	if etag != "" {
+		t.Errorf("GetETag() = %q, want empty for non-existent", etag)
 	}
 
 	// Create event
@@ -457,8 +457,8 @@ func TestGetCalendarETag(t *testing.T) {
 
 	// Get ETag for non-existent calendar
 	etag := storage.GetCalendarETag("user1@example.com", "nonexistent")
-	if etag == "" {
-		t.Error("GetCalendarETag() should return non-empty for non-existent")
+	if etag != "" {
+		t.Errorf("GetCalendarETag() = %q, want empty for non-existent", etag)
 	}
 
 	// Create calendar

@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/mail"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -155,7 +157,7 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 			"Final-Recipient: rfc822; %s\r\n"+
 			"Action: %s\r\n"+
 			"Status: %s\r\n"+
-			"Remote-MTA: dns; %s\r\n",
+			"",
 		dsn.ReportedDomain,
 		dsn.OriginalFrom,
 		boundary,
@@ -172,12 +174,17 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 		dsn.Recipient.Original,
 		dsn.Action,
 		dsn.Status,
-		dsn.RemoteMTA,
 	)
 
+	// Remote-MTA is optional (RFC 3464 §2.3.5): omit it when no remote host
+	// is known instead of printing a bogus "dns; unknown" (F5684).
+	if dsn.RemoteMTA != "" && dsn.RemoteMTA != "unknown" {
+		dsnMsg += fmt.Sprintf("Remote-MTA: dns; %s\r\n", dsn.RemoteMTA)
+	}
+
 	// Add diagnostic code if present
-	if dsn.DiagnosticCode != "" {
-		dsnMsg += fmt.Sprintf("Diagnostic-Code: smtp; %s\r\n", dsn.DiagnosticCode)
+	if diag := diagnosticText(dsn.DiagnosticCode); diag != "" {
+		dsnMsg += fmt.Sprintf("Diagnostic-Code: smtp; %s\r\n", diag)
 	}
 
 	// Add DSN recipient address if different
@@ -222,6 +229,39 @@ func GenerateDelayDSN(dsn *DSN) ([]byte, error) {
 	dsn.Status = "4.0.0"
 	dsn.FinalMTA = dsn.ReportedDomain
 	return GenerateDSN(dsn, []byte{}, DSNRetHeaders)
+}
+
+// quotedReplyRe matches net/textproto.Error's rendering `550 "text"`.
+var quotedReplyRe = regexp.MustCompile(`^(\d{3}) ("(?:[^"\\]|\\.)*")$`)
+
+// maxDiagnosticLen bounds the Diagnostic-Code field to one header line.
+const maxDiagnosticLen = 500
+
+// diagnosticText renders an SMTP reply as the text of a Diagnostic-Code field
+// (RFC 3464 §2.3.2): textproto's quoted form is unquoted, a duplicate "smtp; "
+// type prefix is dropped and line breaks or control characters are collapsed
+// so a multi-line remote reply stays within one field (F5684).
+func diagnosticText(s string) string {
+	if m := quotedReplyRe.FindStringSubmatch(s); m != nil {
+		if u, err := strconv.Unquote(m[2]); err == nil {
+			s = m[1] + " " + u
+		}
+	}
+	s = strings.TrimSpace(s)
+	if len(s) >= 5 && strings.EqualFold(s[:5], "smtp;") {
+		s = strings.TrimSpace(s[5:])
+	}
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > maxDiagnosticLen {
+		s = s[:maxDiagnosticLen]
+	}
+	return s
 }
 
 // extractHeaders extracts only the headers from a message

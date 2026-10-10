@@ -920,15 +920,10 @@ func TestSelectMailbox_NonexistentMailbox(t *testing.T) {
 	defer ms.Close()
 
 	user := "testuser"
+	// F5643: a mailbox that does not exist is an error, not an empty phantom.
 	mb, err := ms.SelectMailbox(user, "NonExistent")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if mb == nil {
-		t.Error("expected non-nil mailbox")
-	}
-	if mb.Name != "NonExistent" {
-		t.Errorf("expected name NonExistent, got %s", mb.Name)
+	if err == nil || !strings.Contains(err.Error(), "NONEXISTENT") || mb != nil {
+		t.Fatalf("SelectMailbox(NonExistent) = %v, %v; want [NONEXISTENT] error", mb, err)
 	}
 }
 

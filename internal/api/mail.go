@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"path"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -123,6 +124,14 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 
 	// Parse folder from query
 	folder := r.URL.Query().Get("folder")
+	if folder == "" {
+		// F5690: the webmail lists a folder via /api/v1/mail/<folder>
+		// (inbox, sent, drafts, trash, spam); without this every folder
+		// route returned the INBOX.
+		if seg := strings.ToLower(path.Base(r.URL.Path)); folderMap[seg] != "" {
+			folder = seg
+		}
+	}
 	if folder == "" {
 		folder = "INBOX"
 	}

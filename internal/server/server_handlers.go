@@ -547,11 +547,6 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 		return fmt.Errorf("user does not exist or is not active: %s", email)
 	}
 
-	// Reserve quota atomically before storing
-	if err := s.database.IncrementQuota(domain, user, int64(len(data))); err != nil {
-		return fmt.Errorf("quota exceeded for user: %s", email)
-	}
-
 	// Handle mail forwarding (before storing, so we skip local store if not keeping copy)
 	if account.ForwardTo != "" {
 		// Check for forwarding loop. A looped message is not forwarded
@@ -590,14 +585,19 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 		// Drop the local copy only when every forward was queued; otherwise
 		// keep it so the message is not lost (F4879).
 		if !account.ForwardKeepCopy && forwarded > 0 && !forwardFailed {
-			// Release the quota we reserved since we're not storing locally
-			s.database.IncrementQuota(domain, user, -int64(len(data)))
 			s.logger.Debug("Message forwarded (no local copy)",
 				"to", email,
 				"from", from,
 			)
 			return nil
 		}
+	}
+
+	// Reserve quota atomically before storing. This comes after the
+	// forward-only return above: a message that is not stored must not be
+	// refused for quota (F5713).
+	if err := s.database.IncrementQuota(domain, user, int64(len(data))); err != nil {
+		return fmt.Errorf("quota exceeded for user: %s", email)
 	}
 
 	// Store message locally
@@ -708,7 +708,7 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 	metrics.Get().DeliverySuccess()
 
 	// Send vacation auto-reply if configured
-	if account.VacationSettings != "" && s.queue != nil {
+	if account.VacationSettings != "" && s.queue != nil && folder != "Junk" && autoReplyAllowed(from, data) {
 		select {
 		case s.bgSem <- struct{}{}:
 			go func() {
@@ -725,6 +725,34 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 		}
 	}
 	return nil
+}
+
+// autoReplyAllowed reports whether an automatic reply (vacation) may be sent
+// for a message: never to the null sender, nor to mail that is itself
+// automatic or bulk (RFC 3834 §2/§4, RFC 5230 §4.6): Auto-Submitted other
+// than "no", Precedence bulk/list/junk, or any List-* header (F5710-F5712).
+func autoReplyAllowed(from string, data []byte) bool {
+	if from == "" {
+		return false
+	}
+	allowed := true
+	forEachHeaderField(data, func(name string, start, end int) {
+		line := string(data[start:end])
+		value := strings.ToLower(strings.TrimSpace(line[strings.IndexByte(line, ':')+1:]))
+		switch {
+		case strings.EqualFold(name, "Auto-Submitted"):
+			if v, _, _ := strings.Cut(value, ";"); strings.TrimSpace(v) != "no" {
+				allowed = false
+			}
+		case strings.EqualFold(name, "Precedence"):
+			if value == "bulk" || value == "list" || value == "junk" {
+				allowed = false
+			}
+		case len(name) >= len("List-") && strings.EqualFold(name[:len("List-")], "List-"):
+			allowed = false
+		}
+	})
+	return allowed
 }
 
 // parseEmail splits an email address into user and domain

@@ -18,6 +18,10 @@ import (
 	"github.com/umailserver/umailserver/internal/tracing"
 )
 
+// maxCommandLine is the longest SMTP command line (including CRLF) the server
+// accepts before answering 500.
+const maxCommandLine = 2048
+
 // ErrSessionQuit is returned when the session handles a QUIT command
 var ErrSessionQuit = errors.New("QUIT")
 
@@ -364,15 +368,22 @@ func (s *Server) handleConnection(conn net.Conn) {
 			_ = conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout))
 		}
 
-		line, err := reader.ReadString('\n')
+		// Bounded read: ReadString would buffer an unterminated command line
+		// without limit (F5671). RFC 5321 §4.5.3.1.4 minimum is 512 octets;
+		// extensions (SMTPUTF8, parameters) need more, so allow 2048.
+		raw, total, _, err := readBoundedLine(reader, maxCommandLine+1)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				s.logger.Debug("read error", slog.Any("error", err))
 			}
 			return
 		}
+		if total > maxCommandLine {
+			_ = session.WriteResponse(500, "5.5.2 Line too long")
+			continue
+		}
 
-		line = strings.TrimSpace(line)
+		line := strings.TrimSpace(string(raw))
 		if line == "" {
 			continue
 		}

@@ -455,14 +455,16 @@ func TestHandleProppatch(t *testing.T) {
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
 	_ = server.storage.CreateCalendar("user@example.com", cal)
 
-	req := httptest.NewRequest("PROPPATCH", "/dav/calendars/test-cal", nil)
+	body := `<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><D:displayname>New</D:displayname></D:prop></D:set></D:propertyupdate>`
+	req := httptest.NewRequest("PROPPATCH", "/dav/calendars/test-cal", strings.NewReader(body))
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	w := httptest.NewRecorder()
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusOK)
+	// F5653: the change is applied and reported in a 207 multistatus.
+	if w.Code != http.StatusMultiStatus {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
 	}
 }
 

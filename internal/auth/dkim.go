@@ -281,6 +281,11 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 		return DKIMPERMError, sig, errors.New("from field not signed")
 	}
 
+	// F5705: RFC 6376 §3.5 — a signature is not valid after its x= time.
+	if sig.Expiration > 0 && time.Now().Unix() > sig.Expiration {
+		return DKIMFail, sig, errors.New("signature expired")
+	}
+
 	// Fetch public key from DNS
 	pubKey, keyType, err := v.fetchPublicKey(sig.Domain, sig.Selector)
 	if err != nil {
@@ -636,12 +641,16 @@ func canonicalizeHeaders(headers map[string][]string, signedHeaders []string, ca
 	for _, headerName := range signedHeaders {
 		headerNameLower := strings.ToLower(headerName)
 		values := headers[headerName]
+		fieldName := headerName
 
 		if len(values) == 0 {
 			// Try case-insensitive lookup
 			for k, v := range headers {
 				if strings.ToLower(k) == headerNameLower {
 					values = v
+					// F5706: c=simple hashes the field name as it was
+					// written ("From"), not the lowercased h= entry.
+					fieldName = k
 					break
 				}
 			}
@@ -652,7 +661,7 @@ func canonicalizeHeaders(headers map[string][]string, signedHeaders []string, ca
 		if idx < 0 {
 			continue
 		}
-		result.WriteString(canonicalizeHeader(headerName, values[idx], canon))
+		result.WriteString(canonicalizeHeader(fieldName, values[idx], canon))
 	}
 
 	return result.String()

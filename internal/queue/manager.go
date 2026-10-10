@@ -61,6 +61,7 @@ type Manager struct {
 	maxRetries   int
 	maxQueueSize int
 	requireTLS   bool
+	helloName    string         // EHLO name for outbound connections (F5680)
 	webhook      WebhookTrigger // optional webhook trigger for delivery events
 
 	// Worker pool settings
@@ -286,6 +287,41 @@ func (m *Manager) SetMTASTSDNSResolver(resolver MTASTSDNSResolver) {
 // SetDANEDNSResolver sets the DNS resolver for DANE validation (for testing)
 func (m *Manager) SetDANEDNSResolver(resolver MTASTSDNSResolver) {
 	m.daneValidator = auth.NewDANEValidator(resolver)
+}
+
+// SetHelloName sets the fully qualified name announced in EHLO on outbound
+// connections; it should match the server's PTR record (RFC 5321 §4.1.4).
+func (m *Manager) SetHelloName(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.helloName = name
+}
+
+// helloNameFor returns the EHLO name for a new outbound connection: the
+// configured name, else a dotted OS hostname, else the local address literal
+// (RFC 5321 §4.1.3). net/smtp's default "localhost" is refused by many MTAs
+// (F5680).
+func (m *Manager) helloNameFor(conn net.Conn) string {
+	m.mu.RLock()
+	name := m.helloName
+	m.mu.RUnlock()
+	if name != "" {
+		return name
+	}
+	host, hostErr := os.Hostname()
+	if hostErr == nil && strings.Contains(host, ".") {
+		return host
+	}
+	if ta, ok := conn.LocalAddr().(*net.TCPAddr); ok && ta.IP != nil {
+		if ip4 := ta.IP.To4(); ip4 != nil {
+			return "[" + ip4.String() + "]"
+		}
+		return "[IPv6:" + ta.IP.String() + "]"
+	}
+	if hostErr == nil && host != "" {
+		return host
+	}
+	return "localhost"
 }
 
 // SetWebhookTrigger sets the webhook trigger for delivery events
@@ -563,7 +599,9 @@ func (m *Manager) claimEntry(id string) (*db.QueueEntry, bool) {
 	m.claimMu.Lock()
 	defer m.claimMu.Unlock()
 	cur, err := m.db.GetQueueEntry(id)
-	if err != nil || cur.Status != "pending" {
+	// A stale duplicate dispatched while the entry is deferred must not
+	// retry it early and burn an attempt (F5683).
+	if err != nil || cur.Status != "pending" || cur.NextRetry.After(time.Now()) {
 		return nil, false
 	}
 	cur.Status = "sending"
@@ -639,7 +677,7 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 			continue
 		}
 		if err := m.deliverToMXTraced(ctx, entry.From, entry.To[0], message, mx); err != nil {
-			lastErr = err.Error()
+			lastErr = tagMX(err.Error(), mx)
 			// A 5yz reply is final (RFC 5321 §4.2.1); other MXs of the same
 			// domain are not asked and the entry is not retried (F5156).
 			var perm *permanentSMTPError
@@ -699,6 +737,21 @@ func bounceStatus(lastError string) string {
 		return m[1]
 	}
 	return "5.0.0"
+}
+
+// mxTagRe matches the " (mx: host)" suffix tagMX appends to a delivery error.
+var mxTagRe = regexp.MustCompile(` \(mx: ([^\s()]+)\)$`)
+
+// tagMX records which MX host produced a delivery error so the failure DSN
+// can name it in Remote-MTA (RFC 3464 §2.3.5, F5684).
+func tagMX(msg, mx string) string { return msg + " (mx: " + mx + ")" }
+
+// splitMXTag splits a LastError into its text and the tagged MX host.
+func splitMXTag(lastError string) (text, mx string) {
+	if m := mxTagRe.FindStringSubmatchIndex(lastError); m != nil {
+		return lastError[:m[0]], lastError[m[2]:m[3]]
+	}
+	return lastError, ""
 }
 
 // startDeliverSpan starts a queue.deliver span carrying envelope attributes.
@@ -807,6 +860,11 @@ func (m *Manager) createMXConn(mx string) (*smtp.Client, error) {
 	if err != nil {
 		_ = conn.Close() // Best-effort
 		return nil, err
+	}
+	// Hello must precede any other command; an invalid configured name keeps
+	// net/smtp's default.
+	if herr := client.Hello(m.helloNameFor(conn)); herr != nil {
+		m.logger.Debug("outbound EHLO name rejected", "error", herr)
 	}
 
 	return client, nil
@@ -927,6 +985,7 @@ func (m *Manager) withMXConn(mx string, fn func(*smtp.Client) error) (err error)
 func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []byte, mx string) error {
 	// Check MTA-STS policy for recipient domain
 	domain := extractDomain(to)
+	enforceTLS := false
 	if m.mtastsValidator != nil && domain != "" {
 		allowed, policy, err := m.mtastsValidator.CheckPolicy(ctx, domain, mx)
 		if err != nil {
@@ -936,6 +995,7 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			return fmt.Errorf("MTA-STS policy violation: MX %s not allowed for domain %s", mx, domain)
 		}
 		if policy != nil && policy.Mode == auth.MTASTSModeEnforce {
+			enforceTLS = true
 			m.logger.Debug("MTA-STS policy enforced", "domain", domain, "mx", mx)
 		}
 	}
@@ -946,21 +1006,21 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 		message = signedMsg
 	}
 
-	// Use VERP-encoded envelope sender for bounce tracking
+	// The real envelope sender is used: a VERP address (bounce-user=dom@sender)
+	// has no decoder or mailbox on the inbound side, so asynchronous bounces to
+	// it were rejected and never reached the sender (F5681).
 	envelopeSender := from
-	if at := strings.LastIndex(from, "@"); at >= 0 {
-		senderDomain := from[at+1:]
-		verpSender := EncodeVERP(senderDomain, to)
-		if verpSender != "" {
-			envelopeSender = verpSender
-		}
-	}
 
 	return m.withMXConn(mx, func(client *smtp.Client) error {
 		// Attempt STARTTLS
+		// Opportunistic TLS (neither requireTLS nor an MTA-STS enforce policy)
+		// is encryption without authentication: an unverifiable certificate
+		// must not fail the delivery, because a failed handshake leaves the
+		// connection unusable (F5682).
 		tlsConfig := &tls.Config{
-			ServerName: mx,
-			MinVersion: tls.VersionTLS12,
+			ServerName:         mx,
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: !m.requireTLS && !enforceTLS, //nolint:gosec // opportunistic TLS, RFC 7435
 		}
 		// A reused pooled connection may already be TLS; STARTTLS again is a
 		// protocol error that remote MTAs reject.
@@ -972,7 +1032,13 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			if m.requireTLS {
 				return fmt.Errorf("STARTTLS required but failed: %w", err)
 			}
-			// STARTTLS failed — continue with plaintext only if not required
+			// A non-reply error is a failed handshake: the connection is
+			// unusable and cannot fall back to plaintext (F5682).
+			var tp *textproto.Error
+			if !errors.As(err, &tp) {
+				return fmt.Errorf("STARTTLS handshake failed: %w", err)
+			}
+			// STARTTLS refused by the server — continue with plaintext
 		} else {
 			// STARTTLS succeeded — validate with DANE if available
 			if m.daneValidator != nil {
@@ -1202,10 +1268,11 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 		Action:         "failed",
 		Status:         bounceStatus(entry.LastError),
 		DiagnosticCode: entry.LastError,
-		RemoteMTA:      "unknown",
 		FinalMTA:       "umailserver",
 		MessageID:      GenerateMessageID(),
 	}
+	// Name the MX host that rejected the message (F5684).
+	dsn.DiagnosticCode, dsn.RemoteMTA = splitMXTag(entry.LastError)
 
 	// Generate proper DSN bounce message
 	bounceMsg, err := GenerateDSN(dsn, originalMsg, ret)

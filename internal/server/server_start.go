@@ -43,6 +43,8 @@ func (s *Server) Start() (err error) {
 	}
 	s.queue = queue.NewManager(s.database, nil, queueDir, s.logger)
 	s.queue.SetTracingProvider(s.tracingProvider)
+	// F5680: outbound EHLO must be the server's FQDN, not net/smtp's "localhost".
+	s.queue.SetHelloName(s.config.Server.Hostname)
 	s.queue.Start(s.ctx)
 	s.logger.Info("Queue manager started")
 
