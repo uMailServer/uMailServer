@@ -315,6 +315,12 @@ func (s *Session) handleMAIL(arg string) error {
 		return s.WriteResponse(code, msg)
 	}
 
+	// An authenticated user may only send as themselves or their aliases
+	// (F6041).
+	if s.isAuth && s.server.onSenderAllowed != nil && !s.server.onSenderAllowed(s.username, from) {
+		return s.WriteResponse(553, "5.7.1 Sender address rejected: not owned by user")
+	}
+
 	s.resetTransaction()
 	s.mailFrom = from
 	s.mailFromRet = ret
@@ -433,11 +439,23 @@ func (s *Session) handleRCPT(arg string) error {
 		return s.WriteResponse(452, "4.5.3 Too many recipients")
 	}
 
+	// An unauthenticated client may only send to local domains (F6042).
+	if !s.isAuth && s.server.onLocalDomain != nil {
+		domain := strings.ToLower(strings.TrimSuffix(validated[strings.LastIndexByte(validated, '@')+1:], "."))
+		if domain == "" || !s.server.onLocalDomain(domain) {
+			return s.WriteResponse(554, "5.7.1 Relay access denied")
+		}
+	}
+
 	// Apply the envelope policy installed with SetValidateHandler. (F4907)
 	if s.server.onValidate != nil {
 		if err := s.server.onValidate(s.mailFrom, []string{validated}); err != nil {
 			return s.WriteResponse(550, "5.7.1 Recipient rejected")
 		}
+	}
+
+	if s.isAuth && !s.server.allowUserRecipient(s.username) {
+		return s.WriteResponse(452, "4.5.3 Hourly recipient limit exceeded")
 	}
 
 	s.rcptTo = append(s.rcptTo, validated)
@@ -677,6 +695,10 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 		data = append([]byte(received), data...)
 	}
 
+	if s.isAuth || s.server.config.IsSubmission {
+		data = sanitizeSubmissionHeaders(data)
+	}
+
 	// Add Message-ID if not present. The search must be scoped to the header
 	// block: a "message-id:" occurring in the body is quoted text (ordinary
 	// in forwards and replies), not this message's identifier, and must not
@@ -690,6 +712,46 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 		data = append([]byte(msgID), data...)
 	}
 	return data
+}
+
+// sanitizeSubmissionHeaders prepares a client-submitted message: Bcc header
+// fields (with continuation lines) are removed so that no recipient sees the
+// blind-copy list (RFC 5322 §3.6.3, F6043), and a Date header is added when
+// missing (RFC 5322 §3.6.1).
+func sanitizeSubmissionHeaders(data []byte) []byte {
+	hdrEnd := len(data)
+	body := []byte(nil)
+	if i := bytes.Index(data, []byte("\r\n\r\n")); i >= 0 {
+		hdrEnd, body = i+2, data[i+2:]
+	} else if bytes.HasSuffix(data, []byte("\r\n")) {
+		hdrEnd = len(data)
+	}
+	var out []byte
+	hasDate, dropping, sawHeader := false, false, false
+	for _, line := range bytes.SplitAfter(data[:hdrEnd], []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' {
+			dropping = false
+			if c := bytes.IndexByte(line, ':'); c > 0 {
+				sawHeader = true
+				switch strings.ToLower(strings.TrimRight(string(line[:c]), " \t")) {
+				case "bcc":
+					dropping = true
+				case "date":
+					hasDate = true
+				}
+			}
+		}
+		if !dropping {
+			out = append(out, line...)
+		}
+	}
+	if sawHeader && !hasDate {
+		out = append([]byte("Date: "+time.Now().Format(time.RFC1123Z)+"\r\n"), out...)
+	}
+	return append(out, body...)
 }
 
 // arcSafe makes a result string safe for a quoted-string in an
