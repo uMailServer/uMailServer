@@ -118,22 +118,32 @@ func (db *Database) CreateMailbox(user, mailbox string) error {
 		if err != nil {
 			return err
 		}
-		if b.Get([]byte("uidvalidity")) == nil {
-			now := time.Now().Unix()
-			if now < 0 || now > 0x7FFFFFFF {
-				return fmt.Errorf("timestamp out of range for uidvalidity")
-			}
-			if err := b.Put([]byte("uidvalidity"), itob(uint32(now))); err != nil {
+		uvMissing := b.Get([]byte("uidvalidity")) == nil
+		if uvMissing {
+			// F5723: never reuse a UIDVALIDITY a deleted/renamed mailbox
+			// of this name had.
+			uv, err := nextUIDValidityTx(tx, mailboxKey(user, mailbox))
+			if err != nil {
 				return err
 			}
+			if err := b.Put([]byte("uidvalidity"), itob(uv)); err != nil {
+				return err
+			}
+			created = true
+		}
+		// F5722: GetNextUID/GetNextModSeq may have auto-created this bucket
+		// already; only initialise counters that are absent so UIDs and
+		// MODSEQs already issued are not re-issued.
+		if b.Get([]byte("uidnext")) == nil {
 			if err := b.Put([]byte("uidnext"), itob(1)); err != nil {
 				return err
 			}
+		}
+		if b.Get([]byte("highestmodseq")) == nil {
 			// Initialize highest modification sequence (RFC 7162)
 			if err := b.Put([]byte("highestmodseq"), itob64(0)); err != nil {
 				return err
 			}
-			created = true
 		}
 		// Also create the messages bucket
 		_, err = tx.CreateBucketIfNotExists([]byte(messagesBucket(user, mailbox)))
@@ -145,6 +155,44 @@ func (db *Database) CreateMailbox(user, mailbox string) error {
 	return err
 }
 
+// uidValidityFloorBucket remembers, per mailbox key, the UIDVALIDITY of a
+// mailbox that was deleted or renamed away, so a re-created mailbox of the
+// same name gets a strictly larger value (RFC 3501 2.3.1.1). F5723.
+const uidValidityFloorBucket = "uidvalidity_floor"
+
+func recordUIDValidityFloorTx(tx *bbolt.Tx, key string) error {
+	b := tx.Bucket([]byte(key))
+	if b == nil {
+		return nil
+	}
+	uv := b.Get([]byte("uidvalidity"))
+	if uv == nil {
+		return nil
+	}
+	fb, err := tx.CreateBucketIfNotExists([]byte(uidValidityFloorBucket))
+	if err != nil {
+		return err
+	}
+	if cur := fb.Get([]byte(key)); cur != nil && btoi(cur) >= btoi(uv) {
+		return nil
+	}
+	return fb.Put([]byte(key), append([]byte(nil), uv...))
+}
+
+func nextUIDValidityTx(tx *bbolt.Tx, key string) (uint32, error) {
+	now := time.Now().Unix()
+	if now < 0 || now > 0x7FFFFFFF {
+		return 0, fmt.Errorf("timestamp out of range for uidvalidity")
+	}
+	uv := uint32(now)
+	if fb := tx.Bucket([]byte(uidValidityFloorBucket)); fb != nil {
+		if floor := btoi(fb.Get([]byte(key))); floor >= uv {
+			uv = floor + 1
+		}
+	}
+	return uv, nil
+}
+
 // DeleteMailbox deletes a mailbox
 func (db *Database) DeleteMailbox(user, mailbox string) error {
 	if db.bolt == nil {
@@ -154,6 +202,9 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 	err := db.bolt.Update(func(tx *bbolt.Tx) error {
 		if tx.Bucket([]byte(mailboxKey(user, mailbox))) != nil {
 			existed = true
+		}
+		if err := recordUIDValidityFloorTx(tx, mailboxKey(user, mailbox)); err != nil {
+			return err
 		}
 		if err := tx.DeleteBucket([]byte(mailboxKey(user, mailbox))); err != nil && err != bolterrors.ErrBucketNotFound {
 			return err
@@ -237,6 +288,9 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 		}
 
 		// Delete old buckets
+		if err := recordUIDValidityFloorTx(tx, oldKey); err != nil {
+			return err
+		}
 		_ = tx.DeleteBucket([]byte(oldKey))  // bucket may not exist in partial state
 		_ = tx.DeleteBucket([]byte(oldMsgs)) // bucket may not exist in partial state
 

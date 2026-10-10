@@ -481,7 +481,7 @@ func TestJoinFlags(t *testing.T) {
 	}{
 		{"empty flags returns base only", "1234567890.1.localhost", "", "1234567890.1.localhost"},
 		{"flags appended with separator", "1234567890.1.localhost", "S", "1234567890.1.localhost" + flagSeparator() + "S"},
-		{"multiple flags", "1234567890.1.localhost", "SRF", "1234567890.1.localhost" + flagSeparator() + "SRF"},
+		{"multiple flags", "1234567890.1.localhost", "FRS", "1234567890.1.localhost" + flagSeparator() + "FRS"},
 		{"single char base name", "a", "S", "a" + flagSeparator() + "S"},
 		{"empty base with flags", "", "S", flagSeparator() + "S"},
 		{"empty base and empty flags", "", "", ""},
@@ -535,7 +535,7 @@ func TestJoinFlagsAndSplitFlagsRoundTrip(t *testing.T) {
 		flags string
 	}{
 		{"1234567890.1.myhost", "S"},
-		{"1234567890.1.myhost", "SRF"},
+		{"1234567890.1.myhost", "FRS"},
 		{"1234567890.1.myhost", ""},
 		{"abc.def.ghi", "T"},
 	}
