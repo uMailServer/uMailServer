@@ -1,9 +1,15 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/umailserver/umailserver/internal/db"
 )
 
 func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
@@ -34,15 +40,69 @@ func (s *Server) handleQueueDetail(w http.ResponseWriter, r *http.Request) {
 
 // Queue handlers
 
+// listQueue returns every undelivered entry (pending, sending, failed - the
+// same set the stats endpoint counts as queue_size), oldest first. F6061: it
+// used to return only pending entries due within 24h, so failed entries that
+// need an operator were invisible. Optional ?status=, ?limit= (default 100,
+// max 1000) and ?offset=.
 func (s *Server) listQueue(w http.ResponseWriter, r *http.Request) {
-	// Get pending queue entries from database
-	entries, err := s.db.GetPendingQueue(time.Now().Add(24 * time.Hour))
+	q := r.URL.Query()
+	limit, offset := 100, 0
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 1000 {
+			s.sendError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			s.sendError(w, http.StatusBadRequest, "invalid offset")
+			return
+		}
+		offset = n
+	}
+	status := q.Get("status")
+	switch status {
+	case "", "pending", "sending", "failed":
+	default:
+		s.sendError(w, http.StatusBadRequest, "invalid status")
+		return
+	}
+
+	var entries []*db.QueueEntry
+	err := s.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var e db.QueueEntry
+		if json.Unmarshal(value, &e) != nil {
+			return nil
+		}
+		if e.Status == "delivered" || e.Status == "bounced" || (status != "" && e.Status != status) {
+			return nil
+		}
+		entries = append(entries, &e)
+		return nil
+	})
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to list queue")
 		return
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].CreatedAt.Equal(entries[j].CreatedAt) {
+			return entries[i].CreatedAt.Before(entries[j].CreatedAt)
+		}
+		return entries[i].ID < entries[j].ID
+	})
+	if offset > len(entries) {
+		offset = len(entries)
+	}
+	entries = entries[offset:]
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
 
-	var result []map[string]interface{}
+	result := make([]map[string]interface{}, 0, len(entries))
 	for _, e := range entries {
 		result = append(result, map[string]interface{}{
 			"id":          e.ID,
@@ -85,6 +145,13 @@ func (s *Server) retryQueueEntry(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
+	// F6062: an in-flight entry would be delivered twice and a finished one
+	// resurrected; only pending/failed entries can be retried.
+	if entry.Status == "sending" || entry.Status == "delivered" || entry.Status == "bounced" {
+		s.sendError(w, http.StatusConflict, "queue entry cannot be retried in status "+entry.Status)
+		return
+	}
+
 	// Reset retry count and status
 	entry.Status = "pending"
 	entry.RetryCount = 0
@@ -92,6 +159,10 @@ func (s *Server) retryQueueEntry(w http.ResponseWriter, r *http.Request, id stri
 	entry.NextRetry = time.Now()
 
 	if err := s.db.UpdateQueueEntry(entry); err != nil {
+		if errors.Is(err, db.ErrQueueEntryNotFound) {
+			s.sendError(w, http.StatusNotFound, "queue entry not found")
+			return
+		}
 		s.sendError(w, http.StatusInternalServerError, "failed to retry queue entry")
 		return
 	}

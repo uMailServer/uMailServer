@@ -311,6 +311,16 @@ func (s *Server) recordLoginFailure(ip string) {
 	now := time.Now()
 	attempt, exists := s.loginAttempts[ip]
 	if !exists {
+		if len(s.loginAttempts) >= maxAuthAttemptEntries {
+			for k, a := range s.loginAttempts {
+				if now.Sub(a.lastSeen) > 5*time.Minute {
+					delete(s.loginAttempts, k)
+				}
+			}
+			if len(s.loginAttempts) >= maxAuthAttemptEntries {
+				return
+			}
+		}
 		s.loginAttempts[ip] = &loginAttempt{count: 1, lastSeen: now}
 		return
 	}
@@ -361,6 +371,12 @@ func (s *Server) recordAccountLoginFailure(email string) {
 	now := time.Now()
 	attempt, exists := s.accountLoginAttempts[email]
 	if !exists {
+		if len(s.accountLoginAttempts) >= maxAuthAttemptEntries {
+			pruneLoginMap(s.accountLoginAttempts, now)
+			if len(s.accountLoginAttempts) >= maxAuthAttemptEntries {
+				return // still full of live entries: do not grow further
+			}
+		}
 		s.accountLoginAttempts[email] = &loginAttempt{count: 1, lastSeen: now}
 		return
 	}
@@ -723,4 +739,46 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		"token":     tokenString,
 		"expiresIn": int(s.config.TokenExpiry.Seconds()),
 	})
+}
+
+// maxAuthAttemptEntries bounds each failed-attempt map. The account map is
+// keyed by an attacker-chosen email string, so without a bound unauthenticated
+// requests grew it forever (F6065).
+const maxAuthAttemptEntries = 10000
+
+// pruneAuthAttempts drops stale entries from the login/TOTP/API rate maps.
+func (s *Server) pruneAuthAttempts() {
+	now := time.Now()
+	s.loginMu.Lock()
+	for k, a := range s.loginAttempts {
+		if now.Sub(a.lastSeen) > 5*time.Minute && now.After(a.lockoutUntil) {
+			delete(s.loginAttempts, k)
+		}
+	}
+	s.loginMu.Unlock()
+	s.accountLoginMu.Lock()
+	pruneLoginMap(s.accountLoginAttempts, now)
+	s.accountLoginMu.Unlock()
+	s.totpMu.Lock()
+	for k, a := range s.totpAttempts {
+		if now.Sub(a.lastSeen) > totpLockoutDuration {
+			delete(s.totpAttempts, k)
+		}
+	}
+	s.totpMu.Unlock()
+	s.apiRateMu.Lock()
+	for k, a := range s.apiRateAttempts {
+		if now.Sub(a.windowStart) > time.Minute {
+			delete(s.apiRateAttempts, k)
+		}
+	}
+	s.apiRateMu.Unlock()
+}
+
+func pruneLoginMap(m map[string]*loginAttempt, now time.Time) {
+	for k, a := range m {
+		if now.Sub(a.lastSeen) > 5*time.Minute {
+			delete(m, k)
+		}
+	}
 }

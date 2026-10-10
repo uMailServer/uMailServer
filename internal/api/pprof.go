@@ -50,5 +50,5 @@ func (s *Server) pprofHandler(w http.ResponseWriter, r *http.Request) {
 // RegisterPprofRoutes adds pprof routes to the router (admin only)
 func (s *Server) RegisterPprofRoutes(mux *http.ServeMux) {
 	// Wrap pprof handlers with admin middleware
-	mux.HandleFunc("/debug/pprof/", s.adminMiddleware(http.HandlerFunc(s.pprofHandler)).ServeHTTP)
+	mux.Handle("/debug/pprof/", s.authMiddleware(s.adminMiddleware(http.HandlerFunc(s.pprofHandler)))) // F6068: adminMiddleware alone never sees isAdmin (set by authMiddleware)
 }
