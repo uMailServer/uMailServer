@@ -4,6 +4,7 @@ package av
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"strings"
@@ -14,6 +15,10 @@ import (
 type ScanResult struct {
 	Infected bool
 	Virus    string
+	// Skipped is true when no scan took place because the scanner is
+	// disabled or unconfigured. Infected=false then means "not scanned", not
+	// "clean"; callers that must fail closed should check it (F5824).
+	Skipped bool
 }
 
 // Scanner scans messages for viruses
@@ -73,7 +78,7 @@ func (s *Scanner) connect() (net.Conn, error) {
 // Scan scans data for viruses using ClamAV
 func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 	if !s.IsEnabled() {
-		return &ScanResult{Infected: false}, nil
+		return &ScanResult{Infected: false, Skipped: true}, nil
 	}
 
 	conn, err := s.connect()
@@ -102,29 +107,12 @@ func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 		}
 		chunk := data[offset:end]
 
-		// Write length (4 bytes, big-endian)
-		chunkLen := len(chunk)
-		if chunkLen > 0x7FFFFFFF {
-			return nil, fmt.Errorf("chunk too large")
-		}
-		length := uint32(chunkLen)
-		_, err := conn.Write([]byte{
-			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
-			byte(length >> 24),
-			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
-			byte(length >> 16),
-			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
-			byte(length >> 8),
-			// #nosec G115 -- Intentional big-endian byte extraction from bounded uint32
-			byte(length),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to write chunk length: %w", err)
-		}
-
-		_, err = conn.Write(chunk)
-		if err != nil {
-			return nil, fmt.Errorf("failed to write chunk data: %w", err)
+		// Length prefix and data go out in one write (4-byte big-endian length).
+		frame := make([]byte, 4+len(chunk))
+		binary.BigEndian.PutUint32(frame, uint32(len(chunk))) // #nosec G115 -- chunk <= 32 KiB
+		copy(frame[4:], chunk)
+		if _, err := conn.Write(frame); err != nil {
+			return nil, writeFailure("failed to write chunk", err, conn)
 		}
 		offset = end
 	}
@@ -132,7 +120,7 @@ func (s *Scanner) Scan(data []byte) (*ScanResult, error) {
 	// Send termination marker (0-length chunk)
 	_, err = conn.Write([]byte{0, 0, 0, 0})
 	if err != nil {
-		return nil, fmt.Errorf("failed to send termination: %w", err)
+		return nil, writeFailure("failed to send termination", err, conn)
 	}
 
 	// Read response
@@ -244,4 +232,16 @@ func readClamAVResponse(reader *bufio.Reader) (string, error) {
 		}
 		response.WriteByte(b)
 	}
+}
+
+// writeFailure reports a failed write. When clamd rejects a stream (for
+// example "INSTREAM size limit exceeded. ERROR") it replies and closes the
+// socket, so the write fails with a reset or broken pipe; the reply explains
+// why, so try to read it (F5824).
+func writeFailure(what string, err error, conn net.Conn) error {
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if reply, rerr := readClamAVResponse(bufio.NewReader(conn)); rerr == nil && strings.TrimSpace(reply) != "" {
+		return fmt.Errorf("%s: %w (ClamAV said: %s)", what, err, strings.TrimSpace(reply))
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }

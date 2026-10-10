@@ -92,7 +92,7 @@ type AutodiscoverResponse struct {
 	XMLName  xml.Name `xml:"AutodiscoverResponse"`
 	Space    string   `xml:"xmlns,attr"`
 	Response struct {
-		XMLName xml.Name `xml:"Response"`
+		XMLName xml.Name `xml:"http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a Response"`
 		User    struct {
 			XMLName      xml.Name `xml:"User"`
 			DisplayName  string   `xml:"DisplayName"`
@@ -104,7 +104,7 @@ type AutodiscoverResponse struct {
 			Action      string                 `xml:"Action"`
 			Protocol    []AutodiscoverProtocol `xml:"Protocol"`
 		} `xml:"Account"`
-	} `xml:"Response"`
+	} `xml:"http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a Response"`
 }
 
 // AutodiscoverProtocol represents a protocol configuration in Autodiscover

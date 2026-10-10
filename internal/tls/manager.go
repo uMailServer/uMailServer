@@ -29,6 +29,7 @@ type Manager struct {
 	certCache   map[string]*tls.Certificate
 	certSrc     map[string]certSource // files each certCache entry was loaded from (F5187)
 	certMu      sync.RWMutex
+	acmeMu      sync.RWMutex // guards certManager, replaced by RenewCertificates (F5821)
 	certDir     string
 }
 
@@ -89,6 +90,8 @@ func (m *Manager) setupAutocert() error {
 		acmeEndpoint = m.config.ACMEEndpoint
 	}
 
+	m.acmeMu.Lock()
+	defer m.acmeMu.Unlock()
 	m.certManager = &autocert.Manager{
 		Client:     &acme.Client{DirectoryURL: acmeEndpoint},
 		Cache:      autocert.DirCache(m.certDir),
@@ -109,8 +112,8 @@ func (m *Manager) setupAutocert() error {
 // GetCertificate returns a TLS certificate for the given hello info
 func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	// First try autocert if enabled
-	if m.certManager != nil {
-		cert, err := m.certManager.GetCertificate(hello)
+	if am := m.autocertManager(); am != nil {
+		cert, err := am.GetCertificate(hello)
 		if err == nil && cert != nil {
 			return cert, nil
 		}
@@ -120,6 +123,12 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 
 	// Try manual certificates
 	return m.getManualCertificate(hello.ServerName)
+}
+
+func (m *Manager) autocertManager() *autocert.Manager {
+	m.acmeMu.RLock()
+	defer m.acmeMu.RUnlock()
+	return m.certManager
 }
 
 // defaultCertCacheKey is the single cache slot holding the fallback
@@ -309,8 +318,14 @@ func (m *Manager) GetTLSConfigWithClientAuth(requireClientCert bool) *tls.Config
 	}
 
 	var clientCAs *x509.CertPool
-	if m.config.ClientCAFile != "" {
+	if clientAuth >= tls.VerifyClientCertIfGiven || m.config.ClientCAFile != "" {
+		// A nil pool makes crypto/tls verify client certificates against the
+		// system roots, so any publicly trusted certificate would pass and
+		// VerifyClientCert would map it to an identity. Always use an
+		// explicit (possibly empty, fail-closed) pool (F5820).
 		clientCAs = x509.NewCertPool()
+	}
+	if m.config.ClientCAFile != "" {
 		caData, err := os.ReadFile(m.config.ClientCAFile)
 		if err == nil {
 			clientCAs.AppendCertsFromPEM(caData)
@@ -384,22 +399,34 @@ func (m *Manager) GenerateSelfSigned(_ []string) (string, string, error) {
 
 // RenewCertificates manually triggers certificate renewal
 func (m *Manager) RenewCertificates(ctx context.Context) error {
-	if m.certManager == nil {
+	am := m.autocertManager()
+	if am == nil {
 		return fmt.Errorf("autocert not configured")
 	}
 
-	// Force renewal by deleting cached certs
+	// Force renewal by deleting cached certs. autocert stores ECDSA entries
+	// under the bare name and RSA ones under name+"+rsa".
 	var renewalErr error
 	for _, domain := range m.config.Domains {
-		if err := m.certManager.Cache.Delete(ctx, domain); err != nil {
-			m.logger.Warn("Failed to delete cached cert", "domain", domain, "error", err)
-			if renewalErr == nil {
-				renewalErr = fmt.Errorf("failed to delete cached certificate for %s: %w", domain, err)
+		for _, key := range []string{domain, domain + "+rsa"} {
+			if err := am.Cache.Delete(ctx, key); err != nil {
+				m.logger.Warn("Failed to delete cached cert", "domain", domain, "error", err)
+				if renewalErr == nil {
+					renewalErr = fmt.Errorf("failed to delete cached certificate for %s: %w", domain, err)
+				}
 			}
 		}
 	}
 	if renewalErr != nil {
 		return renewalErr
+	}
+
+	// autocert also keeps issued certificates in memory and would keep
+	// serving them, so the cache deletion alone renews nothing until restart.
+	// Replace the manager so the next handshake obtains a fresh certificate
+	// (F5821).
+	if err := m.setupAutocert(); err != nil {
+		return err
 	}
 
 	m.logger.Info("Certificate renewal triggered", "domains", m.config.Domains)
@@ -489,10 +516,13 @@ func parseCertificate(data []byte) (*x509.Certificate, error) {
 
 // HTTPChallengeHandler returns the handler for ACME HTTP challenges
 func (m *Manager) HTTPChallengeHandler() http.Handler {
-	if m.certManager == nil {
+	if m.autocertManager() == nil {
 		return nil
 	}
-	return m.certManager.HTTPHandler(nil)
+	// Resolve the manager per request: RenewCertificates replaces it.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.autocertManager().HTTPHandler(nil).ServeHTTP(w, r)
+	})
 }
 
 // Close cleans up resources
