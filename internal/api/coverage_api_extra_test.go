@@ -2731,7 +2731,7 @@ func TestHandleLogin_AccountRateLimited(t *testing.T) {
 
 	// Simulate account rate limiting by setting 3 failed attempts (threshold is 5)
 	server.accountLoginAttempts = map[string]*loginAttempt{
-		"user@ratelimit.com": {count: 5, lastSeen: time.Now()},
+		accountLoginKey("192.0.2.1", "user@ratelimit.com"): {count: 5, lastSeen: time.Now()}, // F6134: httptest default client IP
 	}
 
 	body := map[string]string{

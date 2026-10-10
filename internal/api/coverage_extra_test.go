@@ -866,9 +866,9 @@ func TestDeleteDomain_Nonexistent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.deleteDomain(rec, req, "nothere.com")
 
-	// bbolt Delete returns nil for nonexistent keys
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("Expected 204 for nonexistent domain delete, got %d", rec.Code)
+	// F6130: bbolt Delete returns nil for missing keys, the handler reports 404
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for nonexistent domain delete, got %d", rec.Code)
 	}
 }
 
@@ -884,9 +884,9 @@ func TestDeleteAccount_Nonexistent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	server.deleteAccount(rec, req, "noone@test.com")
 
-	// bbolt Delete returns nil for nonexistent keys
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("Expected 204 for nonexistent account delete, got %d", rec.Code)
+	// F6130: bbolt Delete returns nil for missing keys, the handler reports 404
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for nonexistent account delete, got %d", rec.Code)
 	}
 }
 

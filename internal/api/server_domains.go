@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -11,6 +12,11 @@ import (
 	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/db"
 )
+
+// generateDKIMKeyPair is a variable so tests can force a key generation failure.
+var generateDKIMKeyPair = func(bits int) (*rsa.PrivateKey, []byte, error) {
+	return auth.GenerateDKIMKeyPair(bits)
+}
 
 // handleDomains lists and creates domains
 //
@@ -41,7 +47,7 @@ func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) {
-	domain := strings.TrimPrefix(r.URL.Path, "/api/v1/domains/")
+	domain := strings.ToLower(strings.TrimPrefix(r.URL.Path, "/api/v1/domains/")) // domains are stored lower-case (F6060)
 
 	switch r.Method {
 	case http.MethodGet:
@@ -64,7 +70,7 @@ func (s *Server) listDomains(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var result []map[string]interface{}
+	result := make([]map[string]interface{}, 0, len(domains)) // F6137: [] not null
 	for _, d := range domains {
 		result = append(result, domainToJSON(d))
 	}
@@ -114,23 +120,28 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate DKIM key pair for the domain
-	privKey, _, err := auth.GenerateDKIMKeyPair(2048)
-	if err == nil {
-		domain.DKIMSelector = "default"
-		domain.DKIMPublicKey = auth.GetPublicKeyForDNS(privKey)
-		privKeyBytes := x509.MarshalPKCS1PrivateKey(privKey)
-		domain.DKIMPrivateKey = string(pem.EncodeToMemory(&pem.Block{
-			Type:  "RSA PRIVATE KEY",
-			Bytes: privKeyBytes,
-		}))
+	// F6133: a failure used to be ignored, creating a domain that can never
+	// sign outgoing mail. Fail instead; nothing has been stored yet.
+	privKey, _, err := generateDKIMKeyPair(2048)
+	if err != nil || privKey == nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to generate DKIM key")
+		return
 	}
+	domain.DKIMSelector = "default"
+	domain.DKIMPublicKey = auth.GetPublicKeyForDNS(privKey)
+	privKeyBytes := x509.MarshalPKCS1PrivateKey(privKey)
+	domain.DKIMPrivateKey = string(pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: privKeyBytes,
+	}))
 
 	if err := s.db.CreateDomain(domain); err != nil {
 		if errors.Is(err, db.ErrDomainExists) { // F4938
 			s.sendError(w, http.StatusConflict, "domain already exists")
 			return
 		}
-		s.sendError(w, http.StatusInternalServerError, "failed to create domain")
+		status, msg := dbErrStatus(err, "failed to create domain")
+		s.sendError(w, status, msg)
 		return
 	}
 
@@ -202,7 +213,8 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 	domain.UpdatedAt = time.Now()
 
 	if err := s.db.UpdateDomain(domain); err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to update domain")
+		status, msg := dbErrStatus(err, "failed to update domain")
+		s.sendError(w, status, msg)
 		return
 	}
 
@@ -210,6 +222,14 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 }
 
 func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, name string) {
+	if _, err := s.db.GetDomain(name); err != nil { // F6130
+		if isKeyNotFound(err) {
+			s.sendError(w, http.StatusNotFound, "domain not found")
+		} else {
+			s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
+		}
+		return
+	}
 	if err := s.db.DeleteDomain(name); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
 		return
