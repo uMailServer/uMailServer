@@ -428,8 +428,8 @@ func TestCardDAVHandleProppatch(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusMultiStatus {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
 	}
 }
 
@@ -1313,8 +1313,8 @@ func TestCardDAVHandleProppatch_WithBody(t *testing.T) {
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusMultiStatus {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
 	}
 }
 
@@ -1390,8 +1390,8 @@ func TestCardDAVHandleProppatch_RemoveProperty(t *testing.T) {
 	server.ServeHTTP(w, req)
 
 	// Remove operation should still return OK
-	if w.Code != http.StatusOK {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusMultiStatus {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
 	}
 }
 
