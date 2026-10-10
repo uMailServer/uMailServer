@@ -56,6 +56,7 @@ func (s *Server) Start() (err error) {
 	// Create mailstore for IMAP using shared storage
 	s.mailstore = imap.NewBboltMailstoreWithInterfaces(s.storageDB, s.msgStore)
 	s.mailstore.SetQuotaLimitFunc(s.quotaLimit)
+	s.mailstore.SetQuotaAdjustFunc(s.quotaAdjust)
 
 	// Set MDN handler for read receipts
 	s.mailstore.SetMDNHandler(s.sendMDN)

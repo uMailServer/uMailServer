@@ -113,9 +113,13 @@ func TestTOTPSetupEnabled_Conflict(t *testing.T) {
 // Edge: disable then setup is allowed, and a pending (not yet verified)
 // setup can still be regenerated.
 func TestTOTPSetupEnabled_DisableThenSetup(t *testing.T) {
-	s, _ := a5028Setup(t)
+	s, totp := a5028Setup(t)
 	tok := a5028Session(t)
-	if c := a5028Do(s, http.MethodPost, "/api/v1/account/totp/disable", tok, "{}"); c != http.StatusOK {
+	if c := a5028Do(s, http.MethodPost, "/api/v1/account/totp/disable", tok, "{}"); c != http.StatusBadRequest {
+		t.Fatalf("F5991 codeless disable=%d want 400", c)
+	}
+	body := `{"code":"` + totpCodeAt(t, totp, time.Now()) + `"}`
+	if c := a5028Do(s, http.MethodPost, "/api/v1/account/totp/disable", tok, body); c != http.StatusOK {
 		t.Fatalf("disable=%d", c)
 	}
 	for i := 0; i < 2; i++ {

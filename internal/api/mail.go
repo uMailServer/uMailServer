@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/mail"
 	"path"
@@ -478,7 +479,9 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	if len(safeCC) > 0 {
 		sb.WriteString(fmt.Sprintf("Cc: %s\r\n", strings.Join(safeCC, ", ")))
 	}
-	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", safeSubject))
+	// F5990: non-ASCII subjects must be RFC 2047 encoded-words; raw 8-bit
+	// header bytes are invalid and get mangled by relays.
+	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", safeSubject)))
 	sb.WriteString(fmt.Sprintf("Date: %s\r\n", dateStr))
 	sb.WriteString("MIME-Version: 1.0\r\n")
 	sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")

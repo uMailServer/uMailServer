@@ -176,6 +176,33 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 		return
 	}
 
+	// F5991: a self-service disable of an ENABLED second factor must prove
+	// possession of the factor; otherwise a stolen session token strips 2FA
+	// (admin recovery of another user's account stays code-free).
+	if authenticatedUser == email && account.TOTPEnabled {
+		var req struct {
+			Code string `json:"code"`
+		}
+		if err := decodeJSON(r, &req); err != nil || req.Code == "" {
+			s.sendError(w, http.StatusBadRequest, "current TOTP code required to disable 2FA")
+			return
+		}
+		secret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.getTOTPKey())
+		if err != nil {
+			s.sendError(w, http.StatusInternalServerError, "authentication error")
+			return
+		}
+		valid, step := auth.ValidateTOTPAtWithStep(secret, req.Code, time.Now(), auth.TOTPAlgorithmSHA1)
+		if !valid {
+			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
+			return
+		}
+		if step <= account.TOTPLastUsedStep {
+			s.sendError(w, http.StatusUnauthorized, "TOTP code already used")
+			return
+		}
+	}
+
 	account.TOTPSecret = ""
 	account.TOTPEnabled = false
 	account.UpdatedAt = time.Now()
