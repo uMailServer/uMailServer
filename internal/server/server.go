@@ -223,7 +223,10 @@ func New(cfg *config.Config) (*Server, error) {
 	s.tlsManager = tlsManager
 
 	// Initialize webhook manager
-	webhookMgr := webhook.NewManager(database, cfg.Security.JWTSecret)
+	// The webhook HMAC key is derived from, never equal to, the JWT signing
+	// secret: a receiver verifying signatures must not be able to mint API
+	// tokens (F5600).
+	webhookMgr := webhook.NewManager(database, webhook.DeriveSigningKey(cfg.Security.JWTSecret))
 	webhookMgr.SetTracingProvider(s.tracingProvider)
 	s.webhookMgr = webhookMgr
 
