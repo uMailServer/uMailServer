@@ -109,11 +109,13 @@ export function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-8 pt-6 border-t border-gray-200">
-            <p className="text-center text-sm text-gray-500">
-              Demo accounts: <span className="font-mono text-xs">demo@localhost / demo1234</span>
-            </p>
-          </div>
+          {import.meta.env.DEV && (
+            <div className="mt-8 pt-6 border-t border-gray-200">
+              <p className="text-center text-sm text-gray-500">
+                Demo accounts: <span className="font-mono text-xs">demo@localhost / demo1234</span>
+              </p>
+            </div>
+          )}
         </div>
 
         <p className="text-center text-xs text-gray-400 mt-4">

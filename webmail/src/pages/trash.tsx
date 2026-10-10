@@ -79,12 +79,40 @@ export function TrashPage() {
   const handleRestore = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      // Move back to inbox - for now just delete from trash
-      await api.deleteMail(id)
+      await api.moveMail(id, "trash", "inbox")
       toast.success("Message restored")
       setEmails(emails.filter((email) => email.id !== id))
     } catch (err) {
       toast.error("Failed to restore message")
+    }
+  }
+
+  const handleRestoreSelected = async () => {
+    const ids = Array.from(selectedEmails)
+    try {
+      await api.moveMail(ids, "trash", "inbox")
+      toast.success(`${ids.length} message${ids.length !== 1 ? "s" : ""} restored`)
+      setEmails((prev) => prev.filter((email) => !selectedEmails.has(email.id)))
+      setSelectedEmails(new Set())
+    } catch (err) {
+      toast.error("Failed to restore messages")
+    }
+  }
+
+  const handleDeleteSelected = async () => {
+    const ids = Array.from(selectedEmails)
+    const done = new Set<string>()
+    try {
+      for (const id of ids) {
+        await api.deleteMail(id)
+        done.add(id)
+      }
+      toast.success("Messages permanently deleted")
+    } catch (err) {
+      toast.error("Failed to delete some messages")
+    } finally {
+      setEmails((prev) => prev.filter((email) => !done.has(email.id)))
+      setSelectedEmails(new Set())
     }
   }
 
@@ -126,10 +154,10 @@ export function TrashPage() {
                 {selectedEmails.size} selected
               </span>
               <Separator orientation="vertical" className="h-4" />
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleEmptyTrash}>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleRestoreSelected} title="Restore selected">
                 <RotateCcw className="h-4 w-4" />
               </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={handleDeleteSelected} title="Delete selected permanently">
                 <Trash2 className="h-4 w-4" />
               </Button>
             </>
@@ -137,9 +165,17 @@ export function TrashPage() {
         </div>
         <Button
           variant="ghost"
+          size="sm"
+          disabled={emails.length === 0}
+          onClick={handleEmptyTrash}
+        >
+          Empty trash
+        </Button>
+        <Button
+          variant="ghost"
           size="icon"
           className="h-8 w-8"
-          onClick={() => setLoading(true)}
+          onClick={loadTrash}
         >
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
         </Button>
