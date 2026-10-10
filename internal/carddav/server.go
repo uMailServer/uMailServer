@@ -233,6 +233,21 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	// Build response
 	multistatus := &Multistatus{}
 
+	// A request-URI below the home names one address book or one contact;
+	// answer for that resource only (RFC 4918 §9.1). Previously such requests
+	// returned nothing at Depth 0 and every address book otherwise (F5482).
+	if rel := strings.TrimPrefix(r.URL.Path, "/dav/addressbooks/"); rel != r.URL.Path && rel != "" {
+		if !s.propfindTarget(w, multistatus, username, rel, depth) {
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.WriteHeader(http.StatusMultiStatus)
+		output, _ := xml.MarshalIndent(multistatus, "", "  ")
+		_, _ = w.Write([]byte(xml.Header))
+		_, _ = w.Write(output)
+		return
+	}
+
 	// Root principal
 	if r.URL.Path == "/" || r.URL.Path == "/dav/" {
 		multistatus.Responses = append(multistatus.Responses, s.buildPrincipalResponse(username))
@@ -280,6 +295,58 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	output, _ := xml.MarshalIndent(multistatus, "", "  ")
 	_, _ = w.Write([]byte(xml.Header))
 	_, _ = w.Write(output)
+}
+
+// propfindTarget appends the PROPFIND responses for a request-URI naming one
+// address book (/dav/addressbooks/{id}[/]) or one contact
+// (/dav/addressbooks/{id}/{uid}.vcf) of the authenticated user (F5482). When
+// the target cannot be served it writes the error response and returns false.
+func (s *Server) propfindTarget(w http.ResponseWriter, ms *Multistatus, username, rel, depth string) bool {
+	parts := strings.SplitN(rel, "/", 2)
+	addressbookID := parts[0]
+	ab, err := s.storage.GetAddressbook(username, addressbookID)
+	if err != nil && !errors.Is(err, errInvalidID) {
+		s.logger.Error("Failed to read addressbook", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to read addressbook")
+		return false
+	}
+	if ab == nil {
+		s.sendError(w, http.StatusNotFound, "address book not found")
+		return false
+	}
+
+	if len(parts) == 2 && parts[1] != "" {
+		contactUID := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+		vcardData, err := s.storage.GetContact(username, addressbookID, contactUID)
+		if err != nil && !errors.Is(err, errInvalidID) {
+			s.logger.Error("Failed to read contact", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to read contact")
+			return false
+		}
+		if vcardData == "" {
+			s.sendError(w, http.StatusNotFound, "contact not found")
+			return false
+		}
+		ms.Responses = append(ms.Responses, s.buildContactResponse(username, addressbookID, contactUID, vcardData))
+		return true
+	}
+
+	ms.Responses = append(ms.Responses, s.buildAddressbookResponse(username, ab))
+	if depth == "0" {
+		return true
+	}
+	contacts, err := s.storage.GetContacts(username, addressbookID)
+	if err != nil {
+		s.logger.Error("Failed to query contacts", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to query contacts")
+		return false
+	}
+	for _, contact := range contacts {
+		if uid := s.extractUIDFromVCard(contact); uid != "" {
+			ms.Responses = append(ms.Responses, s.buildContactResponse(username, addressbookID, uid, contact))
+		}
+	}
+	return true
 }
 
 // handleReport handles REPORT requests
@@ -382,8 +449,10 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		} else {
 			uid = urlUID
 		}
-		// Add UID to vCard if missing
-		body = []byte(strings.Replace(string(body), "BEGIN:VCARD\r\n", fmt.Sprintf("BEGIN:VCARD\r\nUID:%s\r\n", uid), 1))
+		// Add UID to vCard if missing, after the BEGIN:VCARD line and with
+		// that line's own terminator: an LF-only body previously got no UID
+		// and was then skipped by PROPFIND/REPORT listings (F5480).
+		body = insertVCardUID(body, uid)
 	} else if urlUID != "" && uid != urlUID {
 		s.sendError(w, http.StatusForbidden, "UID in request URL does not match UID in vCard data")
 		return
@@ -619,6 +688,26 @@ func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, usernam
 	w.WriteHeader(http.StatusOK)
 }
 
+// destinationWritable enforces the RFC 4918 §10.6 Overwrite header for
+// MOVE/COPY: with "Overwrite: F" an existing destination must not be
+// replaced and the request fails with 412 (F5483). Callers hold writeMu so
+// the check and the write are atomic. It writes the error response itself.
+func (s *Server) destinationWritable(w http.ResponseWriter, r *http.Request, username, addressbookID, contactUID string) bool {
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Overwrite")), "F") {
+		return true
+	}
+	existing, err := s.storage.GetContact(username, addressbookID, contactUID)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid destination contact")
+		return false
+	}
+	if existing != "" {
+		s.sendError(w, http.StatusPreconditionFailed, "destination exists and Overwrite is F")
+		return false
+	}
+	return true
+}
+
 // handleMove handles MOVE requests
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username string) {
 	// Extract source address book and contact from URL path
@@ -665,6 +754,20 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	ab, err = s.storage.GetAddressbook(username, destAddressbookID)
 	if err != nil || ab == nil {
 		s.sendError(w, http.StatusForbidden, "destination address book not found")
+		return
+	}
+
+	// RFC 4918 §9.9.4: MOVE onto itself is forbidden. Saving and then
+	// deleting the same file used to destroy the contact (F5484).
+	if srcAddressbookID == destAddressbookID && srcContactUID == destContactUID {
+		s.sendError(w, http.StatusForbidden, "source and destination are the same")
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if !s.destinationWritable(w, r, username, destAddressbookID, destContactUID) {
 		return
 	}
 
@@ -752,6 +855,13 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if !s.destinationWritable(w, r, username, destAddressbookID, destContactUID) {
+		return
+	}
+
 	// Get contact data
 	vcardData, err := s.storage.GetContact(username, srcAddressbookID, srcContactUID)
 	if err != nil || vcardData == "" {
@@ -830,7 +940,9 @@ func (s *Server) buildAddressbookResponse(username string, ab *Addressbook) Resp
 				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <collection/>\n        <addressbook xmlns=\"urn:ietf:params:xml:ns:carddav\"/>\n      "},
 				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: ab.Name},
 				{XMLName: xml.Name{Space: "CARDDAV:", Local: "addressbook-description"}, Value: ab.Description},
-				{XMLName: xml.Name{Space: "DAV:", Local: "getctag"}, Value: fmt.Sprintf("\"%d\"", ab.Modified.Unix())},
+				// Nanosecond precision: a whole-second ctag hid changes made
+				// within the same second from ctag-based sync (F5481).
+				{XMLName: xml.Name{Space: "DAV:", Local: "getctag"}, Value: fmt.Sprintf("\"%d\"", ab.Modified.UnixNano())},
 			},
 			Status: "HTTP/1.1 200 OK",
 		}},
@@ -851,6 +963,27 @@ func (s *Server) buildContactResponse(username, addressbookID, uid, vcardData st
 			Status: "HTTP/1.1 200 OK",
 		}},
 	}
+}
+
+// insertVCardUID inserts a UID line directly after the first BEGIN:VCARD
+// line, reusing that line's terminator (CRLF or LF) (F5480). Data without a
+// terminated BEGIN:VCARD line is returned unchanged.
+func insertVCardUID(data []byte, uid string) []byte {
+	text := string(data)
+	begin := strings.Index(text, "BEGIN:VCARD")
+	if begin < 0 {
+		return data
+	}
+	nl := strings.IndexByte(text[begin:], '\n')
+	if nl < 0 {
+		return data
+	}
+	end := begin + nl + 1
+	eol := "\n"
+	if nl > 0 && text[begin+nl-1] == '\r' {
+		eol = "\r\n"
+	}
+	return []byte(text[:end] + "UID:" + uid + eol + text[end:])
 }
 
 // extractUIDFromVCard extracts the UID from vCard data
