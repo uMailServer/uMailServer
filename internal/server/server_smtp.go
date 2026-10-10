@@ -89,6 +89,9 @@ func (s *Server) startInboundSMTP() error {
 		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
 		TLSConfig:      s.smtpTLSConfig(),
+		// ClamAV and DNS-bound stages can legitimately take a while on
+		// large messages; the 30s default is too tight (F6272).
+		StageTimeout: 2 * time.Minute,
 	}
 
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
@@ -265,9 +268,12 @@ func (s *Server) startSubmissionSMTP() error {
 		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
 		TLSConfig:      s.smtpTLSConfig(),
-		RequireAuth:    true,
-		RequireTLS:     true,
-		IsSubmission:   true,
+		// ClamAV and DNS-bound stages can legitimately take a while on
+		// large messages; the 30s default is too tight (F6272).
+		StageTimeout: 2 * time.Minute,
+		RequireAuth:  true,
+		RequireTLS:   true,
+		IsSubmission: true,
 	}
 
 	submissionServer := smtp.NewServer(submissionCfg, s.logger)

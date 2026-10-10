@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/jmap"
 )
 
@@ -29,6 +30,9 @@ func (s *Server) startJMAP() error {
 	jmapServer.SetQuotaLimitFunc(s.quotaLimit)
 	jmapServer.SetQuotaAdjustFunc(s.quotaAdjust)
 	jmapServer.SetTokenValidator(s.jmapTokenValidator)
+	jmapServer.SetClaimsValidator(s.jmapClaimsValidator)
+	// Clear orphaned uploads left from before a restart (F6280).
+	jmapServer.StartUploadGC()
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -60,10 +64,32 @@ func (s *Server) jmapTokenValidator(tokenHash, subject string) error {
 	if err != nil || revoked {
 		return errors.New("token has been revoked")
 	}
-	localPart, domain := parseEmail(subject)
+	localPart, domain := parseEmail(normalizeLogin(subject))
 	account, err := s.database.GetAccount(domain, localPart)
 	if err == nil && account != nil && !account.IsActive {
 		return errors.New("account is disabled")
+	}
+	return nil
+}
+
+// jmapClaimsValidator applies the API's session cut-off to JMAP tokens: a
+// deleted account, or a token issued before a password change/reset, disable
+// or demotion, no longer works on /jmap/* (F6250-F6252).
+func (s *Server) jmapClaimsValidator(claims map[string]interface{}) error {
+	if s.database == nil {
+		return nil
+	}
+	sub, _ := claims["sub"].(string)
+	localPart, domain := parseEmail(normalizeLogin(sub))
+	account, err := s.database.GetAccount(domain, localPart)
+	if err != nil || account == nil {
+		return errors.New("account not found")
+	}
+	if !account.IsActive {
+		return errors.New("account is disabled")
+	}
+	if !api.TokenIssuedAfterCutoff(claims, account) {
+		return errors.New("session has been revoked")
 	}
 	return nil
 }

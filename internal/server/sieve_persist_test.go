@@ -82,7 +82,7 @@ func TestSievePersistSurvivesServerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := srv1.sieveManager
-	if err := m.StoreScript("alice@test.com", "main", "fileinto \"Work\";"); err != nil {
+	if err := m.StoreScript("alice@test.com", "main", "require \"fileinto\"; fileinto \"Work\";"); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.SetActiveScriptByName("alice@test.com", "main"); err != nil {
@@ -101,7 +101,7 @@ func TestSievePersistSurvivesServerRestart(t *testing.T) {
 	if got := srv2.activeSieveUser("bob@test.com"); got != "" {
 		t.Fatalf("control: bob has no script, got %q", got)
 	}
-	if src := srv2.sieveManager.GetScriptSource("alice@test.com", "main"); src != `fileinto "Work";` {
+	if src := srv2.sieveManager.GetScriptSource("alice@test.com", "main"); src != `require "fileinto"; fileinto "Work";` {
 		t.Fatalf("source = %q", src)
 	}
 }
