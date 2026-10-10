@@ -10,9 +10,9 @@ import (
 )
 
 // startCalDAV creates and starts the CalDAV server
-func (s *Server) startCalDAV() {
+func (s *Server) startCalDAV() error {
 	if !s.config.CalDAV.Enabled {
-		return
+		return nil
 	}
 
 	addr := fmt.Sprintf("%s:%d", s.config.CalDAV.Bind, s.config.CalDAV.Port)
@@ -36,13 +36,11 @@ func (s *Server) startCalDAV() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	if err := s.serveHTTP("CalDAV", srv); err != nil {
+		return err
+	}
 	s.caldavHTTPServer = srv
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("CalDAV server error", "error", err)
-		}
-	}()
-
 	s.logger.Info("CalDAV server started", "addr", addr)
+	return nil
 }

@@ -10,9 +10,9 @@ import (
 )
 
 // startMCP creates and starts the MCP server (if enabled).
-func (s *Server) startMCP() {
+func (s *Server) startMCP() error {
 	if !s.config.MCP.Enabled {
-		return
+		return nil
 	}
 
 	mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
@@ -36,7 +36,7 @@ func (s *Server) startMCP() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
 
-	s.mcpHTTPServer = &http.Server{
+	srv := &http.Server{
 		Addr:              mcpAddr,
 		Handler:           mux,
 		ReadTimeout:       30 * time.Second,
@@ -44,11 +44,10 @@ func (s *Server) startMCP() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	go func() {
-		if err := s.mcpHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("MCP server error", "error", err)
-		}
-	}()
+	if err := s.serveHTTP("MCP", srv); err != nil {
+		return err
+	}
+	s.mcpHTTPServer = srv
 	s.logger.Info("MCP server started", "addr", mcpAddr)
+	return nil
 }

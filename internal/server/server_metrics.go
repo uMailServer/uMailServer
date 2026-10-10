@@ -18,10 +18,10 @@ import (
 //
 // The admin JSON `/metrics` endpoint on the API server stays in place for
 // dashboards that want richer structure than the text format provides.
-func (s *Server) startMetrics() {
+func (s *Server) startMetrics() error {
 	if !s.config.Metrics.Enabled {
 		s.logger.Debug("Metrics server disabled in config")
-		return
+		return nil
 	}
 
 	addr := fmt.Sprintf("%s:%d", s.config.Metrics.Bind, s.config.Metrics.Port)
@@ -30,16 +30,12 @@ func (s *Server) startMetrics() {
 		path = "/metrics"
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(path, metrics.Get().PrometheusHandler)
-	// Liveness probe convenience: scraper rigs often want a known-good URL
-	// distinct from the metrics body itself.
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
+	mux, err := newMetricsMux(path)
+	if err != nil {
+		return err
+	}
 
-	s.metricsHTTPServer = &http.Server{
+	srv := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
 		ReadTimeout:       30 * time.Second,
@@ -47,13 +43,33 @@ func (s *Server) startMetrics() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	if err := s.serveHTTP("Metrics", srv); err != nil {
+		return err
+	}
+	s.metricsHTTPServer = srv
+	s.logger.Info("Metrics server started", "addr", addr, "path", path)
+	return nil
+}
 
-	go func() {
-		if err := s.metricsHTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("Metrics server error", "error", err, "addr", addr)
+// newMetricsMux registers the Prometheus handler on path plus /healthz.
+// ServeMux panics on an invalid pattern ("metrics") or on one that clashes
+// with /healthz; report that as a config error instead of crashing Start
+// (F5431).
+func newMetricsMux(path string) (mux *http.ServeMux, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			mux, err = nil, fmt.Errorf("invalid metrics.path %q: %v", path, r)
 		}
 	}()
-	s.logger.Info("Metrics server started", "addr", addr, "path", path)
+	mux = http.NewServeMux()
+	mux.HandleFunc(path, metrics.Get().PrometheusHandler)
+	// Liveness probe convenience: scraper rigs often want a known-good URL
+	// distinct from the metrics body itself.
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	return mux, nil
 }
 
 // stopMetrics shuts the metrics HTTP server down with a short grace period.
