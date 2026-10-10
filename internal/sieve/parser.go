@@ -3,6 +3,8 @@ package sieve
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -222,9 +224,16 @@ func (p *Parser) parseCommand() (*Command, error) {
 
 	// Parse arguments
 	for p.pos < p.length && !p.isCommandTerminator() {
+		bare := isAlpha(p.input[p.pos])
 		arg, err := p.parseArgument()
 		if err != nil {
 			return nil, err
+		}
+		// F5340: RFC 5228 §8.2 arguments = *argument [test / test-list]; an
+		// identifier argument is a test, which only if/elsif take. Anywhere
+		// else it is a missing ';' (`fileinto "A" keep;`), not an argument.
+		if sv, ok := arg.(*StringValue); ok && bare && !sv.IsLiteral && cmd.Name != "if" && cmd.Name != "elsif" {
+			return nil, fmt.Errorf("unexpected identifier %q in %s command (missing ';'?)", sv.Value, cmd.Name)
 		}
 		if arg != nil {
 			cmd.Arguments = append(cmd.Arguments, arg)
@@ -244,6 +253,9 @@ func (p *Parser) parseCommand() (*Command, error) {
 	// Consume semicolon if present
 	if p.pos < p.length && p.input[p.pos] == ';' {
 		p.pos++
+	} else if cmd.Block == nil {
+		// F5340: RFC 5228 §8.2 command = identifier arguments (";" / block).
+		return nil, fmt.Errorf("expected ';' after %s command", cmd.Name)
 	}
 
 	return cmd, nil
@@ -482,8 +494,11 @@ func (p *Parser) parseNumber() (*NumberValue, error) {
 	}
 
 	value := p.input[start:p.pos]
-	var n int64
-	_, _ = fmt.Sscanf(value, "%d", &n)
+	// F5341: an out-of-range number must fail the script, not become 0.
+	n, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid number %q", value)
+	}
 
 	// F5006: RFC 5228 §2.4.1 number = 1*DIGIT [QUANTIFIER], QUANTIFIER = "K" / "M" / "G".
 	if p.pos < p.length {
@@ -498,6 +513,9 @@ func (p *Parser) parseNumber() (*NumberValue, error) {
 		}
 		if shift != 0 && (p.pos+1 >= p.length || !isAlnumUnderscore(p.input[p.pos+1])) {
 			p.pos++
+			if n > math.MaxInt64>>shift || n < math.MinInt64>>shift {
+				return nil, fmt.Errorf("number %s%c out of range", value, p.input[p.pos-1])
+			}
 			n <<= shift
 		}
 	}

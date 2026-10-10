@@ -268,12 +268,13 @@ func (i *Interpreter) setBuiltInVariables() {
 
 // supportedExtensions lists the capabilities this interpreter implements.
 // RFC 5228 §3.2: requiring anything else must fail the script. F5036.
+// F5343: "variables" (RFC 5229) is not listed: ${name} expansion and the
+// string test are not implemented, so requiring it must fail the script.
 var supportedExtensions = map[string]bool{
 	"fileinto":                   true,
 	"reject":                     true,
 	"vacation":                   true,
 	"vacation-seconds":           true,
-	"variables":                  true,
 	"comparator-i;octet":         true,
 	"comparator-i;ascii-casemap": true,
 }
@@ -510,7 +511,8 @@ func (i *Interpreter) parseHeaderTest(args []Value) (Test, error) {
 	argIdx := 0
 
 	// First arg could be "header" string or a tag like :contains
-	if str, ok := args[argIdx].(*StringValue); ok && str.Value == "header" {
+	// F5342: identifiers are case-insensitive (RFC 5228 §2.1).
+	if str, ok := args[argIdx].(*StringValue); ok && strings.EqualFold(str.Value, "header") {
 		argIdx++
 	}
 
