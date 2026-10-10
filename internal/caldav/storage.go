@@ -1,6 +1,8 @@
 package caldav
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -356,4 +358,38 @@ func (s *Storage) GetCalendarETag(username, calendarID string) string {
 		return ""
 	}
 	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
+}
+
+// GetCalendarCTag returns a collection tag that changes whenever the
+// calendar or any of its events is written or removed (F5751). It hashes the
+// calendar metadata (whose Modified time every event write refreshes) with
+// the name, size and mtime of every event, so it is robust even when a
+// metadata rewrite is lost or timestamps are coarse. "" means unavailable.
+func (s *Storage) GetCalendarCTag(username, calendarID string) string {
+	if validateID(calendarID) != nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	meta, err := os.ReadFile(filepath.Clean(s.calendarPath(username, calendarID)))
+	if err != nil {
+		return ""
+	}
+	h := sha256.New()
+	h.Write(meta)
+	entries, err := os.ReadDir(s.calendarDir(username, calendarID))
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".ics") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(h, "|%s:%d:%d", e.Name(), info.Size(), info.ModTime().UnixNano())
+	}
+	return hex.EncodeToString(h.Sum(nil))[:32]
 }
