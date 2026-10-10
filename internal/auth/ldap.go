@@ -53,6 +53,7 @@ type ldapLoginAttempt struct {
 // checkLoginRateLimit returns true if the username is allowed to attempt login.
 // Uses 5 attempts per 15-minute window with exponential backoff (max 30 min).
 func (c *LDAPClient) checkLoginRateLimit(username string) bool {
+	username = ldapRateKey(username)
 	c.loginMu.Lock()
 	defer c.loginMu.Unlock()
 
@@ -95,6 +96,7 @@ func (c *LDAPClient) checkLoginRateLimit(username string) bool {
 
 // recordLoginSuccess clears the failure history for username (F5270).
 func (c *LDAPClient) recordLoginSuccess(username string) {
+	username = ldapRateKey(username)
 	c.loginMu.Lock()
 	defer c.loginMu.Unlock()
 	delete(c.loginAttempts, username)
@@ -102,12 +104,22 @@ func (c *LDAPClient) recordLoginSuccess(username string) {
 
 // recordLoginFailure records a failed login attempt for rate limiting
 func (c *LDAPClient) recordLoginFailure(username string) {
+	username = ldapRateKey(username)
 	c.loginMu.Lock()
 	defer c.loginMu.Unlock()
 
 	now := time.Now()
 	if c.loginAttempts == nil {
 		c.loginAttempts = make(map[string]*ldapLoginAttempt)
+	}
+
+	// F6009: bound the map; attackers can submit unlimited distinct names.
+	if len(c.loginAttempts) >= ldapMaxTrackedLogins {
+		for k, a := range c.loginAttempts {
+			if now.Sub(a.lastSeen) > 15*time.Minute && !a.lockoutUntil.After(now) {
+				delete(c.loginAttempts, k)
+			}
+		}
 	}
 
 	attempt, exists := c.loginAttempts[username]
@@ -118,6 +130,15 @@ func (c *LDAPClient) recordLoginFailure(username string) {
 
 	attempt.count++
 	attempt.lastSeen = now
+}
+
+// ldapMaxTrackedLogins bounds the failure-tracking map.
+const ldapMaxTrackedLogins = 10000
+
+// ldapRateKey normalizes a username for rate limiting: LDAP uid/sAMAccountName
+// matching is case-insensitive, so "Alice" and "alice" are one account (F6009).
+func ldapRateKey(username string) string {
+	return strings.ToLower(strings.TrimSpace(username))
 }
 
 // min returns the minimum of two integers
