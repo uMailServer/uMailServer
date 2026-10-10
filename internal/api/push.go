@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/umailserver/umailserver/internal/push"
 )
@@ -100,6 +101,10 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 
 	// Save subscription
 	if err := s.subscribePush(user, sub); err != nil {
+		if status, msg := pushClientError(err); status != 0 { // F5873
+			s.sendError(w, status, msg)
+			return
+		}
 		s.logger.Error("Failed to subscribe to push", "error", err, "user", user)
 		s.sendError(w, http.StatusInternalServerError, "failed to subscribe")
 		return
@@ -145,6 +150,10 @@ func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 
 	// Unsubscribe
 	if err := s.unsubscribePush(user, subscriptionID); err != nil {
+		if strings.HasPrefix(err.Error(), "subscription not found") { // F5873
+			s.sendError(w, http.StatusNotFound, "subscription not found")
+			return
+		}
 		s.logger.Error("Failed to unsubscribe from push", "error", err, "user", user)
 		s.sendError(w, http.StatusInternalServerError, "failed to unsubscribe")
 		return
@@ -328,4 +337,23 @@ func (s *Server) getPushStats() map[string]interface{} {
 		"deviceTypes":        map[string]int{},
 		"osTypes":            map[string]int{},
 	}
+}
+
+// pushClientError maps validation errors from push.Subscribe to an HTTP
+// status. The push package reports them as plain errors, so they are matched
+// by message prefix; anything unrecognised (storage failures) returns 0 and
+// stays a 500.
+func pushClientError(err error) (int, string) {
+	msg := err.Error()
+	switch {
+	case strings.HasPrefix(msg, "subscription ID already in use"):
+		return http.StatusConflict, "subscription ID already in use"
+	case strings.HasPrefix(msg, "invalid subscription ID"),
+		strings.HasPrefix(msg, "subscription is nil"):
+		return http.StatusBadRequest, "invalid subscription"
+	case strings.HasPrefix(msg, "invalid push endpoint"),
+		strings.HasPrefix(msg, "push endpoint"):
+		return http.StatusBadRequest, "invalid push endpoint"
+	}
+	return 0, ""
 }

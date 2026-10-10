@@ -364,22 +364,24 @@ func (s *Server) getAccount(w http.ResponseWriter, r *http.Request, email string
 func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email string) {
 	user, domain := parseEmail(email)
 
+	// Authorization check: prevent privilege escalation
+	authUser, ok := r.Context().Value("user").(string)
+	isAdmin, _ := r.Context().Value("isAdmin").(bool)
+
+	// F5871: authorize before the lookup so a non-admin cannot use 404 vs 403
+	// to probe which accounts exist.
+	if ok && authUser != "" && !isAdmin && authUser != user+"@"+domain {
+		s.sendError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
 	account, err := s.db.GetAccount(domain, user)
 	if err != nil {
 		s.sendError(w, http.StatusNotFound, "account not found")
 		return
 	}
-
-	// Authorization check: prevent privilege escalation
-	authUser, ok := r.Context().Value("user").(string)
 	if !ok || authUser == "" {
 		s.sendError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-	isAdmin, _ := r.Context().Value("isAdmin").(bool)
-
-	if !isAdmin && authUser != user+"@"+domain {
-		s.sendError(w, http.StatusForbidden, "access denied")
 		return
 	}
 
@@ -406,6 +408,13 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 
 	if req.QuotaLimit != nil && *req.QuotaLimit < 0 {
 		s.sendError(w, http.StatusBadRequest, "quota_limit must be non-negative")
+		return
+	}
+
+	// F5870: quota is an administrative limit; a non-admin must not raise
+	// (or clear) their own.
+	if !isAdmin && req.QuotaLimit != nil {
+		s.sendError(w, http.StatusForbidden, "only admins can change quota")
 		return
 	}
 
