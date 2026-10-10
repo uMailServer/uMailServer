@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync"
@@ -438,13 +439,17 @@ func parseDMARCRecord(record string) (*DMARCRecord, error) {
 		return nil, errors.New("invalid DMARC version")
 	}
 
-	if rec.Policy == "" {
-		return nil, errors.New("missing required policy (p=)")
-	}
-
-	// Validate policy values
-	if rec.Policy != DMARCPolicyNone && rec.Policy != DMARCPolicyQuarantine && rec.Policy != DMARCPolicyReject {
-		return nil, errors.New("invalid policy value")
+	validPolicy := rec.Policy == DMARCPolicyNone || rec.Policy == DMARCPolicyQuarantine || rec.Policy == DMARCPolicyReject
+	if !validPolicy {
+		// F6193: RFC 7489 §6.6.3 — without a valid p=, a record with a valid
+		// rua is treated as p=none; otherwise it is discarded.
+		if !dmarcHasValidRua(rec.ReportAggregateURI) {
+			if rec.Policy == "" {
+				return nil, errors.New("missing required policy (p=)")
+			}
+			return nil, errors.New("invalid policy value")
+		}
+		rec.Policy = DMARCPolicyNone
 	}
 
 	// F5410: RFC 7489 §6.3 — an invalid sp= is discarded in favour of its
@@ -505,13 +510,13 @@ func shouldApplyPolicy(percentage int) bool {
 	if percentage <= 0 {
 		return false
 	}
-	// Random sampling using crypto/rand for unpredictability
-	var randByte [1]byte
-	if _, err := rand.Read(randByte[:]); err != nil {
+	// F6191: uniform draw in [0,100) via rand.Int; byte%100 was biased.
+	n, err := rand.Int(rand.Reader, big.NewInt(100))
+	if err != nil {
 		// If crypto/rand fails, default to applying policy (fail open for availability)
 		return true
 	}
-	return int(randByte[0])%100 < percentage
+	return int(n.Int64()) < percentage
 }
 
 // parseURIList parses a comma-separated list of URIs
@@ -539,4 +544,14 @@ func parseFailureOptions(s string) []string {
 		return []string{"0"}
 	}
 	return result
+}
+
+// dmarcHasValidRua reports whether any rua URI is a mailto: URI.
+func dmarcHasValidRua(uris []string) bool {
+	for _, u := range uris {
+		if len(u) > len("mailto:") && strings.EqualFold(u[:len("mailto:")], "mailto:") {
+			return true
+		}
+	}
+	return false
 }
