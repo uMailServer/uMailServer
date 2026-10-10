@@ -1,6 +1,8 @@
 package imap
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/mail"
 	"os"
@@ -31,6 +33,48 @@ type BboltMailstore struct {
 	// quotaLimit returns the byte quota of a user (<= 0 = unlimited). Nil
 	// means no quota is enforced (F5730).
 	quotaLimit func(user string) int64
+
+	// quotaAdjust mirrors blob-store usage into the accounts database
+	// (QuotaUsed), the counter SMTP and JMAP already maintain (F5930).
+	quotaAdjust func(user string, delta int64) error
+
+	// userLocks serialises "does the blob exist / reserve / store" against
+	// "is the blob still referenced / free" per user, so the reserved and
+	// released byte counts stay symmetric when identical content races.
+	userLocks sync.Map
+}
+
+// blobRef names a content-addressed blob and its size in bytes.
+type blobRef struct {
+	id   string
+	size int64
+}
+
+func (m *BboltMailstore) userMu(user string) *sync.Mutex {
+	mu, _ := m.userLocks.LoadOrStore(user, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
+// SetQuotaAdjustFunc installs the account quota counter hook (mirrors
+// jmap.Server.SetQuotaAdjustFunc). Accounting is by blob-store bytes, the same
+// measure SetQuotaLimitFunc enforces: delta > 0 reserves the bytes of a blob
+// that APPEND / MULTIAPPEND / COPY actually add to the store (an error
+// refuses the command; wrap storage.ErrQuotaExceeded to get [OVERQUOTA]);
+// delta < 0 releases the bytes of a blob when the last message referencing
+// it is gone (EXPUNGE, MOVE source expunge, DELETE mailbox, failed-command
+// rollback). Blobs are content-addressed per user, so a COPY or an identical
+// APPEND of content the user already stores reserves 0 bytes and expunging
+// one of several references releases 0 bytes. Releases are best effort. The
+// wiring should map it to db.IncrementQuota(domain, localPart, delta).
+func (m *BboltMailstore) SetQuotaAdjustFunc(f func(user string, delta int64) error) {
+	m.quotaAdjust = f
+}
+
+func (m *BboltMailstore) adjustQuota(user string, delta int64) error {
+	if m.quotaAdjust != nil && delta != 0 {
+		return m.quotaAdjust(user, delta)
+	}
+	return nil
 }
 
 // SetQuotaLimitFunc installs the per-user quota lookup used by APPEND, COPY
@@ -42,15 +86,33 @@ func (m *BboltMailstore) SetQuotaLimitFunc(f func(user string) int64) {
 }
 
 // storeBlob stores data for user, enforcing the account quota when a quota
-// lookup is installed. Over-quota returns an error matching
-// storage.ErrQuotaExceeded.
+// lookup is installed and reserving the added bytes through the quota adjust
+// hook. Over-quota returns an error matching storage.ErrQuotaExceeded. It
+// returns the blob ID. The caller must hold userMu(user) and, if a later step
+// fails, call releaseBlobsLocked for the blob so the reservation is undone.
 func (m *BboltMailstore) storeBlob(user string, data []byte) (string, error) {
-	if m.quotaLimit != nil {
-		if limit := m.quotaLimit(user); limit > 0 {
-			return m.msgStore.StoreMessageWithQuota(user, data, limit)
+	var reserved int64
+	if m.quotaAdjust != nil {
+		sum := sha256.Sum256(data)
+		if !m.msgStore.MessageExists(user, hex.EncodeToString(sum[:])) {
+			reserved = int64(len(data))
 		}
 	}
-	return m.msgStore.StoreMessage(user, data)
+	if err := m.adjustQuota(user, reserved); err != nil {
+		return "", err
+	}
+	var id string
+	var err error
+	if m.quotaLimit != nil && m.quotaLimit(user) > 0 {
+		id, err = m.msgStore.StoreMessageWithQuota(user, data, m.quotaLimit(user))
+	} else {
+		id, err = m.msgStore.StoreMessage(user, data)
+	}
+	if err != nil {
+		_ = m.adjustQuota(user, -reserved)
+		return "", err
+	}
+	return id, nil
 }
 
 // CheckQuota reports storage.ErrQuotaExceeded when storing need more bytes
@@ -77,14 +139,14 @@ func (m *BboltMailstore) CheckQuota(user string, need int64) error {
 // RollbackAppended removes the just-appended messages uids of mailbox and
 // releases their blobs; it undoes a partially stored MULTIAPPEND (F5841).
 func (m *BboltMailstore) RollbackAppended(user, mailbox string, uids []uint32) {
-	var released []string
+	var released []blobRef
 	for _, uid := range uids {
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
 			continue
 		}
 		if m.db.DeleteMessage(user, mailbox, uid) == nil {
-			released = append(released, meta.MessageID)
+			released = append(released, blobRef{meta.MessageID, meta.Size})
 		}
 	}
 	m.releaseBlobs(user, released)
@@ -234,7 +296,21 @@ func (m *BboltMailstore) CreateMailbox(user, mailbox string) error {
 
 // DeleteMailbox deletes a mailbox
 func (m *BboltMailstore) DeleteMailbox(user, mailbox string) error {
-	return m.db.DeleteMailbox(user, mailbox)
+	// F5931: the messages' blobs were never released, so DELETE leaked disk
+	// and (with a quota hook) quota. Collect them first, release after.
+	var refs []blobRef
+	if uids, err := m.db.GetMessageUIDs(user, mailbox); err == nil {
+		for _, uid := range uids {
+			if meta, err := m.db.GetMessageMetadata(user, mailbox, uid); err == nil {
+				refs = append(refs, blobRef{meta.MessageID, meta.Size})
+			}
+		}
+	}
+	if err := m.db.DeleteMailbox(user, mailbox); err != nil {
+		return err
+	}
+	m.releaseBlobs(user, refs)
+	return nil
 }
 
 // RenameMailbox renames a mailbox
@@ -391,10 +467,10 @@ func (m *BboltMailstore) getMessage(user, mailbox string, seqNum, uid uint32, it
 	needsData, marksSeen := false, false
 	for _, item := range items {
 		item = strings.ToUpper(item)
-		if item == "RFC822" || item == "BODY" || strings.HasPrefix(item, "BODY[") || strings.HasPrefix(item, "BODY.PEEK[") {
+		if item == "RFC822" || item == "RFC822.HEADER" || item == "RFC822.TEXT" || item == "BODY" || strings.HasPrefix(item, "BODY[") || strings.HasPrefix(item, "BODY.PEEK[") {
 			needsData = true
 		}
-		if item == "RFC822" || strings.HasPrefix(item, "BODY[") {
+		if item == "RFC822" || item == "RFC822.TEXT" || strings.HasPrefix(item, "BODY[") {
 			marksSeen = true
 		}
 	}
@@ -534,6 +610,8 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		return err
 	}
 
+	flags = normalizeStoreFlags(flags)
+
 	// Get message UIDs
 	uids, err := m.db.GetMessageUIDs(user, mailbox)
 	if err != nil {
@@ -581,7 +659,13 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 				}
 				meta.Flags = newFlags
 			case FlagReplace:
-				meta.Flags = flags
+				// \Recent is server-managed (RFC 3501 §2.3.2): a client's
+				// replace neither sets nor clears it (F5932).
+				repl := append([]string(nil), flags...)
+				if hasFlag(meta.Flags, "\\Recent") {
+					repl = append(repl, "\\Recent")
+				}
+				meta.Flags = repl
 			}
 			updatedFlags = meta.Flags
 			return nil
@@ -595,6 +679,20 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 	}
 
 	return nil
+}
+
+// normalizeStoreFlags drops \Recent (which clients cannot alter, RFC 3501
+// §2.3.2) and repeated flags (flag names are case-insensitive) from the flag
+// list of a STORE command (F5932).
+func normalizeStoreFlags(flags []string) []string {
+	out := make([]string, 0, len(flags))
+	for _, f := range flags {
+		if strings.EqualFold(f, "\\Recent") || hasFlag(out, f) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // hasFlag checks if a flag is in the list
@@ -616,7 +714,7 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 		return err
 	}
 
-	var released []string
+	var released []blobRef
 	for _, uid := range uids {
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
@@ -626,7 +724,7 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 		// Check if deleted
 		if hasFlag(meta.Flags, "\\Deleted") {
 			if m.db.DeleteMessage(user, mailbox, uid) == nil {
-				released = append(released, meta.MessageID)
+				released = append(released, blobRef{meta.MessageID, meta.Size})
 			}
 		}
 	}
@@ -638,7 +736,7 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 // ExpungeUIDs removes only the messages whose UID is in uids and that carry
 // \Deleted (RFC 4315 UID EXPUNGE; also used to complete RFC 6851 MOVE).
 func (m *BboltMailstore) ExpungeUIDs(user, mailbox string, uids []uint32) error {
-	var released []string
+	var released []blobRef
 	for _, uid := range uids {
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
@@ -646,7 +744,7 @@ func (m *BboltMailstore) ExpungeUIDs(user, mailbox string, uids []uint32) error 
 		}
 		if hasFlag(meta.Flags, "\\Deleted") {
 			if m.db.DeleteMessage(user, mailbox, uid) == nil {
-				released = append(released, meta.MessageID)
+				released = append(released, blobRef{meta.MessageID, meta.Size})
 			}
 		}
 	}
@@ -659,17 +757,29 @@ func (m *BboltMailstore) ExpungeUIDs(user, mailbox string, uids []uint32) error 
 // COPY/MOVE destination or any identical message shares the file with the
 // expunged one (F5065). When the reference scan fails the files are kept:
 // leaking a blob is recoverable, deleting a live one is not.
-func (m *BboltMailstore) releaseBlobs(user string, ids []string) {
-	if len(ids) == 0 {
+func (m *BboltMailstore) releaseBlobs(user string, refs []blobRef) {
+	if len(refs) == 0 {
+		return
+	}
+	mu := m.userMu(user)
+	mu.Lock()
+	defer mu.Unlock()
+	m.releaseBlobsLocked(user, refs)
+}
+
+// releaseBlobsLocked is releaseBlobs for callers holding userMu(user). Each
+// blob actually freed gives its bytes back through the quota adjust hook.
+func (m *BboltMailstore) releaseBlobsLocked(user string, refs []blobRef) {
+	if len(refs) == 0 {
 		return
 	}
 	mailboxes, err := m.db.ListMailboxes(user)
 	if err != nil {
 		return
 	}
-	candidates := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		candidates[id] = true
+	candidates := make(map[string]int64, len(refs))
+	for _, r := range refs {
+		candidates[r.id] = r.size
 	}
 	for _, mb := range mailboxes {
 		uids, err := m.db.GetMessageUIDs(user, mb)
@@ -687,8 +797,15 @@ func (m *BboltMailstore) releaseBlobs(user string, ids []string) {
 			return
 		}
 	}
-	for id := range candidates {
-		_ = m.msgStore.DeleteMessage(user, id)
+	for id, size := range candidates {
+		if size <= 0 {
+			if data, err := m.msgStore.ReadMessage(user, id); err == nil {
+				size = int64(len(data))
+			}
+		}
+		if err := m.msgStore.DeleteMessage(user, id); err == nil {
+			_ = m.adjustQuota(user, -size)
+		}
 	}
 }
 
@@ -773,15 +890,30 @@ func (m *BboltMailstore) AppendMessageUID(user, mailbox string, flags []string, 
 		return 0, 0, fmt.Errorf("message contains invalid UTF-8 sequence")
 	}
 
+	// Hold the user lock from reserve/store until the metadata row exists, so
+	// a concurrent expunge cannot free the blob in between (F5930).
+	mu := m.userMu(user)
+	mu.Lock()
+	locked := true
+	unlock := func() {
+		if locked {
+			locked = false
+			mu.Unlock()
+		}
+	}
+	defer unlock()
+
 	// Store message
 	messageID, err := m.storeBlob(user, data)
 	if err != nil {
 		return 0, 0, err
 	}
+	ref := []blobRef{{messageID, int64(len(data))}}
 
 	// Get next UID
 	uid, err := m.db.GetNextUID(user, mailbox)
 	if err != nil {
+		m.releaseBlobsLocked(user, ref)
 		return 0, 0, err
 	}
 
@@ -825,8 +957,10 @@ func (m *BboltMailstore) AppendMessageUID(user, mailbox string, flags []string, 
 	}
 
 	if err := m.db.StoreMessageMetadata(user, mailbox, uid, meta); err != nil {
+		m.releaseBlobsLocked(user, ref)
 		return 0, 0, err
 	}
+	unlock()
 
 	// Update thread information
 	if threadID != "" {
@@ -1030,6 +1164,16 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	if criteria.Undraft && hasFlag(meta.Flags, "\\Draft") {
 		return false
 	}
+	for _, k := range criteria.Keyword {
+		if !hasFlag(meta.Flags, k) {
+			return false
+		}
+	}
+	for _, k := range criteria.Unkeyword {
+		if hasFlag(meta.Flags, k) {
+			return false
+		}
+	}
 
 	// Check string criteria
 	if criteria.From != "" && !strings.Contains(strings.ToLower(meta.From), strings.ToLower(criteria.From)) {
@@ -1226,7 +1370,7 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 	total := uint32(uidCount)
 
 	var srcUIDs, dstUIDs []uint32
-	var newIDs []string
+	var newIDs []blobRef
 	// F5640: a message that cannot be copied fails the whole COPY. The old
 	// loop skipped it and answered OK, and MOVE then deleted the source
 	// message it had never copied. Copies already made are rolled back
@@ -1237,6 +1381,50 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 		}
 		m.releaseBlobs(user, newIDs)
 		return 0, nil, nil, fmt.Errorf("copy of UID %d failed: %w", uid, err)
+	}
+	// copyOne copies one message under the user lock (reserve + store +
+	// metadata, see AppendMessageUID). A blob shared with the source reserves
+	// no new bytes (content-addressed, F5930).
+	copyOne := func(uid uint32) error {
+		mu := m.userMu(user)
+		mu.Lock()
+		defer mu.Unlock()
+
+		meta, err := m.db.GetMessageMetadata(user, sourceMailbox, uid)
+		if err != nil {
+			return err
+		}
+		data, err := m.msgStore.ReadMessage(user, meta.MessageID)
+		if err != nil {
+			return err
+		}
+		newUID, err := m.db.GetNextUID(user, destMailbox)
+		if err != nil {
+			return err
+		}
+		newMessageID, err := m.storeBlob(user, data)
+		if err != nil {
+			return err
+		}
+		ref := blobRef{newMessageID, int64(len(data))}
+		newMeta := &storage.MessageMetadata{
+			MessageID:    newMessageID,
+			UID:          newUID,
+			Flags:        meta.Flags,
+			InternalDate: meta.InternalDate,
+			Size:         meta.Size,
+			Subject:      meta.Subject,
+			Date:         meta.Date,
+			From:         meta.From,
+			To:           meta.To,
+		}
+		if err := m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta); err != nil {
+			m.releaseBlobsLocked(user, []blobRef{ref})
+			return err
+		}
+		srcUIDs, dstUIDs = append(srcUIDs, uid), append(dstUIDs, newUID)
+		newIDs = append(newIDs, ref)
+		return nil
 	}
 	for i, uid := range uids {
 		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
@@ -1253,49 +1441,9 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 			continue
 		}
 
-		// Get source metadata
-		meta, err := m.db.GetMessageMetadata(user, sourceMailbox, uid)
-		if err != nil {
+		if err := copyOne(uid); err != nil {
 			return fail(uid, err)
 		}
-
-		// Get message data
-		data, err := m.msgStore.ReadMessage(user, meta.MessageID)
-		if err != nil {
-			return fail(uid, err)
-		}
-
-		// Get next UID for destination
-		newUID, err := m.db.GetNextUID(user, destMailbox)
-		if err != nil {
-			return fail(uid, err)
-		}
-
-		// Copy message
-		newMessageID, err := m.storeBlob(user, data)
-		if err != nil {
-			return fail(uid, err)
-		}
-
-		// Store metadata in destination
-		newMeta := &storage.MessageMetadata{
-			MessageID:    newMessageID,
-			UID:          newUID,
-			Flags:        meta.Flags,
-			InternalDate: meta.InternalDate,
-			Size:         meta.Size,
-			Subject:      meta.Subject,
-			Date:         meta.Date,
-			From:         meta.From,
-			To:           meta.To,
-		}
-
-		if err := m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta); err != nil {
-			newIDs = append(newIDs, newMessageID)
-			return fail(uid, err)
-		}
-		srcUIDs, dstUIDs = append(srcUIDs, uid), append(dstUIDs, newUID)
-		newIDs = append(newIDs, newMessageID)
 	}
 
 	mb, err := m.db.GetMailbox(user, destMailbox)

@@ -2204,7 +2204,11 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 	}
 
 	seqSet := args[0]
-	fetchItems := parseFetchItems(args[1:])
+	fetchItems := expandFetchMacros(parseFetchItems(args[1:]))
+	if bad := unknownFetchItem(fetchItems); bad != "" {
+		s.WriteResponse(s.tag, fmt.Sprintf("BAD Unknown fetch item %q", bad))
+		return nil
+	}
 
 	if span != nil {
 		tracing.SetStringAttribute(span, "fetch.seqset", seqSet)
@@ -2236,6 +2240,10 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 	setsSeen := false
 	for _, item := range fetchItems {
 		if it, ok := parseBodySectionItem(item); ok && !it.peek {
+			setsSeen = true
+		}
+		// F5936: RFC822 and RFC822.TEXT also set \Seen (RFC 3501 §6.4.5).
+		if strings.EqualFold(item, "RFC822") || strings.EqualFold(item, "RFC822.TEXT") {
 			setsSeen = true
 		}
 	}
@@ -2274,6 +2282,44 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 
 	s.WriteResponse(s.tag, "OK FETCH completed")
 	return nil
+}
+
+// expandFetchMacros replaces the ALL / FAST / FULL macros (RFC 3501 §6.4.5)
+// with the items they stand for (F5935: they produced an empty "FETCH ()").
+func expandFetchMacros(items []string) []string {
+	var out []string
+	for _, it := range items {
+		switch strings.ToUpper(it) {
+		case "FAST":
+			out = append(out, "FLAGS", "INTERNALDATE", "RFC822.SIZE")
+		case "ALL":
+			out = append(out, "FLAGS", "INTERNALDATE", "RFC822.SIZE", "ENVELOPE")
+		case "FULL":
+			out = append(out, "FLAGS", "INTERNALDATE", "RFC822.SIZE", "ENVELOPE", "BODY")
+		default:
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// unknownFetchItem returns the first item FETCH cannot answer, or "". Such
+// an item was dropped, leaving the invalid response "* n FETCH ()" (F5937).
+func unknownFetchItem(items []string) string {
+	if len(items) == 0 {
+		return "()"
+	}
+	for _, it := range items {
+		switch strings.ToUpper(it) {
+		case "FLAGS", "INTERNALDATE", "RFC822.SIZE", "UID", "RFC822", "RFC822.HEADER",
+			"RFC822.TEXT", "BODY", "BODYSTRUCTURE", "ENVELOPE":
+			continue
+		}
+		if _, ok := parseBodySectionItem(it); !ok {
+			return it
+		}
+	}
+	return ""
 }
 
 // hasFetchItem reports whether items contains name (case-insensitive).
@@ -3099,6 +3145,20 @@ func parseSearchKey(criteria *SearchCriteria, args []string, i int) int {
 		criteria.Unflagged = true
 	case "UNSEEN":
 		criteria.Unseen = true
+	case "DRAFT":
+		criteria.Draft = true
+	case "UNDRAFT":
+		criteria.Undraft = true
+	case "KEYWORD":
+		if i+1 < len(args) {
+			criteria.Keyword = append(criteria.Keyword, args[i+1])
+			i++
+		}
+	case "UNKEYWORD":
+		if i+1 < len(args) {
+			criteria.Unkeyword = append(criteria.Unkeyword, args[i+1])
+			i++
+		}
 	case "FROM":
 		if i+1 < len(args) {
 			criteria.From = args[i+1]
@@ -3310,20 +3370,65 @@ func (s *Session) writeSearchParseError(err error) {
 	s.WriteResponse(s.tag, fmt.Sprintf("BAD %s", err))
 }
 
-// checkSearchDateArg rejects a date search key whose argument is missing
-// or not an RFC 3501 date. F5566: such a key was dropped, so it matched
-// every message ("BEFORE 1-Feb-2000" selected the whole mailbox).
-func checkSearchDateArg(vals []string) error {
-	switch strings.ToUpper(vals[0]) {
-	case "BEFORE", "ON", "SINCE", "SENTBEFORE", "SENTON", "SENTSINCE":
-		if len(vals) < 2 {
-			return fmt.Errorf("missing date for %s", vals[0])
+// searchKeyArity is the number of arguments of each argument-taking search
+// key; every other known key takes none.
+var searchKeyArity = map[string]int{
+	"FROM": 1, "TO": 1, "CC": 1, "BCC": 1, "SUBJECT": 1, "BODY": 1, "TEXT": 1,
+	"KEYWORD": 1, "UNKEYWORD": 1, "UID": 1, "HEADER": 2,
+	"BEFORE": 1, "ON": 1, "SINCE": 1, "SENTBEFORE": 1, "SENTON": 1, "SENTSINCE": 1,
+	"LARGER": 1, "SMALLER": 1,
+	"ALL": 0, "ANSWERED": 0, "DELETED": 0, "FLAGGED": 0, "NEW": 0, "OLD": 0,
+	"RECENT": 0, "SEEN": 0, "UNANSWERED": 0, "UNDELETED": 0, "UNFLAGGED": 0,
+	"UNSEEN": 0, "DRAFT": 0, "UNDRAFT": 0,
+}
+
+// checkSearchKey rejects a plain search key the parser cannot honour with a
+// BAD response (RFC 3501 §6.4.4 syntax): an unknown key, a missing argument
+// or a non-numeric LARGER/SMALLER size, and a date key whose argument is
+// missing or not an RFC 3501 date. F5566/F5933: such keys were dropped, so
+// they matched every message ("BEFORE 1-Feb-2000", "SUBJECT", "DRAFT",
+// "KEYWORD x" and "SMALLER abc" all selected the whole mailbox).
+func checkSearchKey(vals []string) error {
+	key := strings.ToUpper(vals[0])
+	arity, known := searchKeyArity[key]
+	if !known {
+		if isSequenceSetToken(vals[0]) {
+			return nil
 		}
+		return fmt.Errorf("unknown search key %q", vals[0])
+	}
+	if len(vals) < arity+1 {
+		return fmt.Errorf("missing argument for %s", vals[0])
+	}
+	switch key {
+	case "BEFORE", "ON", "SINCE", "SENTBEFORE", "SENTON", "SENTSINCE":
 		if _, err := parseIMAPDate(vals[1]); err != nil {
 			return fmt.Errorf("invalid date %q", vals[1])
 		}
+	case "LARGER", "SMALLER":
+		if n, err := strconv.ParseInt(vals[1], 10, 64); err != nil || n < 0 {
+			return fmt.Errorf("invalid size %q", vals[1])
+		}
 	}
 	return nil
+}
+
+// searchKeyID names the SearchCriteria slot a plain key writes, so a repeated
+// key (F5934: "SUBJECT a SUBJECT b", which overwrote the first) is ANDed as a
+// separate term instead. Idempotent or accumulating keys return "".
+func searchKeyID(vals []string) string {
+	key := strings.ToUpper(vals[0])
+	switch key {
+	case "HEADER":
+		return "HEADER:" + strings.ToLower(vals[1])
+	case "FROM", "TO", "CC", "BCC", "SUBJECT", "BODY", "TEXT", "UID",
+		"BEFORE", "ON", "SINCE", "SENTBEFORE", "SENTON", "SENTSINCE", "LARGER", "SMALLER":
+		return key
+	}
+	if _, known := searchKeyArity[key]; !known {
+		return "SEQSET"
+	}
+	return ""
 }
 
 // parseSearchProgram parses search keys (after an optional CHARSET).
@@ -3345,6 +3450,7 @@ func parseSearchProgram(toks []imapToken) (*searchExpr, error) {
 // parseSearchSeq parses keys until the end or, inside a group, ")".
 func parseSearchSeq(toks []imapToken, i int, inGroup bool) (*searchExpr, int, error) {
 	e := &searchExpr{flat: SearchCriteria{All: true}}
+	used := map[string]bool{}
 	for i < len(toks) {
 		t := toks[i]
 		if !t.quoted && t.val == ")" {
@@ -3363,10 +3469,19 @@ func parseSearchSeq(toks []imapToken, i int, inGroup bool) (*searchExpr, int, er
 			continue
 		}
 		vals := plainKeyArgs(toks, i)
-		if err := checkSearchDateArg(vals); err != nil {
+		if err := checkSearchKey(vals); err != nil {
 			return nil, i, err
 		}
-		i += parseSearchKey(&e.flat, vals, 0) + 1
+		target := &e.flat
+		if id := searchKeyID(vals); id != "" {
+			if used[id] {
+				x := &searchExpr{flat: SearchCriteria{All: true}}
+				e.terms = append(e.terms, searchTerm{sub: x})
+				target = &x.flat
+			}
+			used[id] = true
+		}
+		i += parseSearchKey(target, vals, 0) + 1
 	}
 	if inGroup {
 		return nil, i, fmt.Errorf("unbalanced parenthesis")
@@ -3403,7 +3518,7 @@ func parseSearchOne(toks []imapToken, i int) (*searchExpr, int, error) {
 		return nil, i, fmt.Errorf("missing search key")
 	default:
 		vals := plainKeyArgs(toks, i)
-		if err := checkSearchDateArg(vals); err != nil {
+		if err := checkSearchKey(vals); err != nil {
 			return nil, i, err
 		}
 		e := &searchExpr{flat: SearchCriteria{All: true}}
@@ -3547,6 +3662,13 @@ func formatFetchResponse(msg *Message, items []string) string {
 			parts = append(parts, fmt.Sprintf("UID %d", msg.UID))
 		case "RFC822":
 			parts = append(parts, fmt.Sprintf("RFC822 {%d}\r\n%s", len(msg.Data), string(msg.Data)))
+		case "RFC822.HEADER", "RFC822.TEXT":
+			hdr, body := splitHeaderBody(msg.Data)
+			part := hdr
+			if item == "RFC822.TEXT" {
+				part = body
+			}
+			parts = append(parts, fmt.Sprintf("%s {%d}\r\n%s", item, len(part), part))
 		case "BODY", "BODYSTRUCTURE":
 			// F5496: describe the real MIME tree; BODY is the non-extensible form.
 			parts = append(parts, item+" "+bodyStructure(msg.Data, item == "BODYSTRUCTURE"))
