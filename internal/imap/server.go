@@ -48,8 +48,7 @@ type Server struct {
 	// Auth brute-force protection
 	maxLoginAttempts int
 	lockoutDuration  time.Duration
-	authFailures     map[string][]time.Time // IP -> failure timestamps
-	authFailuresMu   sync.Mutex
+	auth             *AuthTracker
 
 	// Connection timeouts
 	readTimeout  time.Duration
@@ -141,7 +140,7 @@ func NewServer(config *Config, mailstore Mailstore) *Server {
 		sessions:     make(map[string]*Session),
 		shutdown:     make(chan struct{}),
 		mailstore:    mailstore,
-		authFailures: make(map[string][]time.Time),
+		auth:         NewAuthTracker(),
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
 	}
@@ -203,22 +202,48 @@ func (s *Server) SetLoginResultHandler(fn func(username string, success bool, ip
 	s.onLoginResult = fn
 }
 
+// AuthTracker holds failed-login timestamps per client IP. One tracker can be
+// shared by several Servers (the implicit-TLS and the STARTTLS listener) so an
+// attacker cannot get the full attempt budget on each listener (F5844).
+type AuthTracker struct {
+	mu       sync.Mutex
+	failures map[string][]time.Time
+}
+
+// NewAuthTracker creates an empty tracker.
+func NewAuthTracker() *AuthTracker {
+	return &AuthTracker{failures: make(map[string][]time.Time)}
+}
+
+// SetAuthTracker makes the server use t for failed-login accounting. Pass the
+// same tracker to every IMAP listener of the process.
+func (s *Server) SetAuthTracker(t *AuthTracker) {
+	if t != nil {
+		s.auth = t
+	}
+}
+
 // isAuthLockedOut returns true if the given IP is temporarily locked out
 func (s *Server) isAuthLockedOut(ip string) bool {
 	if s.maxLoginAttempts <= 0 {
 		return false
 	}
-	s.authFailuresMu.Lock()
-	defer s.authFailuresMu.Unlock()
+	t := s.auth
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	cutoff := time.Now().Add(-s.lockoutDuration)
 	var recent []time.Time
-	for _, t := range s.authFailures[ip] {
-		if t.After(cutoff) {
-			recent = append(recent, t)
+	for _, ts := range t.failures[ip] {
+		if ts.After(cutoff) {
+			recent = append(recent, ts)
 		}
 	}
-	s.authFailures[ip] = recent
+	if len(recent) == 0 {
+		delete(t.failures, ip)
+	} else {
+		t.failures[ip] = recent
+	}
 	return len(recent) >= s.maxLoginAttempts
 }
 
@@ -227,16 +252,18 @@ func (s *Server) recordAuthFailure(ip string) {
 	if s.maxLoginAttempts <= 0 {
 		return
 	}
-	s.authFailuresMu.Lock()
-	defer s.authFailuresMu.Unlock()
-	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+	t := s.auth
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failures[ip] = append(t.failures[ip], time.Now())
 }
 
 // clearAuthFailures removes recorded failures for the given IP
 func (s *Server) clearAuthFailures(ip string) {
-	s.authFailuresMu.Lock()
-	defer s.authFailuresMu.Unlock()
-	delete(s.authFailures, ip)
+	t := s.auth
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.failures, ip)
 }
 
 // Start starts the IMAP server
@@ -624,6 +651,9 @@ func defaultCapabilities() []string {
 		"THREAD=REFERENCES",
 		"THREAD=ORDEREDSUBJECT",
 		"MULTIAPPEND",
+		"UNSELECT",
+		"LIST-EXTENDED",
+		"SPECIAL-USE",
 	}
 }
 
@@ -637,7 +667,7 @@ func (s *Session) sessionCapabilities() []string {
 	var caps []string
 	for _, c := range defaultCapabilities() {
 		switch {
-		case c == "STARTTLS" && (s.tlsActive || s.server.tlsConfig == nil):
+		case c == "STARTTLS" && (s.tlsActive || !tlsConfigUsable(s.server.tlsConfig)):
 			continue
 		case !authOK && strings.HasPrefix(c, "AUTH="):
 			continue

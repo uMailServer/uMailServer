@@ -42,6 +42,18 @@ func (s *Server) startSMTP() error {
 	return nil
 }
 
+// smtpTLSConfig returns the TLS config for the SMTP servers, or nil when no
+// certificate can be obtained (no usable cert_file/key_file and ACME off).
+// A config whose GetCertificate always fails would make smtp advertise
+// STARTTLS and then fail every handshake; nil keeps it from claiming TLS.
+func (s *Server) smtpTLSConfig() *tls.Config {
+	if err := s.imapCertificateError(); err != nil {
+		s.logger.Warn("No TLS certificate available; SMTP will not offer STARTTLS", "error", err)
+		return nil
+	}
+	return s.tlsManager.GetTLSConfig()
+}
+
 // serveSMTP binds addr synchronously, so a bind failure reaches the caller
 // (F5530), and then serves srv in the background. A non-nil tlsConfig
 // selects implicit TLS. smtp.Server.Serve closes the listener when it
@@ -76,7 +88,7 @@ func (s *Server) startInboundSMTP() error {
 		MaxConnections: s.config.SMTP.Inbound.MaxConnections,
 		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-		TLSConfig:      s.tlsManager.GetTLSConfig(),
+		TLSConfig:      s.smtpTLSConfig(),
 	}
 
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
@@ -171,7 +183,7 @@ func (s *Server) startInboundSMTP() error {
 			Timeout: s.config.AV.Timeout.ToDuration(),
 			Action:  s.config.AV.Action,
 		})
-		pipeline.AddStage(smtp.NewAVStage(&avScannerAdapter{inner: avScanner}, s.config.AV.Action))
+		pipeline.AddStage(&avFailClosedStage{scanner: avScanner, action: s.config.AV.Action, logger: s.logger})
 	}
 
 	smtpServer.SetPipeline(pipeline)
@@ -250,7 +262,7 @@ func (s *Server) startSubmissionSMTP() error {
 		MaxConnections: s.config.SMTP.Submission.MaxConnections,
 		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-		TLSConfig:      s.tlsManager.GetTLSConfig(),
+		TLSConfig:      s.smtpTLSConfig(),
 		RequireAuth:    true,
 		RequireTLS:     true,
 		IsSubmission:   true,
@@ -275,6 +287,11 @@ func (s *Server) startSubmissionSMTP() error {
 // startSubmissionTLSSMTP creates and starts the implicit-TLS (465) server.
 func (s *Server) startSubmissionTLSSMTP() error {
 	submissionTLSAddr := fmt.Sprintf("%s:%d", s.config.SMTP.SubmissionTLS.Bind, s.config.SMTP.SubmissionTLS.Port)
+	tlsCfg := s.smtpTLSConfig()
+	if tlsCfg == nil {
+		s.logger.Error("Submission TLS (implicit TLS) listener not started: no TLS certificate is available (set tls.cert_file/tls.key_file or enable ACME)", "addr", submissionTLSAddr)
+		return nil
+	}
 	submissionTLSCfg := &smtp.Config{
 		Hostname:       s.config.Server.Hostname,
 		MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
@@ -282,7 +299,7 @@ func (s *Server) startSubmissionTLSSMTP() error {
 		MaxConnections: s.config.SMTP.SubmissionTLS.MaxConnections,
 		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
 		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-		TLSConfig:      s.tlsManager.GetTLSConfig(),
+		TLSConfig:      tlsCfg,
 		RequireAuth:    true,
 		RequireTLS:     false, // Already on TLS
 		IsSubmission:   true,
@@ -296,7 +313,7 @@ func (s *Server) startSubmissionTLSSMTP() error {
 	submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	submissionTLSServer.SetTracingProvider(s.tracingProvider)
 
-	if err := s.serveSMTP("Submission TLS", submissionTLSServer, submissionTLSAddr, s.tlsManager.GetTLSConfig()); err != nil {
+	if err := s.serveSMTP("Submission TLS", submissionTLSServer, submissionTLSAddr, tlsCfg); err != nil {
 		return err
 	}
 	s.submissionTLSServer = submissionTLSServer

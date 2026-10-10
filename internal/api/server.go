@@ -729,6 +729,9 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", allowed)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
+		// F5872: the response varies by Origin; without this a shared cache
+		// can serve one origin's CORS headers to another.
+		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 

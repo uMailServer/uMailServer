@@ -72,7 +72,7 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Alias    string `json:"alias"`  // alias@domain
 		Target   string `json:"target"` // user@domain
-		IsActive bool   `json:"is_active"`
+		IsActive *bool  `json:"is_active"`
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
@@ -118,7 +118,10 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 		Alias:    aliasUser,
 		Domain:   aliasDomain,
 		Target:   req.Target,
-		IsActive: true, // Always default to active; client can override via update
+		IsActive: true, // F5874: default active unless explicitly disabled
+	}
+	if req.IsActive != nil {
+		alias.IsActive = *req.IsActive
 	}
 
 	if err := s.db.CreateAlias(alias); err != nil {

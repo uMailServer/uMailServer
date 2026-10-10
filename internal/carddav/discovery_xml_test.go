@@ -265,8 +265,8 @@ func TestCardDAVDiscoveryF5661Failure(t *testing.T) {
 			reports = append(reports, rep.childNames()...)
 		}
 	}
-	if len(reports) != 2 || reports[0] != (xml.Name{Space: discNSCardDAV, Local: "addressbook-query"}) || reports[1] != (xml.Name{Space: discNSCardDAV, Local: "addressbook-multiget"}) {
-		t.Errorf("DEFECT F5661: supported-report-set\nEXPECTED: addressbook-query, addressbook-multiget\nACTUAL: %v", reports)
+	if len(reports) != 3 || reports[0] != (xml.Name{Space: discNSCardDAV, Local: "addressbook-query"}) || reports[1] != (xml.Name{Space: discNSCardDAV, Local: "addressbook-multiget"}) || reports[2] != (xml.Name{Space: "DAV:", Local: "sync-collection"}) {
+		t.Errorf("DEFECT F5661: supported-report-set\nEXPECTED: addressbook-query, addressbook-multiget, sync-collection\nACTUAL: %v", reports)
 	}
 	var colls []string
 	for _, c := range p[xml.Name{Local: "supported-collation-set"}].Children {

@@ -79,6 +79,10 @@ func (s *Server) newIMAPServer(addr string, mailstore *imap.BboltMailstore) *ima
 	}, mailstore)
 	imapServer.SetAuthFunc(s.authenticate)
 	imapServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
+	if s.imapAuth == nil {
+		s.imapAuth = imap.NewAuthTracker()
+	}
+	imapServer.SetAuthTracker(s.imapAuth)
 	imapServer.SetReadTimeout(10 * time.Minute)
 	imapServer.SetWriteTimeout(10 * time.Minute)
 	imapServer.SetIdleTimeout(time.Duration(s.config.IMAP.IdleTimeout))

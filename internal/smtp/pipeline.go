@@ -429,6 +429,7 @@ type GreylistStage struct {
 
 type greylistEntry struct {
 	firstSeen time.Time
+	lastSeen  time.Time
 	allowed   bool
 }
 
@@ -451,68 +452,89 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 
 	// Emergency cleanup if we've exceeded max entries
 	if len(s.greylist) >= s.maxEntries {
-		// Remove oldest 50% of entries
-		cutoff := now.Add(-5 * time.Minute) // Keep entries newer than 5 minutes
-		// Collect keys to delete first to avoid modifying map during iteration
-		keysToDelete := make([]string, 0)
+		cutoff := now.Add(-5 * time.Minute)
 		for key, entry := range s.greylist {
 			if entry.firstSeen.Before(cutoff) {
-				keysToDelete = append(keysToDelete, key)
+				delete(s.greylist, key)
 			}
-			if len(s.greylist)-len(keysToDelete) < s.maxEntries/2 {
-				break // Stop when we've removed enough
+			if len(s.greylist) < s.maxEntries/2 {
+				break
 			}
 		}
-		for _, key := range keysToDelete {
+		// If everything is recent, still bound memory by evicting arbitrary entries.
+		for key := range s.greylist {
+			if len(s.greylist) < s.maxEntries {
+				break
+			}
 			delete(s.greylist, key)
 		}
 	}
 
-	// Periodically clean up stale greylist entries to prevent unbounded growth
+	// Periodically clean up stale greylist entries to prevent unbounded growth.
+	// Pending entries expire 6h after first sight; passed entries expire
+	// after 36 days without being seen (F5832).
 	if now.Sub(s.lastCleanup) > 10*time.Minute {
-		keysToDelete := make([]string, 0)
 		for key, entry := range s.greylist {
-			if now.Sub(entry.firstSeen) > 6*time.Hour {
-				keysToDelete = append(keysToDelete, key)
+			if greylistExpired(entry, now) {
+				delete(s.greylist, key)
 			}
-		}
-		for _, key := range keysToDelete {
-			delete(s.greylist, key)
 		}
 		s.lastCleanup = now
 	}
 
 	// Create triplet key: sender IP + sender email + recipient email
+	// (addresses are case-insensitive for greylisting purposes).
+	deferred := false
+	from := strings.ToLower(ctx.From)
 	for _, recipient := range ctx.To {
-		key := fmt.Sprintf("%s:%s:%s", ctx.RemoteIP.String(), ctx.From, recipient)
+		key := fmt.Sprintf("%s:%s:%s", ctx.RemoteIP.String(), from, strings.ToLower(recipient))
 
 		entry, exists := s.greylist[key]
+		if exists && greylistExpired(entry, now) {
+			delete(s.greylist, key)
+			exists = false
+		}
 		if !exists {
 			// First time seeing this triplet
-			s.greylist[key] = &greylistEntry{
-				firstSeen: now,
-				allowed:   false,
-			}
-			ctx.Rejected = true
-			ctx.RejectionCode = 451
-			ctx.RejectionMessage = "Greylisted, please try again later"
-			return ResultReject
+			s.greylist[key] = &greylistEntry{firstSeen: now, lastSeen: now}
+			deferred = true
+			continue
 		}
 
 		if !entry.allowed {
 			// Check if enough time has passed (5 minutes)
 			if now.Sub(entry.firstSeen) < 5*time.Minute {
-				ctx.Rejected = true
-				ctx.RejectionCode = 451
-				ctx.RejectionMessage = "Greylisted, please try again later"
-				return ResultReject
+				deferred = true
+				continue
 			}
 			entry.allowed = true
 		}
+		entry.lastSeen = now
+	}
+
+	if deferred {
+		ctx.Rejected = true
+		ctx.RejectionCode = 451
+		ctx.RejectionMessage = "Greylisted, please try again later"
+		return ResultReject
 	}
 
 	return ResultAccept
 }
+
+func greylistExpired(e *greylistEntry, now time.Time) bool {
+	if e.allowed {
+		last := e.lastSeen
+		if last.IsZero() {
+			last = e.firstSeen
+		}
+		return now.Sub(last) > 36*24*time.Hour
+	}
+	return now.Sub(e.firstSeen) > 6*time.Hour
+}
+
+// rblLookupTimeout bounds each DNSBL lookup.
+const rblLookupTimeout = 3 * time.Second
 
 // RBLStage checks DNS blocklists
 type RBLStage struct {
@@ -534,16 +556,21 @@ func NewRealRBLDNSResolver() RBLDNSResolver {
 }
 
 func (r *realRBLDNSResolver) LookupHost(ctx context.Context, host string) (net.IP, error) {
-	// Use net.LookupIP which returns A/AAAA records
-	// We use the first returned IP as the RBL response
-	ips, err := net.LookupIP(host)
+	// Context-aware lookup so a slow DNSBL cannot stall the SMTP session
+	// (F5834). Prefer IPv4 answers: DNSBL listings are A records.
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, err
 	}
-	if len(ips) == 0 {
+	if len(addrs) == 0 {
 		return nil, fmt.Errorf("no DNS records found")
 	}
-	return ips[0], nil
+	for _, a := range addrs {
+		if a.IP.To4() != nil {
+			return a.IP, nil
+		}
+	}
+	return addrs[0].IP, nil
 }
 
 // RBLResult codes (first octet of returned IP indicates listing type)
@@ -580,9 +607,17 @@ func (s *RBLStage) Process(ctx *MessageContext) PipelineResult {
 	for _, server := range s.servers {
 		lookupHost := fmt.Sprintf("%s.%s", reversedIP, server)
 
-		ip, err := s.resolver.LookupHost(context.Background(), lookupHost)
-		if err != nil {
+		lctx, cancel := context.WithTimeout(context.Background(), rblLookupTimeout)
+		ip, err := s.resolver.LookupHost(lctx, lookupHost)
+		cancel()
+		if err != nil || ip == nil {
 			// Not listed or DNS error - continue to next RBL
+			continue
+		}
+		// Only 127.0.0.0/8 answers are listings. 127.255.255.x are
+		// DNSBL operator error codes (query refused / open resolver), and
+		// anything else is a wildcard/hijacked response (F5835).
+		if v4 := ip.To4(); v4 == nil || v4[0] != 127 || v4[1] == 255 {
 			continue
 		}
 
@@ -645,7 +680,7 @@ func reverseIP(ip string) string {
 		low := ipv6[i] & 0x0F
 		// RFC 3596: nibble N+1 is high nibble, nibble N is low nibble
 		// When building reverse, we go byte-by-byte: low nibble first, then high
-		fmt.Fprintf(&reversed, "%d.%d.", low, high)
+		fmt.Fprintf(&reversed, "%x.%x.", low, high)
 	}
 	reversed.WriteString("ip6.arpa")
 	return reversed.String()
@@ -853,7 +888,14 @@ func (s *ScoreStage) Process(ctx *MessageContext) PipelineResult {
 type AVStage struct {
 	scanner AVScanner
 	action  string // "reject", "quarantine", "tag"
+	// failOpen accepts messages when the scan errors. Default false:
+	// scan errors temp-fail (451) so mail is retried rather than delivered
+	// unscanned (F5830).
+	failOpen bool
 }
+
+// SetFailOpen configures whether scan errors accept the message.
+func (s *AVStage) SetFailOpen(v bool) { s.failOpen = v }
 
 // AVScanner interface for virus scanning
 type AVScanner interface {
@@ -865,6 +907,8 @@ type AVScanner interface {
 type AVScanResult struct {
 	Infected bool
 	Virus    string
+	// Skipped means no scan took place; Infected=false then is not "clean".
+	Skipped bool
 }
 
 // NewAVStage creates a new antivirus scanning stage
@@ -883,8 +927,20 @@ func (s *AVStage) Process(ctx *MessageContext) PipelineResult {
 	}
 
 	result, err := s.scanner.Scan(ctx.Data)
-	if err != nil {
-		// Scan error — accept but log
+	if err != nil || result == nil {
+		if s.failOpen {
+			ctx.Headers["X-Virus-Scan"] = []string{"error"}
+			return ResultAccept
+		}
+		ctx.Rejected = true
+		ctx.RejectionCode = 451
+		ctx.RejectionMessage = "4.7.1 Virus scanner unavailable, please try again later"
+		return ResultReject
+	}
+
+	if result.Skipped {
+		// Not scanned: accept, but never claim the message is clean.
+		ctx.Headers["X-Virus-Scan"] = []string{"skipped"}
 		return ResultAccept
 	}
 

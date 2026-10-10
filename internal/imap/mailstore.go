@@ -53,6 +53,43 @@ func (m *BboltMailstore) storeBlob(user string, data []byte) (string, error) {
 	return m.msgStore.StoreMessage(user, data)
 }
 
+// CheckQuota reports storage.ErrQuotaExceeded when storing need more bytes
+// would exceed user's quota (F5841). The check is advisory (used before a
+// MULTIAPPEND); per-message enforcement still happens in storeBlob.
+func (m *BboltMailstore) CheckQuota(user string, need int64) error {
+	if m.quotaLimit == nil {
+		return nil
+	}
+	limit := m.quotaLimit(user)
+	if limit <= 0 {
+		return nil
+	}
+	used, err := m.msgStore.UserUsage(user)
+	if err != nil {
+		return err
+	}
+	if used+need > limit {
+		return &storage.QuotaExceededError{User: user, Used: used, Need: need, Limit: limit}
+	}
+	return nil
+}
+
+// RollbackAppended removes the just-appended messages uids of mailbox and
+// releases their blobs; it undoes a partially stored MULTIAPPEND (F5841).
+func (m *BboltMailstore) RollbackAppended(user, mailbox string, uids []uint32) {
+	var released []string
+	for _, uid := range uids {
+		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
+		if err != nil {
+			continue
+		}
+		if m.db.DeleteMessage(user, mailbox, uid) == nil {
+			released = append(released, meta.MessageID)
+		}
+	}
+	m.releaseBlobs(user, released)
+}
+
 // MDNHandler defines the interface for sending MDN notifications
 type MDNHandler interface {
 	SendMDN(from, to, messageID, inReplyTo string, msg []byte) error

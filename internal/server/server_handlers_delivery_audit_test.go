@@ -143,8 +143,8 @@ func TestDeliveryPartialFailureAcceptsAndBounces(t *testing.T) {
 	if err := s.deliverMessageWithNotify("s@ext.com", []string{"bob@test.com", "alice@test.com"}, nil, []byte(deliveryAuditMsg)); err != nil {
 		t.Fatalf("partial delivery must be accepted (a 451 makes the client duplicate bob's copy): %v", err)
 	}
-	if got := quotaUsed(t, s, "bob"); got != int64(len(deliveryAuditMsg)) {
-		t.Fatalf("bob QuotaUsed = %d, want one copy (%d)", got, len(deliveryAuditMsg))
+	if got := quotaUsed(t, s, "bob"); got != storedLen([]byte(deliveryAuditMsg)) {
+		t.Fatalf("bob QuotaUsed = %d, want one copy (%d)", got, storedLen([]byte(deliveryAuditMsg)))
 	}
 	dsns := bouncesTo(t, s, "s@ext.com")
 	if len(dsns) != 1 || !strings.Contains(dsns[0], "alice@test.com") || !strings.Contains(dsns[0], "5.2.2") {
@@ -198,8 +198,8 @@ func TestDeliveryCatchAllCoversUnknownMailbox(t *testing.T) {
 	if err := s.deliverLocal("bob", "test.com", "s@ext.com", []byte(deliveryAuditMsg)); err != nil {
 		t.Fatalf("existing mailbox: %v", err)
 	}
-	if got := quotaUsed(t, s, "carol"); got != int64(len(deliveryAuditMsg)) {
-		t.Fatalf("carol QuotaUsed = %d, want exactly the catch-all copy (%d)", got, len(deliveryAuditMsg))
+	if got := quotaUsed(t, s, "carol"); got != storedLen([]byte(deliveryAuditMsg)) {
+		t.Fatalf("carol QuotaUsed = %d, want exactly the catch-all copy (%d)", got, storedLen([]byte(deliveryAuditMsg)))
 	}
 }
 
@@ -236,8 +236,8 @@ func TestDeliveryForwardLoopKeepsMessageAndQuotaConsistent(t *testing.T) {
 		if !storedInbox(s, "fw@test.com") {
 			t.Fatalf("keep=%v: looped message dropped", keep)
 		}
-		if got := quotaUsed(t, s, "fw"); got != int64(len(deliveryAuditLoopMsg)) {
-			t.Fatalf("keep=%v: QuotaUsed = %d, want %d", keep, got, len(deliveryAuditLoopMsg))
+		if got := quotaUsed(t, s, "fw"); got != storedLen([]byte(deliveryAuditLoopMsg)) {
+			t.Fatalf("keep=%v: QuotaUsed = %d, want %d", keep, got, storedLen([]byte(deliveryAuditLoopMsg)))
 		}
 		if entries, _ := s.queue.GetPendingEntries(); len(entries) != 0 {
 			t.Fatalf("keep=%v: looped message forwarded again", keep)
@@ -257,7 +257,7 @@ func TestDeliveryForwardFailureKeepsLocalCopy(t *testing.T) {
 		if err := s.deliverLocal("fw", "test.com", "s@ext.com", []byte(deliveryAuditMsg)); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if !storedInbox(s, "fw@test.com") || quotaUsed(t, s, "fw") != int64(len(deliveryAuditMsg)) {
+		if !storedInbox(s, "fw@test.com") || quotaUsed(t, s, "fw") != storedLen([]byte(deliveryAuditMsg)) {
 			t.Fatalf("%s: forward not queued and no local copy kept (mail lost)", name)
 		}
 	}
@@ -427,3 +427,7 @@ func TestIsLocalDomainRequiresActiveDomain(t *testing.T) {
 		t.Fatal("inactive or unknown domain treated as local")
 	}
 }
+
+// storedLen is the stored size of a message delivered from s@ext.com: the
+// delivered copy carries a Return-Path header (RFC 5321 4.4).
+func storedLen(d []byte) int64 { return int64(len(addReturnPath(d, "s@ext.com"))) }

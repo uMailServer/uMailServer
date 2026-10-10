@@ -51,6 +51,7 @@ type Server struct {
 	webhookMgr        *webhook.Manager
 	alertMgr          *alert.Manager
 	pushSvc           *push.Service
+	imapAuth          *imap.AuthTracker // shared failed-login counters across IMAP listeners (F5844)
 	searchSvc         *search.Service
 	sieveManager      *sieve.Manager
 	storageDB         *storage.Database

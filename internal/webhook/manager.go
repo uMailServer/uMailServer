@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -348,9 +349,29 @@ func (m *Manager) isValidWebhookURL(rawURL string) (bool, string) {
 // The unspecified address (0.0.0.0, ::) is included because connecting to it
 // reaches the local host (F5175).
 func isBlockedIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsMulticast() {
+		return true
+	}
+	for _, n := range blockedNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
+
+// blockedNets lists non-routable ranges net.IP's helpers do not cover: CGNAT
+// (100.64/10, which hosts e.g. cloud metadata endpoints), benchmarking,
+// IETF protocol assignments and reserved space (F5923).
+var blockedNets = func() []*net.IPNet {
+	var nets []*net.IPNet
+	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4"} {
+		_, n, _ := net.ParseCIDR(c)
+		nets = append(nets, n)
+	}
+	return nets
+}()
 
 // dialControl runs after DNS resolution with the concrete address being
 // connected to, so it sees the address the request really goes to.
@@ -443,13 +464,14 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Events []string `json:"events"`
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	hook := &Webhook{
-		ID:        fmt.Sprintf("wh_%d", time.Now().Unix()),
+		ID:        newHookID(),
 		URL:       req.URL,
 		Events:    req.Events,
 		Active:    true,
@@ -465,6 +487,16 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(hook); err != nil {
 		log.Printf("webhook: failed to encode response: %v", err)
 	}
+}
+
+// newHookID returns a collision-free webhook ID. A second-resolution
+// timestamp gave two hooks created in the same second the same ID (F5924).
+func newHookID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("wh_%d", time.Now().UnixNano())
+	}
+	return "wh_" + hex.EncodeToString(b)
 }
 
 // GetCircuitBreakerMetrics returns circuit breaker metrics for all webhook URLs

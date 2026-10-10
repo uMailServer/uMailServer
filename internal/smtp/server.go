@@ -460,3 +460,13 @@ func ValidateEmail(email string) (string, error) {
 	}
 	return addr.Address, nil
 }
+
+// tlsAvailable reports whether STARTTLS can actually be served: a TLS config
+// must exist and be able to supply a certificate (F5831).
+func (s *Server) tlsAvailable() bool {
+	c := s.config.TLSConfig
+	if c == nil {
+		return false
+	}
+	return len(c.Certificates) > 0 || c.GetCertificate != nil || c.GetConfigForClient != nil
+}

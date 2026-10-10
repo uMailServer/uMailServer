@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/x509"
@@ -511,6 +512,49 @@ func addMailLoopHeader(data []byte, addr string) []byte {
 	return []byte(headerPart + "X-Mail-Loop: " + addr + "\r\n" + bodyPart)
 }
 
+// addReturnPath returns data with a Return-Path header for the envelope
+// sender prepended and any existing Return-Path header removed.
+func addReturnPath(data []byte, from string) []byte {
+	from = strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' || r == '<' || r == '>' {
+			return -1
+		}
+		return r
+	}, from)
+	hdrEnd := len(data)
+	if i := bytes.Index(data, []byte("\r\n\r\n")); i >= 0 {
+		hdrEnd = i + 2
+	}
+	if j := bytes.Index(data, []byte("\n\n")); j >= 0 && j+1 < hdrEnd {
+		hdrEnd = j + 1
+	}
+	var out bytes.Buffer
+	out.WriteString("Return-Path: <" + from + ">\r\n")
+	skipping := false
+	pos := 0
+	for pos < hdrEnd {
+		nl := bytes.IndexByte(data[pos:hdrEnd], '\n')
+		end := hdrEnd
+		if nl >= 0 {
+			end = pos + nl + 1
+		}
+		line := data[pos:end]
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			if !skipping {
+				out.Write(line)
+			}
+		} else {
+			skipping = len(line) >= 12 && strings.EqualFold(string(line[:12]), "Return-Path:")
+			if !skipping {
+				out.Write(line)
+			}
+		}
+		pos = end
+	}
+	out.Write(data[hdrEnd:])
+	return out.Bytes()
+}
+
 // deliverLocal delivers a message to a local mailbox
 func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFolders ...string) error {
 	return s.deliverLocalHop(user, domain, from, data, true, targetFolders...)
@@ -592,6 +636,10 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 			return nil
 		}
 	}
+
+	// RFC 5321 4.4: the final delivery system records the envelope sender in
+	// a Return-Path header, replacing any the message arrived with.
+	data = addReturnPath(data, from)
 
 	// Reserve quota atomically before storing. This comes after the
 	// forward-only return above: a message that is not stored must not be

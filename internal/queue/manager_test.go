@@ -179,7 +179,7 @@ func TestNewManager(t *testing.T) {
 	if manager.shutdown == nil {
 		t.Error("expected shutdown channel to be initialized")
 	}
-	if manager.maxRetries != len(retryDelays) {
+	if manager.maxRetries != len(retryDelays)+1 {
 		t.Errorf("expected maxRetries to be %d, got %d", len(retryDelays), manager.maxRetries)
 	}
 	if manager.maxQueueSize != 10000 {

@@ -1041,6 +1041,11 @@ func cmdBackup(args []string) {
 	}
 
 	bm := cli.NewBackupManager(cfg)
+	// UMAILSERVER_BACKUP_PASSWORD keeps the secret out of argv, which any
+	// local user can read via /proc/<pid>/cmdline or ps (F5916).
+	if *password == "" {
+		*password = os.Getenv("UMAILSERVER_BACKUP_PASSWORD")
+	}
 	if *password != "" {
 		bm.SetPassword(*password)
 	}
@@ -1070,6 +1075,11 @@ func cmdRestore(args []string) {
 	}
 
 	bm := cli.NewBackupManager(cfg)
+	// UMAILSERVER_BACKUP_PASSWORD keeps the secret out of argv, which any
+	// local user can read via /proc/<pid>/cmdline or ps (F5916).
+	if *password == "" {
+		*password = os.Getenv("UMAILSERVER_BACKUP_PASSWORD")
+	}
 	if *password != "" {
 		bm.SetPassword(*password)
 	}
@@ -1088,6 +1098,7 @@ func cmdMigrate(args []string) {
 	targetUser := fs.String("target", "", "Target user email")
 	dryRun := fs.Bool("dry-run", false, "Dry run mode")
 	passwdFile := fs.String("passwd-file", "", "Password file (for Dovecot)")
+	configFlag := fs.String("config", "./umailserver.yaml", "Path to config file")
 
 	_ = fs.Parse(args)
 
@@ -1102,8 +1113,7 @@ func cmdMigrate(args []string) {
 	}
 
 	// Load config and database
-	configPath := "./umailserver.yaml"
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load(*configFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)

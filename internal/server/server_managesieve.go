@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/sieve"
 )
@@ -20,6 +21,7 @@ func (s *Server) startManageSieve() error {
 	tlsCfg := s.tlsManager.GetTLSConfig()
 
 	sieveServer := sieve.NewManageSieveServer(s.sieveManager, tlsCfg)
+	sieveServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	// F5116: the configured bind/port were only logged; the listener always
 	// bound the package default 0.0.0.0:4190 (and 0.0.0.0:4191 for TLS).
 	sieveServer.SetListenAddrs(addr, tlsAddr)

@@ -117,15 +117,26 @@ func GenerateMessageID() string {
 	return fmt.Sprintf("<%d.%s@umailserver>", time.Now().UnixNano(), hex.EncodeToString(b))
 }
 
+// maxDSNOriginalSize bounds the original message a DSN returns in full.
+const maxDSNOriginalSize = 128 * 1024
+
 // GenerateDSN generates a Delivery Status Notification message
 func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 	// Determine what to include from original message
+	// A full return larger than maxDSNOriginalSize is cut down to the headers
+	// (RFC 3461 §4.3 lets the MTA return headers only), so a bounce of a
+	// large attachment is not itself oversized and bounced again (F5902).
+	// Headers-only content is labelled text/rfc822-headers (RFC 3462 §2).
 	var originalPart string
-	if ret == DSNRetFull {
+	originalType := "message/rfc822"
+	if ret == DSNRetFull && len(originalMessage) <= maxDSNOriginalSize {
 		originalPart = string(originalMessage)
 	} else {
-		// Headers only - extract headers from original message
 		originalPart = extractHeaders(string(originalMessage))
+		originalType = "text/rfc822-headers"
+	}
+	if dsn.MessageID == "" {
+		dsn.MessageID = GenerateMessageID()
 	}
 
 	// Generate DSN message
@@ -139,6 +150,7 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 			"Date: %s\r\n"+
 			"Message-ID: %s\r\n"+
 			"MIME-Version: 1.0\r\n"+
+			"Auto-Submitted: auto-generated\r\n"+
 			"\r\n"+
 			"--%s\r\n"+
 			"Content-Type: text/plain\r\n"+
@@ -194,11 +206,12 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 
 	dsnMsg += fmt.Sprintf(
 		"\r\n--%s\r\n"+
-			"Content-Type: message/rfc822\r\n"+
+			"Content-Type: %s\r\n"+
 			"\r\n"+
 			"%s\r\n"+
 			"\r\n--%s--\r\n",
 		boundary,
+		originalType,
 		originalPart,
 		boundary,
 	)

@@ -33,7 +33,7 @@ func apiUpdateFixtureServer(t *testing.T) (*Server, *db.DB) {
 func apiUpdateFixtureCall(t *testing.T, method, path, body string, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), "user", "user@example.test"))
+	req = req.WithContext(context.WithValue(context.WithValue(req.Context(), "user", "user@example.test"), "isAdmin", true))
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	return rec

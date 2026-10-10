@@ -46,3 +46,50 @@ func (a *avScannerAdapter) Scan(data []byte) (*smtp.AVScanResult, error) {
 		Virus:    res.Virus,
 	}, nil
 }
+
+// avLogger is the logging subset avFailClosedStage needs.
+type avLogger interface {
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
+}
+
+// avFailClosedStage runs the antivirus scan itself so that a scanner error
+// temp-fails the message (451) instead of being accepted unscanned, which
+// is what smtp.AVStage does on error, and so a skipped scan is logged. The
+// infected-verdict handling is delegated to smtp.AVStage.
+type avFailClosedStage struct {
+	scanner *av.Scanner
+	action  string
+	logger  avLogger
+}
+
+func (a *avFailClosedStage) Name() string { return "AV" }
+
+func (a *avFailClosedStage) Process(ctx *smtp.MessageContext) smtp.PipelineResult {
+	if a.scanner == nil || !a.scanner.IsEnabled() {
+		return smtp.ResultAccept
+	}
+	res, err := a.scanner.Scan(ctx.Data)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Error("Antivirus scan failed, temp-failing message", "from", ctx.From, "error", err)
+		}
+		ctx.Rejected = true
+		ctx.RejectionCode = 451
+		ctx.RejectionMessage = "Antivirus scan unavailable, try again later"
+		return smtp.ResultReject
+	}
+	if res.Skipped {
+		if a.logger != nil {
+			a.logger.Warn("Antivirus scan skipped", "from", ctx.From)
+		}
+		return smtp.ResultAccept
+	}
+	return smtp.NewAVStage(staticAVScanner{res: &smtp.AVScanResult{Infected: res.Infected, Virus: res.Virus}}, a.action).Process(ctx)
+}
+
+// staticAVScanner replays an already-computed scan result.
+type staticAVScanner struct{ res *smtp.AVScanResult }
+
+func (staticAVScanner) IsEnabled() bool                           { return true }
+func (s staticAVScanner) Scan([]byte) (*smtp.AVScanResult, error) { return s.res, nil }

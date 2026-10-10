@@ -498,13 +498,55 @@ func (d *DB) IncrementQuota(domain, localPart string, delta int64) error {
 		if err := json.Unmarshal(data, &account); err != nil {
 			return err
 		}
-		if account.QuotaLimit > 0 && account.QuotaUsed+delta > account.QuotaLimit {
-			return fmt.Errorf("quota exceeded for user: %s", key)
+		// F5880: a corrupt/legacy negative counter is treated as 0.
+		if account.QuotaUsed < 0 {
+			account.QuotaUsed = 0
 		}
 		if delta > 0 && account.QuotaUsed > math.MaxInt64-delta {
 			return fmt.Errorf("quota overflow for user: %s", key)
 		}
-		account.QuotaUsed += delta
+		if delta > 0 && account.QuotaLimit > 0 && account.QuotaUsed+delta > account.QuotaLimit {
+			return fmt.Errorf("quota exceeded for user: %s", key)
+		}
+		// F5880: a release larger than the recorded usage (e.g. usage was
+		// reset, or a message was counted before quota tracking) must not
+		// drive the counter negative, which would grant free headroom.
+		if delta < 0 && account.QuotaUsed+delta < 0 {
+			account.QuotaUsed = 0
+		} else {
+			account.QuotaUsed += delta
+		}
+		account.UpdatedAt = time.Now()
+		newData, err := json.Marshal(&account)
+		if err != nil {
+			return fmt.Errorf("failed to marshal value: %w", err)
+		}
+		return b.Put([]byte(key), newData)
+	})
+}
+
+// ReconcileQuota sets an account's QuotaUsed to the authoritative byte count
+// (e.g. recounted from disk), clamped at 0. UpdateAccount deliberately never
+// writes QuotaUsed, so this is the only way to correct drift. F5881.
+func (d *DB) ReconcileQuota(domain, localPart string, used int64) error {
+	if used < 0 {
+		used = 0
+	}
+	key := AccountKey(domain, localPart)
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		data := b.Get([]byte(key))
+		if data == nil {
+			return fmt.Errorf("key not found: %s", key)
+		}
+		var account AccountData
+		if err := json.Unmarshal(data, &account); err != nil {
+			return err
+		}
+		account.QuotaUsed = used
 		account.UpdatedAt = time.Now()
 		newData, err := json.Marshal(&account)
 		if err != nil {
