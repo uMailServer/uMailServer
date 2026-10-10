@@ -1048,7 +1048,7 @@ func TestHandleCalendarPropfind_InvalidPath(t *testing.T) {
 	server := NewServer(t.TempDir(), slog.Default())
 
 	multistatus := &Multistatus{}
-	server.handleCalendarPropfind("/invalid", "user@example.com", multistatus)
+	server.handleCalendarPropfind("/invalid", "user@example.com", multistatus, true)
 
 	// Should not panic and not add any responses
 	if len(multistatus.Responses) != 0 {
@@ -1060,7 +1060,7 @@ func TestHandleCalendarPropfind_NonExistentCalendar(t *testing.T) {
 	server := NewServer(t.TempDir(), slog.Default())
 
 	multistatus := &Multistatus{}
-	server.handleCalendarPropfind("/dav/calendars/nonexistent", "user@example.com", multistatus)
+	server.handleCalendarPropfind("/dav/calendars/nonexistent", "user@example.com", multistatus, true)
 
 	// Should not panic and not add responses
 	if len(multistatus.Responses) != 0 {
@@ -1073,7 +1073,7 @@ func TestHandleCalendarPropfind_EmptyCalendarID(t *testing.T) {
 
 	multistatus := &Multistatus{}
 	// Test with no calendar ID segment
-	server.handleCalendarPropfind("/dav/calendars/", "user@example.com", multistatus)
+	server.handleCalendarPropfind("/dav/calendars/", "user@example.com", multistatus, true)
 
 	if len(multistatus.Responses) != 0 {
 		t.Error("Should not add responses for empty calendar ID")
@@ -1112,7 +1112,7 @@ END:VCALENDAR`
 
 	multistatus := &Multistatus{}
 	// Test with event path (request convention: /dav/calendars/{calendarID}/{eventUID})
-	server.handleCalendarPropfind("/dav/calendars/test-cal/test-event-1", "user@example.com", multistatus)
+	server.handleCalendarPropfind("/dav/calendars/test-cal/test-event-1", "user@example.com", multistatus, true)
 
 	// Should have one response for the event
 	if len(multistatus.Responses) != 1 {
@@ -1135,7 +1135,7 @@ func TestHandleCalendarPropfind_NonExistentEvent(t *testing.T) {
 
 	multistatus := &Multistatus{}
 	// Test with non-existent event path
-	server.handleCalendarPropfind("/dav/calendars/user@example.com/test-cal/nonexistent-event", "user@example.com", multistatus)
+	server.handleCalendarPropfind("/dav/calendars/user@example.com/test-cal/nonexistent-event", "user@example.com", multistatus, true)
 
 	// Should have no responses (event not found)
 	if len(multistatus.Responses) != 0 {

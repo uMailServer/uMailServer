@@ -76,6 +76,12 @@ func (a *pop3MailstoreAdapter) GetMessageData(user string, index int) ([]byte, e
 	if err != nil || len(msgs) == 0 {
 		return nil, fmt.Errorf("message not found")
 	}
+	// FetchMessages leaves Data nil when the blob cannot be read; returning
+	// it made RETR answer "+OK 0 octets" and DELE then dropped the message
+	// the client never received (F5421). A stored empty message is non-nil.
+	if msgs[0].Data == nil {
+		return nil, fmt.Errorf("message data unreadable")
+	}
 	return msgs[0].Data, nil
 }
 

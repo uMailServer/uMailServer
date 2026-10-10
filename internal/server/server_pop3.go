@@ -30,15 +30,31 @@ func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	pop3Server.SetLoginResultHandler(s.protoLoginHandler("pop3"))
 	pop3Server.SetTracingProvider(s.tracingProvider)
 
-	if s.tlsManager.IsEnabled() {
+	// The POP3 port is implicit TLS (RFC 8314, default 995). The TLS config
+	// used to be gated on tlsManager.IsEnabled(), which New never sets, and
+	// the listener was always plaintext: with requireTLS on, USER/PASS were
+	// refused and STLS was unavailable, so no client could log in (F5420).
+	// pop3 loads certificates from files, so a manual cert/key is required.
+	// Without a loadable one the listener stays plaintext: auth is refused
+	// there and STLS is offered once the certificate becomes loadable.
+	implicitTLS := false
+	if s.config.TLS.CertFile != "" && s.config.TLS.KeyFile != "" {
 		pop3Server.SetTLSConfig(&pop3.TLSConfig{
 			CertFile: s.config.TLS.CertFile,
 			KeyFile:  s.config.TLS.KeyFile,
 		})
+		if err := pop3Server.StartTLS(); err != nil {
+			s.logger.Error("POP3 implicit TLS unavailable; clients cannot authenticate", "addr", pop3Addr, "error", err)
+		} else {
+			implicitTLS = true
+		}
+	} else {
+		s.logger.Warn("POP3 has no tls.cert_file/tls.key_file; clients cannot authenticate", "addr", pop3Addr)
 	}
-
-	if err := pop3Server.Start(); err != nil {
-		return fmt.Errorf("failed to start POP3 server: %w", err)
+	if !implicitTLS {
+		if err := pop3Server.Start(); err != nil {
+			return fmt.Errorf("failed to start POP3 server: %w", err)
+		}
 	}
 	s.pop3Server = pop3Server
 	s.logger.Info("POP3 server started", "addr", pop3Addr)

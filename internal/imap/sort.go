@@ -2,6 +2,7 @@ package imap
 
 import (
 	"fmt"
+	"mime"
 	"sort"
 	"strings"
 	"time"
@@ -24,41 +25,43 @@ type SortResult struct {
 // Example: ["ARRIVAL", "REVERSE", "SUBJECT"]
 func parseSortCriteria(args []string) ([]SortCriterion, error) {
 	var criteria []SortCriterion
-	// Default is from newest to oldest
-	descending := true
+	// RFC 5256 §3: criteria sort ascending; REVERSE makes only the next
+	// criterion descending. F5491: the default was descending, so SORT
+	// (DATE) listed newest first and REVERSE DATE oldest first.
+	descending := false
 
 	for i := 0; i < len(args); i++ {
 		arg := strings.ToUpper(args[i])
 		switch arg {
 		case "ARRIVAL":
 			criteria = append(criteria, SortCriterion{Field: "ARRIVAL", Descending: descending})
-			descending = true // reset after each criterion
+			descending = false // reset after each criterion
 		case "DATE":
 			criteria = append(criteria, SortCriterion{Field: "DATE", Descending: descending})
-			descending = true
+			descending = false
 		case "FROM":
 			criteria = append(criteria, SortCriterion{Field: "FROM", Descending: descending})
-			descending = true
+			descending = false
 		case "SUBJECT":
 			criteria = append(criteria, SortCriterion{Field: "SUBJECT", Descending: descending})
-			descending = true
+			descending = false
 		case "SIZE":
 			criteria = append(criteria, SortCriterion{Field: "SIZE", Descending: descending})
-			descending = true
+			descending = false
 		case "UID":
 			criteria = append(criteria, SortCriterion{Field: "UID", Descending: descending})
-			descending = true
+			descending = false
 		case "REVERSE":
-			descending = !descending // Toggle for the next criterion
+			descending = true // applies to the next criterion
 		case "SCORE":
 			// NOTREVEALED - for threading, not supported in basic sort
 			return nil, fmt.Errorf("unsupported sort criterion: SCORE")
 		case "CC":
 			criteria = append(criteria, SortCriterion{Field: "CC", Descending: descending})
-			descending = true
+			descending = false
 		case "TO":
 			criteria = append(criteria, SortCriterion{Field: "TO", Descending: descending})
-			descending = true
+			descending = false
 		default:
 			return nil, fmt.Errorf("unknown sort criterion: %s", arg)
 		}
@@ -97,7 +100,7 @@ func sortMessagesByCriteria(messages []*storage.MessageMetadata, criteria []Sort
 				uid:     msg.UID,
 				date:    t,
 				from:    msg.From,
-				subject: msg.Subject,
+				subject: baseSubject(msg.Subject),
 				size:    msg.Size,
 				arrival: msg.InternalDate,
 			}
@@ -106,7 +109,7 @@ func sortMessagesByCriteria(messages []*storage.MessageMetadata, criteria []Sort
 				seqNum:  seqNums[i],
 				uid:     msg.UID,
 				from:    msg.From,
-				subject: msg.Subject,
+				subject: baseSubject(msg.Subject),
 				size:    msg.Size,
 				arrival: msg.InternalDate,
 			}
@@ -125,7 +128,7 @@ func sortMessagesByCriteria(messages []*storage.MessageMetadata, criteria []Sort
 				case "FROM":
 					return strings.ToLower(sortable[a].from) < strings.ToLower(sortable[b].from)
 				case "SUBJECT":
-					return strings.ToLower(sortable[a].subject) < strings.ToLower(sortable[b].subject)
+					return sortable[a].subject < sortable[b].subject
 				case "SIZE":
 					return sortable[a].size < sortable[b].size
 				case "UID":
@@ -154,6 +157,68 @@ func sortMessagesByCriteria(messages []*storage.MessageMetadata, criteria []Sort
 	}
 
 	return result
+}
+
+// baseSubject returns the RFC 5256 §2.1 base subject used by SORT SUBJECT:
+// decoded, whitespace-collapsed and case-folded, with leading "Re:",
+// "Fw:", "Fwd:" and "[blob]" prefixes, trailing "(fwd)" and the
+// "[fwd: ... ]" wrapper removed. F5492: the raw subject was compared, so
+// "Re: apple" sorted after "banana".
+func baseSubject(subject string) string {
+	if dec, err := new(mime.WordDecoder).DecodeHeader(subject); err == nil {
+		subject = dec
+	}
+	s := strings.ToLower(strings.Join(strings.Fields(subject), " "))
+	for {
+		before := s
+		// (2) trailing "(fwd)" and whitespace
+		for strings.HasSuffix(s, "(fwd)") {
+			s = strings.TrimSpace(strings.TrimSuffix(s, "(fwd)"))
+		}
+		// (3)+(4) leading subj-refwd and subj-blob prefixes
+		for {
+			prev := s
+			s = trimSubjectPrefix(s)
+			if s == prev {
+				break
+			}
+		}
+		// (6) "[fwd:" ... "]" wrapper
+		if strings.HasPrefix(s, "[fwd:") && strings.HasSuffix(s, "]") {
+			s = strings.TrimSpace(s[len("[fwd:") : len(s)-1])
+		}
+		if s == before {
+			return s
+		}
+	}
+}
+
+// trimSubjectPrefix removes one leading "re:", "fw:", "fwd:" (optionally
+// with a "[blob]" before the colon) or one "[blob]" that does not leave
+// the subject empty.
+func trimSubjectPrefix(s string) string {
+	for _, p := range []string{"re", "fwd", "fw"} {
+		if !strings.HasPrefix(s, p) {
+			continue
+		}
+		rest := strings.TrimLeft(s[len(p):], " ")
+		if strings.HasPrefix(rest, "[") {
+			if end := strings.IndexByte(rest, ']'); end > 0 && !strings.ContainsAny(rest[1:end], "[]") {
+				rest = strings.TrimLeft(rest[end+1:], " ")
+			}
+		}
+		if strings.HasPrefix(rest, ":") {
+			return strings.TrimSpace(rest[1:])
+		}
+	}
+	if strings.HasPrefix(s, "[") {
+		if end := strings.IndexByte(s, ']'); end > 0 && !strings.ContainsAny(s[1:end], "[]") {
+			if rest := strings.TrimSpace(s[end+1:]); rest != "" {
+				return rest
+			}
+		}
+	}
+	return s
 }
 
 // ThreadAlgorithm represents the threading algorithm per RFC 5256

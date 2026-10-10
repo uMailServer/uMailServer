@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"mime"
-	"mime/multipart"
+	"net/mail"
 	"net/textproto"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -115,6 +115,11 @@ func bodySection(data []byte, section string) []byte {
 		if err != nil || n <= 0 {
 			break
 		}
+		// F5494: a message/rfc822 part's sub-parts are those of the
+		// encapsulated message (RFC 3501 §6.4.5), not of the part itself.
+		if !isMessage && isRFC822Part(part) {
+			_, part = splitHeaderBody(part)
+		}
 		part = mimeSubpart(part, n)
 		if part == nil {
 			return nil
@@ -123,6 +128,11 @@ func bodySection(data []byte, section string) []byte {
 		section = rest
 	}
 	header, body := splitHeaderBody(part)
+	// F5494: HEADER, HEADER.FIELDS[.NOT] and TEXT after a part number refer
+	// to the message encapsulated by a message/rfc822 part.
+	if !isMessage && section != "" && section != "MIME" && isRFC822Part(part) {
+		header, body = splitHeaderBody(body)
+	}
 	switch {
 	case section == "":
 		if isMessage {
@@ -141,40 +151,82 @@ func bodySection(data []byte, section string) []byte {
 	return nil
 }
 
+// partHeader parses the MIME header block of an entity.
+func partHeader(entity []byte) textproto.MIMEHeader {
+	header, _ := splitHeaderBody(entity)
+	tp := textproto.NewReader(bufio.NewReader(bytes.NewReader(header)))
+	mh, _ := tp.ReadMIMEHeader()
+	return mh
+}
+
+// isRFC822Part reports whether a MIME part is of type message/rfc822.
+func isRFC822Part(part []byte) bool {
+	mediaType, _, err := mime.ParseMediaType(partHeader(part).Get("Content-Type"))
+	return err == nil && (mediaType == "message/rfc822" || mediaType == "message/global")
+}
+
 // mimeSubpart returns part n (1-based, header+body) of a multipart entity.
 // For a non-multipart entity, part 1 is its body (RFC 3501 §6.4.5).
 func mimeSubpart(entity []byte, n int) []byte {
-	header, body := splitHeaderBody(entity)
-	tp := textproto.NewReader(bufio.NewReader(bytes.NewReader(header)))
-	mh, _ := tp.ReadMIMEHeader()
-	mediaType, params, err := mime.ParseMediaType(mh.Get("Content-Type"))
+	_, body := splitHeaderBody(entity)
+	mediaType, params, err := mime.ParseMediaType(partHeader(entity).Get("Content-Type"))
 	if err != nil || !strings.HasPrefix(mediaType, "multipart/") || params["boundary"] == "" {
 		if n == 1 {
 			return append([]byte("\r\n"), body...) // headerless part: body only
 		}
 		return nil
 	}
-	mr := multipart.NewReader(bytes.NewReader(body), params["boundary"])
-	for i := 1; ; i++ {
-		p, err := mr.NextRawPart()
-		if err != nil {
-			return nil
+	parts := splitMultipart(body, params["boundary"])
+	if n > len(parts) {
+		return nil
+	}
+	return parts[n-1]
+}
+
+// splitMultipart returns the raw body parts (header and body, byte for
+// byte) of a multipart body. F5495: parts used to be rebuilt from the
+// parsed header map, which reordered and re-cased the MIME header, so
+// BODY[n.MIME] (and partial fetches of it) differed between requests.
+func splitMultipart(body []byte, boundary string) [][]byte {
+	delim := []byte("--" + boundary)
+	var parts [][]byte
+	start := -1
+	for pos := 0; pos < len(body); {
+		lineEnd, next := len(body), len(body)
+		if i := bytes.IndexByte(body[pos:], '\n'); i >= 0 {
+			lineEnd, next = pos+i, pos+i+1
 		}
-		if i != n {
-			continue
-		}
-		var buf bytes.Buffer
-		for k, vs := range p.Header {
-			for _, v := range vs {
-				fmt.Fprintf(&buf, "%s: %s\r\n", k, v)
+		line := bytes.TrimRight(body[pos:lineEnd], "\r")
+		if bytes.HasPrefix(line, delim) {
+			rest := line[len(delim):]
+			closing := bytes.HasPrefix(rest, []byte("--"))
+			if closing {
+				rest = rest[2:]
+			}
+			if len(bytes.TrimRight(rest, " \t")) == 0 {
+				if start >= 0 {
+					// The line break before a delimiter belongs to it.
+					end := pos
+					if end > start && body[end-1] == '\n' {
+						end--
+						if end > start && body[end-1] == '\r' {
+							end--
+						}
+					}
+					parts = append(parts, body[start:end])
+				}
+				if closing {
+					return parts
+				}
+				start = next
 			}
 		}
-		buf.WriteString("\r\n")
-		if _, err := io.Copy(&buf, p); err != nil {
-			return nil
-		}
-		return buf.Bytes()
+		pos = next
 	}
+	if start >= 0 && start <= len(body) {
+		parts = append(parts, body[start:]) // unterminated last part
+	}
+	return parts
 }
 
 // filterHeader keeps (include) or drops the fields named in "(A B ...)".
@@ -229,4 +281,145 @@ func splitFetchItems(s string) []string {
 		items = append(items, cur.String())
 	}
 	return items
+}
+
+// maxBodyStructureDepth bounds recursion into nested multiparts and
+// message/rfc822 parts; deeper entities are described as opaque leaves.
+const maxBodyStructureDepth = 32
+
+// bodyStructure renders the RFC 3501 §7.4.2 BODY (ext=false) or
+// BODYSTRUCTURE (ext=true) of a message or MIME part. F5496: both items were
+// hard-coded to a single TEXT/PLAIN part, hiding every attachment and
+// nested message from clients that render from the structure.
+func bodyStructure(entity []byte, ext bool) string {
+	return bodyStructureDepth(entity, ext, 0)
+}
+
+func bodyStructureDepth(entity []byte, ext bool, depth int) string {
+	mh := partHeader(entity)
+	_, body := splitHeaderBody(entity)
+	mediaType, params, err := mime.ParseMediaType(mh.Get("Content-Type"))
+	if err != nil || mediaType == "" {
+		mediaType, params = "text/plain", map[string]string{"charset": "us-ascii"}
+	}
+	typ, sub, _ := strings.Cut(mediaType, "/")
+	var b strings.Builder
+	b.WriteByte('(')
+	if typ == "multipart" && params["boundary"] != "" && depth < maxBodyStructureDepth {
+		parts := splitMultipart(body, params["boundary"])
+		if len(parts) == 0 {
+			parts = [][]byte{[]byte("\r\n")} // RFC 3501 requires at least one part
+		}
+		for _, p := range parts {
+			b.WriteString(bodyStructureDepth(p, ext, depth+1))
+		}
+		b.WriteString(" " + imapNString(strings.ToUpper(sub)))
+		if ext {
+			b.WriteString(" " + imapParamList(params) + " " + imapDisposition(mh) + " " +
+				imapNString(mh.Get("Content-Language")) + " " + imapNString(mh.Get("Content-Location")))
+		}
+		b.WriteByte(')')
+		return b.String()
+	}
+	enc := strings.ToUpper(strings.TrimSpace(mh.Get("Content-Transfer-Encoding")))
+	if enc == "" {
+		enc = "7BIT"
+	}
+	fmt.Fprintf(&b, "%s %s %s %s %s %s %d",
+		imapNString(strings.ToUpper(typ)), imapNString(strings.ToUpper(sub)), imapParamList(params),
+		imapNString(mh.Get("Content-Id")), imapNString(mh.Get("Content-Description")),
+		imapNString(enc), len(body))
+	lines := bytes.Count(body, []byte("\n"))
+	switch {
+	case (mediaType == "message/rfc822" || mediaType == "message/global") && depth < maxBodyStructureDepth:
+		fmt.Fprintf(&b, " %s %s %d", imapEnvelope(partHeader(body)), bodyStructureDepth(body, ext, depth+1), lines)
+	case typ == "text":
+		fmt.Fprintf(&b, " %d", lines)
+	}
+	if ext {
+		b.WriteString(" " + imapNString(mh.Get("Content-Md5")) + " " + imapDisposition(mh) + " " +
+			imapNString(mh.Get("Content-Language")) + " " + imapNString(mh.Get("Content-Location")))
+	}
+	b.WriteByte(')')
+	return b.String()
+}
+
+// imapNString renders s as an IMAP nstring: NIL when empty, a quoted string
+// when it is plain 7-bit text, a literal otherwise.
+func imapNString(s string) string {
+	if s == "" {
+		return "NIL"
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 0x80 || c == '\r' || c == '\n' || c == 0 {
+			return fmt.Sprintf("{%d}\r\n%s", len(s), s)
+		}
+	}
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
+// imapParamList renders a body parameter list (sorted for stable output).
+func imapParamList(params map[string]string) string {
+	if len(params) == 0 {
+		return "NIL"
+	}
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, 2*len(keys))
+	for _, k := range keys {
+		parts = append(parts, imapNString(strings.ToUpper(k)), imapNString(params[k]))
+	}
+	return "(" + strings.Join(parts, " ") + ")"
+}
+
+// imapDisposition renders the body-fld-dsp of a part.
+func imapDisposition(mh textproto.MIMEHeader) string {
+	v := mh.Get("Content-Disposition")
+	if v == "" {
+		return "NIL"
+	}
+	disp, params, err := mime.ParseMediaType(v)
+	if err != nil {
+		return "NIL"
+	}
+	return "(" + imapNString(strings.ToUpper(disp)) + " " + imapParamList(params) + ")"
+}
+
+// imapEnvelope renders the ENVELOPE of an encapsulated message header.
+func imapEnvelope(mh textproto.MIMEHeader) string {
+	from := imapAddressList(mh.Get("From"))
+	sender, replyTo := imapAddressList(mh.Get("Sender")), imapAddressList(mh.Get("Reply-To"))
+	if sender == "NIL" {
+		sender = from
+	}
+	if replyTo == "NIL" {
+		replyTo = from
+	}
+	return "(" + strings.Join([]string{
+		imapNString(mh.Get("Date")), imapNString(mh.Get("Subject")), from, sender, replyTo,
+		imapAddressList(mh.Get("To")), imapAddressList(mh.Get("Cc")), imapAddressList(mh.Get("Bcc")),
+		imapNString(mh.Get("In-Reply-To")), imapNString(mh.Get("Message-Id")),
+	}, " ") + ")"
+}
+
+// imapAddressList renders an address header as an IMAP address list.
+func imapAddressList(v string) string {
+	if v == "" {
+		return "NIL"
+	}
+	addrs, err := mail.ParseAddressList(v)
+	if err != nil || len(addrs) == 0 {
+		return "NIL"
+	}
+	var b strings.Builder
+	b.WriteByte('(')
+	for _, a := range addrs {
+		local, domain := splitAddress(a.Address)
+		fmt.Fprintf(&b, "(%s NIL %s %s)", imapNString(a.Name), imapNString(local), imapNString(domain))
+	}
+	b.WriteByte(')')
+	return b.String()
 }

@@ -801,17 +801,33 @@ func (s *Server) jwtKey(token *jwt.Token) (interface{}, error) {
 func (s *Server) lookupJWTSecret(token *jwt.Token) ([]byte, bool) {
 	s.jwtMu.RLock()
 	defer s.jwtMu.RUnlock()
+	secret, ok := "", false
 	// Try kid-based secret lookup first
-	if kid, ok := token.Header["kid"].(string); ok && kid != "" {
-		if kidSecret, ok := s.jwtSecrets[kid]; ok {
-			return []byte(kidSecret), true
-		}
+	if kid, isStr := token.Header["kid"].(string); isStr && kid != "" {
+		secret, ok = s.jwtSecrets[kid]
 	}
 	// Fall back to current kid
-	if secret, ok := s.jwtSecrets[s.currentKid]; ok {
-		return []byte(secret), true
+	if !ok {
+		secret, ok = s.jwtSecrets[s.currentKid]
 	}
-	return nil, false
+	// F5442: the legacy secret is stored under kid "default", so the legacy
+	// fallback in jwtKey is never reached; once the signing key has been
+	// rotated away from it, DisableLegacyJWT must retire it here.
+	if ok && s.config.DisableLegacyJWT && secret == s.config.JWTSecret &&
+		s.jwtSecrets[s.currentKid] != s.config.JWTSecret {
+		return nil, false
+	}
+	if !ok {
+		return nil, false
+	}
+	return []byte(secret), true
+}
+
+// JWTKeyFunc resolves the verification key for an API-issued token exactly
+// as the API does (kid, rotation, DisableLegacyJWT). Other listeners that
+// accept API tokens (JMAP) verify through it (F5440).
+func (s *Server) JWTKeyFunc(token *jwt.Token) (interface{}, error) {
+	return s.jwtKey(token)
 }
 
 // signingKey returns the current key ID and its secret under jwtMu (F4847).

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net"
 	"strconv"
 
@@ -8,9 +9,9 @@ import (
 )
 
 // startManageSieve creates and starts the ManageSieve server on port 4190
-func (s *Server) startManageSieve() {
+func (s *Server) startManageSieve() error {
 	if !s.config.ManageSieve.Enabled {
-		return
+		return nil
 	}
 
 	addr, tlsAddr := manageSieveAddrs(s.config.ManageSieve.Bind, s.config.ManageSieve.Port)
@@ -30,12 +31,12 @@ func (s *Server) startManageSieve() {
 		// Listen may fail after the plain listener is already serving
 		// (TLS bind error); close it so it is not left running unowned.
 		_ = sieveServer.Close()
-		s.logger.Error("Failed to start ManageSieve server", "error", err)
-		return
+		return fmt.Errorf("failed to start ManageSieve server: %w", err)
 	}
 
 	s.manageSieveServer = sieveServer
 	s.logger.Info("ManageSieve server started", "addr", addr, "tls_addr", tlsAddr)
+	return nil
 }
 
 // manageSieveAddrs returns the plain and implicit-TLS listen addresses for

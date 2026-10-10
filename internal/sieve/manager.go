@@ -1,6 +1,7 @@
 package sieve
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -138,6 +139,63 @@ func (m *Manager) DeleteScript(userID string, scriptName string) {
 	}
 }
 
+// Errors of the ManageSieve-facing script operations; the server maps them
+// to RFC 5804 response codes (NONEXISTENT, ACTIVE, ALREADYEXISTS).
+var (
+	errScriptNotFound = errors.New("script does not exist")
+	errScriptActive   = errors.New("script is active")
+	errScriptExists   = errors.New("script already exists")
+)
+
+// deleteInactiveScript removes a script unless it is the active one
+// (RFC 5804 §2.10). Check and delete happen under one lock so a concurrent
+// SETACTIVE cannot make the deleted script active. F5463.
+func (m *Manager) deleteInactiveScript(userID, scriptName string) error {
+	m.scriptsMu.Lock()
+	defer m.scriptsMu.Unlock()
+
+	if _, ok := m.scripts[userID][scriptName]; !ok {
+		return errScriptNotFound
+	}
+	if active, ok := m.activeScripts[userID]; ok && active == scriptName {
+		return errScriptActive
+	}
+	delete(m.scripts[userID], scriptName)
+	return nil
+}
+
+// deactivateScript leaves the user with no active script (SETACTIVE "",
+// RFC 5804 §2.8). F5464.
+func (m *Manager) deactivateScript(userID string) {
+	m.scriptsMu.Lock()
+	defer m.scriptsMu.Unlock()
+	delete(m.activeScripts, userID)
+}
+
+// renameScript renames a script; an active script stays active under its new
+// name (RFC 5804 §2.11.1). F5465.
+func (m *Manager) renameScript(userID, oldName, newName string) error {
+	m.scriptsMu.Lock()
+	defer m.scriptsMu.Unlock()
+
+	userScripts := m.scripts[userID]
+	stored, ok := userScripts[oldName]
+	if !ok {
+		return errScriptNotFound
+	}
+	if _, exists := userScripts[newName]; exists {
+		return errScriptExists
+	}
+	renamed := *stored
+	renamed.Name = newName
+	userScripts[newName] = &renamed
+	delete(userScripts, oldName)
+	if active, ok := m.activeScripts[userID]; ok && active == oldName {
+		m.activeScripts[userID] = newName
+	}
+	return nil
+}
+
 // ListScripts returns all script names for a user
 func (m *Manager) ListScripts(userID string) []string {
 	m.scriptsMu.RLock()
@@ -185,6 +243,18 @@ func (m *Manager) GetScriptSource(userID string, scriptName string) string {
 		}
 	}
 	return ""
+}
+
+// scriptSource is GetScriptSource with an existence flag, so an empty
+// script is distinguishable from a missing one (GETSCRIPT). F5467.
+func (m *Manager) scriptSource(userID, scriptName string) (string, bool) {
+	m.scriptsMu.RLock()
+	defer m.scriptsMu.RUnlock()
+	stored, ok := m.scripts[userID][scriptName]
+	if !ok {
+		return "", false
+	}
+	return stored.Source, true
 }
 
 // ProcessMessage runs the Sieve script for a user and returns actions

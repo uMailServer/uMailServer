@@ -341,9 +341,23 @@ func (bm *BackupManager) backupDatabase(tw *tar.Writer) error {
 	return bm.addFileWithHash(tw, dbPath, header)
 }
 
-// backupMaildir adds maildir files to the backup
+// backupMaildir adds maildir files to the backup. The live mail store is
+// <DataDir>/mail (Maildir messages under mail/messages and the mailbox/UID
+// database mail/mail.db, see server.New); <DataDir>/messages is the legacy
+// location. Both are archived under "messages/" so that copying
+// restore_temp/messages/* into the data directory restores them (F5450).
 func (bm *BackupManager) backupMaildir(tw *tar.Writer) error {
-	maildirPath := bm.config.Server.DataDir + "/messages"
+	for _, sub := range []string{"messages", "mail"} {
+		if err := bm.backupDataSubdir(tw, sub); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// backupDataSubdir archives <DataDir>/<sub> under "messages/".
+func (bm *BackupManager) backupDataSubdir(tw *tar.Writer, sub string) error {
+	maildirPath := bm.config.Server.DataDir + "/" + sub
 
 	// Skip if maildir directory doesn't exist
 	if _, err := os.Stat(maildirPath); os.IsNotExist(err) {
@@ -647,6 +661,14 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		}
 	}
 
+	// The tar reader stops at the end-of-archive marker, so drain the gzip
+	// stream to check its CRC-32/ISIZE footer. The manifest hashes do not
+	// cover manifest.json itself or archives whose manifest lists no files
+	// (F5451).
+	if _, err := io.Copy(io.Discard, gr); err != nil {
+		return fmt.Errorf("corrupt gzip stream: %w", err)
+	}
+
 	// Every file the manifest declares must have been restored (F4857).
 	for _, expected := range expectedHashes {
 		if !seen[expected.Path] {
@@ -807,6 +829,11 @@ func (bm *BackupManager) Verify(backupFile string) error {
 				break
 			}
 		}
+	}
+
+	// Check the gzip CRC-32/ISIZE footer, as Restore does (F5451).
+	if _, err := io.Copy(io.Discard, gr); err != nil {
+		return fmt.Errorf("corrupt gzip stream: %w", err)
 	}
 
 	// Every file the manifest declares must be present in the archive.

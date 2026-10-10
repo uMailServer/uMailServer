@@ -1602,14 +1602,18 @@ func (s *Session) handleSearchWithUIDs(args []string, line string, uidResults bo
 		return nil
 	}
 
-	// Parse search criteria
-	criteria := parseSearchCriteria(args)
+	// Parse search criteria (NOT / OR / parenthesised keys: F5493)
+	program, err := parseSearchProgram(commandArgTokens(args, line, "SEARCH"))
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("BAD %s", err))
+		return nil
+	}
 
 	if span != nil {
 		tracing.SetIntAttribute(span, "search.criteria_count", len(args))
 	}
 
-	uids, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, criteria)
+	uids, err := s.evalSearch(program)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		if span != nil {
@@ -1653,21 +1657,36 @@ func (s *Session) handleSearchWithUIDs(args []string, line string, uidResults bo
 
 // SORT command (RFC 5256)
 func (s *Session) handleSort(args []string, line string) error {
+	return s.sortCmd(args, line, false)
+}
+
+// sortCmd implements SORT and UID SORT: "SORT (criteria) charset search-keys"
+// (RFC 5256 §3). F5490: the parenthesised criteria list was split on
+// spaces ("(DATE)" was an unknown criterion, so every conforming SORT
+// answered BAD) and the charset and search keys were ignored.
+func (s *Session) sortCmd(args []string, line string, uidResults bool) error {
 	if s.server.mailstore == nil || s.selected == nil {
 		s.WriteResponse(s.tag, "NO No mailbox selected")
 		return nil
 	}
 
-	// Parse sort criteria - args[0] is the charset, then criteria
+	toks := commandArgTokens(args, line, "SORT")
+	if len(toks) == 0 || toks[0].quoted || toks[0].val != "(" {
+		s.WriteResponse(s.tag, "BAD invalid sort criteria")
+		return nil
+	}
 	var criteriaArgs []string
-	if len(args) > 0 && strings.ToUpper(args[0]) != "CHARSET" {
-		// No charset specified, use args as criteria
-		criteriaArgs = args
-	} else {
-		// Skip charset if specified
-		if len(args) > 1 {
-			criteriaArgs = args[1:]
-		}
+	i := 1
+	for ; i < len(toks) && (toks[i].quoted || toks[i].val != ")"); i++ {
+		criteriaArgs = append(criteriaArgs, toks[i].val)
+	}
+	if i+2 >= len(toks) {
+		s.WriteResponse(s.tag, "BAD SORT requires a criteria list, a charset and search keys")
+		return nil
+	}
+	if cs := strings.ToUpper(toks[i+1].val); cs != "UTF-8" && cs != "US-ASCII" {
+		s.WriteResponse(s.tag, "NO [BADCHARSET (US-ASCII UTF-8)] unsupported charset")
+		return nil
 	}
 
 	criteria, err := parseSortCriteria(criteriaArgs)
@@ -1676,6 +1695,17 @@ func (s *Session) handleSort(args []string, line string) error {
 		s.WriteResponse(s.tag, "BAD invalid sort criteria")
 		return nil
 	}
+	program, err := parseSearchProgram(toks[i+2:])
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("BAD %s", err))
+		return nil
+	}
+	matched, err := s.evalSearch(program)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	want := seqSetOf(matched)
 
 	// Get all messages in mailbox with metadata
 	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
@@ -1685,37 +1715,46 @@ func (s *Session) handleSort(args []string, line string) error {
 		return nil
 	}
 
-	// Build metadata list with sequence numbers
+	// Build metadata list with sequence numbers for the matching messages
 	var metas []*storage.MessageMetadata
 	var seqNums []uint32
-	seqNum := uint32(0)
-	for _, msg := range messages {
-		seqNum++
+	uidOf := map[uint32]uint32{}
+	for n, msg := range messages {
+		seqNum := uint32(n + 1)
+		if !want[seqNum] {
+			continue
+		}
 		seqNums = append(seqNums, seqNum)
-		// Build a minimal MessageMetadata from the Message
+		uidOf[seqNum] = msg.UID
+		// The bbolt mailstore fills the flat fields, not Envelope (whose
+		// nil dereference dropped the connection: F5490).
 		meta := &storage.MessageMetadata{
-			MessageID:    msg.Envelope.MessageID,
 			UID:          msg.UID,
-			Subject:      msg.Envelope.Subject,
-			From:         addressToString(msg.Envelope.From),
-			Date:         msg.Envelope.Date,
+			Subject:      msg.Subject,
+			From:         msg.From,
+			Date:         msg.Date,
 			InternalDate: msg.InternalDate,
 			Size:         msg.Size,
 		}
-		meta.InReplyTo = msg.Envelope.InReplyTo
+		if env := msg.Envelope; env != nil {
+			meta.Subject, meta.From, meta.Date = env.Subject, addressToString(env.From), env.Date
+		}
 		metas = append(metas, meta)
 	}
 
-	// Sort
-	sortedSeqNums := sortMessagesByCriteria(metas, criteria, seqNums)
-
-	// Output result
 	result := "SORT"
-	for _, seq := range sortedSeqNums {
+	for _, seq := range sortMessagesByCriteria(metas, criteria, seqNums) {
+		if uidResults {
+			seq = uidOf[seq]
+		}
 		result += fmt.Sprintf(" %d", seq)
 	}
 	s.WriteData(result)
-	s.WriteResponse(s.tag, "OK SORT completed")
+	if uidResults {
+		s.WriteResponse(s.tag, "OK UID SORT completed")
+	} else {
+		s.WriteResponse(s.tag, "OK SORT completed")
+	}
 	return nil
 }
 
@@ -1815,73 +1854,7 @@ func (s *Session) handleThread(args []string, line string) error {
 
 // UID SORT command
 func (s *Session) handleUIDSort(args []string, line string) error {
-	if s.server.mailstore == nil || s.selected == nil {
-		s.WriteResponse(s.tag, "NO No mailbox selected")
-		return nil
-	}
-
-	// Add UID prefix to results
-	// Parse criteria from args
-	var criteriaArgs []string
-	if len(args) > 0 && strings.ToUpper(args[0]) != "CHARSET" {
-		criteriaArgs = args
-	} else {
-		if len(args) > 1 {
-			criteriaArgs = args[1:]
-		}
-	}
-
-	criteria, err := parseSortCriteria(criteriaArgs)
-	if err != nil {
-		s.server.logger.Error("imap sort criteria parse error", "error", err)
-		s.WriteResponse(s.tag, "BAD invalid sort criteria")
-		return nil
-	}
-
-	// Get all messages with UID
-	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
-	if err != nil {
-		s.server.logger.Error("imap fetch messages error", "error", err)
-		s.WriteResponse(s.tag, "NO unable to fetch messages")
-		return nil
-	}
-
-	var metas []*storage.MessageMetadata
-	var seqNums []uint32
-	var uids []uint32
-	seqNum := uint32(0)
-	for _, msg := range messages {
-		seqNum++
-		seqNums = append(seqNums, seqNum)
-		uids = append(uids, msg.UID)
-		meta := &storage.MessageMetadata{
-			MessageID:    msg.Envelope.MessageID,
-			UID:          msg.UID,
-			Subject:      msg.Envelope.Subject,
-			From:         addressToString(msg.Envelope.From),
-			Date:         msg.Envelope.Date,
-			InternalDate: msg.InternalDate,
-			Size:         msg.Size,
-		}
-		metas = append(metas, meta)
-	}
-
-	sortedSeqNums := sortMessagesByCriteria(metas, criteria, seqNums)
-
-	// Convert sequence numbers to UIDs
-	result := "SORT"
-	for _, seq := range sortedSeqNums {
-		// Find corresponding UID
-		for i, s := range seqNums {
-			if s == seq {
-				result += fmt.Sprintf(" %d", uids[i])
-				break
-			}
-		}
-	}
-	s.WriteData(result)
-	s.WriteResponse(s.tag, "OK UID SORT completed")
-	return nil
+	return s.sortCmd(args, line, true)
 }
 
 // UID THREAD command
@@ -2021,7 +1994,13 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 		tracing.SetIntAttribute(span, "fetch.item_count", len(fetchItems))
 	}
 
-	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, fetchItems)
+	// F5496: BODYSTRUCTURE is computed from the message data, which the
+	// mailstore loads for the BODY item.
+	storeItems := fetchItems
+	if hasFetchItem(fetchItems, "BODYSTRUCTURE") && !hasFetchItem(fetchItems, "BODY") {
+		storeItems = append(append([]string{}, fetchItems...), "BODY")
+	}
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, storeItems)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		if span != nil {
@@ -2765,145 +2744,376 @@ func parseSearchCriteria(args []string) SearchCriteria {
 	}
 
 	for i := 0; i < len(args); i++ {
-		arg := strings.ToUpper(args[i])
-		switch arg {
-		case "ALL":
-			criteria.All = true
-		case "ANSWERED":
-			criteria.Answered = true
-		case "DELETED":
-			criteria.Deleted = true
-		case "FLAGGED":
-			criteria.Flagged = true
-		case "NEW":
-			criteria.New = true
-		case "OLD":
-			criteria.Old = true
-		case "RECENT":
-			criteria.Recent = true
-		case "SEEN":
-			criteria.Seen = true
-		case "UNANSWERED":
-			criteria.Unanswered = true
-		case "UNDELETED":
-			criteria.Undeleted = true
-		case "UNFLAGGED":
-			criteria.Unflagged = true
-		case "UNSEEN":
-			criteria.Unseen = true
-		case "FROM":
-			if i+1 < len(args) {
-				criteria.From = args[i+1]
-				i++
-			}
-		case "SUBJECT":
-			if i+1 < len(args) {
-				criteria.Subject = args[i+1]
-				i++
-			}
-		case "TO":
-			if i+1 < len(args) {
-				criteria.To = args[i+1]
-				i++
-			}
-		case "UID":
-			if i+1 < len(args) {
-				criteria.UIDSet = args[i+1]
-				i++
-			}
-		case "CC":
-			if i+1 < len(args) {
-				criteria.Cc = args[i+1]
-				i++
-			}
-		case "BCC":
-			if i+1 < len(args) {
-				criteria.Bcc = args[i+1]
-				i++
-			}
-		case "BODY":
-			if i+1 < len(args) {
-				criteria.Body = args[i+1]
-				i++
-			}
-		case "TEXT":
-			if i+1 < len(args) {
-				criteria.Text = args[i+1]
-				i++
-			}
-		case "HEADER":
-			if i+2 < len(args) {
-				if criteria.Header == nil {
-					criteria.Header = make(map[string]string)
-				}
-				criteria.Header[args[i+1]] = args[i+2]
-				i += 2
-			}
-		case "BEFORE":
-			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i+1]); err == nil {
-					criteria.Before = t
-				}
-				i++
-			}
-		case "ON":
-			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i+1]); err == nil {
-					criteria.On = t
-				}
-				i++
-			}
-		case "SINCE":
-			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i+1]); err == nil {
-					criteria.Since = t
-				}
-				i++
-			}
-		case "SENTBEFORE":
-			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i+1]); err == nil {
-					criteria.SentBefore = t
-				}
-				i++
-			}
-		case "SENTON":
-			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i+1]); err == nil {
-					criteria.SentOn = t
-				}
-				i++
-			}
-		case "SENTSINCE":
-			if i+1 < len(args) {
-				if t, err := parseIMAPDate(args[i+1]); err == nil {
-					criteria.SentSince = t
-				}
-				i++
-			}
-		case "LARGER":
-			if i+1 < len(args) {
-				if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
-					criteria.Larger = size
-				}
-				i++
-			}
-		case "SMALLER":
-			if i+1 < len(args) {
-				if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
-					criteria.Smaller = size
-				}
-				i++
-			}
-		default:
-			// RFC 3501 §6.4.4: a bare sequence-set is a search key (F5218).
-			if isSequenceSetToken(arg) {
-				criteria.SeqSet = arg
-			}
-		}
+		i = parseSearchKey(&criteria, args, i)
 	}
 
 	return criteria
+}
+
+// parseSearchKey applies the single search key starting at args[i] to
+// criteria and returns the index of its last token.
+func parseSearchKey(criteria *SearchCriteria, args []string, i int) int {
+	arg := strings.ToUpper(args[i])
+	switch arg {
+	case "ALL":
+		criteria.All = true
+	case "ANSWERED":
+		criteria.Answered = true
+	case "DELETED":
+		criteria.Deleted = true
+	case "FLAGGED":
+		criteria.Flagged = true
+	case "NEW":
+		criteria.New = true
+	case "OLD":
+		criteria.Old = true
+	case "RECENT":
+		criteria.Recent = true
+	case "SEEN":
+		criteria.Seen = true
+	case "UNANSWERED":
+		criteria.Unanswered = true
+	case "UNDELETED":
+		criteria.Undeleted = true
+	case "UNFLAGGED":
+		criteria.Unflagged = true
+	case "UNSEEN":
+		criteria.Unseen = true
+	case "FROM":
+		if i+1 < len(args) {
+			criteria.From = args[i+1]
+			i++
+		}
+	case "SUBJECT":
+		if i+1 < len(args) {
+			criteria.Subject = args[i+1]
+			i++
+		}
+	case "TO":
+		if i+1 < len(args) {
+			criteria.To = args[i+1]
+			i++
+		}
+	case "UID":
+		if i+1 < len(args) {
+			criteria.UIDSet = args[i+1]
+			i++
+		}
+	case "CC":
+		if i+1 < len(args) {
+			criteria.Cc = args[i+1]
+			i++
+		}
+	case "BCC":
+		if i+1 < len(args) {
+			criteria.Bcc = args[i+1]
+			i++
+		}
+	case "BODY":
+		if i+1 < len(args) {
+			criteria.Body = args[i+1]
+			i++
+		}
+	case "TEXT":
+		if i+1 < len(args) {
+			criteria.Text = args[i+1]
+			i++
+		}
+	case "HEADER":
+		if i+2 < len(args) {
+			if criteria.Header == nil {
+				criteria.Header = make(map[string]string)
+			}
+			criteria.Header[args[i+1]] = args[i+2]
+			i += 2
+		}
+	case "BEFORE":
+		if i+1 < len(args) {
+			if t, err := parseIMAPDate(args[i+1]); err == nil {
+				criteria.Before = t
+			}
+			i++
+		}
+	case "ON":
+		if i+1 < len(args) {
+			if t, err := parseIMAPDate(args[i+1]); err == nil {
+				criteria.On = t
+			}
+			i++
+		}
+	case "SINCE":
+		if i+1 < len(args) {
+			if t, err := parseIMAPDate(args[i+1]); err == nil {
+				criteria.Since = t
+			}
+			i++
+		}
+	case "SENTBEFORE":
+		if i+1 < len(args) {
+			if t, err := parseIMAPDate(args[i+1]); err == nil {
+				criteria.SentBefore = t
+			}
+			i++
+		}
+	case "SENTON":
+		if i+1 < len(args) {
+			if t, err := parseIMAPDate(args[i+1]); err == nil {
+				criteria.SentOn = t
+			}
+			i++
+		}
+	case "SENTSINCE":
+		if i+1 < len(args) {
+			if t, err := parseIMAPDate(args[i+1]); err == nil {
+				criteria.SentSince = t
+			}
+			i++
+		}
+	case "LARGER":
+		if i+1 < len(args) {
+			if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
+				criteria.Larger = size
+			}
+			i++
+		}
+	case "SMALLER":
+		if i+1 < len(args) {
+			if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
+				criteria.Smaller = size
+			}
+			i++
+		}
+	default:
+		// RFC 3501 §6.4.4: a bare sequence-set is a search key (F5218).
+		if isSequenceSetToken(arg) {
+			criteria.SeqSet = arg
+		}
+	}
+
+	return i
+}
+
+// imapToken is one argument token of a command line.
+type imapToken struct {
+	val    string
+	quoted bool // a quoted string: never a keyword or parenthesis
+}
+
+// tokenizeIMAPArgs splits command arguments into atoms, unquoted
+// quoted-strings and single "(" / ")" tokens (RFC 3501 §4). F5490/F5493:
+// SEARCH and SORT used strings.Fields, so quotes stayed in the search
+// strings and parenthesised lists were never recognised.
+func tokenizeIMAPArgs(s string) []imapToken {
+	var toks []imapToken
+	for i := 0; i < len(s); {
+		switch c := s[i]; {
+		case c == ' ' || c == '\t':
+			i++
+		case c == '(' || c == ')':
+			toks = append(toks, imapToken{val: string(c)})
+			i++
+		case c == '"':
+			var b strings.Builder
+			i++
+			for i < len(s) && s[i] != '"' {
+				if s[i] == '\\' && i+1 < len(s) {
+					i++
+				}
+				b.WriteByte(s[i])
+				i++
+			}
+			i++ // closing quote
+			toks = append(toks, imapToken{val: b.String(), quoted: true})
+		default:
+			j := i
+			for j < len(s) && !strings.ContainsRune(" \t()\"", rune(s[j])) {
+				j++
+			}
+			toks = append(toks, imapToken{val: s[i:j]})
+			i = j
+		}
+	}
+	return toks
+}
+
+// commandArgTokens tokenizes the arguments that follow the command name cmd
+// (e.g. "SEARCH" in "tag UID SEARCH ...") on the raw line, so quoted strings
+// keep their spaces; without a line it falls back to the split args.
+func commandArgTokens(args []string, line, cmd string) []imapToken {
+	fields := strings.Fields(line)
+	for n := 1; n < len(fields) && n <= 2; n++ {
+		if strings.EqualFold(fields[n], cmd) {
+			idx := 0
+			for k := 0; k <= n; k++ {
+				idx += strings.Index(line[idx:], fields[k]) + len(fields[k])
+			}
+			return tokenizeIMAPArgs(line[idx:])
+		}
+	}
+	return tokenizeIMAPArgs(strings.Join(args, " "))
+}
+
+// searchExpr is a parsed SEARCH program: the plain keys are ANDed into flat
+// (one mailstore scan) and every NOT / OR / parenthesised key is ANDed as a
+// term (RFC 3501 §6.4.4). F5493: NOT, OR and "( )" were ignored, so
+// "NOT FROM x" returned exactly the messages FROM x.
+type searchExpr struct {
+	flat  SearchCriteria
+	terms []searchTerm
+}
+
+type searchTerm struct {
+	not *searchExpr
+	or  [2]*searchExpr
+	sub *searchExpr
+}
+
+// parseSearchProgram parses search keys (after an optional CHARSET).
+func parseSearchProgram(toks []imapToken) (*searchExpr, error) {
+	if len(toks) >= 2 && !toks[0].quoted && strings.EqualFold(toks[0].val, "CHARSET") {
+		toks = toks[2:]
+	}
+	e, next, err := parseSearchSeq(toks, 0, false)
+	if err == nil && next != len(toks) {
+		err = fmt.Errorf("unexpected %q", toks[next].val)
+	}
+	return e, err
+}
+
+// parseSearchSeq parses keys until the end or, inside a group, ")".
+func parseSearchSeq(toks []imapToken, i int, inGroup bool) (*searchExpr, int, error) {
+	e := &searchExpr{flat: SearchCriteria{All: true}}
+	for i < len(toks) {
+		t := toks[i]
+		if !t.quoted && t.val == ")" {
+			if !inGroup {
+				return nil, i, fmt.Errorf("unbalanced parenthesis")
+			}
+			return e, i + 1, nil
+		}
+		if !t.quoted && (t.val == "(" || strings.EqualFold(t.val, "NOT") || strings.EqualFold(t.val, "OR")) {
+			sub, next, err := parseSearchOne(toks, i)
+			if err != nil {
+				return nil, next, err
+			}
+			e.terms = append(e.terms, searchTerm{sub: sub})
+			i = next
+			continue
+		}
+		i += parseSearchKey(&e.flat, plainKeyArgs(toks, i), 0) + 1
+	}
+	if inGroup {
+		return nil, i, fmt.Errorf("unbalanced parenthesis")
+	}
+	return e, i, nil
+}
+
+// parseSearchOne parses exactly one search key starting at toks[i].
+func parseSearchOne(toks []imapToken, i int) (*searchExpr, int, error) {
+	if i >= len(toks) {
+		return nil, i, fmt.Errorf("missing search key")
+	}
+	t := toks[i]
+	switch {
+	case !t.quoted && t.val == "(":
+		return parseSearchSeq(toks, i+1, true)
+	case !t.quoted && strings.EqualFold(t.val, "NOT"):
+		x, next, err := parseSearchOne(toks, i+1)
+		if err != nil {
+			return nil, next, err
+		}
+		return &searchExpr{flat: SearchCriteria{All: true}, terms: []searchTerm{{not: x}}}, next, nil
+	case !t.quoted && strings.EqualFold(t.val, "OR"):
+		a, next, err := parseSearchOne(toks, i+1)
+		if err != nil {
+			return nil, next, err
+		}
+		b, next, err := parseSearchOne(toks, next)
+		if err != nil {
+			return nil, next, err
+		}
+		return &searchExpr{flat: SearchCriteria{All: true}, terms: []searchTerm{{or: [2]*searchExpr{a, b}}}}, next, nil
+	case !t.quoted && t.val == ")":
+		return nil, i, fmt.Errorf("missing search key")
+	default:
+		e := &searchExpr{flat: SearchCriteria{All: true}}
+		return e, i + parseSearchKey(&e.flat, plainKeyArgs(toks, i), 0) + 1, nil
+	}
+}
+
+// plainKeyArgs returns the values of the (at most three: HEADER name value)
+// tokens a plain search key at toks[i] may use; a key's arguments never
+// span a parenthesis.
+func plainKeyArgs(toks []imapToken, i int) []string {
+	vals := make([]string, 0, 3)
+	for k := i; k < len(toks) && len(vals) < 3; k++ {
+		if !toks[k].quoted && (toks[k].val == "(" || toks[k].val == ")") {
+			break
+		}
+		vals = append(vals, toks[k].val)
+	}
+	return vals
+}
+
+// evalSearch returns the ascending sequence numbers matching e.
+func (s *Session) evalSearch(e *searchExpr) ([]uint32, error) {
+	base, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, e.flat)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range e.terms {
+		if len(base) == 0 {
+			break
+		}
+		switch {
+		case t.not != nil:
+			x, err := s.evalSearch(t.not)
+			if err != nil {
+				return nil, err
+			}
+			base = seqFilter(base, seqSetOf(x), false)
+		case t.sub != nil:
+			x, err := s.evalSearch(t.sub)
+			if err != nil {
+				return nil, err
+			}
+			base = seqFilter(base, seqSetOf(x), true)
+		default:
+			a, err := s.evalSearch(t.or[0])
+			if err != nil {
+				return nil, err
+			}
+			b, err := s.evalSearch(t.or[1])
+			if err != nil {
+				return nil, err
+			}
+			either := seqSetOf(a)
+			for _, n := range b {
+				either[n] = true
+			}
+			base = seqFilter(base, either, true)
+		}
+	}
+	return base, nil
+}
+
+func seqSetOf(nums []uint32) map[uint32]bool {
+	m := make(map[uint32]bool, len(nums))
+	for _, n := range nums {
+		m[n] = true
+	}
+	return m
+}
+
+// seqFilter keeps the numbers whose membership in set equals keep.
+func seqFilter(nums []uint32, set map[uint32]bool, keep bool) []uint32 {
+	out := nums[:0:0]
+	for _, n := range nums {
+		if set[n] == keep {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // isSequenceSetToken reports whether tok is a syntactically valid IMAP
@@ -2968,7 +3178,8 @@ func formatFetchResponse(msg *Message, items []string) string {
 		case "RFC822":
 			parts = append(parts, fmt.Sprintf("RFC822 {%d}\r\n%s", len(msg.Data), string(msg.Data)))
 		case "BODY", "BODYSTRUCTURE":
-			parts = append(parts, fmt.Sprintf("BODYSTRUCTURE (\"TEXT\" \"PLAIN\" NIL NIL NIL \"7BIT\" %d 0)", msg.Size))
+			// F5496: describe the real MIME tree; BODY is the non-extensible form.
+			parts = append(parts, item+" "+bodyStructure(msg.Data, item == "BODYSTRUCTURE"))
 		case "ENVELOPE":
 			fromLocal, fromDomain := splitAddress(msg.From)
 			toLocal, toDomain := splitAddress(msg.To)

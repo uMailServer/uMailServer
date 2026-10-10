@@ -49,6 +49,18 @@ var ErrDomainExists = errors.New("domain already exists")
 // domain/local part already exists.
 var ErrAliasExists = errors.New("alias already exists")
 
+// ErrDomainNotFound is returned by CreateAccountInDomain when the account's
+// domain is not hosted.
+var ErrDomainNotFound = errors.New("domain not found")
+
+// ErrDomainAccountLimit is returned by CreateAccountInDomain when the domain
+// already holds MaxAccounts accounts.
+var ErrDomainAccountLimit = errors.New("domain account limit reached")
+
+// ErrQueueEntryNotFound is returned by UpdateQueueEntry when the entry no
+// longer exists.
+var ErrQueueEntryNotFound = errors.New("queue entry not found")
+
 type AccountData struct {
 	Email            string    `json:"email"`
 	LocalPart        string    `json:"local_part"`
@@ -341,6 +353,59 @@ func (d *DB) CreateAccount(account *AccountData) error {
 		}
 		if hasKeyFold(b, []byte(key)) {
 			return ErrAccountExists
+		}
+		return b.Put([]byte(key), data)
+	})
+}
+
+// CreateAccountInDomain creates a new account in a hosted domain. Unlike
+// CreateAccount, the domain's existence and its MaxAccounts limit (0 =
+// unlimited) are checked in the same transaction as the insert, so parallel
+// creates cannot exceed the limit (F5510) and a create racing DeleteDomain
+// cannot leave an orphan account of a deleted domain (F5511). It returns
+// ErrDomainNotFound, ErrDomainAccountLimit or ErrAccountExists.
+func (d *DB) CreateAccountInDomain(account *AccountData) error {
+	if account.CreatedAt.IsZero() {
+		account.CreatedAt = time.Now()
+	}
+	account.UpdatedAt = time.Now()
+
+	key := AccountKey(account.Domain, account.LocalPart)
+	data, err := json.Marshal(account)
+	if err != nil {
+		return fmt.Errorf("failed to marshal account: %w", err)
+	}
+
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		domains := tx.Bucket([]byte(BucketDomains))
+		if domains == nil {
+			return fmt.Errorf("bucket not found: %s", BucketDomains)
+		}
+		raw := domains.Get([]byte(account.Domain))
+		if raw == nil {
+			return ErrDomainNotFound
+		}
+		var domain DomainData
+		if err := json.Unmarshal(raw, &domain); err != nil {
+			return fmt.Errorf("failed to unmarshal domain: %w", err)
+		}
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		if hasKeyFold(b, []byte(key)) {
+			return ErrAccountExists
+		}
+		if domain.MaxAccounts > 0 {
+			prefix := []byte(AccountKey(account.Domain, ""))
+			count := 0
+			c := b.Cursor()
+			for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+				count++
+			}
+			if count >= domain.MaxAccounts {
+				return ErrDomainAccountLimit
+			}
 		}
 		return b.Put([]byte(key), data)
 	})
@@ -745,9 +810,25 @@ func (d *DB) GetQueueEntry(id string) (*QueueEntry, error) {
 	return &entry, nil
 }
 
-// UpdateQueueEntry updates a queue entry
+// UpdateQueueEntry updates an existing queue entry. F5512: it returns
+// ErrQueueEntryNotFound instead of re-creating an entry that was dequeued
+// after the caller read it, so a stale write-back cannot resurrect a dropped
+// message.
 func (d *DB) UpdateQueueEntry(entry *QueueEntry) error {
-	return d.Put(BucketQueue, entry.ID, entry)
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value: %w", err)
+	}
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketQueue))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketQueue)
+		}
+		if b.Get([]byte(entry.ID)) == nil {
+			return fmt.Errorf("%w: %s", ErrQueueEntryNotFound, entry.ID)
+		}
+		return b.Put([]byte(entry.ID), data)
+	})
 }
 
 // Dequeue removes a message from the queue

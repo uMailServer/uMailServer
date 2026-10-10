@@ -171,3 +171,114 @@ func TestUpdateAccountKeepsConcurrentCounters(t *testing.T) {
 			got.QuotaUsed, got.TOTPLastUsedStep, got.ForwardTo, deliveries)
 	}
 }
+
+// F5510: parallel CreateAccountInDomain calls must never exceed the domain's
+// MaxAccounts. All creators are released together behind one channel; bbolt
+// serializes the check-and-insert transactions.
+func TestCreateAccountInDomainEnforcesLimitUnderConcurrency(t *testing.T) {
+	d := openIntegrityDB(t)
+	const limit, parallel = 3, 16
+	if err := d.CreateDomain(&DomainData{Name: "a.test", MaxAccounts: limit, IsActive: true}); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+	// Prefix-sharing domain must not count toward a.test's limit.
+	if err := d.CreateAccount(&AccountData{LocalPart: "z", Domain: "a.testx"}); err != nil {
+		t.Fatalf("create other: %v", err)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	created, limited := 0, 0
+	for i := 0; i < parallel; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			err := d.CreateAccountInDomain(&AccountData{LocalPart: string(rune('a' + i)), Domain: "a.test"})
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				created++
+			case errors.Is(err, ErrDomainAccountLimit):
+				limited++
+			default:
+				t.Errorf("create %d: %v", i, err)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	list, err := d.ListAccountsByDomain("a.test")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if created != limit || limited != parallel-limit || len(list) != limit {
+		t.Fatalf("created=%d limited=%d stored=%d, want %d/%d/%d", created, limited, len(list), limit, parallel-limit, limit)
+	}
+	// Freeing a slot allows exactly one more create; duplicates still win over the limit check.
+	if err := d.DeleteAccount("a.test", list[0].LocalPart); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := d.CreateAccountInDomain(&AccountData{LocalPart: list[1].LocalPart, Domain: "a.test"}); !errors.Is(err, ErrAccountExists) {
+		t.Fatalf("duplicate: err=%v, want ErrAccountExists", err)
+	}
+	if err := d.CreateAccountInDomain(&AccountData{LocalPart: "new", Domain: "a.test"}); err != nil {
+		t.Fatalf("create after delete: %v", err)
+	}
+	if err := d.CreateAccountInDomain(&AccountData{LocalPart: "over", Domain: "a.test"}); !errors.Is(err, ErrDomainAccountLimit) {
+		t.Fatalf("over limit: err=%v, want ErrDomainAccountLimit", err)
+	}
+}
+
+// F5511: CreateAccountInDomain must reject an unknown or just-deleted domain,
+// so a create racing DeleteDomain cannot leave an orphan account.
+func TestCreateAccountInDomainRejectsMissingDomain(t *testing.T) {
+	d := openIntegrityDB(t)
+	if err := d.CreateAccountInDomain(&AccountData{LocalPart: "bob", Domain: "none.test"}); !errors.Is(err, ErrDomainNotFound) {
+		t.Fatalf("unknown domain: err=%v, want ErrDomainNotFound", err)
+	}
+	if err := d.CreateDomain(&DomainData{Name: "a.test", IsActive: true}); err != nil {
+		t.Fatalf("create domain: %v", err)
+	}
+	if err := d.CreateAccountInDomain(&AccountData{LocalPart: "alice", Domain: "a.test"}); err != nil {
+		t.Fatalf("create on live domain (unlimited): %v", err)
+	}
+	if err := d.DeleteDomain("a.test"); err != nil {
+		t.Fatalf("delete domain: %v", err)
+	}
+	if err := d.CreateAccountInDomain(&AccountData{LocalPart: "bob", Domain: "a.test"}); !errors.Is(err, ErrDomainNotFound) {
+		t.Fatalf("deleted domain: err=%v, want ErrDomainNotFound", err)
+	}
+	if _, err := d.GetAccount("a.test", "bob"); err == nil {
+		t.Fatal("orphan account created for deleted domain")
+	}
+}
+
+// F5512: a stale UpdateQueueEntry after Dequeue must not resurrect the entry.
+func TestUpdateQueueEntryDoesNotResurrectDroppedEntry(t *testing.T) {
+	d := openIntegrityDB(t)
+	if err := d.Enqueue(&QueueEntry{ID: "q1", Status: "sending"}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	snap, err := d.GetQueueEntry("q1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	snap.Status = "pending"
+	if err := d.UpdateQueueEntry(snap); err != nil {
+		t.Fatalf("update live entry: %v", err)
+	}
+	if err := d.Dequeue("q1"); err != nil {
+		t.Fatalf("dequeue: %v", err)
+	}
+	if err := d.UpdateQueueEntry(snap); !errors.Is(err, ErrQueueEntryNotFound) {
+		t.Fatalf("update dropped entry: err=%v, want ErrQueueEntryNotFound", err)
+	}
+	if _, err := d.GetQueueEntry("q1"); err == nil {
+		t.Fatal("dropped queue entry resurrected")
+	}
+	if err := d.UpdateQueueEntry(&QueueEntry{ID: "never"}); !errors.Is(err, ErrQueueEntryNotFound) {
+		t.Fatalf("update unknown entry: err=%v, want ErrQueueEntryNotFound", err)
+	}
+}

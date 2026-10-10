@@ -309,12 +309,21 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:    time.Now(),
 	}
 
-	if err := s.db.CreateAccount(account); err != nil {
-		if errors.Is(err, db.ErrAccountExists) {
+	// F5510/F5511: the checks above give early answers, but only
+	// CreateAccountInDomain re-checks the domain and its limit in the same
+	// transaction as the insert, so parallel creates and a racing domain
+	// delete cannot slip past them.
+	if err := s.db.CreateAccountInDomain(account); err != nil {
+		switch {
+		case errors.Is(err, db.ErrAccountExists):
 			s.sendError(w, http.StatusConflict, "account already exists")
-			return
+		case errors.Is(err, db.ErrDomainNotFound):
+			s.sendError(w, http.StatusBadRequest, "domain not found")
+		case errors.Is(err, db.ErrDomainAccountLimit):
+			s.sendError(w, http.StatusConflict, "domain account limit reached")
+		default:
+			s.sendError(w, http.StatusInternalServerError, "failed to create account")
 		}
-		s.sendError(w, http.StatusInternalServerError, "failed to create account")
 		return
 	}
 

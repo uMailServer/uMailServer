@@ -1,7 +1,10 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -78,13 +81,41 @@ func (s *Server) Start() (err error) {
 		return err
 	}
 
-	s.startMCP()
-	s.startManageSieve()
-	s.startCalDAV()
-	s.startCardDAV()
+	// F5430: an enabled optional listener that cannot bind fails Start, as
+	// IMAP/POP3 do, instead of being logged while Start reports success.
+	if err := s.startMCP(); err != nil {
+		return err
+	}
+	if err := s.startManageSieve(); err != nil {
+		return err
+	}
+	if err := s.startCalDAV(); err != nil {
+		return err
+	}
+	if err := s.startCardDAV(); err != nil {
+		return err
+	}
 	s.startJMAP()
 	s.startAPI()
-	s.startMetrics()
+	if err := s.startMetrics(); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+// serveHTTP binds srv.Addr synchronously, so a bind failure reaches the
+// caller (F5430), and then serves srv in the background. Errors after the
+// bind are logged; Shutdown ends Serve with http.ErrServerClosed.
+func (s *Server) serveHTTP(name string, srv *http.Server) error {
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return fmt.Errorf("failed to start %s server: %w", name, err)
+	}
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error(name+" server error", "error", err)
+		}
+	}()
 	return nil
 }

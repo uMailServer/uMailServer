@@ -330,9 +330,16 @@ func TestManageSieve_cmdSetActive_EmptyScriptName(t *testing.T) {
 		manager: mgr,
 	}
 
+	// F5464: RFC 5804 §2.8 — SETACTIVE "" deactivates instead of failing.
+	if err := mgr.SetActiveScript("testuser", "s", "keep;"); err != nil {
+		t.Fatal(err)
+	}
 	err := srv.cmdSetActive(session, []string{""})
-	if err == nil {
-		t.Fatal("Expected error for empty script name")
+	if err != nil {
+		t.Fatalf("SETACTIVE \"\" failed: %v", err)
+	}
+	if mgr.HasActiveScript("testuser") {
+		t.Fatal("SETACTIVE \"\" left a script active")
 	}
 }
 
@@ -342,8 +349,11 @@ func TestManageSieve_cmdDeleteScript_Success(t *testing.T) {
 	mgr := NewManager()
 	srv := NewManageSieveServer(mgr, nil)
 
-	// Store a script first
-	mgr.StoreScript("testuser", "todelete", "content")
+	// Store a script first (F5463: "content" was not a valid script, so the
+	// test only passed because DELETESCRIPT ignored missing scripts).
+	if err := mgr.StoreScript("testuser", "todelete", "keep;"); err != nil {
+		t.Fatal(err)
+	}
 
 	conn := &mockConn{
 		readBuf:  bytes.NewBuffer([]byte{}),

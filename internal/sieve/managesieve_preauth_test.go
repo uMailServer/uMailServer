@@ -22,7 +22,7 @@ func regF5037Exchange(t *testing.T, payload string) string {
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
 	r := bufio.NewReader(client)
-	if line, err := r.ReadString('\n'); err != nil || !strings.HasPrefix(line, "OK") {
+	if line, err := readManageSieveGreeting(r); err != nil || !strings.HasPrefix(line, "OK") {
 		t.Fatalf("INVALID greeting %q %v", line, err)
 	}
 	go func() { _, _ = client.Write([]byte(payload)) }()

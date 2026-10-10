@@ -47,13 +47,14 @@ func dialAndAuth(t *testing.T, ln net.Listener) (net.Conn, *bufio.Reader) {
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	r := bufio.NewReader(conn)
 
-	if line, err := r.ReadString('\n'); err != nil || !strings.HasPrefix(line, "OK") {
+	if line, err := readManageSieveGreeting(r); err != nil || !strings.HasPrefix(line, "OK") {
 		t.Fatalf("greeting: %q err=%v", line, err)
 	}
 	if _, err := fmt.Fprintf(conn, "AUTHENTICATE PLAIN\r\n"); err != nil {
 		t.Fatalf("write auth: %v", err)
 	}
-	if line, err := r.ReadString('\n'); err != nil || !strings.HasPrefix(line, "OK") {
+	// F5466: the SASL continuation is an empty base64 string, not OK.
+	if line, err := r.ReadString('\n'); err != nil || line != "\"\"\r\n" {
 		t.Fatalf("auth continue: %q err=%v", line, err)
 	}
 	creds := base64.StdEncoding.EncodeToString([]byte("\x00user\x00pass"))

@@ -10,9 +10,9 @@ import (
 )
 
 // startCardDAV creates and starts the CardDAV server
-func (s *Server) startCardDAV() {
+func (s *Server) startCardDAV() error {
 	if !s.config.CardDAV.Enabled {
-		return
+		return nil
 	}
 
 	addr := fmt.Sprintf("%s:%d", s.config.CardDAV.Bind, s.config.CardDAV.Port)
@@ -36,13 +36,11 @@ func (s *Server) startCardDAV() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	if err := s.serveHTTP("CardDAV", srv); err != nil {
+		return err
+	}
 	s.carddavHTTPServer = srv
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("CardDAV server error", "error", err)
-		}
-	}()
-
 	s.logger.Info("CardDAV server started", "addr", addr)
+	return nil
 }
