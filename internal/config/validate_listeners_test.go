@@ -40,7 +40,7 @@ func TestValidateListenerPortsAndSigns(t *testing.T) {
 		{"F5361 imap 70000", "imap:\n  port: 70000\n", "out of range"},
 		{"F5361 mcp -1", "mcp:\n  port: -1\n", "out of range"},
 		{"F5361 caldav 65535", "caldav:\n  enabled: true\n  port: 65535\n", ""},
-		{"F5362 max_message_size -1", "smtp:\n  inbound:\n    max_message_size: -1\n", "max_message_size"},
+		{"F5362 max_message_size -1", "smtp:\n  inbound:\n    max_message_size: -1\n", "must not be negative"},
 		{"F5362 max_message_size 0", "smtp:\n  inbound:\n    max_message_size: 0\n", "max_message_size"},
 		{"F5363 lockout_duration -15m", "security:\n  lockout_duration: -15m\n", "security.lockout_duration"},
 		{"F5363 idle_timeout -1m", "imap:\n  idle_timeout: -1m\n", "imap.idle_timeout"},
