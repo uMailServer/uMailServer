@@ -112,7 +112,7 @@ func TestManageSieve_cmdPutScript_Success(t *testing.T) {
 	}
 
 	conn := &mockConn{
-		readBuf:  bytes.NewBuffer([]byte("script content")),
+		readBuf:  bytes.NewBuffer([]byte("keep; discard;")), // F5340: must be valid Sieve
 		writeBuf: bytes.NewBuffer([]byte{}),
 	}
 	reader := &manageSieveReader{r: conn}
@@ -131,8 +131,8 @@ func TestManageSieve_cmdPutScript_Success(t *testing.T) {
 
 	// Verify script was stored
 	script := mgr.GetScriptSource("testuser", "testscript")
-	if script != "script content" {
-		t.Errorf("Expected script 'script content', got %q", script)
+	if script != "keep; discard;" {
+		t.Errorf("Expected script 'keep; discard;', got %q", script)
 	}
 }
 

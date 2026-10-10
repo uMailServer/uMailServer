@@ -851,7 +851,7 @@ func TestSetupWizardRun(t *testing.T) {
 	// 8. IMAP port (993)
 	// 9. POP3 enabled (n)
 	// 10. Admin enabled (y)
-	// 11. Admin port (8080)
+	// 11. Admin port (8443; 8080 is the enabled metrics port, F5364)
 	// 12. ACME enabled (n)
 	// 13. Spam enabled (n)
 	// 14. Log level (1)
@@ -865,7 +865,7 @@ func TestSetupWizardRun(t *testing.T) {
 		"993\n" +
 		"n\n" +
 		"y\n" +
-		"8080\n" +
+		"8443\n" +
 		"n\n" +
 		"n\n" +
 		"1\n"

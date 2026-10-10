@@ -345,22 +345,32 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	}()
 
-	s.sessionsMu.RLock()
-	atLimit := s.maxConnections > 0 && len(s.sessions) >= s.maxConnections
-	s.sessionsMu.RUnlock()
-	if atLimit {
-		if _, err := conn.Write([]byte("-ERR Too many connections\r\n")); err != nil {
-			s.logger.Debug("failed to write connection limit response", "error", err)
+	session := NewSession(conn, s)
+
+	// Check the limit and register under one lock: a separate read-locked
+	// check let concurrent connections all pass before any registered
+	// (F5401). A connection that reaches here after Stop must not register
+	// into the post-Stop map, where nothing would ever close it (F5404).
+	reject := ""
+	s.sessionsMu.Lock()
+	select {
+	case <-s.shutdown:
+		reject = "-ERR Server shutting down"
+	default:
+		if s.maxConnections > 0 && len(s.sessions) >= s.maxConnections {
+			reject = "-ERR Too many connections"
+		} else {
+			s.sessions[session.ID()] = session
+		}
+	}
+	s.sessionsMu.Unlock()
+	if reject != "" {
+		if _, err := conn.Write([]byte(reject + "\r\n")); err != nil {
+			s.logger.Debug("failed to write connection rejection", "error", err)
 		}
 		_ = conn.Close()
 		return
 	}
-
-	session := NewSession(conn, s)
-
-	s.sessionsMu.Lock()
-	s.sessions[session.ID()] = session
-	s.sessionsMu.Unlock()
 
 	s.logger.Info("New POP3 session", "session", session.ID(), "remote", conn.RemoteAddr())
 
@@ -383,6 +393,10 @@ func NewSession(conn net.Conn, server *Server) *Session {
 	// Generate greeting timestamp: timestamp.secret@domain
 	timestamp := time.Now().Unix()
 	secret := generateSessionID()
+	// A connection from the implicit-TLS listener (StartTLS) is already
+	// encrypted; without this, requireTLS refused USER/PASS on it and CAPA
+	// offered STLS (F5402).
+	_, isTLS := conn.(*tls.Conn)
 	return &Session{
 		id:                generateSessionID(),
 		conn:              conn,
@@ -392,6 +406,7 @@ func NewSession(conn net.Conn, server *Server) *Session {
 		greetingTimestamp: fmt.Sprintf("%d.%s", timestamp, secret),
 		state:             StateAuthorization,
 		deletedUIDs:       make(map[string]bool),
+		isTLS:             isTLS,
 	}
 }
 
@@ -764,7 +779,11 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		s.WriteDataLine("UIDL")
 		s.WriteDataLine("TOP")
 		if s.server.tlsConfig != nil && !s.isTLS {
-			s.WriteDataLine("STLS")
+			// Advertise STLS only when STLS can succeed: it refuses when the
+			// certificate cannot be loaded (F5403).
+			if _, err := s.server.getTLSConfig(); err == nil {
+				s.WriteDataLine("STLS")
+			}
 		}
 		s.WriteDataEnd()
 
@@ -1057,7 +1076,13 @@ func (s *Session) sendTop(data []byte, lines int) {
 
 	// Send specified number of lines
 	body := content[headerEnd+sepLen:]
-	bodyLines := strings.Split(body, "\n")
+	// The final line terminator ends the last line; splitting on it must not
+	// yield an extra empty line when n exceeds the body length (F5400).
+	body = strings.TrimSuffix(body, "\n")
+	var bodyLines []string
+	if body != "" {
+		bodyLines = strings.Split(body, "\n")
+	}
 	for i, line := range bodyLines {
 		if i >= lines {
 			break

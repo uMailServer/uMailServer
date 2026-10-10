@@ -1070,7 +1070,7 @@ func TestEvaluate_PtrMechanism(t *testing.T) {
 }
 
 func TestEvaluate_UnknownMechanism(t *testing.T) {
-	// Unknown mechanism type returns false (no match)
+	// F5414: RFC 7208 §5 — an unknown mechanism is a permerror.
 	resolver := newMockDNSResolver()
 	resolver.txtRecords["example.com"] = []string{"v=spf1 unknown:foo ?all"}
 
@@ -1078,13 +1078,13 @@ func TestEvaluate_UnknownMechanism(t *testing.T) {
 	ip := net.ParseIP("192.168.1.1")
 	result, _ := checker.CheckSPF(context.Background(), ip, "example.com", "sender@example.com")
 
-	if result != SPFNeutral {
-		t.Errorf("Expected SPFNeutral (unknown mech + ?all), got %s", result.String())
+	if result != SPFPermError {
+		t.Errorf("Expected SPFPermError (unknown mech), got %s", result.String())
 	}
 }
 
 func TestEvaluate_ExpModifier(t *testing.T) {
-	// exp= modifier is parsed but treated as unknown mechanism type -> no match
+	// exp= is a modifier and is skipped during evaluation (F5414)
 	resolver := newMockDNSResolver()
 	resolver.txtRecords["example.com"] = []string{"v=spf1 exp=explain.example.com ?all"}
 

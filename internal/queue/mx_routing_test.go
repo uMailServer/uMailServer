@@ -276,3 +276,86 @@ func TestRegressionF5159_FailureDSNHonoursNotify(t *testing.T) {
 		}
 	}
 }
+
+// F5390: a temporary MX lookup failure defers the message instead of falling
+// back to the domain's address record (RFC 5321 §5.1).
+func TestRegressionF5390_TemporaryMXLookupFailureDefers(t *testing.T) {
+	var dials int32
+	m := routeManager(t, mxErrResolver{&net.DNSError{Err: "server misbehaving", IsTemporary: true}}, func(string) (net.Conn, error) {
+		atomic.AddInt32(&dials, 1)
+		return nil, errors.New("must not dial")
+	})
+	if e := routeSend(t, m, "b@remote.test"); e.Status != "pending" || atomic.LoadInt32(&dials) != 0 {
+		t.Fatalf("SERVFAIL: status=%q dials=%d, want pending without dialing", e.Status, dials)
+	}
+	// NXDOMAIN/NODATA still falls back to the A record.
+	var accepted int32
+	var addr string
+	m2 := routeManager(t, routeResolver{}, func(a string) (net.Conn, error) {
+		addr = a
+		c, s := net.Pipe()
+		routePeer(s, "250 ok", &accepted)
+		return c, nil
+	})
+	if e := routeSend(t, m2, "b@nomx.test"); e.Status != "delivered" || addr != "nomx.test:25" {
+		t.Fatalf("no MX: status=%q addr=%q, want delivered via nomx.test:25", e.Status, addr)
+	}
+}
+
+type mxErrResolver struct{ err error }
+
+func (r mxErrResolver) LookupMX(string) ([]string, error) { return nil, r.err }
+
+// F5391: a success DSN uses a null reverse-path (RFC 3461 §6.2).
+func TestRegressionF5391_SuccessDSNNullSender(t *testing.T) {
+	var accepted int32
+	m := routeManager(t, routeResolver{"remote.test": {"mx.remote.test"}}, func(string) (net.Conn, error) {
+		c, s := net.Pipe()
+		routePeer(s, "250 ok", &accepted)
+		return c, nil
+	})
+	id, err := m.EnqueueWithNotify("a@sender.test", []string{"b@remote.test"}, []string{"SUCCESS"}, []byte("Subject: x\r\n\r\nbody\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := m.db.GetQueueEntry(id + "-0")
+	m.deliver(context.Background(), e)
+	// routeFailureDSNs counts null-sender entries addressed to the sender.
+	if n := routeFailureDSNs(m); n != 1 {
+		t.Fatalf("null-sender DSNs to sender = %d, want 1", n)
+	}
+}
+
+// F5392: the failure DSN Status carries the remote enhanced status code.
+func TestRegressionF5392_BounceStatusFromReply(t *testing.T) {
+	for in, want := range map[string]string{
+		"550 5.1.1 user unknown":     "5.1.1",
+		`550 "5.2.2 mailbox full"`:   "5.2.2",
+		`550 "user unknown"`:         "5.0.0",
+		"550 4.1.1 class mismatch":   "5.0.0",
+		"451 4.4.3 MX lookup failed": "5.0.0",
+		"connection refused":         "5.0.0",
+	} {
+		if got := bounceStatus(in); got != want {
+			t.Fatalf("bounceStatus(%q) = %q, want %q", in, got, want)
+		}
+	}
+	m := routeManager(t, routeResolver{"remote.test": {"mx.remote.test"}}, func(string) (net.Conn, error) {
+		c, s := net.Pipe()
+		var n int32
+		routePeer(s, "550 5.1.1 user unknown", &n)
+		return c, nil
+	})
+	routeSend(t, m, "b@remote.test")
+	var body []byte
+	_ = m.db.ForEach(db.BucketQueue, func(_ string, v []byte) error {
+		var q db.QueueEntry
+		if json.Unmarshal(v, &q) == nil && q.From == "" {
+			body, _ = readFile(q.MessagePath)
+		}
+		return nil
+	})
+	if !strings.Contains(string(body), "Status: 5.1.1\r\n") || strings.Contains(string(body), "Status: 5.0.0") {
+		t.Fatalf("bounce does not carry Status 5.1.1:\n%s", body)
+	}
+}

@@ -92,9 +92,15 @@ func (w *SetupWizard) Run() (*Config, error) {
 	useACME := w.askBool("Use Let's Encrypt (ACME) for automatic certificates?", true)
 	if useACME {
 		w.Config.TLS.ACME.Enabled = true
-		w.Config.TLS.ACME.Email, err = w.askString("ACME email address", "")
-		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
+		// F5364: Load rejects ACME without an email; ask until one is given.
+		for w.Config.TLS.ACME.Email == "" {
+			w.Config.TLS.ACME.Email, err = w.askString("ACME email address (required)", "")
+			if errors.Is(err, io.EOF) {
+				break // no more input; Validate below reports the missing email
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		w.Config.TLS.ACME.Provider = "letsencrypt"
 	} else {
@@ -125,6 +131,11 @@ func (w *SetupWizard) Run() (*Config, error) {
 	// Save configuration
 	fmt.Println()
 	fmt.Println("┌─ Saving Configuration ─")
+
+	// F5364: never save a config that Load (and so the server) would reject.
+	if err := w.Config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
 
 	configPath := filepath.Join(dataDir, "config.yaml")
 	if err := w.Save(configPath); err != nil {

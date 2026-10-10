@@ -21,6 +21,9 @@ func setupInputRegressionRun(t *testing.T, n int) (string, error) {
 	lines := make([]string, n)
 	lines[0] = dir
 	lines[1] = "mail.example.com"
+	if n > 12 {
+		lines[12] = "admin@example.com" // ACME email (default ACME=yes); F5364 re-asks when blank
+	}
 	w := NewSetupWizard()
 	w.reader = bufio.NewReader(io.MultiReader(strings.NewReader(strings.Join(lines, "\n")+"\n"), setupInputRegressionReader{}))
 	_, e := w.Run()

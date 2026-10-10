@@ -281,9 +281,10 @@ func TestInterpreter_ExecuteSet_String(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
+	// F5343: "variables" is not implemented, so requiring it fails the script.
 	_, err = interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported extension") {
+		t.Fatalf("Execute error = %v, want unsupported extension", err)
 	}
 }
 
@@ -307,9 +308,10 @@ func TestInterpreter_ExecuteSet_Modifier(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
+	// F5343: "variables" is not implemented, so requiring it fails the script.
 	_, err = interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported extension") {
+		t.Fatalf("Execute error = %v, want unsupported extension", err)
 	}
 }
 

@@ -796,7 +796,11 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		}
 	}
 
-	// Handle update - update keywords (flags) and mailboxIds
+	// Handle update - update keywords (flags) and mailboxIds. F5333/F5334:
+	// an Email is one object across every mailbox holding a copy of it
+	// (RFC 8621 §4), so the patch is applied to all copies: keywords reach
+	// every copy and mailboxIds (full or "mailboxIds/<id>" path form)
+	// describe the complete set of mailboxes the Email ends up in.
 	for emailID, val := range update {
 		updateData, ok := val.(map[string]interface{})
 		if !ok {
@@ -806,153 +810,96 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			continue
 		}
 
-		// Find the message in user's mailboxes
-		mailboxes, _ := s.db.ListMailboxes(user)
-		var found bool
-		var targetMbox string
-		var targetUID uint32
-		var meta *storage.MessageMetadata
-
-		for _, mbox := range mailboxes {
-			uids, _ := s.db.GetMessageUIDs(user, mbox)
-			for _, uid := range uids {
-				m, err := s.db.GetMessageMetadata(user, mbox, uid)
-				if err != nil || m == nil {
-					continue
-				}
-				if m.MessageID == emailID {
-					found = true
-					targetMbox = mbox
-					targetUID = uid
-					meta = m
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-
-		if !found || meta == nil {
+		copies := s.findEmailCopies(user, emailID)
+		if len(copies) == 0 {
 			notUpdated[emailID] = map[string]interface{}{
 				"type": "notFound",
 			}
 			continue
 		}
 
-		// Update keywords (flags). RFC 8620 §4.3 patches the Email with a
-		// PatchObject: the "keywords" property form is a full property set
-		// (replace), while the "keywords/$name" path form adds or removes a
-		// single keyword and preserves the rest. Both forms are honoured; the
-		// path form alone used to be silently ignored.
-		if keywords, ok := updateData["keywords"].(map[string]interface{}); ok {
-			// Convert JMAP keywords to IMAP flags
-			newFlags := []string{}
-			for kw, val := range keywords {
-				if b, ok := val.(bool); ok && b {
-					if flag, ok := jmapKeywordToIMAPFlag(kw); ok {
-						newFlags = append(newFlags, flag)
-					}
-				}
-			}
-			meta.Flags = newFlags
-		}
-		for key, val := range updateData {
-			const keywordPathPrefix = "keywords/"
-			if !strings.HasPrefix(key, keywordPathPrefix) {
-				continue
-			}
-			flag, ok := jmapKeywordToIMAPFlag(strings.TrimPrefix(key, keywordPathPrefix))
-			if !ok {
-				continue
-			}
-			// null (JSON null) or false removes the keyword; true adds it.
-			// Anything else is an invalid patch value — RFC 8620 §4.3 requires
-			// such an update to be rejected with invalidPatch instead of being
-			// silently treated as a removal.
-			if val == nil {
-				meta.Flags = removeIMAPFlag(meta.Flags, flag)
-				continue
-			}
-			if set, isBool := val.(bool); isBool {
-				if set {
-					if !hasIMAPFlag(meta.Flags, flag) {
-						meta.Flags = append(meta.Flags, flag)
-					}
-				} else {
-					meta.Flags = removeIMAPFlag(meta.Flags, flag)
-				}
-				continue
-			}
+		patchFlags, ok := emailKeywordPatch(updateData)
+		if !ok {
 			notUpdated[emailID] = map[string]interface{}{
 				"type": "invalidPatch",
 			}
 			continue
 		}
 
-		// RFC 8620 §4.3: an invalid patch rejects the whole update for this
-		// object. Do not apply any further part of the patch (mailboxIds
-		// move, metadata persistence) and do not report it as updated —
-		// otherwise the response lists the id in both updated and notUpdated
-		// while storage changes on a failed update.
-		if _, failed := notUpdated[emailID]; failed {
+		current := make([]string, 0, len(copies))
+		inMailbox := make(map[string]bool, len(copies))
+		for _, c := range copies {
+			current = append(current, c.mailbox)
+			inMailbox[c.mailbox] = true
+		}
+		desired, errType := emailMailboxPatch(updateData, current)
+		if errType != "" {
+			notUpdated[emailID] = map[string]interface{}{
+				"type": errType,
+			}
+			continue
+		}
+		// RFC 8620 §2.3 / RFC 8621 §4.4: every destination mailbox must
+		// exist. getMailboxNameFromID passes unknown ids through verbatim,
+		// so without this check the storage layer would silently
+		// materialize a phantom mailbox (CreateBucketIfNotExists).
+		var missingMailbox bool
+		for mbox := range desired {
+			if !s.mailboxExists(user, mbox) {
+				missingMailbox = true
+				break
+			}
+		}
+		if missingMailbox {
+			notUpdated[emailID] = map[string]interface{}{
+				"type": "mailboxNotFound",
+			}
 			continue
 		}
 
-		// Update mailboxIds (move message)
-		if mailboxIDs, ok := updateData["mailboxIds"].(map[string]interface{}); ok {
-			// Determine target mailbox
-			var newMbox string
-			for id, val := range mailboxIDs {
-				if b, ok := val.(bool); ok && b {
-					newMbox = getMailboxNameFromID(id)
-					break
-				}
+		// Store the copies for newly added mailboxes first, so a failure
+		// never leaves the Email with fewer copies than before.
+		newFlags := patchFlags(append([]string(nil), copies[0].meta.Flags...))
+		var failed bool
+		for _, mbox := range sortedKeys(desired) {
+			if inMailbox[mbox] {
+				continue
 			}
-
-			if newMbox != "" && newMbox != targetMbox {
-				// RFC 8620 §2.3: the destination mailbox must exist; RFC 8621
-				// §4.4 requires such moves to fail with "mailboxNotFound".
-				// getMailboxNameFromID passes unknown ids through verbatim,
-				// so without this check the storage layer would silently
-				// materialize a phantom mailbox (CreateBucketIfNotExists).
-				if !s.mailboxExists(user, newMbox) {
-					notUpdated[emailID] = map[string]interface{}{
-						"type": "mailboxNotFound",
-					}
-					continue
+			newMeta := *copies[0].meta
+			newMeta.Flags = append([]string(nil), newFlags...)
+			newUID, _ := s.db.GetNextUID(user, mbox)
+			newMeta.UID = newUID
+			if err := s.db.StoreMessageMetadata(user, mbox, newUID, &newMeta); err != nil {
+				notUpdated[emailID] = map[string]interface{}{
+					"type":        "serverFail",
+					"description": s.safeError("StoreMessageMetadata", err),
 				}
-
-				// Move message to new mailbox
-				// Store in new mailbox
-				newUID, _ := s.db.GetNextUID(user, newMbox)
-				if err := s.db.StoreMessageMetadata(user, newMbox, newUID, meta); err != nil {
-					notUpdated[emailID] = map[string]interface{}{
-						"type":        "serverFail",
-						"description": s.safeError("StoreMessageMetadata", err),
-					}
-					continue
-				}
-
-				// Delete from old mailbox
-				_ = s.db.DeleteMessage(user, targetMbox, targetUID)
-				targetMbox = newMbox
-				// The message now lives in the new mailbox under newUID. Point
-				// targetUID (and the stored UID) at newUID so the metadata save
-				// below updates the moved message instead of writing to the
-				// stale UID, which would clobber an unrelated message that
-				// already occupies that UID in the destination mailbox.
-				targetUID = newUID
-				meta.UID = newUID
+				failed = true
+				break
 			}
 		}
+		if failed {
+			continue
+		}
 
-		// Save updated metadata
-		if err := s.db.UpdateMessageMetadata(user, targetMbox, targetUID, meta); err != nil {
-			notUpdated[emailID] = map[string]interface{}{
-				"type":        "serverFail",
-				"description": s.safeError("UpdateMessageMetadata", err),
+		for _, c := range copies {
+			if !desired[c.mailbox] {
+				// Best-effort, matching destroy: the copy is no longer in
+				// the Email's mailbox set.
+				_ = s.db.DeleteMessage(user, c.mailbox, c.uid)
+				continue
 			}
+			c.meta.Flags = patchFlags(c.meta.Flags)
+			if err := s.db.UpdateMessageMetadata(user, c.mailbox, c.uid, c.meta); err != nil {
+				notUpdated[emailID] = map[string]interface{}{
+					"type":        "serverFail",
+					"description": s.safeError("UpdateMessageMetadata", err),
+				}
+				failed = true
+				break
+			}
+		}
+		if failed {
 			continue
 		}
 
@@ -1015,6 +962,127 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		},
 		ID: call.ID,
 	}
+}
+
+// emailKeywordPatch parses the keyword part of an Email/set update. RFC 8620
+// §5.3 patches the Email with a PatchObject: the "keywords" property form is
+// a full property set (replace), while the "keywords/$name" path form adds
+// (true) or removes (null/false) a single keyword and preserves the rest.
+// The returned function applies the patch to one copy's flags (F5334); ok is
+// false for an invalid patch value, which rejects the whole update.
+func emailKeywordPatch(updateData map[string]interface{}) (func([]string) []string, bool) {
+	var replace []string
+	keywords, hasReplace := updateData["keywords"].(map[string]interface{})
+	if hasReplace {
+		replace = []string{}
+		for kw, val := range keywords {
+			if b, ok := val.(bool); ok && b {
+				if flag, ok := jmapKeywordToIMAPFlag(kw); ok {
+					replace = append(replace, flag)
+				}
+			}
+		}
+	}
+	paths := map[string]bool{}
+	for key, val := range updateData {
+		const keywordPathPrefix = "keywords/"
+		if !strings.HasPrefix(key, keywordPathPrefix) {
+			continue
+		}
+		flag, ok := jmapKeywordToIMAPFlag(strings.TrimPrefix(key, keywordPathPrefix))
+		if !ok {
+			continue
+		}
+		// null (JSON null) or false removes the keyword; true adds it.
+		// Anything else is an invalid patch value (RFC 8620 §5.3).
+		if val == nil {
+			paths[flag] = false
+			continue
+		}
+		set, isBool := val.(bool)
+		if !isBool {
+			return nil, false
+		}
+		paths[flag] = set
+	}
+	return func(flags []string) []string {
+		if hasReplace {
+			flags = append([]string(nil), replace...)
+		}
+		for flag, set := range paths {
+			if set {
+				if !hasIMAPFlag(flags, flag) {
+					flags = append(flags, flag)
+				}
+			} else {
+				flags = removeIMAPFlag(flags, flag)
+			}
+		}
+		return flags
+	}, true
+}
+
+// emailMailboxPatch returns the set of mailbox names the Email must be in
+// after the update (F5333). The "mailboxIds" property form replaces the set;
+// the "mailboxIds/<id>" path form adds (true) or removes (null/false) one
+// mailbox. Using both forms is an overlapping patch (RFC 8620 §5.3,
+// invalidPatch); an empty result is invalidProperties because an Email must
+// belong to at least one mailbox (RFC 8621 §4.1.1).
+func emailMailboxPatch(updateData map[string]interface{}, current []string) (map[string]bool, string) {
+	const mailboxPathPrefix = "mailboxIds/"
+	desired := map[string]bool{}
+	full, hasFull := updateData["mailboxIds"]
+	if hasFull {
+		ids, ok := full.(map[string]interface{})
+		if !ok {
+			return nil, "invalidProperties"
+		}
+		for id, val := range ids {
+			if b, ok := val.(bool); ok && b {
+				desired[getMailboxNameFromID(id)] = true
+			}
+		}
+	} else {
+		for _, mbox := range current {
+			desired[mbox] = true
+		}
+	}
+	for key, val := range updateData {
+		if !strings.HasPrefix(key, mailboxPathPrefix) {
+			continue
+		}
+		if hasFull {
+			return nil, "invalidPatch"
+		}
+		mbox := getMailboxNameFromID(strings.TrimPrefix(key, mailboxPathPrefix))
+		if val == nil {
+			delete(desired, mbox)
+			continue
+		}
+		set, isBool := val.(bool)
+		if !isBool {
+			return nil, "invalidPatch"
+		}
+		if set {
+			desired[mbox] = true
+		} else {
+			delete(desired, mbox)
+		}
+	}
+	if len(desired) == 0 {
+		return nil, "invalidProperties"
+	}
+	return desired, ""
+}
+
+// sortedKeys returns the keys of m in sorted order, for deterministic writes.
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // mailboxExists reports whether the user's account has a mailbox with this

@@ -85,6 +85,8 @@ func TestValidate_Complete(t *testing.T) {
 					Inbound: InboundSMTPConfig{
 						Enabled: true,
 						Port:    25,
+						// F5362: zero would refuse every message.
+						MaxMessageSize: 10 * MB,
 					},
 					Submission: SubmissionSMTPConfig{
 						Enabled: true,
@@ -553,6 +555,8 @@ func TestConfigValidate_WithZeroPorts(t *testing.T) {
 			Inbound: InboundSMTPConfig{
 				Enabled: true,
 				Port:    25,
+				// F5362: zero would refuse every message.
+				MaxMessageSize: 10 * MB,
 			},
 			Submission: SubmissionSMTPConfig{
 				Enabled: false,

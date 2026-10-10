@@ -719,6 +719,29 @@ func (c *Config) Validate() error {
 	if c.SMTP.Inbound.WriteTimeout < 0 {
 		return fmt.Errorf("smtp.inbound.write_timeout must be non-negative")
 	}
+	// F5363: a negative lockout_duration puts the lockout cutoff in the
+	// future, so failed logins are never counted (lockout silently disabled).
+	for _, d := range []struct {
+		name  string
+		value Duration
+	}{
+		{"security.lockout_duration", c.Security.LockoutDuration},
+		{"security.spf_cache_ttl", c.Security.SPFCacheTTL},
+		{"imap.idle_timeout", c.IMAP.IdleTimeout},
+		{"spam.greylisting.delay", c.Spam.Greylisting.Delay},
+		{"av.timeout", c.AV.Timeout},
+	} {
+		if d.value < 0 {
+			return fmt.Errorf("%s must be non-negative", d.name)
+		}
+	}
+
+	// F5362: every SMTP listener rejects messages longer than this limit, so
+	// a zero or negative value refuses all mail.
+	smtpEnabled := c.SMTP.Inbound.Enabled || c.SMTP.Submission.Enabled || c.SMTP.SubmissionTLS.Enabled
+	if smtpEnabled && c.SMTP.Inbound.MaxMessageSize <= 0 {
+		return fmt.Errorf("smtp.inbound.max_message_size must be positive")
+	}
 
 	// Validate AV settings
 	if c.AV.Enabled {
@@ -858,53 +881,55 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// checkPortConflicts checks for conflicting port configurations
+// checkPortConflicts checks that the listeners server.Start binds are on
+// valid, distinct ports. It mirrors internal/server: a disabled service binds
+// nothing (F5360), the HTTP API always binds, and ManageSieve also binds
+// port+1 for implicit TLS. imap.starttls_port and http.http_port are not bound
+// today but stay reserved.
 func (c *Config) checkPortConflicts() error {
+	manageSieveTLSPort := 0
+	if c.ManageSieve.Port > 0 && c.ManageSieve.Port < 65535 {
+		manageSieveTLSPort = c.ManageSieve.Port + 1
+	}
+	listeners := []struct {
+		name    string
+		enabled bool
+		port    int
+	}{
+		{"smtp.inbound", c.SMTP.Inbound.Enabled, c.SMTP.Inbound.Port},
+		{"smtp.submission", c.SMTP.Submission.Enabled, c.SMTP.Submission.Port},
+		{"smtp.submission_tls", c.SMTP.SubmissionTLS.Enabled, c.SMTP.SubmissionTLS.Port},
+		{"imap", c.IMAP.Enabled, c.IMAP.Port},
+		{"imap.starttls", c.IMAP.Enabled, c.IMAP.STARTTLSPort},
+		{"pop3", c.POP3.Enabled, c.POP3.Port},
+		{"http", true, c.HTTP.Port},
+		{"http.plain", true, c.HTTP.HTTPPort},
+		{"admin", c.Admin.Enabled, c.Admin.Port},
+		{"metrics", c.Metrics.Enabled, c.Metrics.Port},
+		{"mcp", c.MCP.Enabled, c.MCP.Port},
+		{"managesieve", c.ManageSieve.Enabled, c.ManageSieve.Port},
+		{"managesieve.tls", c.ManageSieve.Enabled, manageSieveTLSPort},
+		{"caldav", c.CalDAV.Enabled, c.CalDAV.Port},
+		{"carddav", c.CardDAV.Enabled, c.CardDAV.Port},
+		{"jmap", c.JMAP.Enabled, c.JMAP.Port},
+	}
+
 	ports := make(map[int]string)
-
-	checkPort := func(port int, name string) error {
-		if port <= 0 {
-			return nil // Disabled or invalid
+	for _, l := range listeners {
+		if !l.enabled {
+			continue
 		}
-		if existing, ok := ports[port]; ok {
-			return fmt.Errorf("port conflict: %s and %s both use port %d", existing, name, port)
+		// F5361: net.Listen rejects these at bind time; fail at load instead.
+		if l.port < 0 || l.port > 65535 {
+			return fmt.Errorf("%s port %d is out of range (1-65535)", l.name, l.port)
 		}
-		ports[port] = name
-		return nil
-	}
-
-	if err := checkPort(c.SMTP.Inbound.Port, "smtp.inbound"); err != nil {
-		return err
-	}
-	if err := checkPort(c.SMTP.Submission.Port, "smtp.submission"); err != nil {
-		return err
-	}
-	if err := checkPort(c.SMTP.SubmissionTLS.Port, "smtp.submission_tls"); err != nil {
-		return err
-	}
-	if err := checkPort(c.IMAP.Port, "imap"); err != nil {
-		return err
-	}
-	if err := checkPort(c.IMAP.STARTTLSPort, "imap.starttls"); err != nil {
-		return err
-	}
-	if err := checkPort(c.POP3.Port, "pop3"); err != nil {
-		return err
-	}
-	if err := checkPort(c.HTTP.Port, "http"); err != nil {
-		return err
-	}
-	if err := checkPort(c.HTTP.HTTPPort, "http.plain"); err != nil {
-		return err
-	}
-	if err := checkPort(c.Admin.Port, "admin"); err != nil {
-		return err
-	}
-	if err := checkPort(c.Metrics.Port, "metrics"); err != nil {
-		return err
-	}
-	if err := checkPort(c.MCP.Port, "mcp"); err != nil {
-		return err
+		if l.port == 0 {
+			continue // unset / ephemeral
+		}
+		if existing, ok := ports[l.port]; ok {
+			return fmt.Errorf("port conflict: %s and %s both use port %d", existing, l.name, l.port)
+		}
+		ports[l.port] = l.name
 	}
 
 	return nil
