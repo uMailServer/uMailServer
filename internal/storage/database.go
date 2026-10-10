@@ -21,6 +21,10 @@ type Database struct {
 	bolt *bbolt.DB
 }
 
+// openLockTimeout bounds how long Open waits for another holder of the file
+// lock (F5950: the bare literal 1 meant 1ns, i.e. no wait at all).
+const openLockTimeout = 5 * time.Second
+
 // OpenDatabase opens the bbolt database
 func OpenDatabase(path string) (*Database, error) {
 	// Create parent directories if they don't exist
@@ -31,7 +35,7 @@ func OpenDatabase(path string) (*Database, error) {
 		}
 	}
 
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: 1})
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: openLockTimeout})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database at %s: %w", path, err)
 	}
