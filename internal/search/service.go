@@ -3,13 +3,44 @@ package search
 import (
 	"fmt"
 	"log/slog"
+	"net/mail"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/storage"
 )
+
+// maxSearchLimit bounds the page size of a single search.
+const maxSearchLimit = 1000
+
+var attachmentDispositionRE = regexp.MustCompile(`(?i)content-disposition:\s*attachment`)
+
+// parseSearchDate parses YYYY-MM-DD or RFC3339. A date-only upper bound is
+// inclusive of the whole day.
+func parseSearchDate(v string, upper bool) (time.Time, error) {
+	if t, err := time.Parse("2006-01-02", v); err == nil {
+		if upper {
+			t = t.Add(24*time.Hour - time.Nanosecond)
+		}
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, v)
+}
+
+// docDate picks the message date used for date filtering.
+func docDate(meta *storage.MessageMetadata) time.Time {
+	if !meta.InternalDate.IsZero() {
+		return meta.InternalDate
+	}
+	if t, err := mail.ParseDate(meta.Date); err == nil {
+		return t
+	}
+	return time.Time{}
+}
 
 // Service provides message search functionality
 type Service struct {
@@ -78,40 +109,74 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 	}
 
 	// Perform search
-	searchOpts := SearchOptions{}
-	if opts.Limit > 0 {
-		searchOpts.Limit = opts.Limit
-	} else {
-		searchOpts.Limit = 20
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
 	}
-	searchOpts.Offset = opts.Offset
+	// F5975: cap so a caller cannot force an unbounded result slice.
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
 
-	indexOpts := searchOpts
-	if opts.Folder != "" {
-		// Folder filtering must precede pagination.
+	var from, to time.Time
+	var err error
+	if opts.DateFrom != "" {
+		if from, err = parseSearchDate(opts.DateFrom, false); err != nil {
+			return nil, fmt.Errorf("invalid date_from: %w", err)
+		}
+	}
+	if opts.DateTo != "" {
+		if to, err = parseSearchDate(opts.DateTo, true); err != nil {
+			return nil, fmt.Errorf("invalid date_to: %w", err)
+		}
+	}
+
+	filtered := opts.Folder != "" || !from.IsZero() || !to.IsZero() || opts.HasAttachment
+	indexOpts := SearchOptions{Limit: limit, Offset: offset}
+	if filtered {
+		// Filtering must precede pagination.
 		indexOpts = SearchOptions{}
 	}
 	results := index.Search(opts.Query, indexOpts)
-	if opts.Folder != "" {
-		filtered := results[:0]
+	if filtered {
+		kept := results[:0]
 		for _, result := range results {
-			folder, _, err := parseDocID(result.DocID)
-			if err == nil && folder == opts.Folder {
-				filtered = append(filtered, result)
+			if opts.Folder != "" {
+				folder, _, err := parseDocID(result.DocID)
+				if err != nil || folder != opts.Folder {
+					continue
+				}
 			}
+			if !from.IsZero() || !to.IsZero() || opts.HasAttachment {
+				doc := index.Get(result.DocID)
+				if doc == nil {
+					continue
+				}
+				if opts.HasAttachment && !doc.HasAttachment {
+					continue
+				}
+				if !from.IsZero() && (doc.Date.IsZero() || doc.Date.Before(from)) {
+					continue
+				}
+				if !to.IsZero() && (doc.Date.IsZero() || doc.Date.After(to)) {
+					continue
+				}
+			}
+			kept = append(kept, result)
 		}
-		start := searchOpts.Offset
-		if start < 0 {
-			start = 0
+		start := offset
+		if start > len(kept) {
+			start = len(kept)
 		}
-		if start > len(filtered) {
-			start = len(filtered)
+		end := len(kept)
+		if limit < end-start {
+			end = start + limit
 		}
-		end := len(filtered)
-		if searchOpts.Limit < end-start {
-			end = start + searchOpts.Limit
-		}
-		results = filtered[start:end]
+		results = kept[start:end]
 	}
 
 	// Convert to MessageSearchResult
@@ -134,6 +199,10 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 			UID:    uid,
 			Folder: folder,
 			Score:  result.Score,
+		}
+
+		if doc := index.Get(result.DocID); doc != nil {
+			searchResult.HasAttachment = doc.HasAttachment
 		}
 
 		if s.db != nil {
@@ -186,11 +255,13 @@ func (s *Service) BuildIndex(user string) error {
 
 			// Read message content for full-text indexing
 			content := ""
+			hasAtt := false
 			if s.msgStore != nil {
 				data, err := s.msgStore.ReadMessage(user, meta.MessageID)
 				if err == nil {
 					// Extract text content
 					content = extractTextContent(data)
+					hasAtt = attachmentDispositionRE.Match(data)
 				}
 			}
 
@@ -203,6 +274,8 @@ func (s *Service) BuildIndex(user string) error {
 					"to":      meta.To,
 					"subject": meta.Subject,
 				},
+				Date:          docDate(meta),
+				HasAttachment: hasAtt,
 			}
 
 			index.Add(doc)
@@ -238,10 +311,12 @@ func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 
 	// Read message content
 	content := ""
+	hasAtt := false
 	if s.msgStore != nil {
 		data, err := s.msgStore.ReadMessage(user, meta.MessageID)
 		if err == nil {
 			content = extractTextContent(data)
+			hasAtt = attachmentDispositionRE.Match(data)
 		}
 	}
 
@@ -253,6 +328,8 @@ func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 			"to":      meta.To,
 			"subject": meta.Subject,
 		},
+		Date:          docDate(meta),
+		HasAttachment: hasAtt,
 	}
 
 	index.Add(doc)
