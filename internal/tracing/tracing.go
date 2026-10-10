@@ -151,7 +151,7 @@ func createResource(config Config) (*resource.Resource, error) {
 
 // Stop shuts down the tracing provider
 func (p *Provider) Stop(ctx context.Context) error {
-	if !p.enabled || p.stopFunc == nil {
+	if p == nil || !p.enabled || p.stopFunc == nil {
 		return nil
 	}
 	return p.stopFunc(ctx)
@@ -159,8 +159,10 @@ func (p *Provider) Stop(ctx context.Context) error {
 
 // StartSpan starts a new span with the given name and options
 func (p *Provider) StartSpan(ctx context.Context, name string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
-	if !p.enabled {
-		return ctx, trace.SpanFromContext(ctx)
+	if p == nil || !p.enabled {
+		// Return a no-op span, never the caller's current one: callers
+		// defer span.End(), which would end the parent span early (F5927).
+		return ctx, trace.SpanFromContext(context.Background())
 	}
 	return p.tracer.Start(ctx, name, opts...)
 }
@@ -177,14 +179,14 @@ func ContextWithSpan(ctx context.Context, span trace.Span) context.Context {
 
 // Inject propagates the span context into carrier headers
 func (p *Provider) Inject(ctx context.Context, carrier propagation.TextMapCarrier) {
-	if p.enabled && p.propagator != nil {
+	if p != nil && p.enabled && p.propagator != nil {
 		p.propagator.Inject(ctx, carrier)
 	}
 }
 
 // Extract extracts span context from carrier headers
 func (p *Provider) Extract(ctx context.Context, carrier propagation.TextMapCarrier) context.Context {
-	if !p.enabled || p.propagator == nil {
+	if p == nil || !p.enabled || p.propagator == nil {
 		return ctx
 	}
 	return p.propagator.Extract(ctx, carrier)
@@ -192,7 +194,7 @@ func (p *Provider) Extract(ctx context.Context, carrier propagation.TextMapCarri
 
 // IsEnabled returns whether tracing is enabled
 func (p *Provider) IsEnabled() bool {
-	return p.enabled
+	return p != nil && p.enabled
 }
 
 // noopExporter is a no-op span exporter

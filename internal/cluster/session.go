@@ -133,6 +133,11 @@ func (l *RedisLeaderElection) TryAcquire(ctx context.Context, electionKey string
 
 	// Check if we are the current leader
 	current, err := l.client.Get(ctx, leaderKey(electionKey)).Result()
+	if err == redis.Nil {
+		// The lease expired between SETNX and GET: not an error, just not
+		// acquired this round (F5928).
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

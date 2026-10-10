@@ -228,6 +228,9 @@ func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 		return s.BuildIndex(user)
 	}
 
+	if s.db == nil {
+		return fmt.Errorf("database not available")
+	}
 	meta, err := s.db.GetMessageMetadata(user, folder, uid)
 	if err != nil {
 		return err

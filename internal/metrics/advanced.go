@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,12 +20,17 @@ type Histogram struct {
 func NewHistogram(bounds []float64) *Histogram {
 	return &Histogram{
 		buckets: make([]uint64, len(bounds)+1),
-		bounds:  bounds,
+		bounds:  append([]float64(nil), bounds...),
 	}
 }
 
 // Observe records a value
 func (h *Histogram) Observe(value float64) {
+	// NaN would poison sum forever (and make Snapshot unencodable as JSON);
+	// drop it (F5926).
+	if math.IsNaN(value) {
+		return
+	}
 	h.mutex.Lock()
 	defer h.mutex.Unlock()
 

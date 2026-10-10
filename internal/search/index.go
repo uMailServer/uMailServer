@@ -62,7 +62,7 @@ func (idx *Index) Add(doc *Document) {
 		// Add field-specific tokens with field prefix
 		tokens := tokenize(value)
 		for _, token := range tokens {
-			fieldToken := field + ":" + token
+			fieldToken := strings.ToLower(field) + ":" + token
 			idx.addToken(fieldToken, doc.ID)
 		}
 		allText += " " + value
@@ -81,6 +81,17 @@ func (idx *Index) addToken(token, docID string) {
 		idx.tokens[token] = make(map[string]int)
 	}
 	idx.tokens[token][docID]++
+}
+
+// dropToken removes docID from a token's posting list and deletes the list
+// once empty, so removed documents do not leave their vocabulary behind
+// (F5920).
+func (idx *Index) dropToken(token, docID string) {
+	postings := idx.tokens[token]
+	delete(postings, docID)
+	if len(postings) == 0 {
+		delete(idx.tokens, token)
+	}
 }
 
 // Remove removes a document from the index
@@ -102,15 +113,14 @@ func (idx *Index) removeInternal(docID string) {
 		tokens := tokenize(value)
 		for _, token := range tokens {
 			// Remove field-prefixed token (as added in Add)
-			fieldToken := field + ":" + token
-			delete(idx.tokens[fieldToken], docID)
+			idx.dropToken(strings.ToLower(field)+":"+token, docID)
 		}
 		allText += " " + value
 	}
 
 	tokens := tokenize(allText)
 	for _, token := range tokens {
-		delete(idx.tokens[token], docID)
+		idx.dropToken(token, docID)
 	}
 
 	delete(idx.docs, docID)
@@ -250,15 +260,25 @@ func parseQuery(query string) []QueryTerm {
 
 // tokenize breaks text into tokens
 func tokenize(text string) []string {
-	// Convert to lowercase
+	// Convert to lowercase, folding the Turkish dotless i (U+0131) to "i" so
+	// "ISPARTA" (lowercased by a Turkish locale to "ısparta") and "isparta"
+	// find each other (F5921).
 	text = strings.ToLower(text)
+	text = strings.ReplaceAll(text, "\u0131", "i")
 
 	// Split by non-letter/number characters
 	var tokens []string
 	var current strings.Builder
 
 	for _, r := range text {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+		if r == '\u0307' {
+			// Combining dot above: left behind when a dotted capital I is
+			// decomposed; it carries no search meaning (F5921).
+			continue
+		}
+		// Combining marks belong to the base letter: splitting on them tore
+		// decomposed (NFD) words in two (F5922).
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) {
 			current.WriteRune(r)
 		} else {
 			if current.Len() > 0 {

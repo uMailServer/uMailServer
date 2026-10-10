@@ -35,6 +35,18 @@ type SSEClient struct {
 	// http.ResponseWriter is not safe for concurrent use.
 	writeMu sync.Mutex
 	closed  bool // protected by writeMu
+
+	stopOnce sync.Once
+}
+
+// sseWriteTimeout bounds each event write. A client that stops reading would
+// otherwise block Write forever while holding writeMu, stalling every
+// Broadcast/SendToUser/SendToAdmins call that reaches it (F5925).
+var sseWriteTimeout = 10 * time.Second
+
+// stopClient signals the handler goroutine to exit; safe to call repeatedly.
+func (c *SSEClient) stopClient() {
+	c.stopOnce.Do(func() { close(c.stop) })
 }
 
 // NewSSEServer creates a new SSE server
@@ -139,7 +151,7 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 		if len(s.clients[user]) >= maxClientsPerUser {
 			oldest := s.clients[user][0]
 			s.clients[user] = s.clients[user][1:]
-			close(oldest.stop)
+			oldest.stopClient()
 		}
 		s.clients[user] = append(s.clients[user], client)
 		s.clientsMu.Unlock()
@@ -236,12 +248,19 @@ func (s *SSEServer) sendEvent(client *SSEClient, event string, data interface{})
 		return
 	}
 
+	// Best effort: writers without deadline support just keep the old behaviour.
+	_ = http.NewResponseController(client.writer).SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+
 	if _, err := fmt.Fprintf(client.writer, "event: %s\n", event); err != nil {
 		s.logger.Debug("failed to write SSE event", "error", err)
+		client.closed = true
+		client.stopClient()
 		return
 	}
 	if _, err := fmt.Fprintf(client.writer, "data: %s\n\n", payload); err != nil {
 		s.logger.Debug("failed to write SSE data", "error", err)
+		client.closed = true
+		client.stopClient()
 		return
 	}
 	client.flusher.Flush()
