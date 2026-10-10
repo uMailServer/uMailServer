@@ -60,7 +60,7 @@ func TestSetupWizardRunPOP3Enabled(t *testing.T) {
 		"y\n" + // POP3 enabled
 		"995\n" + // POP3 port
 		"y\n" + // Admin enabled
-		"8080\n" +
+		"8443\n" + // 8080 is the enabled metrics port (F5364)
 		"n\n" + // ACME disabled
 		"y\n" + // Spam enabled
 		"y\n" + // Bayesian
