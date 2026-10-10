@@ -252,7 +252,7 @@ func TestHandleDeleteSuccess(t *testing.T) {
 	session.state = StateAuthenticated
 	session.user = "test"
 
-	err := session.handleDelete([]string{"OldBox"})
+	err := session.handleDelete([]string{"Sent"})
 	if err != nil {
 		t.Errorf("handleDelete failed: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestHandleRenameSuccess(t *testing.T) {
 	session.state = StateAuthenticated
 	session.user = "test"
 
-	err := session.handleRename([]string{"OldBox", "NewBox"})
+	err := session.handleRename([]string{"Sent", "NewBox"})
 	if err != nil {
 		t.Errorf("handleRename failed: %v", err)
 	}
@@ -1847,7 +1847,7 @@ func TestHandleAuthenticatedDelete(t *testing.T) {
 	session.user = "test"
 	session.tag = "A1"
 
-	err := session.handleAuthenticated("DELETE", []string{"OldMailbox"}, "A1 DELETE OldMailbox")
+	err := session.handleAuthenticated("DELETE", []string{"Sent"}, "A1 DELETE Sent")
 	if err != nil {
 		t.Errorf("handleAuthenticated DELETE failed: %v", err)
 	}
@@ -1866,7 +1866,7 @@ func TestHandleAuthenticatedRename(t *testing.T) {
 	session.user = "test"
 	session.tag = "A1"
 
-	err := session.handleAuthenticated("RENAME", []string{"OldName", "NewName"}, "A1 RENAME OldName NewName")
+	err := session.handleAuthenticated("RENAME", []string{"Sent", "NewName"}, "A1 RENAME Sent NewName")
 	if err != nil {
 		t.Errorf("handleAuthenticated RENAME failed: %v", err)
 	}

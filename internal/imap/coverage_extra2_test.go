@@ -1045,3 +1045,11 @@ func TestHandleDelete_NilMailstoreViaCommand(t *testing.T) {
 	}
 	<-done
 }
+
+// The first unseen message of the fixture is message 3 (F6039).
+func (u *unseenMockMailstore) SearchMessages(user, mailbox string, criteria SearchCriteria) ([]uint32, error) {
+	if criteria.Unseen {
+		return []uint32{3, 5}, nil
+	}
+	return u.mockMailstore.SearchMessages(user, mailbox, criteria)
+}

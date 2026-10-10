@@ -34,7 +34,7 @@ func (s *Session) handleCommand(line string) error {
 
 	s.tag = parts[0]
 	command := strings.ToUpper(parts[1])
-	args := parts[2:]
+	args := regroupArgs(command, line, parts[2:])
 
 	// Handle the command based on current state.
 	// Use the State() accessor (RLock) rather than s.state directly: Close()
@@ -549,12 +549,10 @@ func (s *Session) handleLogin(args []string) error {
 		return nil
 	}
 
+	// The dispatcher already unquoted the arguments; trimming quote /
+	// apostrophe characters here corrupted passwords such as "it's" (F6032).
 	username := args[0]
 	password := args[1]
-
-	// Remove quotes if present
-	username = strings.Trim(username, "\"'")
-	password = strings.Trim(password, "\"'")
 
 	return s.authenticateUser(username, password, "LOGIN completed", "Authentication failed")
 }
@@ -581,8 +579,7 @@ func (s *Session) handleSelect(args []string) error {
 		return nil
 	}
 
-	mailboxName := args[0]
-	mailboxName = strings.Trim(mailboxName, "\"'")
+	mailboxName := canonMailbox(args[0])
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
@@ -616,8 +613,8 @@ func (s *Session) handleSelect(args []string) error {
 	s.WriteData(fmt.Sprintf("%d EXISTS", mailbox.Exists))
 	s.WriteData(fmt.Sprintf("%d RECENT", mailbox.Recent))
 
-	if mailbox.Unseen > 0 {
-		s.WriteData(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", mailbox.Unseen, mailbox.Unseen))
+	if first := s.firstUnseen(mailbox); first > 0 {
+		s.WriteData(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", first, first))
 	}
 
 	s.WriteData(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", mailbox.UIDValidity))
@@ -650,8 +647,7 @@ func (s *Session) handleExamine(args []string) error {
 		return nil
 	}
 
-	mailboxName := args[0]
-	mailboxName = strings.Trim(mailboxName, "\"'")
+	mailboxName := canonMailbox(args[0])
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
@@ -676,8 +672,8 @@ func (s *Session) handleExamine(args []string) error {
 	s.WriteData(fmt.Sprintf("%d EXISTS", mailbox.Exists))
 	s.WriteData(fmt.Sprintf("%d RECENT", mailbox.Recent))
 
-	if mailbox.Unseen > 0 {
-		s.WriteData(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", mailbox.Unseen, mailbox.Unseen))
+	if first := s.firstUnseen(mailbox); first > 0 {
+		s.WriteData(fmt.Sprintf("OK [UNSEEN %d] Message %d is first unseen", first, first))
 	}
 
 	s.WriteData(fmt.Sprintf("OK [UIDVALIDITY %d] UIDs valid", mailbox.UIDValidity))
@@ -693,6 +689,26 @@ func (s *Session) handleExamine(args []string) error {
 
 	s.WriteResponse(s.tag, "OK [READ-ONLY] EXAMINE completed")
 	return nil
+}
+
+// firstUnseen returns the sequence number of the first unseen message (RFC
+// 3501 §7.1 [UNSEEN]), 0 when there is none. F6039: the unseen COUNT was
+// reported as that sequence number.
+func (s *Session) firstUnseen(mb *Mailbox) uint32 {
+	if mb.Unseen <= 0 {
+		return 0
+	}
+	seqs, err := s.server.mailstore.SearchMessages(s.user, mb.Name, SearchCriteria{Unseen: true})
+	if err != nil || len(seqs) == 0 {
+		return 0
+	}
+	first := seqs[0]
+	for _, q := range seqs {
+		if q < first {
+			first = q
+		}
+	}
+	return first
 }
 
 // deselect leaves the selected state after a failed SELECT / EXAMINE: RFC 3501
@@ -729,15 +745,31 @@ func (s *Session) handleCreate(args []string) error {
 		return nil
 	}
 
-	mailboxName := args[0]
-	mailboxName = strings.Trim(mailboxName, "\"'")
-
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
 		return nil
 	}
 
-	err := s.server.mailstore.CreateMailbox(s.user, mailboxName)
+	// F6033: a trailing hierarchy delimiter ("Foo/") only hints that the
+	// client wants inferiors (RFC 3501 §6.3.3) and must not become part of
+	// the name; INBOX is case-insensitive and cannot be created again; an
+	// existing name is [ALREADYEXISTS], not a silent OK.
+	mailboxName, err := checkNewMailboxName(args[0])
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	exists, err := s.mailboxExists(mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	if exists {
+		s.WriteResponse(s.tag, "NO [ALREADYEXISTS] Mailbox already exists")
+		return nil
+	}
+
+	err = s.server.mailstore.CreateMailbox(s.user, mailboxName)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
@@ -754,11 +786,10 @@ func (s *Session) handleDelete(args []string) error {
 		return nil
 	}
 
-	mailboxName := args[0]
-	mailboxName = strings.Trim(mailboxName, "\"'")
+	mailboxName := canonMailbox(args[0])
 
 	// Cannot delete INBOX
-	if strings.ToUpper(mailboxName) == "INBOX" {
+	if mailboxName == "INBOX" {
 		s.WriteResponse(s.tag, "NO Cannot delete INBOX")
 		return nil
 	}
@@ -768,7 +799,18 @@ func (s *Session) handleDelete(args []string) error {
 		return nil
 	}
 
-	err := s.server.mailstore.DeleteMailbox(s.user, mailboxName)
+	// F6034: deleting a mailbox that does not exist answered OK.
+	exists, err := s.mailboxExists(mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	if !exists {
+		s.WriteResponse(s.tag, "NO [NONEXISTENT] Mailbox does not exist")
+		return nil
+	}
+
+	err = s.server.mailstore.DeleteMailbox(s.user, mailboxName)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
@@ -785,13 +827,12 @@ func (s *Session) handleRename(args []string) error {
 		return nil
 	}
 
-	oldName := strings.Trim(args[0], "\"'")
-	newName := strings.Trim(args[1], "\"'")
+	oldName := canonMailbox(args[0])
 
 	// Cannot rename INBOX. INBOX is the mandatory, reserved mailbox: renaming
 	// it away would destroy the user's INBOX and its messages, exactly what
 	// the DELETE handler already refuses to allow.
-	if strings.EqualFold(oldName, "INBOX") {
+	if oldName == "INBOX" {
 		s.WriteResponse(s.tag, "NO Cannot rename INBOX")
 		return nil
 	}
@@ -801,10 +842,50 @@ func (s *Session) handleRename(args []string) error {
 		return nil
 	}
 
-	err := s.server.mailstore.RenameMailbox(s.user, oldName, newName)
+	newName, err := checkNewMailboxName(args[1])
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
+	}
+
+	// F6034: the source must exist (the store silently created an empty
+	// destination otherwise), the destination must not, and the mailboxes
+	// below the source move with it (RFC 3501 §6.3.5).
+	names, err := s.server.mailstore.ListMailboxes(s.user, "*")
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	have := make(map[string]bool, len(names)+1)
+	for _, n := range names {
+		have[n] = true
+	}
+	have["INBOX"] = true
+	if !have[oldName] {
+		s.WriteResponse(s.tag, "NO [NONEXISTENT] Mailbox does not exist")
+		return nil
+	}
+	if newName == oldName || have[newName] {
+		s.WriteResponse(s.tag, "NO [ALREADYEXISTS] Mailbox already exists")
+		return nil
+	}
+	type move struct{ from, to string }
+	moves := []move{{oldName, newName}}
+	for _, n := range names {
+		if strings.HasPrefix(n, oldName+"/") {
+			to := newName + n[len(oldName):]
+			if have[to] {
+				s.WriteResponse(s.tag, "NO [ALREADYEXISTS] Mailbox already exists")
+				return nil
+			}
+			moves = append(moves, move{n, to})
+		}
+	}
+	for _, mv := range moves {
+		if err := s.server.mailstore.RenameMailbox(s.user, mv.from, mv.to); err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
+		}
 	}
 
 	s.WriteResponse(s.tag, "OK RENAME completed")
@@ -818,26 +899,22 @@ func (s *Session) handleSubscribe(args []string) error {
 		return nil
 	}
 
-	mailboxName := strings.Trim(args[0], "\"'")
+	mailboxName := canonMailbox(args[0])
 	if mailboxName == "" {
 		s.WriteResponse(s.tag, "BAD Empty mailbox name")
 		return nil
 	}
 
-	// Verify mailbox exists first
-	mailboxes, err := s.server.mailstore.ListMailboxes(s.user, mailboxName)
-	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
 		return nil
 	}
 
-	// Check if the mailbox exists (exact match)
-	found := false
-	for _, m := range mailboxes {
-		if m == mailboxName {
-			found = true
-			break
-		}
+	// Verify mailbox exists first
+	found, err := s.mailboxExists(mailboxName)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
 	}
 
 	if !found {
@@ -862,9 +939,14 @@ func (s *Session) handleUnsubscribe(args []string) error {
 		return nil
 	}
 
-	mailboxName := strings.Trim(args[0], "\"'")
+	mailboxName := canonMailbox(args[0])
 	if mailboxName == "" {
 		s.WriteResponse(s.tag, "BAD Empty mailbox name")
+		return nil
+	}
+
+	if s.server.mailstore == nil {
+		s.WriteResponse(s.tag, "NO Mailstore not available")
 		return nil
 	}
 
@@ -1149,8 +1231,8 @@ func (s *Session) handleLsub(args []string) error {
 		return nil
 	}
 
-	reference := strings.Trim(args[0], "\"'")
-	pattern := strings.Trim(args[1], "\"'")
+	reference := args[0]
+	pattern := args[1]
 
 	// Combine reference and pattern
 	fullPattern := reference
@@ -1181,7 +1263,7 @@ func (s *Session) handleLsub(args []string) error {
 	}
 
 	for _, mbox := range mailboxes {
-		s.WriteData(fmt.Sprintf("LSUB (\\HasNoChildren) \"/\" \"%s\"", mbox))
+		s.WriteData(fmt.Sprintf("LSUB (\\HasNoChildren) \"/\" %s", quoteMailbox(mbox)))
 	}
 
 	s.WriteResponse(s.tag, "OK LSUB completed")
@@ -1201,8 +1283,30 @@ func (s *Session) handleStatus(args []string) error {
 		return nil
 	}
 
-	mailboxName := strings.Trim(args[0], "\"'")
-	statusItems := strings.Join(args[1:], " ")
+	mailboxName := canonMailbox(args[0])
+
+	// F6035: the item list is "(" item ... ")". Items were matched as
+	// substrings of the raw text (so "XMESSAGESX" counted as MESSAGES), an
+	// unterminated list or an unknown item was accepted, and the answer
+	// always listed items in a fixed order.
+	list := strings.Join(args[1:], " ")
+	if !strings.HasPrefix(list, "(") || !strings.HasSuffix(list, ")") {
+		s.WriteResponse(s.tag, "BAD Status items must be a parenthesized list")
+		return nil
+	}
+	items := strings.Fields(strings.ToUpper(list[1 : len(list)-1]))
+	if len(items) == 0 {
+		s.WriteResponse(s.tag, "BAD Missing status items")
+		return nil
+	}
+	for _, it := range items {
+		switch it {
+		case "MESSAGES", "RECENT", "UIDNEXT", "UIDVALIDITY", "UNSEEN", "HIGHESTMODSEQ":
+		default:
+			s.WriteResponse(s.tag, "BAD Unknown status item "+it)
+			return nil
+		}
+	}
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
@@ -1216,28 +1320,25 @@ func (s *Session) handleStatus(args []string) error {
 		return nil
 	}
 
-	// Build status response
-	status := fmt.Sprintf("STATUS \"%s\" (", mailboxName)
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		switch it {
+		case "MESSAGES":
+			parts = append(parts, fmt.Sprintf("MESSAGES %d", mailbox.Exists))
+		case "RECENT":
+			parts = append(parts, fmt.Sprintf("RECENT %d", mailbox.Recent))
+		case "UIDNEXT":
+			parts = append(parts, fmt.Sprintf("UIDNEXT %d", mailbox.UIDNext))
+		case "UIDVALIDITY":
+			parts = append(parts, fmt.Sprintf("UIDVALIDITY %d", mailbox.UIDValidity))
+		case "UNSEEN":
+			parts = append(parts, fmt.Sprintf("UNSEEN %d", mailbox.Unseen))
+		case "HIGHESTMODSEQ":
+			parts = append(parts, fmt.Sprintf("HIGHESTMODSEQ %d", mailbox.HighestModSeq))
+		}
+	}
 
-	if strings.Contains(statusItems, "MESSAGES") {
-		status += fmt.Sprintf("MESSAGES %d ", mailbox.Exists)
-	}
-	if strings.Contains(statusItems, "RECENT") {
-		status += fmt.Sprintf("RECENT %d ", mailbox.Recent)
-	}
-	if strings.Contains(statusItems, "UIDNEXT") {
-		status += fmt.Sprintf("UIDNEXT %d ", mailbox.UIDNext)
-	}
-	if strings.Contains(statusItems, "UIDVALIDITY") {
-		status += fmt.Sprintf("UIDVALIDITY %d ", mailbox.UIDValidity)
-	}
-	if strings.Contains(statusItems, "UNSEEN") {
-		status += fmt.Sprintf("UNSEEN %d ", mailbox.Unseen)
-	}
-
-	status = strings.TrimRight(status, " ") + ")"
-
-	s.WriteData(status)
+	s.WriteData(fmt.Sprintf("STATUS %s (%s)", quoteMailbox(mailboxName), strings.Join(parts, " ")))
 	s.WriteResponse(s.tag, "OK STATUS completed")
 	return nil
 }
@@ -1264,7 +1365,7 @@ func (s *Session) handleAppend(args []string, line string) error {
 		return nil
 	}
 
-	mailboxName := strings.Trim(args[0], "\"'")
+	mailboxName := canonMailbox(args[0])
 
 	if span != nil {
 		tracing.SetStringAttribute(span, "append.mailbox", mailboxName)
@@ -1470,7 +1571,7 @@ func (s *Session) parseAppendParams(args []string, line string) ([]string, time.
 
 	// Find literal string indicator {N} in the command line
 	// Handle both {size} and {size}+ forms
-	literalStart := strings.Index(line, "{")
+	literalStart := strings.LastIndex(line, "{")
 	if literalStart < 0 {
 		return flags, date, 0, fmt.Errorf("missing literal size")
 	}
@@ -1581,6 +1682,18 @@ func (s *Session) handleIdle() error {
 		return nil
 	}
 
+	// F6030: Handle() armed a read deadline of readTimeout for the IDLE
+	// command line itself. Left in place it fired inside the DONE reader
+	// after readTimeout (30s by default) and ended every IDLE early with a
+	// bogus "OK IDLE terminated"; IDLE is bounded by idleTimeout instead.
+	_ = s.conn.SetReadDeadline(time.Time{}) // Best-effort deadline reset
+	defer func() {
+		// idleCleanup forces an expired deadline to wake the DONE reader;
+		// with readTimeout == 0 Handle() never re-arms it, so the next
+		// command read failed at once and dropped the connection.
+		_ = s.conn.SetReadDeadline(time.Time{})
+	}()
+
 	// Send continuation response
 	s.WriteContinuation("idling")
 
@@ -1634,8 +1747,12 @@ func (s *Session) handleIdle() error {
 			return nil
 
 		case <-idleTimer:
-			s.WriteResponse(s.tag, "OK IDLE terminated")
+			// The client never sent DONE: a tagged completion would leave it
+			// believing IDLE is still running and its later DONE would be read
+			// as a command. RFC 3501 §5.4 autologout instead.
+			s.WriteData("BYE Autologout; idle for too long")
 			idleCleanup()
+			s.Close()
 			return nil
 
 		case notification, ok := <-s.idleNotifyChan:
@@ -2509,8 +2626,8 @@ func uidSetString(uids []uint32) string {
 // mistyped name made a new folder instead of failing. INBOX is matched
 // case-insensitively.
 func (s *Session) copyDestination(arg string) (string, bool) {
-	dest := strings.Trim(arg, "\"'")
-	if strings.EqualFold(dest, "INBOX") {
+	dest := canonMailbox(arg)
+	if dest == "INBOX" {
 		return "INBOX", true
 	}
 	names, err := s.server.mailstore.ListMailboxes(s.user, dest)
