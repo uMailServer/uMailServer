@@ -457,8 +457,9 @@ END:VCARD`
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	// The destination is new, so 201 Created (RFC 4918 §9.8.5, §9.9.4; F5574).
+	if w.Code != http.StatusCreated {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusCreated)
 	}
 }
 
@@ -507,8 +508,9 @@ END:VCARD`
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	// The destination is new, so 201 Created (RFC 4918 §9.8.5, §9.9.4; F5574).
+	if w.Code != http.StatusCreated {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusCreated)
 	}
 }
 
