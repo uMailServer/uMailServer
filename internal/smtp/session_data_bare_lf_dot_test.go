@@ -118,7 +118,7 @@ func TestDATABareLFDotBareLFDot(t *testing.T) {
 }
 
 // Edge: dot-stuffing after CRLF is still removed, a dot line after a bare LF
-// is preserved verbatim, and "\r\n.\n" (dot + bare LF) does not end DATA
+// is preserved (its LF normalised to CRLF, F5670), and "\r\n.\n" (dot + bare LF) does not end DATA
 // (its transparency dot is removed, as for any dot-led line).
 func TestDATABareLFDotEdgeStuffing(t *testing.T) {
 	var delivered [][]byte
@@ -128,7 +128,7 @@ func TestDATABareLFDotEdgeStuffing(t *testing.T) {
 		t.Fatalf("DEFECT F4906: replies %v delivered=%d", codes, len(delivered))
 	}
 	got := string(delivered[0])
-	for _, want := range []string{"\r\n.stuffed\r\n", "lf\n..kept\r\n", "x\r\n\nNOOP\r\n"} {
+	for _, want := range []string{"\r\n.stuffed\r\n", "lf\r\n..kept\r\n", "x\r\n\r\nNOOP\r\n"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("DEFECT F4906: delivered body missing %q: %q", want, got)
 		}
@@ -141,7 +141,7 @@ func TestDATABareLFDotEdgeBareLFThenTerminator(t *testing.T) {
 	var delivered [][]byte
 	c := f4906Start(t, 1<<20, &delivered)
 	codes := f4906Transaction(t, c, "a\n.\r\n.\r\n")
-	if strings.Join(codes, ",") != "250,221" || len(delivered) != 1 || !strings.HasSuffix(string(delivered[0]), "\r\na\n.\r\n") {
+	if strings.Join(codes, ",") != "250,221" || len(delivered) != 1 || !strings.HasSuffix(string(delivered[0]), "\r\na\r\n.\r\n") {
 		t.Errorf("DEFECT F4906: replies %v delivered=%q", codes, delivered)
 	}
 }
