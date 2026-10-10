@@ -284,7 +284,7 @@ func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 	s.isTLS = false
 	s.mutex.Unlock()
 
-	// No onAuth handler set (nil) -- auth should succeed
+	// No onAuth handler set (nil) -- auth must fail closed (F5946)
 
 	done := make(chan error, 1)
 	go func() {
@@ -309,8 +309,8 @@ func TestHandleAuthLOGIN_NilAuthHandler(t *testing.T) {
 
 	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp3, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp3, "235") {
-		t.Errorf("Expected 235 auth success with nil handler, got: %q", resp3)
+	if !strings.HasPrefix(resp3, "535") {
+		t.Errorf("Expected 535 with nil handler (fail closed), got: %q", resp3)
 	}
 	<-done
 }
