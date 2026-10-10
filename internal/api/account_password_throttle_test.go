@@ -58,14 +58,14 @@ func TestAccountPasswordThrottle_SuccessResets(t *testing.T) {
 		t.Fatalf("correct=%d", c)
 	}
 	s.accountLoginMu.Lock()
-	_, left := s.accountLoginAttempts["bob@ex.com"]
+	_, left := s.accountLoginAttempts[accountLoginKey("127.0.0.1", "bob@ex.com")]
 	s.accountLoginMu.Unlock()
 	if left {
 		t.Fatalf("budget not cleared after success")
 	}
 }
 
-// Edge: the budget is shared with login and keyed case-insensitively; once
+// Edge: the budget is shared with login (same client IP, F6134) and keyed case-insensitively; once
 // exhausted, even the correct password is refused.
 func TestAccountPasswordThrottle_SharedBudget(t *testing.T) {
 	s, _ := a5028Setup(t)
@@ -76,7 +76,7 @@ func TestAccountPasswordThrottle_SharedBudget(t *testing.T) {
 	if c := a5030Change(s, tok, "Passw0rd!x"); c != http.StatusTooManyRequests {
 		t.Fatalf("correct after budget=%d want 429", c)
 	}
-	if c := a5026Login(s, "198.51.100.30", "BOB@ex.com", "Passw0rd!x"); c != http.StatusTooManyRequests {
+	if c := a5026Login(s, "127.0.0.1", "BOB@ex.com", "Passw0rd!x"); c != http.StatusTooManyRequests {
 		t.Fatalf("login after budget=%d want 429", c)
 	}
 }

@@ -56,7 +56,7 @@ func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 		}
 	}
 
-	var mailboxes []Mailbox
+	mailboxes := []Mailbox{}
 	for _, name := range mailboxNames {
 		mboxID := getMailboxIDFromName(name)
 
@@ -117,8 +117,8 @@ func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 	}
 
 	// Filter by IDs if specified
-	var result []Mailbox
-	var notFound []string
+	result := []Mailbox{}
+	notFound := []string{}
 	if len(ids) > 0 {
 		idSet := make(map[string]bool)
 		for _, id := range ids {
@@ -135,9 +135,13 @@ func (s *Server) handleMailboxGet(user string, call MethodCall) Response {
 		}
 		// RFC 8620 §4.2: requested ids with no matching record are reported
 		// in notFound rather than silently dropped.
-		for id := range idSet {
-			if !foundIDs[id] {
-				notFound = append(notFound, id)
+		// F6185: report in request order, once each, so the response is
+		// deterministic (map iteration order is random).
+		reported := make(map[string]bool)
+		for _, id := range ids {
+			if str, ok := id.(string); ok && !foundIDs[str] && !reported[str] {
+				reported[str] = true
+				notFound = append(notFound, str)
 			}
 		}
 	} else {
@@ -217,6 +221,27 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 		return resp
 	}
 
+	// F6186: RFC 8620 §5.3 — report the real oldState and honor ifInState
+	// (stateMismatch, nothing applied), like Email/set does.
+	oldState, stateErr := s.db.CurrentChangeState(user)
+	if stateErr != nil {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{
+				"type":        "serverFail",
+				"description": s.safeError("CurrentChangeState", stateErr),
+			},
+			ID: call.ID,
+		}
+	}
+	if ifInState, _ := args["ifInState"].(string); ifInState != "" && ifInState != oldState {
+		return Response{
+			Name: "error",
+			Args: map[string]interface{}{"type": "stateMismatch"},
+			ID:   call.ID,
+		}
+	}
+
 	// Parse create, update, destroy
 	create, _ := args["create"].(map[string]interface{})
 	update, _ := args["update"].(map[string]interface{})
@@ -245,6 +270,19 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 			notCreated[key] = map[string]interface{}{
 				"type":        "invalidArguments",
 				"description": "Mailbox name is required",
+			}
+			continue
+		}
+
+		// F6189: CreateMailbox is idempotent, so without this check a
+		// create of an existing name (or of a name whose JMAP id collides
+		// with an existing mailbox, e.g. "inbox") would report success
+		// without creating anything. Names must be unique (RFC 8621 §2.5).
+		if s.mailboxNameTaken(user, name) {
+			notCreated[key] = map[string]interface{}{
+				"type":        "invalidProperties",
+				"properties":  []string{"name"},
+				"description": "A mailbox with this name already exists",
 			}
 			continue
 		}
@@ -289,6 +327,14 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 				notUpdated[key] = map[string]interface{}{
 					"type":        "forbidden",
 					"description": "The inbox cannot be renamed",
+				}
+				continue
+			}
+			if s.mailboxNameTaken(user, newName) {
+				notUpdated[key] = map[string]interface{}{
+					"type":        "invalidProperties",
+					"properties":  []string{"name"},
+					"description": "A mailbox with this name already exists",
 				}
 				continue
 			}
@@ -352,7 +398,7 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 		Name: "Mailbox/set",
 		Args: map[string]interface{}{
 			"accountId":    accountID,
-			"oldState":     nil,
+			"oldState":     oldState,
 			"newState":     s.stateToken(user),
 			"created":      created,
 			"updated":      updated,
@@ -363,6 +409,22 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 		},
 		ID: call.ID,
 	}
+}
+
+// mailboxNameTaken reports whether name collides with an existing mailbox,
+// either by name or by JMAP id (the reserved role ids map to canonical names).
+func (s *Server) mailboxNameTaken(user, name string) bool {
+	names, err := s.db.ListMailboxes(user)
+	if err != nil {
+		return false
+	}
+	id := getMailboxIDFromName(name)
+	for _, n := range names {
+		if n == name || getMailboxIDFromName(n) == id || strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // handleEmailGet handles Email/get method
@@ -376,8 +438,27 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 		return resp
 	}
 
-	var emails []Email
-	var notFound []string
+	// F6184: honor the `properties` argument (RFC 8620 §5.1) and reject
+	// unknown property names with invalidArguments.
+	var wantProps []string
+	if rawProps, present := args["properties"]; present && rawProps != nil {
+		arr, ok := rawProps.([]interface{})
+		if !ok {
+			return invalidArgumentsResponse(call.ID, "properties must be an array", "properties")
+		}
+		wantProps = []string{}
+		for _, p := range arr {
+			ps, ok := p.(string)
+			if !ok || !validEmailProperty(ps) {
+				return invalidArgumentsResponse(call.ID, "unknown property", "properties")
+			}
+			wantProps = append(wantProps, ps)
+		}
+	}
+
+	emails := []Email{}
+	var projected []interface{}
+	notFound := []string{}
 
 	for _, id := range ids {
 		if idStr, ok := id.(string); ok {
@@ -393,7 +474,18 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 				email.MailboxIDs[getMailboxIDFromName(c.mailbox)] = true
 			}
 			emails = append(emails, email)
+			if wantProps != nil {
+				projected = append(projected, projectEmail(email, wantProps))
+			}
 		}
+	}
+
+	var list interface{} = emails
+	if wantProps != nil {
+		if projected == nil {
+			projected = []interface{}{}
+		}
+		list = projected
 	}
 
 	return Response{
@@ -401,11 +493,65 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 		Args: map[string]interface{}{
 			"accountId": accountID,
 			"state":     s.stateToken(user),
-			"list":      emails,
+			"list":      list,
 			"notFound":  notFound,
 		},
 		ID: call.ID,
 	}
+}
+
+// invalidArgumentsResponse builds a method-level invalidArguments error
+// (RFC 8620 §3.6.2).
+func invalidArgumentsResponse(callID, desc string, props ...string) Response {
+	args := map[string]interface{}{
+		"type":        "invalidArguments",
+		"description": desc,
+	}
+	if len(props) > 0 {
+		args["properties"] = props
+	}
+	return Response{Name: "error", Args: args, ID: callID}
+}
+
+var emailPropertyNames = map[string]bool{
+	"id": true, "blobId": true, "threadId": true, "mailboxIds": true,
+	"keywords": true, "size": true, "receivedAt": true, "messageId": true,
+	"inReplyTo": true, "references": true, "sender": true, "from": true,
+	"to": true, "cc": true, "bcc": true, "replyTo": true, "subject": true,
+	"sentAt": true, "bodyStructure": true, "bodyValues": true,
+	"textBody": true, "htmlBody": true, "attachments": true,
+	"hasAttachment": true, "preview": true, "headers": true,
+}
+
+func validEmailProperty(p string) bool {
+	return emailPropertyNames[p] || strings.HasPrefix(p, "header:")
+}
+
+// projectEmail returns only the requested properties of email; "id" is
+// always included (RFC 8620 §5.1). Required-but-empty properties are
+// emitted with their empty value so clients never see them missing.
+func projectEmail(email Email, props []string) map[string]interface{} {
+	data, _ := json.Marshal(email)
+	var full map[string]interface{}
+	_ = json.Unmarshal(data, &full)
+	out := map[string]interface{}{"id": email.ID}
+	for _, p := range props {
+		if v, ok := full[p]; ok {
+			out[p] = v
+			continue
+		}
+		switch p {
+		case "keywords":
+			out[p] = map[string]bool{}
+		case "hasAttachment":
+			out[p] = false
+		case "subject", "preview":
+			out[p] = ""
+		case "from", "to", "cc", "bcc", "sender", "replyTo", "messageId", "inReplyTo", "references", "sentAt":
+			out[p] = nil
+		}
+	}
+	return out
 }
 
 // handleEmailQuery handles Email/query method
@@ -423,10 +569,12 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 	position, _ := args["position"].(float64)
 	limit, _ := args["limit"].(float64)
 
-	// Default limit
-	if limit == 0 || limit > 100 {
-		limit = 30
+	// F6187: a negative limit is invalidArguments (RFC 8620 §5.5); a limit
+	// above the server maximum is clamped to it, not reset to the default.
+	if limit < 0 {
+		return invalidArgumentsResponse(call.ID, "limit must be a non-negative integer", "limit")
 	}
+	limit = float64(clampQueryLimit(limit))
 
 	fullIDs := s.runEmailQuery(user, filter, sort)
 
@@ -522,6 +670,11 @@ func (s *Server) runEmailQuery(user string, filter interface{}, sort interface{}
 		if targetMbox != "" && mbox != targetMbox {
 			continue
 		}
+		// F6183: inMailboxOtherThan — a message matches if it is in at
+		// least one mailbox outside the list, so skip the excluded ones.
+		if filterCondition != nil && mailboxExcluded(mbox, filterCondition.InMailboxOtherThan) {
+			continue
+		}
 
 		uids, _ := s.db.GetMessageUIDs(user, mbox)
 		for _, uid := range uids {
@@ -586,9 +739,15 @@ func matchesFilter(meta *storage.MessageMetadata, filter *FilterCondition) bool 
 		return true
 	}
 
-	// Filter by unread
-	if filter.NotKeyword == "$seen" {
-		if storage.HasFlag(meta.Flags, "\\Seen") {
+	// F6182: hasKeyword / notKeyword (RFC 8621 §4.4.1) for every keyword
+	// this server models, not just $seen.
+	if filter.HasKeyword != "" {
+		if !metaHasKeyword(meta, filter.HasKeyword) {
+			return false
+		}
+	}
+	if filter.NotKeyword != "" {
+		if metaHasKeyword(meta, filter.NotKeyword) {
 			return false
 		}
 	}
@@ -629,8 +788,8 @@ func matchesFilter(meta *storage.MessageMetadata, filter *FilterCondition) bool 
 		return false
 	}
 
-	// Filter by maxSize
-	if filter.MaxSize > 0 && meta.Size > filter.MaxSize {
+	// Filter by maxSize: RFC 8621 §4.4.1 requires size < maxSize (strict).
+	if filter.MaxSize > 0 && meta.Size >= filter.MaxSize {
 		return false
 	}
 
@@ -646,13 +805,46 @@ func matchesFilter(meta *storage.MessageMetadata, filter *FilterCondition) bool 
 	// Filter by before date
 	if filter.Before != "" {
 		if before, err := time.Parse(time.RFC3339, filter.Before); err == nil {
-			if meta.InternalDate.After(before) {
+			// RFC 8621 §4.4.1: receivedAt must be strictly before.
+			if !meta.InternalDate.Before(before) {
 				return false
 			}
 		}
 	}
 
 	return true
+}
+
+// mailboxExcluded reports whether mailbox name is named (by JMAP id) in the
+// inMailboxOtherThan list.
+func mailboxExcluded(name string, otherThan []string) bool {
+	for _, id := range otherThan {
+		if getMailboxNameFromID(id) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// metaHasKeyword reports whether the message carries the JMAP keyword.
+func metaHasKeyword(meta *storage.MessageMetadata, keyword string) bool {
+	if flag, ok := jmapKeywordToIMAPFlag(keyword); ok {
+		return hasIMAPFlag(meta.Flags, flag)
+	}
+	return hasIMAPFlag(meta.Flags, keyword)
+}
+
+// clampQueryLimit maps a client-supplied /query limit to the page size
+// actually used. Zero/absent means the default (30); anything above the
+// server maximum (100) is clamped to it rather than collapsing to the default.
+func clampQueryLimit(limit float64) int {
+	if limit <= 0 {
+		return 30
+	}
+	if limit > 100 {
+		return 100
+	}
+	return int(limit)
 }
 
 // sortMessages sorts messages based on comparator
@@ -673,31 +865,39 @@ func sortMessages(messages []struct {
 	// the request to be honored.
 	ascending := comp.IsAscending
 
-	sort.Slice(messages, func(i, j int) bool {
+	// F6180: derive a three-way comparison so descending order is a strict
+	// weak ordering. The old `return !less` reported both a<b and b<a for
+	// equal keys, making tie order (and thus paging) arbitrary. Ties fall
+	// back to the email id, ascending, for a deterministic result.
+	sort.SliceStable(messages, func(i, j int) bool {
 		a, b := messages[i].meta, messages[j].meta
-		var less bool
-
+		var c int
 		switch comp.Property {
-		case "receivedAt":
-			less = a.InternalDate.Before(b.InternalDate)
 		case "sentAt":
-			less = a.Date < b.Date
+			c = strings.Compare(a.Date, b.Date)
 		case "from":
-			less = strings.ToLower(a.From) < strings.ToLower(b.From)
+			c = strings.Compare(strings.ToLower(a.From), strings.ToLower(b.From))
 		case "to":
-			less = strings.ToLower(a.To) < strings.ToLower(b.To)
+			c = strings.Compare(strings.ToLower(a.To), strings.ToLower(b.To))
 		case "subject":
-			less = strings.ToLower(a.Subject) < strings.ToLower(b.Subject)
+			c = strings.Compare(strings.ToLower(a.Subject), strings.ToLower(b.Subject))
 		case "size":
-			less = a.Size < b.Size
-		default:
-			less = a.InternalDate.Before(b.InternalDate)
+			switch {
+			case a.Size < b.Size:
+				c = -1
+			case a.Size > b.Size:
+				c = 1
+			}
+		default: // receivedAt and unknown properties
+			c = a.InternalDate.Compare(b.InternalDate)
 		}
-
-		if ascending {
-			return less
+		if !ascending {
+			c = -c
 		}
-		return !less
+		if c == 0 {
+			return messages[i].id < messages[j].id
+		}
+		return c < 0
 	})
 }
 
@@ -1424,8 +1624,8 @@ func (s *Server) handleThreadGet(user string, call MethodCall) Response {
 	ids, _ := args["ids"].([]interface{})
 
 	// Get threads from storage
-	var threads []Thread
-	var notFound []string
+	threads := []Thread{}
+	notFound := []string{}
 	mailboxes, _ := s.db.ListMailboxes(user)
 	for _, id := range ids {
 		if idStr, ok := id.(string); ok {
@@ -1794,12 +1994,20 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 	args := call.Args
 	accountID, _ := args["accountId"].(string)
 	sinceState, _ := args["sinceState"].(string)
-	maxChanges, _ := args["maxChanges"].(float64)
+	maxChanges, hasMax := args["maxChanges"].(float64)
 
 	if valid, resp := validateAccountId(accountID, user, methodName, call.ID); !valid {
 		return resp
 	}
 
+	// F6188: sinceState is required, and maxChanges, when given, must be a
+	// positive integer (RFC 8620 §5.2); both are invalidArguments otherwise.
+	if _, ok := args["sinceState"].(string); !ok {
+		return invalidArgumentsResponse(call.ID, "sinceState is required", "sinceState")
+	}
+	if rawMax, present := args["maxChanges"]; present && rawMax != nil && (!hasMax || maxChanges < 1) {
+		return invalidArgumentsResponse(call.ID, "maxChanges must be a positive integer", "maxChanges")
+	}
 	if maxChanges == 0 || maxChanges > 256 {
 		maxChanges = 256
 	}
@@ -2056,9 +2264,10 @@ func (s *Server) handleThreadQuery(user string, call MethodCall) Response {
 	position, _ := args["position"].(float64)
 	limit, _ := args["limit"].(float64)
 
-	if limit == 0 || limit > 100 {
-		limit = 30
+	if limit < 0 {
+		return invalidArgumentsResponse(call.ID, "limit must be a non-negative integer", "limit")
 	}
+	limit = float64(clampQueryLimit(limit))
 
 	threadIDs := s.runThreadQuery(user, filter, sortList)
 

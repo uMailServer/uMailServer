@@ -56,7 +56,7 @@ func (r DKIMResult) String() string {
 // Package-level precompiled regex for canonicalization (hot path optimization)
 var (
 	whitespaceRegex = regexp.MustCompile(`[ \t]+`)
-	bTagRegex       = regexp.MustCompile(`b=([^;]*)`)
+	bTagRegex       = regexp.MustCompile(`(^|;)(\s*)b=[^;]*`)
 )
 
 // dkimDNSTimeout bounds a DKIM public key lookup (F5075).
@@ -334,6 +334,11 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 	// Verify signature
 	canonicalHeaders := canonicalizeHeaders(headers, sig.SignedHeaders, sig.HeaderCanon)
 	sigData := canonicalHeaders + dkimSignatureFieldForHash(dkimHeader, sig.HeaderCanon)
+
+	// F6192: RFC 8463 §4 / RFC 6376 §3.5 — a= must match the key type.
+	if (sig.Algorithm == "rsa-sha256" && keyType != "rsa") || (sig.Algorithm == "ed25519-sha256" && keyType != "ed25519") {
+		return DKIMFail, sig, fmt.Errorf("algorithm %s does not match %s key", sig.Algorithm, keyType)
+	}
 
 	switch keyType {
 	case "ed25519":
@@ -775,7 +780,7 @@ func (s *DKIMSigner) computeSignature(headers map[string][]string, body []byte, 
 // dkimHeaderWithoutSig returns the DKIM header value without the signature
 func dkimHeaderWithoutSig(header string) string {
 	// Remove the b= value from the header
-	return bTagRegex.ReplaceAllString(header, "b=")
+	return bTagRegex.ReplaceAllString(header, "${1}${2}b=")
 }
 
 // dkimSignatureFieldForHash returns the DKIM-Signature header field as it

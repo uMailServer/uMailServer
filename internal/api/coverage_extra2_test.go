@@ -135,7 +135,9 @@ func TestUpdateAccount_WithPasswordChange(t *testing.T) {
 		"password": strings.Repeat("Nw0!", 3), "is_admin": false, "is_active": true,
 	})
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@pwchg.com", bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), "user", "u@pwchg.com"))
+	// F6139: an admin resets another account's password (self-reset goes
+	// through /api/v1/account/password and needs the current password).
+	req = req.WithContext(context.WithValue(context.WithValue(req.Context(), "user", "root@pwchg.com"), "isAdmin", true))
 	rec := httptest.NewRecorder()
 	server.updateAccount(rec, req, "u@pwchg.com")
 

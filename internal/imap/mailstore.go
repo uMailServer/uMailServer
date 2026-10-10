@@ -847,7 +847,7 @@ func parseMessageHeadersExtended(data []byte) (subject, from, to, date, msgID, i
 		headers = headers[:idx]
 	}
 
-	for _, line := range strings.Split(headers, "\n") {
+	for _, line := range strings.Split(unfoldHeaders(headers), "\n") {
 		line = strings.TrimRight(line, "\r")
 		lower := strings.ToLower(line)
 
@@ -884,7 +884,7 @@ func parseMessageHeaders(data []byte) (subject, from, to, date string) {
 		headers = headers[:idx]
 	}
 
-	for _, line := range strings.Split(headers, "\n") {
+	for _, line := range strings.Split(unfoldHeaders(headers), "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.HasPrefix(strings.ToLower(line), "subject:") {
 			subject = strings.TrimSpace(line[8:])
@@ -1201,13 +1201,13 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	}
 
 	// Check string criteria
-	if criteria.From != "" && !strings.Contains(strings.ToLower(meta.From), strings.ToLower(criteria.From)) {
+	if criteria.From != "" && !headerContains(meta.From, criteria.From) {
 		return false
 	}
-	if criteria.To != "" && !strings.Contains(strings.ToLower(meta.To), strings.ToLower(criteria.To)) {
+	if criteria.To != "" && !headerContains(meta.To, criteria.To) {
 		return false
 	}
-	if criteria.Subject != "" && !strings.Contains(strings.ToLower(meta.Subject), strings.ToLower(criteria.Subject)) {
+	if criteria.Subject != "" && !headerContains(meta.Subject, criteria.Subject) {
 		return false
 	}
 
@@ -1263,7 +1263,7 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 		// CC criteria
 		if criteria.Cc != "" {
 			msg, err := mail.ReadMessage(strings.NewReader(string(msgData)))
-			if err != nil || !strings.Contains(strings.ToLower(msg.Header.Get("Cc")), strings.ToLower(criteria.Cc)) {
+			if err != nil || !headerContains(msg.Header.Get("Cc"), criteria.Cc) {
 				return false
 			}
 		}
@@ -1290,14 +1290,16 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 			} else {
 				bodyStr = msgStr
 			}
-			if !strings.Contains(bodyStr, strings.ToLower(criteria.Body)) {
+			if !strings.Contains(bodyStr, strings.ToLower(criteria.Body)) &&
+				!strings.Contains(strings.ToLower(decodedBodyText(msgData)), strings.ToLower(criteria.Body)) {
 				return false
 			}
 		}
 
 		// TEXT criteria - search entire message (headers + body)
 		if criteria.Text != "" {
-			if !strings.Contains(msgStr, strings.ToLower(criteria.Text)) {
+			if !strings.Contains(msgStr, strings.ToLower(criteria.Text)) &&
+				!strings.Contains(strings.ToLower(decodedHeaderText(msgData)+"\n"+decodedBodyText(msgData)), strings.ToLower(criteria.Text)) {
 				return false
 			}
 		}
@@ -1325,7 +1327,8 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 				lineEnd = len(msgStr)
 			}
 			headerVal := strings.TrimSpace(msgStr[valueStart : valueStart+lineEnd])
-			if !strings.Contains(headerVal, strings.ToLower(headerValue)) {
+			if !strings.Contains(headerVal, strings.ToLower(headerValue)) &&
+				!headerContains(decodeEncodedWords(headerVal), headerValue) {
 				return false
 			}
 		}

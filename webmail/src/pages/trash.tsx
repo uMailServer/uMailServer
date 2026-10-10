@@ -80,7 +80,7 @@ export function TrashPage() {
     e.stopPropagation()
     try {
       // Move back to inbox - for now just delete from trash
-      await api.delete(`/mail/delete?id=${id}`)
+      await api.deleteMail(id)
       toast.success("Message restored")
       setEmails(emails.filter((email) => email.id !== id))
     } catch (err) {
@@ -91,7 +91,7 @@ export function TrashPage() {
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      await api.delete(`/mail/delete?id=${id}`)
+      await api.deleteMail(id)
       toast.success("Message permanently deleted")
       setEmails(emails.filter((email) => email.id !== id))
     } catch (err) {
@@ -103,7 +103,7 @@ export function TrashPage() {
     try {
       // Delete all trash emails one by one
       for (const email of emails) {
-        await api.delete(`/mail/delete?id=${email.id}`)
+        await api.deleteMail(email.id)
       }
       toast.success("Trash emptied")
       setEmails([])

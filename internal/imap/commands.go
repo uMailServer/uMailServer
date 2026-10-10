@@ -71,6 +71,8 @@ func (s *Session) handleNotAuthenticated(command string, args []string, line str
 		return s.handleLogout()
 	case "COMPRESS":
 		return s.handleCompress(args)
+	case "ID":
+		return s.handleIDLine(args, line)
 	default:
 		s.WriteResponse(s.tag, "BAD Command not allowed in this state")
 		return nil
@@ -117,7 +119,7 @@ func (s *Session) handleAuthenticated(command string, args []string, line string
 	case "ENABLE":
 		return s.handleEnable(args)
 	case "ID":
-		return s.handleID(args)
+		return s.handleIDLine(args, line)
 	case "GETACL":
 		return s.handleGetACL(args)
 	case "SETACL":
@@ -196,7 +198,7 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 	case "IDLE":
 		return s.handleIdle()
 	case "ID":
-		return s.handleID(args)
+		return s.handleIDLine(args, line)
 	case "GETACL":
 		return s.handleGetACL(args)
 	case "SETACL":
@@ -579,7 +581,10 @@ func (s *Session) handleSelect(args []string) error {
 		return nil
 	}
 
-	mailboxName := canonMailbox(args[0])
+	mailboxName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
@@ -647,7 +652,10 @@ func (s *Session) handleExamine(args []string) error {
 		return nil
 	}
 
-	mailboxName := canonMailbox(args[0])
+	mailboxName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
@@ -754,7 +762,11 @@ func (s *Session) handleCreate(args []string) error {
 	// client wants inferiors (RFC 3501 §6.3.3) and must not become part of
 	// the name; INBOX is case-insensitive and cannot be created again; an
 	// existing name is [ALREADYEXISTS], not a silent OK.
-	mailboxName, err := checkNewMailboxName(args[0])
+	decoded, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
+	mailboxName, err := checkNewMailboxName(decoded)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
@@ -786,7 +798,10 @@ func (s *Session) handleDelete(args []string) error {
 		return nil
 	}
 
-	mailboxName := canonMailbox(args[0])
+	mailboxName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 
 	// Cannot delete INBOX
 	if mailboxName == "INBOX" {
@@ -827,7 +842,10 @@ func (s *Session) handleRename(args []string) error {
 		return nil
 	}
 
-	oldName := canonMailbox(args[0])
+	oldName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 
 	// Cannot rename INBOX. INBOX is the mandatory, reserved mailbox: renaming
 	// it away would destroy the user's INBOX and its messages, exactly what
@@ -842,7 +860,11 @@ func (s *Session) handleRename(args []string) error {
 		return nil
 	}
 
-	newName, err := checkNewMailboxName(args[1])
+	decodedNew, ok := s.mboxArg(args[1])
+	if !ok {
+		return nil
+	}
+	newName, err := checkNewMailboxName(decodedNew)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
@@ -888,6 +910,21 @@ func (s *Session) handleRename(args []string) error {
 		}
 	}
 
+	// F6177: subscriptions follow the renamed mailboxes (the old name stayed
+	// subscribed and the new one was not).
+	if subs, serr := s.server.mailstore.ListSubscribed(s.user); serr == nil {
+		isSub := make(map[string]bool, len(subs))
+		for _, n := range subs {
+			isSub[n] = true
+		}
+		for _, mv := range moves {
+			if isSub[mv.from] {
+				_ = s.server.mailstore.SetSubscribed(s.user, mv.from, false)
+				_ = s.server.mailstore.SetSubscribed(s.user, mv.to, true)
+			}
+		}
+	}
+
 	s.WriteResponse(s.tag, "OK RENAME completed")
 	return nil
 }
@@ -899,7 +936,10 @@ func (s *Session) handleSubscribe(args []string) error {
 		return nil
 	}
 
-	mailboxName := canonMailbox(args[0])
+	mailboxName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 	if mailboxName == "" {
 		s.WriteResponse(s.tag, "BAD Empty mailbox name")
 		return nil
@@ -939,7 +979,10 @@ func (s *Session) handleUnsubscribe(args []string) error {
 		return nil
 	}
 
-	mailboxName := canonMailbox(args[0])
+	mailboxName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 	if mailboxName == "" {
 		s.WriteResponse(s.tag, "BAD Empty mailbox name")
 		return nil
@@ -1097,6 +1140,15 @@ func (s *Session) handleListLine(args []string, line string) error {
 		return nil
 	}
 
+	for i, p := range req.patterns {
+		d, derr := decodeMUTF7(p)
+		if derr != nil {
+			s.WriteResponse(s.tag, "BAD "+derr.Error())
+			return nil
+		}
+		req.patterns[i] = d
+	}
+
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
 		return nil
@@ -1213,7 +1265,7 @@ func (s *Session) handleListLine(args []string, line string) error {
 		if (req.selSpecialUse || req.retSpecial) && special != "" {
 			attrs = append(attrs, special)
 		}
-		out := fmt.Sprintf("LIST (%s) \"/\" \"%s\"", strings.Join(attrs, " "), mbox)
+		out := fmt.Sprintf("LIST (%s) \"/\" %s", strings.Join(attrs, " "), quoteMailbox(encodeMUTF7(mbox)))
 		if childInfo {
 			out += " (\"CHILDINFO\" (\"SUBSCRIBED\"))"
 		}
@@ -1231,8 +1283,12 @@ func (s *Session) handleLsub(args []string) error {
 		return nil
 	}
 
-	reference := args[0]
-	pattern := args[1]
+	reference, errR := decodeMUTF7(args[0])
+	pattern, errP := decodeMUTF7(args[1])
+	if errR != nil || errP != nil {
+		s.WriteResponse(s.tag, "BAD "+errBadMUTF7.Error())
+		return nil
+	}
 
 	// Combine reference and pattern
 	fullPattern := reference
@@ -1249,21 +1305,68 @@ func (s *Session) handleLsub(args []string) error {
 	}
 
 	// Get subscribed mailboxes
-	var mailboxes []string
 	subscribed, err := s.server.mailstore.ListSubscribed(s.user)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
 	}
-	// Filter by pattern
+	// F6176 / RFC 3501 §6.3.9: with a "%" pattern, the parent of a subscribed
+	// child that does not itself match is returned as \Noselect so the client
+	// can show the hierarchy. LSUB attributes now reflect real children.
+	type lsubEntry struct {
+		name  string
+		attrs string
+	}
+	subSet := make(map[string]bool, len(subscribed))
+	for _, m := range subscribed {
+		subSet[m] = true
+	}
+	var all []string
+	if l, lerr := s.server.mailstore.ListMailboxes(s.user, "*"); lerr == nil {
+		all = l
+	}
+	hasChild := func(m string) bool {
+		for _, o := range all {
+			if strings.HasPrefix(o, m+"/") {
+				return true
+			}
+		}
+		for _, o := range subscribed {
+			if strings.HasPrefix(o, m+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	var entries []lsubEntry
+	emitted := map[string]bool{}
 	for _, mbox := range subscribed {
 		if matchMailboxPattern(mbox, fullPattern) {
-			mailboxes = append(mailboxes, mbox)
+			attrs := "\\HasNoChildren"
+			if hasChild(mbox) {
+				attrs = "\\HasChildren"
+			}
+			emitted[mbox] = true
+			entries = append(entries, lsubEntry{mbox, attrs})
+			continue
+		}
+		if !strings.Contains(fullPattern, "%") {
+			continue
+		}
+		for i := 0; i < len(mbox); i++ {
+			if mbox[i] != '/' {
+				continue
+			}
+			parent := mbox[:i]
+			if !subSet[parent] && !emitted[parent] && matchMailboxPattern(parent, fullPattern) {
+				emitted[parent] = true
+				entries = append(entries, lsubEntry{parent, "\\Noselect \\HasChildren"})
+			}
 		}
 	}
-
-	for _, mbox := range mailboxes {
-		s.WriteData(fmt.Sprintf("LSUB (\\HasNoChildren) \"/\" %s", quoteMailbox(mbox)))
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+	for _, e := range entries {
+		s.WriteData(fmt.Sprintf("LSUB (%s) \"/\" %s", e.attrs, quoteMailbox(encodeMUTF7(e.name))))
 	}
 
 	s.WriteResponse(s.tag, "OK LSUB completed")
@@ -1283,7 +1386,10 @@ func (s *Session) handleStatus(args []string) error {
 		return nil
 	}
 
-	mailboxName := canonMailbox(args[0])
+	mailboxName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 
 	// F6035: the item list is "(" item ... ")". Items were matched as
 	// substrings of the raw text (so "XMESSAGESX" counted as MESSAGES), an
@@ -1338,7 +1444,7 @@ func (s *Session) handleStatus(args []string) error {
 		}
 	}
 
-	s.WriteData(fmt.Sprintf("STATUS %s (%s)", quoteMailbox(mailboxName), strings.Join(parts, " ")))
+	s.WriteData(fmt.Sprintf("STATUS %s (%s)", quoteMailbox(encodeMUTF7(mailboxName)), strings.Join(parts, " ")))
 	s.WriteResponse(s.tag, "OK STATUS completed")
 	return nil
 }
@@ -1365,7 +1471,10 @@ func (s *Session) handleAppend(args []string, line string) error {
 		return nil
 	}
 
-	mailboxName := canonMailbox(args[0])
+	mailboxName, ok := s.mboxArg(args[0])
+	if !ok {
+		return nil
+	}
 
 	if span != nil {
 		tracing.SetStringAttribute(span, "append.mailbox", mailboxName)
@@ -1561,10 +1670,15 @@ func (s *Session) parseAppendParams(args []string, line string) ([]string, time.
 		if strings.HasPrefix(arg, "(") {
 			flagsStr := strings.Join(args[i:], " ")
 			end := strings.Index(flagsStr, ")")
-			if end > 0 {
-				flagsStr = flagsStr[1:end]
-				flags = strings.Fields(flagsStr)
+			if end < 0 {
+				return flags, date, 0, fmt.Errorf("unterminated flag list")
 			}
+			flags = strings.Fields(flagsStr[1:end])
+			nf, ferr := checkFlags(flags)
+			if ferr != nil {
+				return flags, date, 0, ferr
+			}
+			flags = nf
 			break
 		}
 	}
@@ -1829,9 +1943,34 @@ func (s *Session) handleEnable(args []string) error {
 
 // ID command (RFC 2971)
 func (s *Session) handleID(args []string) error {
-	// Client may send parenthesized list or NIL; we ignore client ID
-	_ = args
-	s.WriteData("* ID (\"name\" \"uMailServer\" \"version\" \"dev\")")
+	return s.handleIDLine(args, "x ID "+strings.Join(args, " "))
+}
+
+// handleIDLine implements RFC 2971 ID. The client parameter is NIL or a
+// parenthesised list of field/value string pairs (at most 30 pairs); anything
+// else is BAD. The reply is a single untagged "* ID (...)" line (F6171: it was
+// written as "* * ID" and refused before login, where clients send it).
+func (s *Session) handleIDLine(args []string, line string) error {
+	rest := strings.TrimSpace(skipWords(line, 2))
+	if !strings.EqualFold(rest, "NIL") {
+		toks := tokenizeIMAPArgs(rest)
+		if len(toks) < 2 || toks[0].val != "(" || toks[0].quoted || toks[len(toks)-1].val != ")" || toks[len(toks)-1].quoted {
+			s.WriteResponse(s.tag, "BAD ID parameters must be NIL or a parenthesized list")
+			return nil
+		}
+		inner := toks[1 : len(toks)-1]
+		if len(inner)%2 != 0 || len(inner) > 60 {
+			s.WriteResponse(s.tag, "BAD ID parameter list must hold field/value pairs (max 30)")
+			return nil
+		}
+		for _, tk := range inner {
+			if (tk.val == "(" || tk.val == ")") && !tk.quoted {
+				s.WriteResponse(s.tag, "BAD Invalid ID parameter")
+				return nil
+			}
+		}
+	}
+	s.WriteData("ID (\"name\" \"uMailServer\" \"version\" \"dev\")")
 	s.WriteResponse(s.tag, "OK ID completed")
 	return nil
 }
@@ -2495,7 +2634,11 @@ func (s *Session) store(args []string, uidCmd bool) error {
 	flagsStr := strings.Join(args[2:], " ")
 
 	// Parse flags
-	flags := parseFlags(flagsStr)
+	flags, ferr := checkFlags(parseFlags(flagsStr))
+	if ferr != nil {
+		s.WriteResponse(s.tag, "BAD "+ferr.Error())
+		return nil
+	}
 
 	if span != nil {
 		tracing.SetStringAttribute(span, "store.seqset", seqSet)
@@ -2626,7 +2769,10 @@ func uidSetString(uids []uint32) string {
 // mistyped name made a new folder instead of failing. INBOX is matched
 // case-insensitively.
 func (s *Session) copyDestination(arg string) (string, bool) {
-	dest := canonMailbox(arg)
+	dest, ok := s.mboxArg(arg)
+	if !ok {
+		return "", false
+	}
 	if dest == "INBOX" {
 		return "INBOX", true
 	}
@@ -3212,10 +3358,17 @@ func (s *Session) handleListRights(args []string) error {
 // parseOwnerMailbox parses mailbox name which may be in owner:mailbox format for shared mailboxes
 func (s *Session) parseOwnerMailbox(mailbox string) (owner, name string, isShared bool) {
 	parts := strings.SplitN(mailbox, ":", 2)
+	name = mailbox
+	owner = s.user
 	if len(parts) == 2 {
-		return parts[0], parts[1], true
+		owner, name, isShared = parts[0], parts[1], true
 	}
-	return s.user, mailbox, false
+	// Wire names are modified UTF-7; an undecodable name is kept raw and so
+	// matches no mailbox.
+	if d, err := decodeMUTF7(name); err == nil {
+		name = canonMailbox(d)
+	}
+	return owner, name, isShared
 }
 
 // Helper functions

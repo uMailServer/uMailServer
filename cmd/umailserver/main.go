@@ -4,13 +4,17 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/auth"
@@ -32,7 +36,7 @@ var (
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
+		printUsage(os.Stderr)
 		os.Exit(1)
 	}
 
@@ -65,17 +69,19 @@ func main() {
 		cmdStop(os.Args[2:])
 	case "restart":
 		cmdRestart(os.Args[2:])
-	case "version":
+	case "version", "--version", "-v":
 		fmt.Printf("uMailServer %s (%s) built %s\n", Version, GitCommit, BuildDate)
+	case "help", "--help", "-h":
+		printUsage(os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		printUsage()
+		printUsage(os.Stderr)
 		os.Exit(1)
 	}
 }
 
-func printUsage() {
-	fmt.Println(`uMailServer - One binary. Complete email.
+func printUsage(w io.Writer) {
+	fmt.Fprintln(w, `uMailServer - One binary. Complete email.
 
 Usage: umailserver <command> [flags]
 
@@ -85,16 +91,16 @@ Commands:
   restart      Restart the server
   status       Show server status
   quickstart   Generate config and create first account
-  domain       Domain management (add, list, dns)
+  domain       Domain management (add, list, dns, delete)
   account      Account management (add, password, list, delete)
   queue        Queue management (list, retry, flush, drop)
   check        Diagnostics (dns, tls, deliverability)
-  test         Test utilities (send)
   backup       Create backup
   restore      Restore from backup
   migrate      Import from other mail servers
-  db           Database management (migrate, status)
+  db           Database management (status, migrate, rollback)
   version      Show version
+  help         Show this help
 
 Examples:
   umailserver quickstart you@example.com
@@ -114,9 +120,36 @@ func cmdServe(args []string) {
 	fs.StringVar(&configPath, "config", "", "Path to config file")
 	fs.StringVar(&dataDir, "data-dir", "", "Override data directory")
 	_ = fs.Parse(args)
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "serve: unexpected argument: %s\n", fs.Arg(0))
+		os.Exit(1)
+	}
+	if err := requireConfigFile(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Without --config, look for the config the wizard/quickstart wrote in the
+	// data directory (the same default the stop/status commands use) so that a
+	// second run does not re-launch the first-run wizard (F6213).
+	wizardDir := dataDir
+	if wizardDir == "" {
+		wizardDir = config.GetDefaultDataDir()
+	}
+	if configPath == "" {
+		if _, err := os.Stat(filepath.Join(wizardDir, "config.yaml")); err == nil {
+			configPath = filepath.Join(wizardDir, "config.yaml")
+		} else if p := os.Getenv("UMAILSERVER_CONFIG"); p != "" {
+			configPath = p
+			if err := requireConfigFile(configPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	}
 
 	// Check if this is first run (no config exists)
-	if configPath == "" && config.CheckFirstRun(dataDir) {
+	if configPath == "" && config.CheckFirstRun(wizardDir) {
 		fmt.Println()
 		fmt.Println("Welcome to uMailServer!")
 		fmt.Println("It looks like this is your first time running the server.")
@@ -124,7 +157,7 @@ func cmdServe(args []string) {
 
 		// Run interactive setup
 		wizard := config.NewSetupWizard()
-		wizard.Config.Server.DataDir = dataDir
+		wizard.Config.Server.DataDir = wizardDir
 
 		cfg, err := wizard.Run()
 		if err != nil {
@@ -133,14 +166,13 @@ func cmdServe(args []string) {
 		}
 
 		// Use the newly created config
-		configPath = filepath.Join(dataDir, "config.yaml")
+		// The wizard lets the user change the data directory, so the config
+		// lives wherever the wizard saved it, not necessarily under --data-dir.
+		configPath = filepath.Join(cfg.Server.DataDir, "config.yaml")
 
 		fmt.Println()
 		fmt.Println("Setup complete! Starting server...")
 		fmt.Println()
-
-		// Update cfg variable for use below
-		_ = cfg.EnsureDataDir()
 	}
 
 	// Load configuration
@@ -154,6 +186,17 @@ func cmdServe(args []string) {
 	if dataDir != "" {
 		cfg.Server.DataDir = dataDir
 	}
+
+	// A reload signal must not kill the daemon (default SIGHUP action is to
+	// terminate, skipping graceful shutdown). Live reload is not supported, so
+	// say so and keep serving (F6216).
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for range hup {
+			fmt.Fprintln(os.Stderr, "SIGHUP received: live config reload is not supported; use 'umailserver restart'")
+		}
+	}()
 
 	// Create server
 	srv, err := server.New(cfg)
@@ -191,19 +234,19 @@ func cmdQuickstart(args []string) {
 	// Get email from remaining args
 	remaining := parseInterspersed(fs, args)
 	if len(remaining) < 1 {
-		fmt.Println("Usage: umailserver quickstart <email> [flags]")
-		fmt.Println("Flags:")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver quickstart <email> [flags]")
+		fmt.Fprintln(os.Stderr, "Flags:")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
 	email := remaining[0]
-	parts := strings.Split(email, "@")
-	if len(parts) != 2 {
+	localPart, domain, ok := parseEmail(email)
+	if !ok {
 		fmt.Fprintf(os.Stderr, "Invalid email format: %s\n", email)
 		os.Exit(1)
 	}
-	domain := parts[1]
+	parts := []string{localPart, domain}
 
 	// Check if config already exists
 	if _, err := os.Stat(configPath); err == nil {
@@ -223,7 +266,14 @@ func cmdQuickstart(args []string) {
 
 	// Generate DKIM key
 	dkimDir := filepath.Join(dataDir, "dkim")
-	_ = os.MkdirAll(dkimDir, 0o750)
+	if err := os.MkdirAll(dkimDir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create DKIM directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create config directory: %v\n", err)
+		os.Exit(1)
+	}
 	dkimKeyPath := filepath.Join(dkimDir, domain+".private.pem")
 
 	fmt.Println("Generating DKIM key pair...")
@@ -233,9 +283,14 @@ func cmdQuickstart(args []string) {
 	}
 
 	// Read public key for DNS
-	publicKey, err := os.ReadFile(filepath.Clean(dkimKeyPath + ".pub"))
+	publicKeyPEM, err := os.ReadFile(filepath.Clean(dkimKeyPath + ".pub"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to read DKIM public key: %v\n", err)
+		os.Exit(1)
+	}
+	publicKey, err := dkimPublicKeyB64(publicKeyPEM)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid DKIM public key: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -296,7 +351,7 @@ domains:
     max_mailbox_size: 5368709120  # 5GB
 `, email, domain, dataDir, email, domain, dkimKeyPath, domain)
 
-	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+	if err := writeSecretFile(configPath, []byte(config), 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write config: %v\n", err)
 		os.Exit(1)
 	}
@@ -307,7 +362,7 @@ domains:
 	// Initialize database
 	fmt.Println("\nInitializing database...")
 	dbPath := filepath.Join(dataDir, "umailserver.db")
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
 		os.Exit(1)
 	}
@@ -344,7 +399,11 @@ domains:
 
 	// Create admin account with password prompt
 	fmt.Print("\nEnter admin password: ")
-	password := readPassword()
+	password := readNewPassword()
+	if len(password) < 8 {
+		fmt.Fprintf(os.Stderr, "Password must be at least 8 characters\n")
+		os.Exit(1)
+	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -384,8 +443,7 @@ domains:
 	fmt.Printf("%s.    IN    TXT    \"v=spf1 mx ~all\"\n\n", domain)
 
 	fmt.Println("# DKIM Record (default._domainkey):")
-	dkimRecord := fmt.Sprintf("v=DKIM1; k=rsa; p=%s", strings.TrimSpace(string(publicKey)))
-	fmt.Printf("default._domainkey.%s.    IN    TXT    \"%s\"\n\n", domain, dkimRecord)
+	fmt.Printf("default._domainkey.%s.    IN    TXT    %s\n\n", domain, dkimTXT(publicKey))
 
 	fmt.Println("# DMARC Record:")
 	fmt.Printf("_dmarc.%s.    IN    TXT    \"v=DMARC1; p=quarantine; rua=mailto:dmarc@%s\"\n\n", domain, domain)
@@ -411,13 +469,7 @@ func generateDKIMKey(keyPath string) error {
 		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
 	}
 
-	privateKeyFile, err := os.Create(filepath.Clean(keyPath))
-	if err != nil {
-		return err
-	}
-	defer privateKeyFile.Close()
-
-	if err := pem.Encode(privateKeyFile, privateKeyPEM); err != nil {
+	if err := writeSecretFile(keyPath, pem.EncodeToMemory(privateKeyPEM), 0o600); err != nil {
 		return err
 	}
 
@@ -432,33 +484,28 @@ func generateDKIMKey(keyPath string) error {
 		Bytes: publicKeyBytes,
 	}
 
-	publicKeyFile, err := os.Create(filepath.Clean(keyPath + ".pub"))
-	if err != nil {
-		return err
-	}
-	defer publicKeyFile.Close()
-
-	if err := pem.Encode(publicKeyFile, publicKeyPEM); err != nil {
-		return err
-	}
-
-	return nil
+	return writeSecretFile(keyPath+".pub", pem.EncodeToMemory(publicKeyPEM), 0o644)
 }
 
 func readPassword() string {
 	// #nosec G115 -- file descriptors are small positive integers on all supported platforms
 	fd := int(os.Stdin.Fd())
-	if state, err := term.MakeRaw(fd); err == nil {
-		defer func() { _ = term.Restore(fd, state) }()
-		if pw, err := term.ReadPassword(fd); err == nil {
-			fmt.Println()
-			return string(pw)
+	if term.IsTerminal(fd) {
+		// ReadPassword disables echo itself; MakeRaw would also disable signal
+		// handling (Ctrl-C), and falling back to an echoing read on error
+		// would leak the password to the screen (F6215).
+		pw, err := term.ReadPassword(fd)
+		fmt.Println()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read password: %v\n", err)
+			os.Exit(1)
 		}
+		return string(pw)
 	}
-	// Fallback for non-terminal contexts
+	// Non-terminal input: consume one line without reading ahead into a later
+	// prompt's input.
 	var password strings.Builder
 	var next [1]byte
-	// Consume one line without reading ahead into a later prompt's input.
 	for {
 		if n, _ := os.Stdin.Read(next[:]); n == 0 || next[0] == '\n' {
 			break
@@ -468,10 +515,25 @@ func readPassword() string {
 	return strings.TrimSuffix(password.String(), "\r")
 }
 
+// readNewPassword prompts for a new password and, on a terminal, asks for it
+// a second time and exits if the two entries differ (F6215).
+func readNewPassword() string {
+	pw := readPassword()
+	// #nosec G115 -- file descriptors are small positive integers on all supported platforms
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Print("Confirm password: ")
+		if again := readPassword(); again != pw {
+			fmt.Fprintln(os.Stderr, "Passwords do not match")
+			os.Exit(1)
+		}
+	}
+	return pw
+}
+
 // getDataDir returns the data directory from config file, or default
 func getDataDir() string {
 	// Try to load config to get data_dir
-	configPaths := []string{"./umailserver.yaml", "./umailserver.yml", "./demo.yaml"}
+	configPaths := configSearchPaths()
 	var cfg *config.Config
 	for _, p := range configPaths {
 		// Check if config file actually exists before trying to load
@@ -493,8 +555,8 @@ func getDataDir() string {
 
 func cmdDomain(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: umailserver domain <subcommand>")
-		fmt.Println("Subcommands: add, list, dns, delete")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver domain <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: add, list, dns, delete")
 		os.Exit(1)
 	}
 
@@ -513,7 +575,7 @@ func cmdDomain(args []string) {
 	switch subcmd {
 	case "add":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver domain add <domain>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver domain add <domain>")
 			os.Exit(1)
 		}
 		domainName := args[1]
@@ -563,12 +625,16 @@ func cmdDomain(args []string) {
 			if !d.IsActive {
 				status = "inactive"
 			}
-			fmt.Printf("%-30s %s (%d/%d accounts)\n", d.Name, status, 0, d.MaxAccounts)
+			n := 0
+			if accts, err := database.ListAccountsByDomain(d.Name); err == nil {
+				n = len(accts)
+			}
+			fmt.Printf("%-30s %s (%d/%d accounts)\n", d.Name, status, n, d.MaxAccounts)
 		}
 
 	case "dns":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver domain dns <domain>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver domain dns <domain>")
 			os.Exit(1)
 		}
 		domainName := args[1]
@@ -594,7 +660,11 @@ func cmdDomain(args []string) {
 		if dkimKey == "" {
 			dkimKey = "<GENERATE_WITH: umailserver domain add>"
 		}
-		fmt.Printf("default._domainkey.%s.    IN    TXT    \"v=DKIM1; k=rsa; p=%s\"\n\n", domain.Name, dkimKey)
+		if domain.DKIMPublicKey == "" {
+			fmt.Printf("default._domainkey.%s.    IN    TXT    \"v=DKIM1; k=rsa; p=%s\"\n\n", domain.Name, dkimKey)
+		} else {
+			fmt.Printf("default._domainkey.%s.    IN    TXT    %s\n\n", domain.Name, dkimTXT(dkimKey))
+		}
 
 		fmt.Println("# DMARC Record:")
 		fmt.Printf("_dmarc.%s.    IN    TXT    \"v=DMARC1; p=quarantine; rua=mailto:dmarc@%s\"\n\n", domain.Name, domain.Name)
@@ -603,7 +673,7 @@ func cmdDomain(args []string) {
 
 	case "delete":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver domain delete <domain>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver domain delete <domain>")
 			os.Exit(1)
 		}
 		domainName := args[1]
@@ -631,8 +701,8 @@ func cmdDomain(args []string) {
 
 func cmdAccount(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: umailserver account <subcommand>")
-		fmt.Println("Subcommands: add, password, list, delete")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver account <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: add, password, list, delete")
 		os.Exit(1)
 	}
 
@@ -651,15 +721,23 @@ func cmdAccount(args []string) {
 	switch subcmd {
 	case "add":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver account add <email>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver account add <email>")
 			os.Exit(1)
 		}
-		email := args[1]
-		parts := strings.Split(email, "@")
-		if len(parts) != 2 {
+		addFS := flag.NewFlagSet("account add", flag.ExitOnError)
+		passwordFlag := addFS.String("password", "", "Account password (visible in process list; prefer the prompt or UMAILSERVER_ACCOUNT_PASSWORD)")
+		addPos := parseInterspersed(addFS, args[1:])
+		if len(addPos) != 1 {
+			fmt.Fprintln(os.Stderr, "Usage: umailserver account add <email> [--password <pass>]")
+			os.Exit(1)
+		}
+		email := addPos[0]
+		localPart, domainPart, ok := parseEmail(email)
+		if !ok {
 			fmt.Fprintf(os.Stderr, "Invalid email format: %s\n", email)
 			os.Exit(1)
 		}
+		parts := []string{localPart, domainPart}
 
 		// Check if domain exists
 		_, err := database.GetDomain(parts[1])
@@ -669,16 +747,14 @@ func cmdAccount(args []string) {
 		}
 
 		// Get password (from flag or prompt)
-		var password string
-		for i, arg := range args {
-			if arg == "--password" && i+1 < len(args) {
-				password = args[i+1]
-				break
-			}
+		// UMAILSERVER_ACCOUNT_PASSWORD keeps the secret out of argv (F6215).
+		password := *passwordFlag
+		if password == "" {
+			password = os.Getenv("UMAILSERVER_ACCOUNT_PASSWORD")
 		}
 		if password == "" {
 			fmt.Print("Enter password: ")
-			password = readPassword()
+			password = readNewPassword()
 		}
 		if len(password) < 8 {
 			fmt.Fprintf(os.Stderr, "Password must be at least 8 characters\n")
@@ -760,15 +836,16 @@ func cmdAccount(args []string) {
 
 	case "password":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver account password <email>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver account password <email>")
 			os.Exit(1)
 		}
 		email := args[1]
-		parts := strings.Split(email, "@")
-		if len(parts) != 2 {
+		localPart, domainPart, ok := parseEmail(email)
+		if !ok {
 			fmt.Fprintf(os.Stderr, "Invalid email format: %s\n", email)
 			os.Exit(1)
 		}
+		parts := []string{localPart, domainPart}
 
 		account, err := database.GetAccount(parts[1], parts[0])
 		if err != nil {
@@ -777,7 +854,7 @@ func cmdAccount(args []string) {
 		}
 
 		fmt.Print("Enter new password: ")
-		password := readPassword()
+		password := readNewPassword()
 		if len(password) < 8 {
 			fmt.Fprintf(os.Stderr, "Password must be at least 8 characters\n")
 			os.Exit(1)
@@ -800,15 +877,16 @@ func cmdAccount(args []string) {
 
 	case "delete":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver account delete <email>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver account delete <email>")
 			os.Exit(1)
 		}
 		email := args[1]
-		parts := strings.Split(email, "@")
-		if len(parts) != 2 {
+		localPart, domainPart, ok := parseEmail(email)
+		if !ok {
 			fmt.Fprintf(os.Stderr, "Invalid email format: %s\n", email)
 			os.Exit(1)
 		}
+		parts := []string{localPart, domainPart}
 
 		// Confirm deletion
 		fmt.Printf("Are you sure you want to delete account %s? (y/N): ", email)
@@ -833,8 +911,8 @@ func cmdAccount(args []string) {
 
 func cmdQueue(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: umailserver queue <subcommand>")
-		fmt.Println("Subcommands: list, retry, flush, drop")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver queue <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: list, retry, flush, drop")
 		os.Exit(1)
 	}
 
@@ -852,7 +930,7 @@ func cmdQueue(args []string) {
 
 	switch subcmd {
 	case "list":
-		entries, err := database.GetPendingQueue(time.Now().Add(24 * time.Hour))
+		entries, err := allQueueEntries(database)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to list queue: %v\n", err)
 			os.Exit(1)
@@ -868,7 +946,7 @@ func cmdQueue(args []string) {
 		}
 	case "retry":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver queue retry <id>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver queue retry <id>")
 			os.Exit(1)
 		}
 		entry, err := database.GetQueueEntry(args[1])
@@ -886,7 +964,7 @@ func cmdQueue(args []string) {
 		}
 		fmt.Printf("Queue entry retried: %s\n", args[1])
 	case "flush":
-		entries, err := database.GetPendingQueue(time.Now().Add(24 * time.Hour))
+		entries, err := allQueueEntries(database)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to flush queue: %v\n", err)
 			os.Exit(1)
@@ -906,7 +984,7 @@ func cmdQueue(args []string) {
 		fmt.Printf("Flushed %d failed entries\n", count)
 	case "drop":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver queue drop <id>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver queue drop <id>")
 			os.Exit(1)
 		}
 		if err := database.Dequeue(args[1]); err != nil {
@@ -922,8 +1000,8 @@ func cmdQueue(args []string) {
 
 func cmdCheck(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: umailserver check <type>")
-		fmt.Println("Types: dns, tls, deliverability")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver check <type>")
+		fmt.Fprintln(os.Stderr, "Types: dns, tls, deliverability")
 		os.Exit(1)
 	}
 
@@ -931,10 +1009,18 @@ func cmdCheck(args []string) {
 
 	// Load config
 	dataDir := "./data"
-	configPath := "./umailserver.yaml"
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		// Try loading from default data dir
+	var cfg *config.Config
+	for _, p := range configSearchPaths() {
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		if c, err := config.Load(p); err == nil {
+			cfg = c
+			break
+		}
+	}
+	if cfg == nil {
+		fmt.Fprintln(os.Stderr, "warning: no usable config found; using hostname \"localhost\" (set UMAILSERVER_CONFIG or run from the config directory)")
 		cfg = &config.Config{
 			Server: config.ServerConfig{
 				Hostname: "localhost",
@@ -948,7 +1034,7 @@ func cmdCheck(args []string) {
 	switch checkType {
 	case "dns":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver check dns <domain>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver check dns <domain>")
 			os.Exit(1)
 		}
 		results, err := diagnostics.CheckDNS(args[1])
@@ -957,10 +1043,16 @@ func cmdCheck(args []string) {
 			os.Exit(1)
 		}
 		cli.PrintDNSResults(results)
+		// A failed check must be visible to scripts (F6217).
+		for _, r := range results {
+			if r.Status == "fail" {
+				os.Exit(1)
+			}
+		}
 
 	case "tls":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver check tls <hostname>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver check tls <hostname>")
 			os.Exit(1)
 		}
 		result, err := diagnostics.CheckTLS(args[1])
@@ -973,11 +1065,13 @@ func cmdCheck(args []string) {
 			fmt.Printf("  Protocol: %s\n", result.Protocol)
 			fmt.Printf("  Version:  %s\n", result.Version)
 			fmt.Printf("  Cipher:   %s\n", result.Cipher)
+		} else {
+			os.Exit(1)
 		}
 
 	case "deliverability":
 		if len(args) < 2 {
-			fmt.Println("Usage: umailserver check deliverability <domain>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver check deliverability <domain>")
 			os.Exit(1)
 		}
 		result, err := diagnostics.CheckDeliverability(args[1])
@@ -998,21 +1092,22 @@ func cmdCheck(args []string) {
 
 func cmdTest(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: umailserver test <type>")
-		fmt.Println("Types: send")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver test <type>")
+		fmt.Fprintln(os.Stderr, "Types: send")
 		os.Exit(1)
 	}
 
 	testType := args[0]
-	fmt.Printf("Test command: %s\n", testType)
 
 	switch testType {
 	case "send":
 		if len(args) < 4 {
-			fmt.Println("Usage: umailserver test send <from> <to> <subject>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver test send <from> <to> <subject>")
 			os.Exit(1)
 		}
-		fmt.Printf("Sending test email from %s to %s\n", args[1], args[2])
+		// The command never sent anything yet reported success (exit 0).
+		fmt.Fprintln(os.Stderr, "test send is not implemented: no message was sent")
+		os.Exit(1)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown test type: %s\n", testType)
 		os.Exit(1)
@@ -1026,7 +1121,7 @@ func cmdBackup(args []string) {
 	pos := parseInterspersed(fs, args)
 
 	if len(pos) < 1 {
-		fmt.Println("Usage: umailserver backup <backup-directory> [--config <path>] [--password <pass>]")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver backup <backup-directory> [--config <path>] [--password <pass>]")
 		os.Exit(1)
 	}
 
@@ -1034,6 +1129,10 @@ func cmdBackup(args []string) {
 	// umailserver_backup_<TS>.tar.gz[.enc] file is created inside it.
 	backupPath := pos[0]
 
+	if err := requireConfigFile(*configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
@@ -1062,12 +1161,16 @@ func cmdRestore(args []string) {
 	pos := parseInterspersed(fs, args)
 
 	if len(pos) < 1 {
-		fmt.Println("Usage: umailserver restore <backup-file> [--config <path>] [--password <pass>]")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver restore <backup-file> [--config <path>] [--password <pass>]")
 		os.Exit(1)
 	}
 
 	backupFile := pos[0]
 
+	if err := requireConfigFile(*configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
@@ -1103,16 +1206,20 @@ func cmdMigrate(args []string) {
 	_ = fs.Parse(args)
 
 	if *sourceType == "" || *source == "" {
-		fmt.Println("Usage: umailserver migrate --type <type> --source <source>")
-		fmt.Println("Types: imap, dovecot, mbox")
-		fmt.Println("\nExamples:")
-		fmt.Println("  umailserver migrate --type imap --source imaps://oldserver.com --username user@old.com --target user@new.com")
-		fmt.Println("  umailserver migrate --type dovecot --source /var/mail --passwd-file /etc/dovecot/users")
-		fmt.Println("  umailserver migrate --type mbox --source /path/to/mail/*.mbox")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver migrate --type <type> --source <source>")
+		fmt.Fprintln(os.Stderr, "Types: imap, dovecot, mbox")
+		fmt.Fprintln(os.Stderr, "\nExamples:")
+		fmt.Fprintln(os.Stderr, "  umailserver migrate --type imap --source imaps://oldserver.com --username user@old.com --target user@new.com")
+		fmt.Fprintln(os.Stderr, "  umailserver migrate --type dovecot --source /var/mail --passwd-file /etc/dovecot/users")
+		fmt.Fprintln(os.Stderr, "  umailserver migrate --type mbox --source /path/to/mail/*.mbox")
 		os.Exit(1)
 	}
 
 	// Load config and database
+	if err := requireConfigFile(*configFlag); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
 	cfg, err := config.Load(*configFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
@@ -1170,8 +1277,8 @@ func cmdMigrate(args []string) {
 
 func cmdDB(args []string) {
 	if len(args) < 1 {
-		fmt.Println("Usage: umailserver db <subcommand>")
-		fmt.Println("Subcommands: status, migrate, rollback")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver db <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: status, migrate, rollback")
 		os.Exit(1)
 	}
 
@@ -1186,8 +1293,8 @@ func cmdDB(args []string) {
 		cmdDBRollback(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown db subcommand: %s\n", subcmd)
-		fmt.Println("Usage: umailserver db <subcommand>")
-		fmt.Println("Subcommands: status, migrate, rollback")
+		fmt.Fprintln(os.Stderr, "Usage: umailserver db <subcommand>")
+		fmt.Fprintln(os.Stderr, "Subcommands: status, migrate, rollback")
 		os.Exit(1)
 	}
 }
@@ -1283,43 +1390,66 @@ func cmdDBRollback(args []string) {
 	fmt.Println("Rollback complete.")
 }
 
-func cmdStatus(args []string) {
-	dataDir := config.GetDefaultDataDir()
+// lifecycleDataDir resolves the data directory for status/stop/restart: an
+// explicit argument wins, otherwise the configured data_dir (the directory the
+// running server writes its PID file to), otherwise the default (F6214).
+func lifecycleDataDir(args []string) string {
 	if len(args) > 0 {
-		dataDir = args[0]
+		return args[0]
 	}
+	return getDataDir()
+}
+
+// readLivePID reads the PID file and reports whether the recorded process
+// exists. A PID file naming a dead process is stale and is removed by the
+// caller's choice via stale=true (F6214).
+func readLivePID(pidFile *server.PIDFile) (pid int, running bool, stale bool) {
+	pid, err := pidFile.Read()
+	if err != nil || pid <= 0 {
+		return 0, false, false
+	}
+	if !processAlive(pid) {
+		return pid, false, true
+	}
+	return pid, true, false
+}
+
+func cmdStatus(args []string) {
+	dataDir := lifecycleDataDir(args)
 
 	pidFile := server.NewPIDFile(dataDir)
-	pid, err := pidFile.Read()
-	if err != nil {
-		fmt.Println("Status: not running")
-		os.Exit(0)
+	pid, running, stale := readLivePID(pidFile)
+	if !running {
+		if stale {
+			fmt.Printf("Status: not running (stale PID file for PID %d)\n", pid)
+		} else {
+			fmt.Println("Status: not running")
+		}
+		// Conventional status exit code: 3 = program is not running.
+		os.Exit(3)
 	}
 
 	fmt.Printf("Status: running\n")
 	fmt.Printf("PID: %d\n", pid)
-
-	// Try to get more info from health endpoint
-	// This would require the admin API to be accessible
-	// For now, just show basic info
 }
 
 func cmdStop(args []string) {
-	dataDir := config.GetDefaultDataDir()
-	if len(args) > 0 {
-		dataDir = args[0]
-	}
+	dataDir := lifecycleDataDir(args)
 
 	pidFile := server.NewPIDFile(dataDir)
-	pid, err := pidFile.Read()
-	if err != nil {
-		fmt.Println("Server is not running")
+	pid, running, stale := readLivePID(pidFile)
+	if !running {
+		if stale {
+			_ = pidFile.Remove()
+			fmt.Printf("Server is not running (removed stale PID file for PID %d)\n", pid)
+		} else {
+			fmt.Println("Server is not running")
+		}
 		os.Exit(0)
 	}
 
 	fmt.Printf("Stopping server (PID: %d)...\n", pid)
 
-	// Send SIGTERM
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to find process: %v\n", err)
@@ -1335,25 +1465,50 @@ func cmdStop(args []string) {
 }
 
 func cmdRestart(args []string) {
-	dataDir := config.GetDefaultDataDir()
-	if len(args) > 0 {
-		dataDir = args[0]
-	}
+	dataDir := lifecycleDataDir(args)
 
 	// Stop if running
 	pidFile := server.NewPIDFile(dataDir)
-	if pid, err := pidFile.Read(); err == nil && pid > 0 {
+	if pid, running, stale := readLivePID(pidFile); running {
 		fmt.Printf("Stopping server (PID: %d)...\n", pid)
-		if proc, err := os.FindProcess(pid); err == nil {
-			_ = proc.Signal(os.Interrupt)
-			// Wait a bit for shutdown
-			time.Sleep(2 * time.Second)
+		proc, err := os.FindProcess(pid)
+		if err != nil || proc.Signal(os.Interrupt) != nil {
+			fmt.Fprintf(os.Stderr, "Failed to signal process %d\n", pid)
+			os.Exit(1)
 		}
+		// Wait for the old process to exit; starting while it still holds the
+		// ports and PID file would fail or race (F6214).
+		deadline := time.Now().Add(60 * time.Second)
+		for processAlive(pid) {
+			if time.Now().After(deadline) {
+				fmt.Fprintf(os.Stderr, "Server (PID %d) did not stop within 60s\n", pid)
+				os.Exit(1)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	} else if stale {
+		_ = pidFile.Remove()
 	}
 
 	// Start again
 	fmt.Println("Starting server...")
 	cmdServe([]string{"--data-dir", dataDir})
+}
+
+// allQueueEntries returns every queue entry regardless of status. GetPendingQueue
+// only returns "pending" entries due within a window, so list never showed
+// failed entries and flush (which retries failed ones) could never find any.
+func allQueueEntries(database *db.DB) ([]*db.QueueEntry, error) {
+	var entries []*db.QueueEntry
+	err := database.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var e db.QueueEntry
+		if err := json.Unmarshal(value, &e); err != nil {
+			return err
+		}
+		entries = append(entries, &e)
+		return nil
+	})
+	return entries, err
 }
 
 // parseInterspersed parses fs flags wherever they appear in args and returns

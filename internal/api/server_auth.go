@@ -60,8 +60,22 @@ type totpAttempt struct {
 const maxTOTPFailures = 5
 const totpLockoutDuration = 5 * time.Minute
 
+// accountLoginKey is the per-account login budget key. F6134: the budget is
+// per (client IP, account), not per account alone, otherwise anyone able to
+// send five wrong passwords for a victim's address, from any IP, locks the
+// victim out of the account for the window. Guessing from one IP stays capped
+// at 5 per window per account, and the per-IP limiter still bounds an
+// attacker's total guesses across accounts.
+func accountLoginKey(ip, email string) string {
+	return strings.ToLower(strings.TrimSpace(email)) + "|" + ip
+}
+
+// totpKey normalises the account identity for the TOTP budget (F6135).
+func totpKey(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
+
 // isTOTPLockedOut returns true if the account has exceeded TOTP failure limits.
 func (s *Server) isTOTPLockedOut(email string) bool {
+	email = totpKey(email)
 	s.totpMu.Lock()
 	defer s.totpMu.Unlock()
 
@@ -78,6 +92,7 @@ func (s *Server) isTOTPLockedOut(email string) bool {
 
 // recordTOTPFailure increments the failed TOTP attempt count for an account.
 func (s *Server) recordTOTPFailure(email string) {
+	email = totpKey(email)
 	s.totpMu.Lock()
 	defer s.totpMu.Unlock()
 
@@ -96,6 +111,7 @@ func (s *Server) recordTOTPFailure(email string) {
 
 // clearTOTPFailures resets the TOTP failure count for an account.
 func (s *Server) clearTOTPFailures(email string) {
+	email = totpKey(email)
 	s.totpMu.Lock()
 	defer s.totpMu.Unlock()
 
@@ -422,7 +438,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Normalize email for rate limiting
-	emailKey := strings.ToLower(req.Email)
+	emailKey := accountLoginKey(ip, req.Email)
 
 	// Rate limit login attempts by account
 	if !s.checkAccountLoginRateLimit(emailKey) {

@@ -31,8 +31,9 @@ export interface Account {
 export interface QueueEntry {
   id: string;
   from: string;
-  to: string;
-  status: 'pending' | 'sending' | 'failed' | 'delivered';
+  // The API serialises the recipient list as an array; older fixtures use a string.
+  to: string | string[];
+  status: 'pending' | 'sending' | 'failed' | 'delivered' | 'bounced';
   retry_count: number;
   last_error?: string;
   created_at: string;

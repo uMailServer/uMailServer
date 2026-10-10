@@ -60,7 +60,11 @@ func TLSCertificateCheck(certPath, keyPath string, warningDays, criticalDays int
 		check.Details["days_until_expiry"] = daysUntilExpiry
 		check.Details["dns_names"] = cert.DNSNames
 
-		if !time.Now().Before(cert.NotAfter) {
+		if time.Now().Before(cert.NotBefore) {
+			// A certificate that is not yet valid is rejected by every client.
+			check.Status = StatusUnhealthy
+			check.Message = fmt.Sprintf("TLS certificate is not valid until %s", cert.NotBefore.Format(time.RFC3339))
+		} else if !time.Now().Before(cert.NotAfter) {
 			check.Status = StatusUnhealthy
 			check.Message = fmt.Sprintf("TLS certificate EXPIRED %d days ago", -daysUntilExpiry)
 		} else if daysUntilExpiry <= criticalDays {

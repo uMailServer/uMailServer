@@ -3,6 +3,7 @@ package queue
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -1192,10 +1193,17 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 		}
 	}
 
-	// Sign message with DKIM if possible
+	// Normalise (CRLF, no Bcc/Return-Path) before signing, always.
+	message = prepareOutbound(message)
+
+	// Sign with DKIM if possible. Policy: a signing failure never blocks
+	// delivery; the message goes out unsigned and the reason is logged
+	// (error text never contains key material).
 	signedMsg, err := m.signWithDKIM(from, message)
 	if err == nil && len(signedMsg) > 0 {
 		message = signedMsg
+	} else if err != nil && m.logger != nil && m.db != nil {
+		m.logger.Warn("DKIM signing skipped, delivering unsigned", "from", from, "error", err.Error())
 	}
 
 	// The real envelope sender is used: a VERP address (bounce-user=dom@sender)
@@ -1744,64 +1752,190 @@ func (m *Manager) countMessageRefsUnsafe(messagePath string) int {
 	return count
 }
 
-// signWithDKIM signs an outgoing message with DKIM if the sender's domain has a DKIM key configured.
+// prepareOutbound normalises a message for remote delivery (F6203, F6205):
+//   - bare LF / bare CR line endings become CRLF, so the bytes signed are the
+//     bytes the receiver sees (the SMTP DATA writer converts them anyway, which
+//     would invalidate a "simple" body hash computed over LF text);
+//   - Return-Path is removed (it is added by the final delivery agent; a copy
+//     here would be duplicated or spoofed);
+//   - Bcc is removed so blind recipients never reach remote servers in the
+//     header (the envelope already carries them).
+func prepareOutbound(message []byte) []byte {
+	// Normalise line endings.
+	if bytes.IndexByte(message, '\n') >= 0 || bytes.IndexByte(message, '\r') >= 0 {
+		out := make([]byte, 0, len(message)+len(message)/64)
+		for i := 0; i < len(message); i++ {
+			c := message[i]
+			switch c {
+			case '\r':
+				if i+1 < len(message) && message[i+1] == '\n' {
+					i++
+				}
+				out = append(out, '\r', '\n')
+			case '\n':
+				out = append(out, '\r', '\n')
+			default:
+				out = append(out, c)
+			}
+		}
+		message = out
+	}
+
+	hdrEnd := bytes.Index(message, []byte("\r\n\r\n"))
+	var hdr, rest []byte
+	if hdrEnd >= 0 {
+		hdr, rest = message[:hdrEnd+2], message[hdrEnd+2:]
+	} else {
+		hdr, rest = message, nil
+	}
+	var out []byte
+	changed := false
+	skipping := false
+	for len(hdr) > 0 {
+		i := bytes.Index(hdr, []byte("\r\n"))
+		var line []byte
+		if i < 0 {
+			line, hdr = hdr, nil
+		} else {
+			line, hdr = hdr[:i+2], hdr[i+2:]
+		}
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			if skipping {
+				continue
+			}
+		} else {
+			name := line
+			if c := bytes.IndexByte(line, ':'); c >= 0 {
+				name = line[:c]
+			}
+			n := strings.ToLower(strings.TrimSpace(string(name)))
+			skipping = n == "bcc" || n == "return-path"
+			if skipping {
+				changed = true
+				continue
+			}
+		}
+		out = append(out, line...)
+	}
+	if !changed {
+		// Nothing removed: reuse the (possibly line-normalised) message.
+		return message
+	}
+	return append(out, rest...)
+}
+
+// parseDKIMKey parses a PEM private key (PKCS#1 RSA, PKCS#8 RSA or Ed25519).
+func parseDKIMKey(pemData string) (*rsa.PrivateKey, ed25519.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, nil, fmt.Errorf("failed to decode DKIM private key PEM")
+	}
+	if k, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return k, nil, nil
+	} else {
+		key, err8 := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err8 != nil {
+			// Never include key material in the error.
+			return nil, nil, fmt.Errorf("failed to parse DKIM private key: %w (pkcs1: %w)", err8, err)
+		}
+		switch kk := key.(type) {
+		case *rsa.PrivateKey:
+			return kk, nil, nil
+		case ed25519.PrivateKey:
+			return nil, kk, nil
+		}
+		return nil, nil, fmt.Errorf("DKIM private key is neither RSA nor Ed25519")
+	}
+}
+
+// signWithDKIM signs an outgoing message with DKIM. The signing domain is the
+// From-header domain when we own it and it has a key (DMARC alignment), else
+// the envelope sender's domain. Domains not present in the database are never
+// signed for. A returned error means the message must go out unsigned (policy:
+// deliver unsigned rather than fail; the caller logs it).
 func (m *Manager) signWithDKIM(from string, message []byte) ([]byte, error) {
 	if m.db == nil {
 		return nil, fmt.Errorf("database not available")
 	}
+	message = prepareOutbound(message)
 
-	// Extract sender domain
-	senderDomain := extractDomain(from)
-	if senderDomain == "" {
+	envDomain := extractDomain(from)
+	var candidates []string
+	if hd := fromHeaderDomain(message); hd != "" {
+		candidates = append(candidates, hd)
+	}
+	if envDomain != "" && (len(candidates) == 0 || !strings.EqualFold(candidates[0], envDomain)) {
+		candidates = append(candidates, envDomain)
+	}
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("cannot extract domain from sender: %s", from)
 	}
 
-	// Look up domain's DKIM key
-	domain, err := m.db.GetDomain(senderDomain)
-	if err != nil {
-		return nil, fmt.Errorf("domain %s not found: %w", senderDomain, err)
-	}
-	if domain.DKIMPrivateKey == "" || domain.DKIMSelector == "" {
-		return nil, fmt.Errorf("no DKIM key configured for domain %s", senderDomain)
-	}
-
-	// Parse private key
-	block, _ := pem.Decode([]byte(domain.DKIMPrivateKey))
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode DKIM private key PEM")
-	}
-
-	rsaKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		// Try PKCS8 as fallback
-		key, err8 := x509.ParsePKCS8PrivateKey(block.Bytes)
-		if err8 != nil {
-			return nil, fmt.Errorf("failed to parse DKIM private key: %w (pkcs1: %w)", err8, err)
+	var lastErr error
+	for _, d := range candidates {
+		domain, err := m.db.GetDomain(strings.ToLower(d))
+		if err != nil {
+			lastErr = fmt.Errorf("domain %s not found: %w", d, err)
+			continue
 		}
-		var ok bool
-		rsaKey, ok = key.(*rsa.PrivateKey)
-		if !ok {
-			return nil, fmt.Errorf("DKIM private key is not RSA")
+		if domain.DKIMPrivateKey == "" || domain.DKIMSelector == "" {
+			lastErr = fmt.Errorf("no DKIM key configured for domain %s", d)
+			continue
 		}
+		signed, err := m.signAs(strings.ToLower(d), domain.DKIMSelector, domain.DKIMPrivateKey, message)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return signed, nil
+	}
+	return nil, lastErr
+}
+
+func (m *Manager) signAs(signDomain, selector, keyPEM string, message []byte) ([]byte, error) {
+	rsaKey, edKey, err := parseDKIMKey(keyPEM)
+	if err != nil {
+		return nil, err
 	}
 
-	// Parse message headers and body
 	headers := parseMessageHeaders(message)
+	if len(headers) == 0 {
+		return nil, fmt.Errorf("cannot parse message headers for DKIM")
+	}
 	body := extractMessageBody(message)
 
-	// Create signer and sign
+	var signer *auth.DKIMSigner
 	dnsResolver := &dkimDNSResolver{}
-	signer := auth.NewDKIMSigner(dnsResolver, rsaKey, senderDomain, domain.DKIMSelector)
+	if edKey != nil {
+		signer = auth.NewDKIMSignerEd25519(dnsResolver, edKey, signDomain, selector)
+	} else {
+		signer = auth.NewDKIMSigner(dnsResolver, rsaKey, signDomain, selector)
+	}
 	signature, err := signer.Sign(headers, body)
 	if err != nil {
 		return nil, fmt.Errorf("DKIM signing failed: %w", err)
 	}
 
-	// Prepend DKIM-Signature header to the message
 	// Sign returns only the field value; the field name is required (F4925).
 	dkimHeader := "DKIM-Signature: " + signature + "\r\n"
-	signedMessage := append([]byte(dkimHeader), message...)
+	signedMessage := make([]byte, 0, len(dkimHeader)+len(message))
+	signedMessage = append(signedMessage, dkimHeader...)
+	signedMessage = append(signedMessage, message...)
 	return signedMessage, nil
+}
+
+// fromHeaderDomain returns the domain of the first From header address.
+func fromHeaderDomain(message []byte) string {
+	h := parseMessageHeaders(message)
+	v := h["From"]
+	if len(v) == 0 {
+		return ""
+	}
+	addr, err := mail.ParseAddress(v[0])
+	if err != nil {
+		return ""
+	}
+	return extractDomain(addr.Address)
 }
 
 // parseMessageHeaders parses the headers from a raw email message into a map

@@ -1,8 +1,12 @@
 package api
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
+
+	"github.com/umailserver/umailserver/internal/db"
 )
 
 func parseEmail(email string) (user, domain string) {
@@ -82,8 +86,8 @@ func validatePassword(password string) error {
 	if len(password) < 8 {
 		return fmt.Errorf("password must be at least 8 characters")
 	}
-	if len(password) > 128 {
-		return fmt.Errorf("password exceeds maximum length of 128 characters")
+	if len(password) > maxPasswordLength {
+		return fmt.Errorf("password exceeds maximum length of %d characters", maxPasswordLength)
 	}
 	var hasUpper, hasLower, hasDigit, hasSpecial bool
 	for _, c := range password {
@@ -111,4 +115,39 @@ func validatePassword(password string) error {
 		return fmt.Errorf("password must contain at least one special character")
 	}
 	return nil
+}
+
+// maxPasswordLength is the longest password any flow accepts.
+const maxPasswordLength = 128
+
+// isKeyNotFound reports whether err is db.Get's "key not found" (the db
+// package returns it untyped), as opposed to a storage failure.
+func isKeyNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "key not found")
+}
+
+// dbErrStatus maps the db package's sentinel errors to an HTTP status and
+// message (F6132); anything else is a 500 with the fallback message.
+func dbErrStatus(err error, fallback string) (int, string) {
+	switch {
+	case errors.Is(err, db.ErrAccountNotFound):
+		return http.StatusNotFound, "account not found"
+	case errors.Is(err, db.ErrAliasNotFound):
+		return http.StatusNotFound, "alias not found"
+	case errors.Is(err, db.ErrDomainNotFound):
+		return http.StatusNotFound, "domain not found"
+	case errors.Is(err, db.ErrAccountExists):
+		return http.StatusConflict, "account already exists"
+	case errors.Is(err, db.ErrAliasExists):
+		return http.StatusConflict, "alias already exists"
+	case errors.Is(err, db.ErrDomainExists):
+		return http.StatusConflict, "domain already exists"
+	case errors.Is(err, db.ErrAliasConflict):
+		return http.StatusConflict, "alias conflicts with an existing mailbox or targets itself"
+	case errors.Is(err, db.ErrDomainAccountLimit):
+		return http.StatusConflict, "domain account limit reached"
+	case errors.Is(err, db.ErrInvalidName):
+		return http.StatusBadRequest, "invalid name"
+	}
+	return http.StatusInternalServerError, fallback
 }

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/metrics"
@@ -630,15 +632,33 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 	// Reserve quota atomically before storing. This comes after the
 	// forward-only return above: a message that is not stored must not be
 	// refused for quota (F5713).
-	if err := s.database.IncrementQuota(domain, user, int64(len(data))); err != nil {
-		return fmt.Errorf("quota exceeded for user: %s", email)
+	//
+	// Blobs are content-addressed per user and IMAP/JMAP charge (and later
+	// release) a blob once however many messages reference it. A byte-identical
+	// delivery to a blob the user already holds must therefore reserve 0 bytes,
+	// otherwise the second charge is never released (quota drifts above disk).
+	// The check-and-store runs under a per-user lock so concurrent identical
+	// deliveries agree on who pays.
+	unlock := s.lockDeliveryUser(email)
+	reserved := int64(len(data))
+	if sum := sha256.Sum256(data); s.msgStore.MessageExists(email, hex.EncodeToString(sum[:])) {
+		reserved = 0
+	}
+	if reserved > 0 {
+		if err := s.database.IncrementQuota(domain, user, reserved); err != nil {
+			unlock()
+			return fmt.Errorf("quota exceeded for user: %s", email)
+		}
 	}
 
 	// Store message locally
 	messageID, err := s.msgStore.StoreMessage(email, data)
+	unlock()
 	if err != nil {
 		// Release the quota we reserved since store failed
-		s.database.IncrementQuota(domain, user, -int64(len(data)))
+		if reserved > 0 {
+			s.database.IncrementQuota(domain, user, -reserved)
+		}
 		return fmt.Errorf("failed to store message: %w", err)
 	}
 
@@ -928,4 +948,13 @@ func (s *Server) authenticateClientCert(cert *x509.Certificate) (string, bool) {
 	s.logger.Info("Client certificate authentication successful", "email", email)
 
 	return email, true
+}
+
+// lockDeliveryUser serialises the blob-exists check and store of local
+// deliveries per mailbox and returns the unlock function.
+func (s *Server) lockDeliveryUser(email string) func() {
+	v, _ := s.deliveryLocks.LoadOrStore(strings.ToLower(email), &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }

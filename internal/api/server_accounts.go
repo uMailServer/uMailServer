@@ -116,6 +116,12 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "new password must be at least 8 characters")
 		return
 	}
+	// F6138: create/reset cap passwords at 128 characters; self-service had
+	// no ceiling with argon2id, so it could store what create rejects.
+	if len(req.NewPassword) > maxPasswordLength {
+		s.sendError(w, http.StatusBadRequest, fmt.Sprintf("new password exceeds maximum length of %d characters", maxPasswordLength))
+		return
+	}
 	if err := s.checkHasherPasswordLength(req.NewPassword); err != nil { // F5282
 		s.sendError(w, http.StatusBadRequest, "new "+err.Error())
 		return
@@ -131,7 +137,7 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 	// F5030: this route is outside the API rate limiter, so without a budget
 	// it is an unlimited oracle for the current password. Guesses share the
 	// per-account login budget (5 per 5 minutes), cleared on success.
-	emailKey := strings.ToLower(authUser)
+	emailKey := accountLoginKey(getClientIP(r, s.config.TrustedProxies), authUser) // F6134
 	if !s.checkAccountLoginRateLimit(emailKey) {
 		s.sendError(w, http.StatusTooManyRequests, "too many password attempts for this account")
 		return
@@ -156,7 +162,8 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 	account.UpdatedAt = time.Now()
 
 	if err := s.db.UpdateAccount(account); err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to update password")
+		status, msg := dbErrStatus(err, "failed to update password")
+		s.sendError(w, status, msg)
 		return
 	}
 
@@ -211,7 +218,7 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var result []map[string]interface{}
+	result := make([]map[string]interface{}, 0, len(accounts)) // F6137: [] not null
 	for _, a := range accounts {
 		result = append(result, accountToJSON(a))
 	}
@@ -249,6 +256,10 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "invalid email format")
 		return
 	}
+	// F6136: domains are stored lower-case and SMTP/IMAP lower-case the
+	// login name, so a mixed-case address either failed the domain lookup
+	// or created a mailbox nobody could authenticate to.
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	// Validate password strength
 	if err := s.validateNewPassword(req.Password); err != nil { // F5282
@@ -314,16 +325,12 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	// transaction as the insert, so parallel creates and a racing domain
 	// delete cannot slip past them.
 	if err := s.db.CreateAccountInDomain(account); err != nil {
-		switch {
-		case errors.Is(err, db.ErrAccountExists):
-			s.sendError(w, http.StatusConflict, "account already exists")
-		case errors.Is(err, db.ErrDomainNotFound):
+		if errors.Is(err, db.ErrDomainNotFound) { // create: unknown domain is a bad request
 			s.sendError(w, http.StatusBadRequest, "domain not found")
-		case errors.Is(err, db.ErrDomainAccountLimit):
-			s.sendError(w, http.StatusConflict, "domain account limit reached")
-		default:
-			s.sendError(w, http.StatusInternalServerError, "failed to create account")
+			return
 		}
+		status, msg := dbErrStatus(err, "failed to create account")
+		s.sendError(w, status, msg)
 		return
 	}
 
@@ -464,6 +471,12 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 
 	if req.Password != "" {
+		// F6139: PUT must not be a way around the current-password check
+		// and throttle of /api/v1/account/password for one's own account.
+		if authUser == user+"@"+domain {
+			s.sendError(w, http.StatusForbidden, "use /api/v1/account/password to change your own password")
+			return
+		}
 		if err := s.validateNewPassword(req.Password); err != nil { // F5281
 			s.sendError(w, http.StatusBadRequest, err.Error())
 			return
@@ -496,7 +509,8 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	account.UpdatedAt = time.Now()
 
 	if err := s.db.UpdateAccount(account); err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to update account")
+		status, msg := dbErrStatus(err, "failed to update account")
+		s.sendError(w, status, msg)
 		return
 	}
 
@@ -516,6 +530,16 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
+	// F6130: deleting a missing account is a 404, not a 204 with an audit
+	// entry for a deletion that never happened.
+	if _, err := s.db.GetAccount(domain, user); err != nil {
+		if isKeyNotFound(err) {
+			s.sendError(w, http.StatusNotFound, "account not found")
+		} else {
+			s.sendError(w, http.StatusInternalServerError, "failed to delete account")
+		}
+		return
+	}
 	if err := s.db.DeleteAccount(domain, user); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to delete account")
 		return

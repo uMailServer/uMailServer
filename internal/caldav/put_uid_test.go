@@ -1,10 +1,8 @@
 package caldav
 
-// Regression tests for the PUT UID-identity defect: handlePut stored the
-// event under the iCalendar BODY UID, so a PUT to /dav/calendars/{cal}/{uid}
-// whose body UID differed created a resource unreachable at its request-URL
-// (GET/DELETE 404) while the PUT reported success. RFC 4791 §5.3.2 makes the
-// request-URI's UID authoritative and requires rejecting a mismatch (403).
+// PUT resource-name / UID identity: the client-chosen resource name is the
+// storage key and need not equal the UID in the data (RFC 4791 §4.1, §5.3.2);
+// one UID may live in only one resource (no-uid-conflict).
 
 import (
 	"net/http"
@@ -50,25 +48,69 @@ func putUIDCalendar(t *testing.T) (*Server, *httptest.ResponseRecorder) {
 	return server, put("/dav/calendars/cal-1/evt-2", "evt-other")
 }
 
-func TestHandlePutRejectsMismatchedUID(t *testing.T) {
-	_, w := putUIDCalendar(t)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("FAIL: mismatched-UID PUT = %d, want 403 per RFC 4791 §5.3.2 (a mismatch would store the event at an address the client cannot address)", w.Code)
+// Round 134: the resource name is chosen by the client and need not equal the
+// UID (Apple/Thunderbird/DAVx5 PUT <random>.ics). The name is the storage key.
+func TestHandlePutAcceptsArbitraryResourceName(t *testing.T) {
+	server, w := putUIDCalendar(t)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("PUT with differing name/UID = %d, want 201", w.Code)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/dav/calendars/cal-1/evt-2", nil)
+	req.SetBasicAuth("alice", "pw")
+	gw := httptest.NewRecorder()
+	server.ServeHTTP(gw, req)
+	if gw.Code != http.StatusOK || !strings.Contains(gw.Body.String(), "UID:evt-other") {
+		t.Fatalf("GET by resource name = %d %q", gw.Code, gw.Body.String())
+	}
+	// PROPFIND hrefs use the resource name.
+	pf := httptest.NewRequest("PROPFIND", "/dav/calendars/cal-1/", nil)
+	pf.Header.Set("Depth", "1")
+	pf.SetBasicAuth("alice", "pw")
+	pw := httptest.NewRecorder()
+	server.ServeHTTP(pw, pf)
+	if !strings.Contains(pw.Body.String(), "/dav/calendars/cal-1/evt-2<") {
+		t.Fatalf("PROPFIND missing resource-name href: %s", pw.Body.String())
+	}
+	// DELETE by resource name.
+	del := httptest.NewRequest(http.MethodDelete, "/dav/calendars/cal-1/evt-2", nil)
+	del.SetBasicAuth("alice", "pw")
+	dw := httptest.NewRecorder()
+	server.ServeHTTP(dw, del)
+	if dw.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d", dw.Code)
 	}
 }
 
-func TestHandlePutMismatchStoresNothing(t *testing.T) {
+func TestHandlePutDuplicateUIDConflicts(t *testing.T) {
 	server, _ := putUIDCalendar(t)
+	body := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-other\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/dav/calendars/cal-1/third.ics", strings.NewReader(body))
+	req.SetBasicAuth("alice", "pw")
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "no-uid-conflict") {
+		t.Fatalf("duplicate UID PUT = %d %s", w.Code, w.Body.String())
+	}
+	// Same resource re-PUT is not a conflict.
+	req = httptest.NewRequest(http.MethodPut, "/dav/calendars/cal-1/evt-2", strings.NewReader(body))
+	req.SetBasicAuth("alice", "pw")
+	w = httptest.NewRecorder()
+	server.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("re-PUT = %d", w.Code)
+	}
+}
 
-	// Nothing may be stored at the mismatched body UID either: the request
-	// was rejected, so neither evt-2 nor evt-other may exist.
-	for _, uid := range []string{"evt-2", "evt-other"} {
-		req := httptest.NewRequest(http.MethodGet, "/dav/calendars/cal-1/"+uid, nil)
+func TestHandlePutResourceNameTraversalRejected(t *testing.T) {
+	server, _ := putUIDCalendar(t)
+	body := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:x\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+	for _, p := range []string{"/dav/calendars/cal-1/..%2Fx", "/dav/calendars/cal-1/a%00b", "/dav/calendars/cal-1/x/y"} {
+		req := httptest.NewRequest(http.MethodPut, p, strings.NewReader(body))
 		req.SetBasicAuth("alice", "pw")
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, req)
-		if w.Code == http.StatusOK {
-			t.Fatalf("FAIL: rejected PUT still stored a resource at %q", uid)
+		if w.Code < 400 {
+			t.Fatalf("PUT %s = %d, want error", p, w.Code)
 		}
 	}
 }

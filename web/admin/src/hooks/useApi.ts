@@ -204,6 +204,7 @@ export function useStats() {
     queue_size: number;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
 
   const fetchStats = useCallback(async () => {
     setLoading(true);
@@ -215,26 +216,35 @@ export function useStats() {
         queue_size: number;
       }>("/stats");
       setStats(result);
+      setError(null);
       return result;
+    } catch (err) {
+      setError(err as ApiError);
+      throw err;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  return { stats, loading, fetchStats, setStats };
+  return { stats, loading, error, fetchStats, setStats };
 }
 
 // Queue API hooks
 export function useQueue() {
   const [data, setData] = useState<QueueEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
     try {
       const result = await apiRequest<QueueEntry[]>("/queue");
       setData(result);
+      setError(null);
       return result;
+    } catch (err) {
+      setError(err as ApiError);
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -253,6 +263,7 @@ export function useQueue() {
   return {
     entries: data,
     loading,
+    error,
     fetchQueue,
     retryEntry,
     dropEntry,

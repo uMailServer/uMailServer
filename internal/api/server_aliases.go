@@ -60,7 +60,7 @@ func (s *Server) listAliases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var result []map[string]interface{}
+	result := make([]map[string]interface{}, 0, len(aliases)) // F6137: [] not null
 	for _, a := range aliases {
 		result = append(result, aliasToJSON(a))
 	}
@@ -85,11 +85,15 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "alias address required")
 		return
 	}
-	aliasUser, aliasDomain := parseEmail(req.Alias)
-	if aliasUser == "" || aliasDomain == "" {
+	// F6131: same validation as account addresses ('/', multiple '@', length)
+	// instead of letting the db reject it as a 500.
+	req.Alias = strings.ToLower(strings.TrimSpace(req.Alias))
+	req.Target = strings.ToLower(strings.TrimSpace(req.Target))
+	if err := validateEmailFormat(req.Alias); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid alias address format")
 		return
 	}
+	aliasUser, aliasDomain := parseEmail(req.Alias)
 
 	// Validate target format (must be user@domain)
 	if req.Target == "" {
@@ -129,7 +133,8 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusConflict, "alias already exists")
 			return
 		}
-		s.sendError(w, http.StatusInternalServerError, "failed to create alias")
+		status, msg := dbErrStatus(err, "failed to create alias")
+		s.sendError(w, status, msg)
 		return
 	}
 
@@ -193,7 +198,8 @@ func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request, alias strin
 	}
 
 	if err := s.db.UpdateAlias(data); err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to update alias")
+		status, msg := dbErrStatus(err, "failed to update alias")
+		s.sendError(w, status, msg)
 		return
 	}
 
@@ -207,6 +213,14 @@ func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request, alias strin
 		return
 	}
 
+	if _, err := s.db.GetAlias(aliasDomain, aliasUser); err != nil { // F6130
+		if isKeyNotFound(err) {
+			s.sendError(w, http.StatusNotFound, "alias not found")
+		} else {
+			s.sendError(w, http.StatusInternalServerError, "failed to delete alias")
+		}
+		return
+	}
 	if err := s.db.DeleteAlias(aliasDomain, aliasUser); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to delete alias")
 		return

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import {
   Mail,
   Users,
@@ -35,7 +35,10 @@ const serviceStatuses: ServiceStatus[] = [
 ];
 
 export function Dashboard({ isConnected, metrics, activities }: DashboardProps) {
-  const { stats, loading, fetchStats } = useStats();
+  const { stats, loading, error, fetchStats: rawFetchStats } = useStats();
+  // The failure is surfaced via `error`; swallowing the rejection prevents
+  // unhandled promise rejections from the poll and the Refresh button.
+  const fetchStats = useCallback(() => rawFetchStats().catch(() => undefined), [rawFetchStats]);
 
   useEffect(() => {
     fetchStats();
@@ -102,6 +105,12 @@ export function Dashboard({ isConnected, metrics, activities }: DashboardProps) 
           Refresh
         </Button>
       </div>
+
+      {error && (
+        <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-500">
+          Unable to load server statistics: {error.message}
+        </div>
+      )}
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,6 +68,10 @@ type Session struct {
 
 	// Sieve actions from pipeline processing
 	sieveActions []string
+
+	// Abuse limits (read by the server's command loop)
+	cmdCount atomic.Int64
+	errCount atomic.Int64
 }
 
 // NewSession creates a new SMTP session
@@ -121,6 +126,10 @@ func (s *Session) Username() string {
 
 // WriteResponse writes an SMTP response to the client
 func (s *Session) WriteResponse(code int, message string) error {
+	if code >= 500 {
+		s.errCount.Add(1)
+	}
+
 	if s.server.config.WriteTimeout > 0 {
 		_ = s.conn.SetWriteDeadline(time.Now().Add(s.server.config.WriteTimeout))
 	}
@@ -229,7 +238,7 @@ func (s *Session) handleEHLO(arg string) error {
 	// Send capabilities
 	capabilities := []string{
 		s.server.config.Hostname,
-		"SIZE " + fmt.Sprintf("%d", s.server.config.MaxMessageSize),
+		"SIZE " + fmt.Sprintf("%d", s.server.config.maxMessageSize()),
 		"8BITMIME",
 		"PIPELINING",
 		"ENHANCEDSTATUSCODES",
@@ -357,7 +366,7 @@ func (s *Session) checkMailParams(arg string) (int, string) {
 			if err != nil || n < 0 {
 				return 501, "5.5.4 Invalid SIZE parameter"
 			}
-			if max := s.server.config.MaxMessageSize; max > 0 && n > max {
+			if max := s.server.config.maxMessageSize(); n > max {
 				return 552, "5.3.4 Message size exceeds fixed maximum message size"
 			}
 		case "BODY":
@@ -435,7 +444,7 @@ func (s *Session) handleRCPT(arg string) error {
 	}
 
 	// Check max recipients
-	if len(s.rcptTo) >= s.server.config.MaxRecipients {
+	if len(s.rcptTo) >= s.server.config.maxRecipients() {
 		return s.WriteResponse(452, "4.5.3 Too many recipients")
 	}
 
@@ -507,11 +516,19 @@ func (s *Session) handleDATA() error {
 		if errors.Is(err, errMessageTooLarge) {
 			return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
 		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			_ = s.WriteResponse(421, "4.4.2 Timeout waiting for message data")
+			return ErrSessionQuit
+		}
+		if errors.Is(err, errBareCR) {
+			return s.WriteResponse(554, "5.6.0 Message contains bare CR")
+		}
 		return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 	}
 
 	// Check message size
-	if int64(len(data)) > s.server.config.MaxMessageSize {
+	if int64(len(data)) > s.server.config.maxMessageSize() {
 		s.resetTransaction()
 		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
 	}
@@ -584,6 +601,7 @@ func (s *Session) handleDATA() error {
 	}
 
 	s.resetTransaction()
+	s.errCount.Store(0)
 	return s.WriteResponse(250, "OK")
 }
 
@@ -656,6 +674,31 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 	}
 	data = removeOwnAuthResults(data, hostname)
 
+	// A submitting client's own Received fields would forge the origin of the
+	// trace; the first hop is this server and it records the true origin
+	// (RFC 6409 §8.1, F6153).
+	if s.isAuth || s.server.config.IsSubmission {
+		data = stripHeaderFields(data, "received")
+	}
+
+	// Message-ID and Date are inserted first so that the trace fields added
+	// below end up above them: Received must be the topmost field (RFC 5321 §4.4, F6153).
+	if s.isAuth || s.server.config.IsSubmission {
+		data = sanitizeSubmissionHeaders(data)
+	}
+
+	// Add Message-ID if not present. The search must be scoped to the header
+	// block: a "message-id:" occurring in the body is quoted text (ordinary
+	// in forwards and replies), not this message's identifier, and must not
+	// suppress the header. RFC 5322 §3.6.4.
+	headerScope := data
+	if idx := bytes.Index(data, []byte("\r\n\r\n")); idx >= 0 {
+		headerScope = data[:idx]
+	}
+	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
+		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), hostname)
+		data = append([]byte(msgID), data...)
+	}
 	if ctx != nil {
 		// Add Authentication-Results header with SPF/DKIM/DMARC/ARC results
 		if ar := s.authResultsValue(ctx); ar != "" {
@@ -670,9 +713,15 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 		}
 
 		// Add Received trace header
+		// RFC 3848: an authenticated session is ESMTPA / ESMTPSA (F6155).
 		proto := "ESMTP"
-		if s.isTLS {
+		switch {
+		case s.isTLS && s.isAuth:
+			proto = "ESMTPSA"
+		case s.isTLS:
 			proto = "ESMTPS"
+		case s.isAuth:
+			proto = "ESMTPA"
 		}
 		// The "for" clause names a recipient only when there is exactly one:
 		// with several it would disclose one (possibly Bcc) recipient to all
@@ -695,23 +744,34 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 		data = append([]byte(received), data...)
 	}
 
-	if s.isAuth || s.server.config.IsSubmission {
-		data = sanitizeSubmissionHeaders(data)
-	}
-
-	// Add Message-ID if not present. The search must be scoped to the header
-	// block: a "message-id:" occurring in the body is quoted text (ordinary
-	// in forwards and replies), not this message's identifier, and must not
-	// suppress the header. RFC 5322 §3.6.4.
-	headerScope := data
-	if idx := bytes.Index(data, []byte("\r\n\r\n")); idx >= 0 {
-		headerScope = data[:idx]
-	}
-	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
-		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), hostname)
-		data = append([]byte(msgID), data...)
-	}
 	return data
+}
+
+// stripHeaderFields removes every header field named name (lower case),
+// continuation lines included, from the header block of data.
+func stripHeaderFields(data []byte, name string) []byte {
+	hdrEnd := len(data)
+	if i := bytes.Index(data, []byte("\r\n\r\n")); i >= 0 {
+		hdrEnd = i + 2
+	}
+	var out []byte
+	dropping := false
+	for _, line := range bytes.SplitAfter(data[:hdrEnd], []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' {
+			dropping = false
+			if c := bytes.IndexByte(line, ':'); c > 0 &&
+				strings.ToLower(strings.TrimRight(string(line[:c]), " \t")) == name {
+				dropping = true
+			}
+		}
+		if !dropping {
+			out = append(out, line...)
+		}
+	}
+	return append(out, data[hdrEnd:]...)
 }
 
 // sanitizeSubmissionHeaders prepares a client-submitted message: Bcc header
@@ -883,6 +943,28 @@ func authServID(value []byte) string {
 	return strings.ToLower(fields[0])
 }
 
+// setReadDeadline sets the connection read deadline; a session without a
+// connection (unit-test construction) has none to set.
+func (s *Session) setReadDeadline(t time.Time) {
+	if s.conn != nil {
+		_ = s.conn.SetReadDeadline(t)
+	}
+}
+
+// errBareCR is returned by readData for a message containing a bare CR.
+var errBareCR = errors.New("message contains bare CR")
+
+// hasBareCR reports whether line (one CRLF/LF-terminated line) has a CR that
+// is not immediately followed by LF.
+func hasBareCR(line []byte) bool {
+	for i, b := range line {
+		if b == '\r' && (i+1 >= len(line) || line[i+1] != '\n') {
+			return true
+		}
+	}
+	return false
+}
+
 // errMessageTooLarge is returned by readData when the message exceeds the size limit
 var errMessageTooLarge = errors.New("message too large")
 
@@ -910,10 +992,20 @@ func (s *Session) readData() ([]byte, error) {
 	// treating it as one enables SMTP smuggling. (F4906)
 	atLineStart := true
 
+	// Absolute DATA deadline: the per-line deadline below is renewed by every
+	// line, so a client dripping one byte per interval would otherwise hold
+	// the session forever (F6150).
+	dataDeadline := time.Now().Add(s.server.config.dataTimeout())
+	defer s.setReadDeadline(time.Time{})
+
 	for {
-		if s.server.config.ReadTimeout > 0 {
-			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.config.ReadTimeout))
+		lineDeadline := dataDeadline
+		if rt := s.server.config.ReadTimeout; rt > 0 {
+			if d := time.Now().Add(rt); d.Before(lineDeadline) {
+				lineDeadline = d
+			}
 		}
+		s.setReadDeadline(lineDeadline)
 
 		// Read through a bounded reader: ReadBytes would buffer an
 		// unterminated line without limit, defeating the size and line
@@ -950,6 +1042,13 @@ func (s *Session) readData() ([]byte, error) {
 			continue
 		}
 
+		// A CR that is not half of a CRLF is a line break to some parsers
+		// and not to others: the SMTP smuggling family. Refuse it (F6151).
+		if hasBareCR(line) {
+			contentErr = errBareCR
+			continue
+		}
+
 		// Remove dot-stuffing (leading dot is doubled)
 		if dotLine {
 			line = line[1:]
@@ -966,8 +1065,8 @@ func (s *Session) readData() ([]byte, error) {
 		}
 
 		// Check accumulated size during read to prevent memory exhaustion
-		if int64(len(data)) > s.server.config.MaxMessageSize {
-			contentErr = fmt.Errorf("%w: message exceeds maximum size of %d bytes", errMessageTooLarge, s.server.config.MaxMessageSize)
+		if int64(len(data)) > s.server.config.maxMessageSize() {
+			contentErr = fmt.Errorf("%w: message exceeds maximum size of %d bytes", errMessageTooLarge, s.server.config.maxMessageSize())
 			data = nil
 		}
 	}
@@ -1067,7 +1166,7 @@ func (s *Session) handleBDAT(arg string) error {
 	// make() below run with an attacker-chosen length. bdatBuffer.Len() is always
 	// <= MaxMessageSize because every previous chunk passed this same check, so
 	// the subtraction cannot underflow.
-	if int64(size) > s.server.config.MaxMessageSize-int64(s.bdatBuffer.Len()) {
+	if int64(size) > s.server.config.maxMessageSize()-int64(s.bdatBuffer.Len()) {
 		s.bdatBuffer = nil
 		s.resetTransaction()
 		if err := s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size"); err != nil {
@@ -1090,6 +1189,7 @@ func (s *Session) handleBDAT(arg string) error {
 		}
 		// Grow the buffer as octets arrive instead of allocating the
 		// declared size up front (F5675).
+		s.setReadDeadline(time.Now().Add(s.server.config.dataTimeout()))
 		if _, err := io.CopyN(s.bdatBuffer, reader, int64(size)); err != nil {
 			return fmt.Errorf("failed to read BDAT chunk: %w", err)
 		}
@@ -1097,11 +1197,16 @@ func (s *Session) handleBDAT(arg string) error {
 
 	if isLast {
 		// Final chunk — process the complete message
-		data := normalizeBareLF(s.bdatBuffer.Bytes()) // F5670
+		raw := s.bdatBuffer.Bytes()
 		s.bdatBuffer = nil
+		if hasBareCR(raw) { // F6151
+			s.resetTransaction()
+			return s.WriteResponse(554, "5.6.0 Message contains bare CR")
+		}
+		data := normalizeBareLF(raw) // F5670
 
 		// Check total message size
-		if int64(len(data)) > s.server.config.MaxMessageSize {
+		if int64(len(data)) > s.server.config.maxMessageSize() {
 			s.resetTransaction()
 			return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
 		}
@@ -1168,6 +1273,7 @@ func (s *Session) handleBDAT(arg string) error {
 		}
 
 		s.resetTransaction()
+		s.errCount.Store(0)
 		return s.WriteResponse(250, "2.0.0 OK")
 	}
 
@@ -1323,6 +1429,34 @@ func (s *Session) handleAUTH(arg string) error {
 	}
 }
 
+// maxAuthLine bounds an AUTH continuation response (RFC 4954 §4: 12288).
+const maxAuthLine = 12288
+
+// errAuthAborted is returned once a reply to a failed continuation read has
+// already been written.
+var errAuthAborted = errors.New("authentication exchange aborted")
+
+// readAuthLine reads one SASL continuation line without buffering more than
+// maxAuthLine bytes (an unbounded ReadString let a pre-auth client grow server
+// memory, F6157) and honours the "*" cancel response (RFC 4954 §4, F6158).
+func (s *Session) readAuthLine(r *bufio.Reader) (string, error) {
+	line, total, _, err := readBoundedLine(r, maxAuthLine+1)
+	if err != nil {
+		return "", err
+	}
+	if total > maxAuthLine {
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		_ = s.WriteResponse(501, "5.5.4 Authentication response too long")
+		return "", errAuthAborted
+	}
+	text := strings.TrimSpace(string(line))
+	if text == "*" {
+		_ = s.WriteResponse(501, "5.0.0 Authentication cancelled")
+		return "", errAuthAborted
+	}
+	return text, nil
+}
+
 // handleAuthPLAIN handles PLAIN authentication
 func (s *Session) handleAuthPLAIN(parts []string) error {
 	var credentials string
@@ -1340,7 +1474,7 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 		if reader == nil {
 			reader = bufio.NewReader(s.conn)
 		}
-		line, err := reader.ReadString('\n')
+		line, err := s.readAuthLine(reader)
 		if err != nil {
 			return err
 		}
@@ -1368,6 +1502,14 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 
 	// RFC 7616 PRECIS: normalize username (UsernameCaseMapped: lowercase)
 	usernameNormalized := strings.ToLower(username)
+
+	// An authzid other than the authenticating identity asks to act as
+	// someone else; no proxy authorization is implemented, so refuse it
+	// rather than silently dropping it (RFC 4616 §2, F6158).
+	if authzid := credParts[0]; authzid != "" && strings.ToLower(authzid) != usernameNormalized {
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		return s.WriteResponse(535, "5.7.8 Authorization identity not permitted")
+	}
 
 	// Authenticate
 	// Fail closed: with no auth handler wired no credential is valid (F5946).
@@ -1415,7 +1557,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 		if err := s.WriteResponse(334, "VXNlcm5hbWU6"); err != nil { // base64("Username:")
 			return err
 		}
-		line, err := reader.ReadString('\n')
+		line, err := s.readAuthLine(reader)
 		if err != nil {
 			return err
 		}
@@ -1439,7 +1581,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	}
 
 	// Read password
-	line, err := reader.ReadString('\n')
+	line, err := s.readAuthLine(reader)
 	if err != nil {
 		return err
 	}
@@ -1500,7 +1642,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 		if reader == nil {
 			reader = bufio.NewReader(s.conn)
 		}
-		line, err := reader.ReadString('\n')
+		line, err := s.readAuthLine(reader)
 		if err != nil {
 			return err
 		}
@@ -1570,7 +1712,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	if reader == nil {
 		reader = bufio.NewReader(s.conn)
 	}
-	line, err := reader.ReadString('\n')
+	line, err := s.readAuthLine(reader)
 	if err != nil {
 		return err
 	}
@@ -1691,6 +1833,7 @@ func (s *Session) handleSTARTTLS() error {
 	s.resetTransaction()
 	s.isAuth = false
 	s.username = ""
+	s.helloDomain = "" // the client must greet again; stale name must not reach Received (F6159)
 
 	return nil
 }

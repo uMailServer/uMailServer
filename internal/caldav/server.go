@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/umailserver/umailserver/internal/tracing"
 )
 
@@ -243,7 +244,23 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 
 	// RFC 4918 §9.1: Depth 0 targets only the request-URI; an absent header
 	// means infinity. Members are enumerated only when Depth is not 0 (F5472).
-	includeMembers := strings.TrimSpace(r.Header.Get("Depth")) != "0"
+	// An explicit "infinity" is refused with DAV:propfind-finite-depth
+	// (RFC 4918 §9.1, §16); other unknown values are a client error. An
+	// absent header is served as Depth 1 (clients that omit it expect the
+	// collection listing, and the tree is only two levels deep) (F6168).
+	depth := strings.ToLower(strings.TrimSpace(r.Header.Get("Depth")))
+	switch depth {
+	case "", "0", "1":
+	case "infinity":
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(xml.Header + `<d:error xmlns:d="DAV:"><d:propfind-finite-depth/></d:error>`))
+		return
+	default:
+		s.sendError(w, http.StatusBadRequest, "invalid Depth header")
+		return
+	}
+	includeMembers := depth != "0"
 
 	// Build response
 	multistatus := &Multistatus{}
@@ -487,14 +504,15 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 	multistatus := &Multistatus{}
 
 	// Query actual events from storage
-	events, err := s.storage.GetEvents(username, calendarID)
+	events, err := s.storage.GetEventEntries(username, calendarID)
 	if err == nil {
-		for _, eventData := range events {
+		for _, ev := range events {
+			eventData := ev.Data
 			if !compFilterMatches(compFilter, eventData) {
 				continue
 			}
-			uid := extractUIDFromICS(eventData)
-			if uid == "" {
+			uid := ev.Name
+			if extractUIDFromICS(eventData) == "" {
 				continue
 			}
 			if expandSet {
@@ -527,10 +545,10 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 				if len(instances) == 0 && len(overrideBlocks) == 0 {
 					continue
 				}
-				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, buildExpandedICS(eventData, instances, duration, overrideBlocks)))
+				multistatus.Responses = append(multistatus.Responses, s.buildEventResponseTag(calendarID, uid, buildExpandedICS(eventData, instances, duration, overrideBlocks), ev.ETag))
 				continue
 			}
-			multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
+			multistatus.Responses = append(multistatus.Responses, s.buildEventResponseTag(calendarID, uid, eventData, ev.ETag))
 		}
 	}
 
@@ -830,7 +848,18 @@ func compFilterMatches(cf *CompFilter, icsData string) bool {
 		// RFC 4791 §9.9.1: a recurring component matches when ANY
 		// generated instance intersects the range; EXDATE, RDATE and
 		// RECURRENCE-ID overrides are honored (F6074, F6075).
-		if len(eventOccurrences(blocks, rStart, rEnd, false)) == 0 {
+		if cf.Name == "VTODO" && !anyRecurring(blocks) {
+			matched := false
+			for _, b := range blocks {
+				if todoInRange(b, rStart, rEnd) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		} else if len(eventOccurrences(blocks, rStart, rEnd, false)) == 0 {
 			return false
 		}
 	}
@@ -950,17 +979,38 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		return
 	}
 
-	// RFC 4791 §5.3.2: the request-URI names the resource, so its UID is
-	// authoritative. A body UID that differs would store the event at an
-	// address the client cannot address back, so reject the mismatch.
-	if bodyUID := extractUIDFromICS(icsData); bodyUID != "" && bodyUID != eventUID {
-		s.sendError(w, http.StatusForbidden, "UID in request URL does not match UID in calendar data")
+	// RFC 4791 §4.1/§5.3.2: the client picks the resource name; the UID
+	// inside the data need not equal it. The resource name (URL segment) is
+	// the storage key, so GET/DELETE/ETag/REPORT all address the same name.
+	if len(parts) > 4 || eventUID == "" {
+		s.sendError(w, http.StatusConflict, "invalid resource path")
 		return
 	}
+	if err := validateID(eventUID); err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid resource name")
+		return
+	}
+	bodyUID := extractUIDFromICS(icsData)
 	uid := eventUID
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+
+	// RFC 4791 §5.3.2.1 no-uid-conflict: a UID may live in one resource only.
+	if bodyUID != "" {
+		other, cerr := s.storage.FindUIDConflict(username, calendarID, bodyUID, uid)
+		if cerr != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to read calendar")
+			return
+		}
+		if other != "" {
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(xml.Header + `<d:error xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><c:no-uid-conflict>` +
+				davHref((&url.URL{Path: "/dav/calendars/" + calendarID + "/" + other}).EscapedPath()) + `</c:no-uid-conflict></d:error>`))
+			return
+		}
+	}
 
 	existing, err := s.storage.GetEvent(username, calendarID, uid)
 	if err != nil {
@@ -1027,8 +1077,25 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 
 	// Set content type and ETag
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	if etag := s.storage.GetETag(username, calendarID, eventUID); etag != "" {
+	etag := s.storage.GetETag(username, calendarID, eventUID)
+	if etag != "" {
 		w.Header().Set("ETag", etag)
+		// RFC 7232 §3.1/§3.2: failed If-Match -> 412; matching
+		// If-None-Match on a safe method -> 304 (F6167).
+		if values, present := r.Header["If-Match"]; present {
+			list := strings.Join(values, ",")
+			if strings.TrimSpace(list) != "*" && !etagListMatches(list, etag, false) {
+				w.WriteHeader(http.StatusPreconditionFailed)
+				return
+			}
+		}
+		if values, present := r.Header["If-None-Match"]; present {
+			list := strings.Join(values, ",")
+			if strings.TrimSpace(list) == "*" || etagListMatches(list, etag, true) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -1422,9 +1489,19 @@ func (s *Server) transferEvent(w http.ResponseWriter, r *http.Request, username 
 		return
 	}
 
-	// Update UID if different
-	if sourceEventUID != destEventUID {
-		eventData = rewriteUID(eventData, extractUIDFromICS(eventData), destEventUID)
+	// The resource name no longer has to equal the UID, so the UID is kept
+	// unless another destination resource already carries it (RFC 4791
+	// §5.3.2.1 no-uid-conflict); then the copy gets a fresh UID (F5583).
+	if srcUID := extractUIDFromICS(eventData); srcUID != "" {
+		exceptName := destEventUID
+		other, cerr := s.storage.FindUIDConflict(username, destCalendarID, srcUID, exceptName)
+		if cerr != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to read destination calendar")
+			return
+		}
+		if other != "" && !(move && sourceCalendarID == destCalendarID && other == sourceEventUID) {
+			eventData = rewriteUID(eventData, srcUID, uuid.New().String())
+		}
 	}
 
 	// Create event at destination
@@ -1640,14 +1717,13 @@ func (s *Server) handleCalendarPropfind(path string, username string, multistatu
 		}
 
 		// Also include events
-		events, err := s.storage.GetEvents(username, calendarID)
+		events, err := s.storage.GetEventEntries(username, calendarID)
 		if err != nil {
 			return true, err
 		}
-		for _, eventData := range events {
-			uid := extractUIDFromICS(eventData)
-			if uid != "" {
-				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
+		for _, ev := range events {
+			if extractUIDFromICS(ev.Data) != "" {
+				multistatus.Responses = append(multistatus.Responses, s.buildEventResponseTag(calendarID, ev.Name, ev.Data, ev.ETag))
 			}
 		}
 		return true, nil
@@ -1670,104 +1746,6 @@ func (s *Server) handleCalendarPropfind(path string, username string, multistatu
 // pathological RRULE cannot loop unbounded.
 const maxRRULEInstances = 5000
 
-// rruleSpec is the supported RRULE subset: FREQ=DAILY|WEEKLY|MONTHLY|YEARLY,
-// INTERVAL, COUNT, UNTIL. Other parts (BYDAY, BYMONTH, BYSETPOS, ...) are
-// unsupported: the event degrades to base-only matching and unexpanded
-// responses (documented behavior).
-type rruleSpec struct {
-	freq     string
-	interval int
-	count    int
-	until    time.Time
-
-	byDay      []time.Weekday // WEEKLY/DAILY plain weekday codes
-	byMonthDay []int          // MONTHLY day-of-month (negative counts from month end)
-}
-
-// parseRRULEValue parses an RRULE value ("FREQ=DAILY;COUNT=10"). It returns
-// nil when the rule is absent or uses unsupported parts.
-func parseRRULEValue(value string) *rruleSpec {
-	var r rruleSpec
-	seenFreq := false
-	for _, part := range strings.Split(strings.TrimSpace(value), ";") {
-		k, v, found := strings.Cut(part, "=")
-		if !found {
-			return nil
-		}
-		switch strings.ToUpper(strings.TrimSpace(k)) {
-		case "FREQ":
-			freq := strings.ToUpper(strings.TrimSpace(v))
-			if freq != "DAILY" && freq != "WEEKLY" && freq != "MONTHLY" && freq != "YEARLY" {
-				return nil
-			}
-			r.freq = freq
-			seenFreq = true
-		case "INTERVAL":
-			n, err := strconv.Atoi(strings.TrimSpace(v))
-			if err != nil || n < 1 {
-				return nil
-			}
-			r.interval = n
-		case "COUNT":
-			n, err := strconv.Atoi(strings.TrimSpace(v))
-			if err != nil || n < 1 {
-				return nil
-			}
-			r.count = n
-		case "UNTIL":
-			t, ok := parseICSTime(strings.TrimSpace(v))
-			if !ok {
-				return nil
-			}
-			if len(strings.TrimSpace(v)) == 8 {
-				// A DATE UNTIL is inclusive of the whole day (F6078).
-				t = t.AddDate(0, 0, 1).Add(-time.Nanosecond)
-			}
-			r.until = t
-		case "BYDAY":
-			days, ok := parseByDay(v)
-			if !ok {
-				return nil
-			}
-			r.byDay = days
-		case "BYMONTHDAY":
-			days, ok := parseByMonthDay(v)
-			if !ok {
-				return nil
-			}
-			r.byMonthDay = days
-		case "WKST":
-			if !strings.EqualFold(strings.TrimSpace(v), "MO") {
-				return nil
-			}
-		default:
-			return nil
-		}
-	}
-	if !seenFreq {
-		return nil
-	}
-	if r.interval == 0 {
-		r.interval = 1
-	}
-	if len(r.byDay) > 0 && r.freq != "WEEKLY" && r.freq != "DAILY" {
-		return nil
-	}
-	if len(r.byMonthDay) > 0 && r.freq != "MONTHLY" {
-		return nil
-	}
-	return &r
-}
-
-// parseRRULEBlock extracts the component's own RRULE property and parses it;
-// nil when the block has no supported RRULE.
-func parseRRULEBlock(body string) *rruleSpec {
-	if l := ownPropLines(body, "RRULE"); len(l) > 0 {
-		return parseRRULEValue(l[0].value)
-	}
-	return nil
-}
-
 // icsTimeFormat mirrors the shape of an existing iCalendar time value so
 // generated instances look like the source data.
 func icsTimeFormat(value string) string {
@@ -1780,35 +1758,6 @@ func icsTimeFormat(value string) string {
 	default:
 		return "20060102T150405"
 	}
-}
-
-// rruleInstances generates the recurrence instances of a component whose
-// base interval is [baseStart, baseEnd) and returns those intersecting
-// [windowStart, windowEnd). Zero-length instances match points inside the
-// window (RFC 4791 §9.9.1).
-func rruleInstances(baseStart, baseEnd time.Time, r *rruleSpec, windowStart, windowEnd time.Time) []time.Time {
-	dur := baseEnd.Sub(baseStart)
-	var out []time.Time
-	count := 0
-	first := r.firstPeriod(baseStart, windowStart.Add(-dur))
-	for p := first; p < first+maxRRULEPeriods && len(out) < maxRRULEInstances; p++ {
-		for _, inst := range r.periodCandidates(baseStart, p) {
-			if !r.until.IsZero() && inst.After(r.until) {
-				return out
-			}
-			if r.count > 0 && count >= r.count {
-				return out
-			}
-			if !inst.Before(windowEnd) {
-				return out
-			}
-			count++
-			if intervalIntersects(inst, inst.Add(dur), windowStart, windowEnd) {
-				out = append(out, inst)
-			}
-		}
-	}
-	return out
 }
 
 // buildExpandedICS renders the recurrence set as one VEVENT per instance
@@ -1871,17 +1820,24 @@ func buildExpandedICS(eventData string, instances []time.Time, duration time.Dur
 
 // buildEventResponse builds a response for a calendar event
 func (s *Server) buildEventResponse(username, calendarID, eventUID, eventData string) Response {
+	return s.buildEventResponseTag(calendarID, eventUID, eventData, s.storage.GetETag(username, calendarID, eventUID))
+}
+
+// buildEventResponseTag is buildEventResponse with the ETag already known
+// (listing paths take it from the directory pass instead of re-stating every
+// file). name is the resource name, not the UID.
+func (s *Server) buildEventResponseTag(calendarID, eventUID, eventData, etag string) Response {
 	// Request convention: "/dav/calendars/{calendarID}/{eventUID}" (no username segment).
 	href := fmt.Sprintf("/dav/calendars/%s/%s", calendarID, eventUID)
 	props := []Property{
 		{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}},
 		{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: eventUID},
 	}
-	if etag := s.storage.GetETag(username, calendarID, eventUID); etag != "" {
+	if etag != "" {
 		props = append(props, Property{XMLName: xml.Name{Space: nsDAV, Local: "getetag"}, Value: etag})
 	}
 	props = append(props,
-		Property{XMLName: xml.Name{Space: nsDAV, Local: "getcontenttype"}, Value: "text/calendar; component=vevent"},
+		Property{XMLName: xml.Name{Space: nsDAV, Local: "getcontenttype"}, Value: eventContentType(eventData)},
 		Property{XMLName: xml.Name{Space: nsDAV, Local: "getcontentlength"}, Value: fmt.Sprintf("%d", len(eventData))},
 		Property{XMLName: xml.Name{Space: nsCalDAV, Local: "calendar-data"}, Value: eventData},
 	)
@@ -2091,4 +2047,70 @@ type Calendar struct {
 	ReadOnly    bool      `json:"read_only,omitempty"`
 	Created     time.Time `json:"created"`
 	Modified    time.Time `json:"modified"`
+}
+
+func anyRecurring(blocks []string) bool {
+	for _, b := range blocks {
+		if len(ownPropLines(b, "RRULE")) > 0 || len(ownPropLines(b, "RDATE")) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// todoInRange implements the RFC 4791 §9.9 VTODO time-range table for a
+// non-recurring VTODO, including the COMPLETED/CREATED-only forms and the
+// "no temporal property matches everything" rule (F6166).
+func todoInRange(b string, rs, re time.Time) bool {
+	get := func(name string) (time.Time, bool) {
+		for _, pl := range ownPropLines(b, name) {
+			if t, _, ok := parseICSTimeProp(pl.params, pl.value); ok {
+				return t, true
+			}
+		}
+		return time.Time{}, false
+	}
+	dtstart, hasStart := get("DTSTART")
+	due, hasDue := get("DUE")
+	completed, hasCompleted := get("COMPLETED")
+	created, hasCreated := get("CREATED")
+	var dur time.Duration
+	hasDur := false
+	if v, ok := ownPropValue(b, "DURATION"); ok {
+		dur, hasDur = parseICSDuration(v)
+	}
+	switch {
+	case hasStart && hasDur:
+		e := dtstart.Add(dur)
+		return !rs.After(e) && (re.After(dtstart) || !re.Before(e))
+	case hasStart && hasDue:
+		return (rs.Before(due) || !rs.After(dtstart)) && (re.After(dtstart) || !re.Before(due))
+	case hasStart:
+		return !rs.After(dtstart) && re.After(dtstart)
+	case hasDue:
+		if rs.Before(due) && !re.Before(due) {
+			return true
+		}
+		return hasCreated && !rs.After(created) && re.After(created)
+	case hasCompleted && hasCreated:
+		return (!rs.After(created) || !rs.After(completed)) && (!re.Before(created) || !re.Before(completed))
+	case hasCompleted:
+		return !rs.After(completed) && !re.Before(completed)
+	case hasCreated:
+		return re.After(created)
+	}
+	return true
+}
+
+// eventContentType reports the component kind of a stored object (RFC 4791
+// §5.2): VTODO-only objects are not "component=vevent" (F6166).
+func eventContentType(data string) string {
+	hasEvent := len(extractComponentBlocks(data, "VEVENT")) > 0
+	if !hasEvent && len(extractComponentBlocks(data, "VTODO")) > 0 {
+		return "text/calendar; component=vtodo"
+	}
+	if !hasEvent && len(extractComponentBlocks(data, "VJOURNAL")) > 0 {
+		return "text/calendar; component=vjournal"
+	}
+	return "text/calendar; component=vevent"
 }

@@ -423,21 +423,131 @@ func imapEnvelope(mh textproto.MIMEHeader) string {
 	}, " ") + ")"
 }
 
-// imapAddressList renders an address header as an IMAP address list.
+// imapAddressList renders an address header as an IMAP address list
+// (RFC 3501 §7.4.2). Display names keep their RFC 2047 encoded-words (the
+// envelope is the raw header, F6173: net/mail decoded them to UTF-8) and RFC
+// 5322 groups become the start marker (NIL NIL "group" NIL) and the end marker
+// (NIL NIL NIL NIL) around their members (F6174: they were flattened).
 func imapAddressList(v string) string {
-	if v == "" {
+	if strings.TrimSpace(v) == "" {
 		return "NIL"
 	}
-	addrs, err := mail.ParseAddressList(v)
-	if err != nil || len(addrs) == 0 {
+	var out []string
+	var cur strings.Builder
+	inGroup := false
+	quote, angle, comment := false, 0, 0
+	flush := func() bool {
+		s := strings.TrimSpace(cur.String())
+		cur.Reset()
+		if s == "" {
+			return true
+		}
+		a, ok := imapOneAddress(s)
+		if !ok {
+			return false
+		}
+		out = append(out, a)
+		return true
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case quote:
+			cur.WriteByte(c)
+			if c == '\\' && i+1 < len(v) {
+				i++
+				cur.WriteByte(v[i])
+			} else if c == '"' {
+				quote = false
+			}
+			continue
+		case comment > 0:
+			cur.WriteByte(c)
+			if c == '\\' && i+1 < len(v) {
+				i++
+				cur.WriteByte(v[i])
+			} else if c == '(' {
+				comment++
+			} else if c == ')' {
+				comment--
+			}
+			continue
+		}
+		switch {
+		case c == '"':
+			quote = true
+		case c == '(':
+			comment = 1
+		case c == '<':
+			angle++
+		case c == '>':
+			if angle > 0 {
+				angle--
+			}
+		case c == ',' && angle == 0:
+			if !flush() {
+				return "NIL"
+			}
+			continue
+		case c == ':' && angle == 0 && !inGroup:
+			name := strings.TrimSpace(cur.String())
+			cur.Reset()
+			if name == "" {
+				return "NIL"
+			}
+			out = append(out, fmt.Sprintf("(NIL NIL %s NIL)", imapNString(unquotePhrase(name))))
+			inGroup = true
+			continue
+		case c == ';' && angle == 0 && inGroup:
+			if !flush() {
+				return "NIL"
+			}
+			out = append(out, "(NIL NIL NIL NIL)")
+			inGroup = false
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	if quote || comment > 0 || inGroup || angle != 0 || !flush() || len(out) == 0 {
 		return "NIL"
 	}
-	var b strings.Builder
-	b.WriteByte('(')
-	for _, a := range addrs {
-		local, domain := splitAddress(a.Address)
-		fmt.Fprintf(&b, "(%s NIL %s %s)", imapNString(a.Name), imapNString(local), imapNString(domain))
+	return "(" + strings.Join(out, "") + ")"
+}
+
+// unquotePhrase strips the quotes of a quoted-string phrase and resolves its
+// quoted-pairs, leaving encoded-words untouched.
+func unquotePhrase(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		var b strings.Builder
+		for i := 1; i < len(s)-1; i++ {
+			if s[i] == '\\' && i+1 < len(s)-1 {
+				i++
+			}
+			b.WriteByte(s[i])
+		}
+		return b.String()
 	}
-	b.WriteByte(')')
-	return b.String()
+	return s
+}
+
+// imapOneAddress renders one mailbox ("phrase <addr>" or "addr").
+func imapOneAddress(s string) (string, bool) {
+	name := ""
+	spec := s
+	if lt := strings.LastIndexByte(s, '<'); lt >= 0 && strings.HasSuffix(strings.TrimSpace(s), ">") {
+		name = unquotePhrase(s[:lt])
+		spec = strings.TrimSpace(s)
+		spec = spec[lt:]
+	}
+	a, err := mail.ParseAddress(spec)
+	if err != nil || a.Address == "" {
+		return "", false
+	}
+	local, domain := splitAddress(a.Address)
+	nm := "NIL"
+	if name != "" {
+		nm = imapNString(name)
+	}
+	return fmt.Sprintf("(%s NIL %s %s)", nm, imapNString(local), imapNString(domain)), true
 }

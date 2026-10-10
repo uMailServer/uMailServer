@@ -5,9 +5,10 @@ import { useAuth } from '../contexts/AuthContext'
 export function LoginPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [totpCode, setTotpCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const { login, isAuthenticated } = useAuth()
+  const { login, isAuthenticated, requiresTotp, error: authError } = useAuth()
 
   if (isAuthenticated) {
     return <Navigate to="/inbox" replace />
@@ -19,10 +20,9 @@ export function LoginPage() {
     setLoading(true)
 
     try {
-      const success = await login(email, password)
-      if (!success) {
-        setError('Invalid email or password')
-      }
+      // The context maps status codes to messages (bad credentials, rate
+      // limit, TOTP required) and exposes them as `error`.
+      await login(email, password, requiresTotp ? totpCode.trim() : undefined)
     } catch {
       setError('Connection error. Please try again.')
     } finally {
@@ -45,9 +45,9 @@ export function LoginPage() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
-            {error && (
-              <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
-                {error}
+            {(error || authError) && (
+              <div role="alert" className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm">
+                {error || authError}
               </div>
             )}
 
@@ -80,6 +80,25 @@ export function LoginPage() {
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
               />
             </div>
+
+            {requiresTotp && (
+              <div>
+                <label htmlFor="totp" className="block text-sm font-medium text-gray-700 mb-2">
+                  Authentication Code
+                </label>
+                <input
+                  id="totp"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value)}
+                  placeholder="123456"
+                  required
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                />
+              </div>
+            )}
 
             <button
               type="submit"

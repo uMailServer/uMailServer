@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react'
-import api from '../utils/api'
+import api, { ApiError } from '../utils/api'
 
 interface AuthContextType {
   user: { email: string } | null
@@ -7,17 +7,33 @@ interface AuthContextType {
   isLoading: boolean
   loading: boolean
   error: string | null
-  login: (email: string, password: string) => Promise<boolean>
+  requiresTotp: boolean
+  login: (email: string, password: string, totpCode?: string) => Promise<boolean>
   logout: () => void
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
+
+function describeLoginError(err: unknown, hadTotp: boolean): string {
+  if (err instanceof ApiError) {
+    const msg = err.serverMessage ?? ''
+    if (err.status === 401 && /totp/i.test(msg)) {
+      return hadTotp ? 'Invalid authentication code' : 'Enter the 6-digit code from your authenticator app'
+    }
+    if (err.status === 429) return msg || 'Too many attempts. Please try again later.'
+    if (err.status === 401) return 'Invalid email or password'
+    if (err.status >= 500) return 'Server error. Please try again.'
+    return msg || 'Login failed'
+  }
+  return 'Connection error. Please try again.'
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<{ email: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [requiresTotp, setRequiresTotp] = useState(false)
   const requestIdRef = useRef(0)
   const mountedRef = useRef(true)
 
@@ -29,7 +45,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const login = useCallback(async (email: string, password: string): Promise<boolean> => {
+  const login = useCallback(async (email: string, password: string, totpCode?: string): Promise<boolean> => {
     if (!mountedRef.current) return false
     const requestId = ++requestIdRef.current
     const isCurrent = () => mountedRef.current && requestId === requestIdRef.current
@@ -37,14 +53,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setError(null)
     try {
       // Token is now in HttpOnly cookie - no need to store in memory
-      await api.post<{ expiresIn?: number }>('/auth/login', { email, password })
+      await api.post<{ expiresIn?: number }>(
+        '/auth/login',
+        totpCode ? { email, password, totp_code: totpCode } : { email, password }
+      )
       if (!isCurrent()) return false
+      setRequiresTotp(false)
       setUser({ email })
       setIsAuthenticated(true)
       return true
     } catch (err: unknown) {
       if (!isCurrent()) return false
-      setError(err instanceof Error ? err.message : 'Login failed')
+      setError(describeLoginError(err, Boolean(totpCode)))
+      if (err instanceof ApiError && err.status === 401 && /totp/i.test(err.serverMessage ?? '')) {
+        // Two-factor is enabled for this account: the form must ask for the code.
+        setRequiresTotp(true)
+      }
       return false
     } finally {
       if (isCurrent()) setLoading(false)
@@ -72,6 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isLoading: false,
     loading,
     error,
+    requiresTotp,
     login,
     logout
   }

@@ -278,6 +278,7 @@ func (s *Server) startSubmissionSMTP() error {
 	// submissionServer.SetUserSecretHandler(s.getUserSecret)
 	submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	submissionServer.SetTracingProvider(s.tracingProvider)
+	submissionServer.SetUserRecipientLimit(s.submissionRecipientLimit())
 
 	if err := s.serveSMTP("Submission", submissionServer, submissionAddr, nil); err != nil {
 		return err
@@ -316,6 +317,7 @@ func (s *Server) startSubmissionTLSSMTP() error {
 	// submissionTLSServer.SetUserSecretHandler(s.getUserSecret)
 	submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	submissionTLSServer.SetTracingProvider(s.tracingProvider)
+	submissionTLSServer.SetUserRecipientLimit(s.submissionRecipientLimit())
 
 	if err := s.serveSMTP("Submission TLS", submissionTLSServer, submissionTLSAddr, tlsCfg); err != nil {
 		return err
@@ -323,4 +325,14 @@ func (s *Server) startSubmissionTLSSMTP() error {
 	s.submissionTLSServer = submissionTLSServer
 	s.logger.Info("Submission TLS server started", "addr", submissionTLSAddr)
 	return nil
+}
+
+// submissionRecipientLimit derives the per-user rolling-hour recipient cap for
+// submission listeners from the existing security.rate_limit.user_per_hour
+// setting (0 or negative disables the cap).
+func (s *Server) submissionRecipientLimit() int {
+	if s.config == nil || s.config.Security.RateLimit.UserPerHour <= 0 {
+		return 0
+	}
+	return s.config.Security.RateLimit.UserPerHour
 }

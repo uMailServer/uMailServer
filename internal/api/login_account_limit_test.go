@@ -39,7 +39,13 @@ func f5135Login(s *Server, n int, pw string) int {
 		strings.NewReader(fmt.Sprintf(`{"email":"bob@ex.com","password":%q}`, pw)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "f5135-client/1.0")
-	req.RemoteAddr = fmt.Sprintf("198.51.100.%d:4000", n+1)
+	// F6134: the budget is per (IP, account); n < 100 reuses one client IP
+	// (the per-IP limiter has its own tests), larger n is a different IP.
+	if n >= 100 {
+		req.RemoteAddr = fmt.Sprintf("198.51.100.%d:4000", n)
+	} else {
+		req.RemoteAddr = "198.51.100.1:4000"
+	}
 	rec := httptest.NewRecorder()
 	s.ServeHTTP(rec, req)
 	return rec.Code
@@ -56,7 +62,7 @@ func TestAccountLoginLimit_FourFailuresThenSuccess(t *testing.T) {
 		t.Fatalf("F5135: correct password after 4 failures = %d, want 200", c)
 	}
 	s.accountLoginMu.Lock()
-	_, left := s.accountLoginAttempts["bob@ex.com"]
+	_, left := s.accountLoginAttempts[accountLoginKey("198.51.100.1", "bob@ex.com")]
 	s.accountLoginMu.Unlock()
 	if left {
 		t.Fatal("successful login did not clear the account budget")
@@ -88,14 +94,14 @@ func TestAccountLoginLimit_ExpiredWindowResets(t *testing.T) {
 	s := f5135Server(t)
 	s.accountLoginMu.Lock()
 	s.accountLoginAttempts = map[string]*loginAttempt{
-		"bob@ex.com": {count: 5, lastSeen: time.Now().Add(-6 * time.Minute)},
+		accountLoginKey("198.51.100.1", "bob@ex.com"): {count: 5, lastSeen: time.Now().Add(-6 * time.Minute)},
 	}
 	s.accountLoginMu.Unlock()
 	if c := f5135Login(s, 0, "wrong"); c != http.StatusUnauthorized {
 		t.Fatalf("first failure in a new window = %d, want 401", c)
 	}
 	s.accountLoginMu.Lock()
-	count := s.accountLoginAttempts["bob@ex.com"].count
+	count := s.accountLoginAttempts[accountLoginKey("198.51.100.1", "bob@ex.com")].count
 	s.accountLoginMu.Unlock()
 	if count != 1 {
 		t.Fatalf("count after expired window + 1 failure = %d, want 1", count)
