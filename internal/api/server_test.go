@@ -2321,7 +2321,7 @@ func TestUpdateAccountWithPassword(t *testing.T) {
 	}
 
 	body := map[string]interface{}{
-		"password":               "newpassword123",
+		"password":               strings.Repeat("Nw0!", 3), // F5281: must meet the password policy
 		"is_admin":               true,
 		"is_active":              true,
 		"current_admin_password": "adminpass",
