@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"net/mail"
 	"sort"
 	"strings"
 	"sync"
@@ -107,20 +108,25 @@ func (c *Classifier) IncrementToken(bucketName string, token string, delta uint3
 		return nil
 	}
 	return c.bolt.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(bucketName))
-		if bucket == nil {
-			return fmt.Errorf("bucket %s not found", bucketName)
-		}
-		key := tokenKey(token)
-		var count uint32
-		if v := bucket.Get(key); len(v) >= 4 {
-			count = binary.BigEndian.Uint32(v)
-		}
-		count += delta
-		var buf [4]byte
-		binary.BigEndian.PutUint32(buf[:], count)
-		return bucket.Put(key, buf[:])
+		return incrementTokenTx(tx, bucketName, token, delta)
 	})
+}
+
+// incrementTokenTx increments a token count inside an open write transaction.
+func incrementTokenTx(tx *bbolt.Tx, bucketName string, token string, delta uint32) error {
+	bucket := tx.Bucket([]byte(bucketName))
+	if bucket == nil {
+		return fmt.Errorf("bucket %s not found", bucketName)
+	}
+	key := tokenKey(token)
+	var count uint32
+	if v := bucket.Get(key); len(v) >= 4 {
+		count = binary.BigEndian.Uint32(v)
+	}
+	count += delta
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], count)
+	return bucket.Put(key, buf[:])
 }
 
 // UpdateStats updates the total ham/spam counts in stats bucket
@@ -128,26 +134,46 @@ func (c *Classifier) UpdateStats() error {
 	if c.bolt == nil {
 		return nil
 	}
+	return c.bolt.Update(updateStatsTx)
+}
+
+// updateStatsTx recomputes the total counts inside an open write transaction.
+func updateStatsTx(tx *bbolt.Tx) error {
+	statsBucket := tx.Bucket([]byte(StatsBucket))
+	if statsBucket == nil {
+		return nil
+	}
+	var totalHam, totalSpam uint64
+	if bucket := tx.Bucket([]byte(HamBucket)); bucket != nil {
+		totalHam = countAllTokens(bucket)
+	}
+	if bucket := tx.Bucket([]byte(SpamBucket)); bucket != nil {
+		totalSpam = countAllTokens(bucket)
+	}
+	// bbolt retains value slices until the transaction commits.
+	var hamBuf, spamBuf [8]byte
+	binary.BigEndian.PutUint64(hamBuf[:], totalHam)
+	if err := statsBucket.Put([]byte("total_ham"), hamBuf[:]); err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint64(spamBuf[:], totalSpam)
+	return statsBucket.Put([]byte("total_spam"), spamBuf[:])
+}
+
+// train applies every token of one message and the stats refresh in a single
+// write transaction, so a failing token rolls back the whole message instead
+// of leaving it partially trained (F5300).
+func (c *Classifier) train(bucketName string, tokens []string) error {
+	if c.bolt == nil {
+		return nil
+	}
 	return c.bolt.Update(func(tx *bbolt.Tx) error {
-		statsBucket := tx.Bucket([]byte(StatsBucket))
-		if statsBucket == nil {
-			return nil
+		for _, token := range tokens {
+			if err := incrementTokenTx(tx, bucketName, token, 1); err != nil {
+				return err
+			}
 		}
-		var totalHam, totalSpam uint64
-		if bucket := tx.Bucket([]byte(HamBucket)); bucket != nil {
-			totalHam = countAllTokens(bucket)
-		}
-		if bucket := tx.Bucket([]byte(SpamBucket)); bucket != nil {
-			totalSpam = countAllTokens(bucket)
-		}
-		// bbolt retains value slices until the transaction commits.
-		var hamBuf, spamBuf [8]byte
-		binary.BigEndian.PutUint64(hamBuf[:], totalHam)
-		if err := statsBucket.Put([]byte("total_ham"), hamBuf[:]); err != nil {
-			return err
-		}
-		binary.BigEndian.PutUint64(spamBuf[:], totalSpam)
-		return statsBucket.Put([]byte("total_spam"), spamBuf[:])
+		return updateStatsTx(tx)
 	})
 }
 
@@ -156,12 +182,7 @@ func (c *Classifier) TrainSpam(tokens []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, token := range tokens {
-		if err := c.IncrementToken(SpamBucket, token, 1); err != nil {
-			return err
-		}
-	}
-	return c.UpdateStats()
+	return c.train(SpamBucket, tokens)
 }
 
 // TrainHam trains the classifier with a ham (non-spam) email
@@ -169,12 +190,7 @@ func (c *Classifier) TrainHam(tokens []string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, token := range tokens {
-		if err := c.IncrementToken(HamBucket, token, 1); err != nil {
-			return err
-		}
-	}
-	return c.UpdateStats()
+	return c.train(HamBucket, tokens)
 }
 
 // GetTokenFrequency retrieves the ham and spam counts for a token
@@ -375,18 +391,36 @@ func ExtractTokensFromBody(body []byte) []string {
 	return tokenizer.Tokenize(string(body))
 }
 
-// extractEmails extracts email addresses as tokens
+// maxEmailTokenLength bounds address tokens to the RFC 5321 path limit so a
+// hostile header cannot produce a token larger than a bbolt key (F5301).
+const maxEmailTokenLength = 254
+
+// extractEmails extracts email addresses as tokens. Tokens are the bare,
+// lowercased addresses: display names are dropped (F5301).
 func extractEmails(s string) []string {
-	var emails []string
-	parts := strings.Split(s, "@")
-	if len(parts) == 2 {
-		local := strings.TrimSpace(parts[0])
-		domain := strings.TrimSpace(parts[1])
-		local = strings.Trim(local, "<>")
-		domain = strings.Trim(domain, "<>")
-		if local != "" && domain != "" {
-			emails = append(emails, local+"@"+domain)
+	var candidates []string
+	if list, err := mail.ParseAddressList(s); err == nil {
+		for _, addr := range list {
+			candidates = append(candidates, addr.Address)
 		}
+	} else {
+		parts := strings.Split(s, "@")
+		if len(parts) == 2 {
+			local := strings.TrimSpace(parts[0])
+			domain := strings.TrimSpace(parts[1])
+			local = strings.Trim(local, "<>")
+			domain = strings.Trim(domain, "<>")
+			if local != "" && domain != "" {
+				candidates = append(candidates, local+"@"+domain)
+			}
+		}
+	}
+	var emails []string
+	for _, addr := range candidates {
+		if addr == "" || len(addr) > maxEmailTokenLength {
+			continue
+		}
+		emails = append(emails, strings.ToLower(addr))
 	}
 	return emails
 }
