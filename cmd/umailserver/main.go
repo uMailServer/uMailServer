@@ -188,10 +188,8 @@ func cmdQuickstart(args []string) {
 	fs := flag.NewFlagSet("quickstart", flag.ExitOnError)
 	fs.StringVar(&dataDir, "data-dir", defaultDataDir, "Data directory")
 	fs.StringVar(&configPath, "config", defaultConfigPath, "Config file path")
-	_ = fs.Parse(args)
-
 	// Get email from remaining args
-	remaining := fs.Args()
+	remaining := parseInterspersed(fs, args)
 	if len(remaining) < 1 {
 		fmt.Println("Usage: umailserver quickstart <email> [flags]")
 		fmt.Println("Flags:")
@@ -1025,16 +1023,16 @@ func cmdBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
 	configPath := fs.String("config", "./umailserver.yaml", "Path to config file")
 	password := fs.String("password", "", "Backup encryption password (empty = store unencrypted)")
-	_ = fs.Parse(args)
+	pos := parseInterspersed(fs, args)
 
-	if fs.NArg() < 1 {
+	if len(pos) < 1 {
 		fmt.Println("Usage: umailserver backup <backup-directory> [--config <path>] [--password <pass>]")
 		os.Exit(1)
 	}
 
 	// BackupManager treats the path as a DIRECTORY: a timestamped
 	// umailserver_backup_<TS>.tar.gz[.enc] file is created inside it.
-	backupPath := fs.Arg(0)
+	backupPath := pos[0]
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -1056,14 +1054,14 @@ func cmdRestore(args []string) {
 	fs := flag.NewFlagSet("restore", flag.ExitOnError)
 	configPath := fs.String("config", "./umailserver.yaml", "Path to config file")
 	password := fs.String("password", "", "Backup encryption password (required for encrypted backups)")
-	_ = fs.Parse(args)
+	pos := parseInterspersed(fs, args)
 
-	if fs.NArg() < 1 {
+	if len(pos) < 1 {
 		fmt.Println("Usage: umailserver restore <backup-file> [--config <path>] [--password <pass>]")
 		os.Exit(1)
 	}
 
-	backupFile := fs.Arg(0)
+	backupFile := pos[0]
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -1346,4 +1344,28 @@ func cmdRestart(args []string) {
 	// Start again
 	fmt.Println("Starting server...")
 	cmdServe([]string{"--data-dir", dataDir})
+}
+
+// parseInterspersed parses fs flags wherever they appear in args and returns
+// the positional arguments in order. flag.FlagSet.Parse stops at the first
+// positional argument, so "backup <dir> --password p" (the documented usage)
+// silently ignored --config and --password and wrote an unencrypted backup
+// from the default config (F5620). Arguments after "--" stay positional.
+func parseInterspersed(fs *flag.FlagSet, args []string) []string {
+	var pos []string
+	for {
+		before := len(args)
+		_ = fs.Parse(args)
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos
+		}
+		// Parse consumed a "--" terminator: everything after it is positional.
+		consumed := before - len(rest)
+		if consumed > 0 && args[consumed-1] == "--" {
+			return append(pos, rest...)
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
 }
