@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/tracing"
 	"go.opentelemetry.io/otel/attribute"
@@ -51,6 +52,13 @@ type ManageSieveServer struct {
 	// tracingProvider wraps every command in a `managesieve.<COMMAND>`
 	// server-kind span when set.
 	tracingProvider *tracing.Provider
+
+	// Brute-force protection (F5852): failed AUTHENTICATE attempts per
+	// client IP; zero maxAuthFailures disables the lockout.
+	authMu          sync.Mutex
+	authFailures    map[string][]time.Time
+	maxAuthFailures int
+	lockoutDuration time.Duration
 }
 
 // NewManageSieveServer creates a new ManageSieve server
@@ -60,6 +68,92 @@ func NewManageSieveServer(manager *Manager, tlsCfg *tls.Config) *ManageSieveServ
 		tlsCfg:  tlsCfg,
 		done:    make(chan struct{}),
 	}
+}
+
+// SetAuthLimits enables per-IP brute-force protection: after maxAttempts
+// failed AUTHENTICATE exchanges within lockout, further attempts from that
+// IP are refused until the oldest failure ages out. F5852.
+func (s *ManageSieveServer) SetAuthLimits(maxAttempts int, lockout time.Duration) {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	s.maxAuthFailures = maxAttempts
+	s.lockoutDuration = lockout
+}
+
+func (s *ManageSieveServer) authLocked(ip string) bool {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.maxAuthFailures <= 0 {
+		return false
+	}
+	cutoff := time.Now().Add(-s.lockoutDuration)
+	var recent []time.Time
+	for _, t := range s.authFailures[ip] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	if len(recent) == 0 {
+		delete(s.authFailures, ip)
+	} else {
+		s.authFailures[ip] = recent
+	}
+	return len(recent) >= s.maxAuthFailures
+}
+
+func (s *ManageSieveServer) recordAuthFailure(ip string) {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.maxAuthFailures <= 0 {
+		return
+	}
+	if s.authFailures == nil {
+		s.authFailures = make(map[string][]time.Time)
+	}
+	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+}
+
+func (s *ManageSieveServer) clearAuthFailures(ip string) {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	delete(s.authFailures, ip)
+}
+
+// sessionIP is the client host used as the lockout key.
+func sessionIP(session *manageSieveSession) string {
+	addr := session.conn.RemoteAddr().String()
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+// tlsAvailable reports whether STARTTLS can succeed: a certificate source is
+// configured. A cert-less tls.Config would ack STARTTLS and then fail the
+// handshake. F5851.
+func (s *ManageSieveServer) tlsAvailable() bool {
+	c := s.tlsCfg
+	return c != nil && (len(c.Certificates) > 0 || c.GetCertificate != nil || c.GetConfigForClient != nil)
+}
+
+// validScriptName enforces RFC 5804 §1.6: non-empty UTF-8 without control
+// characters, bounded in length. F5850.
+func validScriptName(name string) error {
+	if name == "" {
+		return fmt.Errorf("script name cannot be empty")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("script name too long")
+	}
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("script name is not valid UTF-8")
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) || r == 0x2028 || r == 0x2029 {
+			return fmt.Errorf("script name contains control characters")
+		}
+	}
+	return nil
 }
 
 // SetAuthHandler sets the authentication handler for ManageSieve
@@ -280,7 +374,7 @@ func (s *ManageSieveServer) sendCapabilities(session *manageSieveSession, ok str
 		sasl,
 		`"SIEVE" ` + quoteManageSieveString(strings.Join(exts, " ")),
 	}
-	if s.tlsCfg != nil && !session.tls {
+	if s.tlsAvailable() && !session.tls {
 		lines = append(lines, `"STARTTLS"`)
 	}
 	lines = append(lines, `"VERSION" "1.0"`, ok)
@@ -290,7 +384,7 @@ func (s *ManageSieveServer) sendCapabilities(session *manageSieveSession, ok str
 // authNeedsTLS reports whether AUTHENTICATE must wait for STARTTLS: TLS is
 // configured but this connection is still cleartext. F5614.
 func (s *ManageSieveServer) authNeedsTLS(session *manageSieveSession) bool {
-	return s.tlsCfg != nil && !session.tls
+	return s.tlsAvailable() && !session.tls
 }
 
 // manageSieveSession holds state for a single ManageSieve session
@@ -369,8 +463,17 @@ func (s *ManageSieveServer) processCommandSession(session *manageSieveSession, l
 func (s *ManageSieveServer) dispatchCommand(session *manageSieveSession, cmd string, args []string) error {
 	switch cmd {
 	case "AUTHENTICATE":
+		ip := sessionIP(session)
+		if session.user == "" && s.authLocked(ip) {
+			return &manageSieveNo{msg: "too many failed authentication attempts", closeConn: true}
+		}
 		err := s.cmdAuthenticate(session, args)
 		var no *manageSieveNo
+		if session.user != "" {
+			s.clearAuthFailures(ip)
+		} else if err != nil && !errors.As(err, &no) {
+			s.recordAuthFailure(ip)
+		}
 		if err != nil && !errors.As(err, &no) {
 			// A failed authentication ends the connection after the NO.
 			return &manageSieveNo{msg: err.Error(), closeConn: true}
@@ -728,6 +831,11 @@ func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []str
 		return err
 	}
 
+	// Validated only after the literal is consumed so the stream stays in sync.
+	if err := validScriptName(scriptName); err != nil {
+		return err
+	}
+
 	// Validate script
 	if err := s.manager.ValidateScript(scriptContent); err != nil {
 		return fmt.Errorf("script validation failed: %w", err)
@@ -913,7 +1021,7 @@ func (s *ManageSieveServer) cmdStartTLS(session *manageSieveSession, args []stri
 	if len(args) != 0 {
 		return fmt.Errorf("STARTTLS takes no arguments")
 	}
-	if s.tlsCfg == nil || session.tls {
+	if !s.tlsAvailable() || session.tls {
 		return fmt.Errorf("TLS not available")
 	}
 	if session.user != "" {
@@ -941,8 +1049,8 @@ func (s *ManageSieveServer) cmdHaveSpace(session *manageSieveSession, args []str
 	if len(args) != 2 {
 		return fmt.Errorf("HAVESPACE requires script-name and script-size")
 	}
-	if unquoteManageSieveArg(args[0]) == "" {
-		return fmt.Errorf("script name cannot be empty")
+	if err := validScriptName(unquoteManageSieveArg(args[0])); err != nil {
+		return err
 	}
 	size, err := strconv.Atoi(args[1])
 	if err != nil || size < 0 {
@@ -980,8 +1088,11 @@ func (s *ManageSieveServer) cmdRenameScript(session *manageSieveSession, args []
 		return fmt.Errorf("RENAMESCRIPT requires old-name and new-name")
 	}
 	oldName, newName := unquoteManageSieveArg(args[0]), unquoteManageSieveArg(args[1])
-	if oldName == "" || newName == "" {
+	if oldName == "" {
 		return fmt.Errorf("script name cannot be empty")
+	}
+	if err := validScriptName(newName); err != nil {
+		return err
 	}
 	if err := s.manager.renameScript(session.user, oldName, newName); err != nil {
 		code := "NONEXISTENT"

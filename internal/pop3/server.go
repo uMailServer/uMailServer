@@ -208,7 +208,11 @@ func (s *Server) isAuthLockedOut(ip string) bool {
 			recent = append(recent, t)
 		}
 	}
-	s.authFailures[ip] = recent
+	if len(recent) == 0 {
+		delete(s.authFailures, ip) // F5853: do not retain idle IPs
+	} else {
+		s.authFailures[ip] = recent
+	}
 	return len(recent) >= s.maxLoginAttempts
 }
 
