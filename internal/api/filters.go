@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -111,6 +112,33 @@ func (s *Server) handleGetFilter(w http.ResponseWriter, r *http.Request) {
 	s.sendJSON(w, http.StatusOK, filter)
 }
 
+// validateFilterFields applies the size and shape limits shared by create and
+// update (F5693: update used to skip them). It returns an error message, or ""
+// when the supplied fields are acceptable; empty slices are not an error here.
+func validateFilterFields(name string, conditions []FilterCondition, actions []FilterAction) string {
+	if len(name) > 255 {
+		return "filter name exceeds maximum length of 255"
+	}
+	if len(conditions) > 50 {
+		return "too many conditions (max 50)"
+	}
+	if len(actions) > 20 {
+		return "too many actions (max 20)"
+	}
+	for i, cond := range conditions {
+		if cond.Value == "" {
+			return fmt.Sprintf("condition %d has empty value", i+1)
+		}
+		if len(cond.Value) > 1000 {
+			return fmt.Sprintf("condition %d value exceeds maximum length", i+1)
+		}
+		if cond.Field == "header" && cond.HeaderName == "" {
+			return fmt.Sprintf("condition %d requires headerName", i+1)
+		}
+	}
+	return ""
+}
+
 // handleCreateFilter creates a new filter
 func (s *Server) handleCreateFilter(w http.ResponseWriter, r *http.Request) {
 	// Get user from context
@@ -138,41 +166,17 @@ func (s *Server) handleCreateFilter(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "filter name is required")
 		return
 	}
-	if len(req.Name) > 255 {
-		s.sendError(w, http.StatusBadRequest, "filter name exceeds maximum length of 255")
+	if msg := validateFilterFields(req.Name, req.Conditions, req.Actions); msg != "" {
+		s.sendError(w, http.StatusBadRequest, msg)
 		return
 	}
 	if len(req.Conditions) == 0 {
 		s.sendError(w, http.StatusBadRequest, "at least one condition is required")
 		return
 	}
-	if len(req.Conditions) > 50 {
-		s.sendError(w, http.StatusBadRequest, "too many conditions (max 50)")
-		return
-	}
 	if len(req.Actions) == 0 {
 		s.sendError(w, http.StatusBadRequest, "at least one action is required")
 		return
-	}
-	if len(req.Actions) > 20 {
-		s.sendError(w, http.StatusBadRequest, "too many actions (max 20)")
-		return
-	}
-
-	// Validate condition values
-	for i, cond := range req.Conditions {
-		if cond.Value == "" {
-			s.sendError(w, http.StatusBadRequest, fmt.Sprintf("condition %d has empty value", i+1))
-			return
-		}
-		if len(cond.Value) > 1000 {
-			s.sendError(w, http.StatusBadRequest, fmt.Sprintf("condition %d value exceeds maximum length", i+1))
-			return
-		}
-		if cond.Field == "header" && cond.HeaderName == "" {
-			s.sendError(w, http.StatusBadRequest, fmt.Sprintf("condition %d requires headerName", i+1))
-			return
-		}
 	}
 
 	// Create filter
@@ -184,9 +188,14 @@ func (s *Server) handleCreateFilter(w http.ResponseWriter, r *http.Request) {
 		MatchAll:   req.MatchAll,
 		Conditions: req.Conditions,
 		Actions:    req.Actions,
-		Priority:   0, // Will be set based on order
+		Priority:   0,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
+	}
+
+	// F5694: a new filter goes last in the user's order.
+	if existing, err := s.getUserFilters(user); err == nil {
+		filter.Priority = len(existing)
 	}
 
 	// Save filter
@@ -222,13 +231,18 @@ func (s *Server) handleUpdateFilter(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name       string            `json:"name"`
 		Enabled    *bool             `json:"enabled,omitempty"`
-		MatchAll   bool              `json:"matchAll"`
+		MatchAll   *bool             `json:"matchAll,omitempty"`
 		Conditions []FilterCondition `json:"conditions"`
 		Actions    []FilterAction    `json:"actions"`
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
 		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if msg := validateFilterFields(req.Name, req.Conditions, req.Actions); msg != "" {
+		s.sendError(w, http.StatusBadRequest, msg)
 		return
 	}
 
@@ -239,7 +253,9 @@ func (s *Server) handleUpdateFilter(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		existing.Enabled = *req.Enabled
 	}
-	existing.MatchAll = req.MatchAll
+	if req.MatchAll != nil { // F5695: an omitted matchAll keeps the stored value
+		existing.MatchAll = *req.MatchAll
+	}
 	if len(req.Conditions) > 0 {
 		existing.Conditions = req.Conditions
 	}
@@ -408,7 +424,17 @@ func (s *Server) getUserFilters(userID string) ([]*EmailFilter, error) {
 		return nil, err
 	}
 
-	// Sort by priority
+	// F5694: order by the stored priority (set by reorder), then creation time;
+	// the key order (random UUIDs) used to be returned and the priority ignored.
+	sort.SliceStable(filters, func(i, j int) bool {
+		if filters[i].Priority != filters[j].Priority {
+			return filters[i].Priority < filters[j].Priority
+		}
+		if !filters[i].CreatedAt.Equal(filters[j].CreatedAt) {
+			return filters[i].CreatedAt.Before(filters[j].CreatedAt)
+		}
+		return filters[i].ID < filters[j].ID
+	})
 	for i := range filters {
 		filters[i].Priority = i
 	}
@@ -481,12 +507,14 @@ func (s *Server) reorderFilters(userID string, filterIDs []string) error {
 		return fmt.Errorf("database not available")
 	}
 
-	for priority, filterID := range filterIDs {
+	priority := 0
+	for _, filterID := range filterIDs {
 		filter, err := s.getFilter(userID, filterID)
 		if err != nil {
 			continue
 		}
 		filter.Priority = priority
+		priority++
 		filter.UpdatedAt = time.Now()
 		if err := s.saveFilter(filter); err != nil {
 			s.logger.Error("failed to update filter priority", "filterID", filterID, "error", err)

@@ -16,7 +16,9 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueueDetail(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/queue/")
+	// F5691: the detail routes are mounted under both /api/v1/queue/ and
+	// /api/v1/admin/queue/; trimming only the first left the full path as id.
+	id := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/api/v1/admin/queue/"), "/api/v1/queue/")
 
 	switch r.Method {
 	case http.MethodGet:
@@ -98,7 +100,15 @@ func (s *Server) retryQueueEntry(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (s *Server) dropQueueEntry(w http.ResponseWriter, r *http.Request, id string) {
-	if err := s.db.Dequeue(id); err != nil {
+	// F5692: with a queue manager, drop through it so the queued message file
+	// is removed too (a bare Dequeue orphaned it on disk).
+	var err error
+	if s.queueMgr != nil {
+		err = s.queueMgr.DropEntry(id)
+	} else {
+		err = s.db.Dequeue(id)
+	}
+	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to drop queue entry")
 		return
 	}

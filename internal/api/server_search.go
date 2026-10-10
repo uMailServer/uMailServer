@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/search"
@@ -37,6 +38,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	folder := r.URL.Query().Get("folder")
+	// F5696: accept the webmail folder names (inbox, spam, ...) like the mail
+	// endpoints do; the index keys documents by the internal mailbox name.
+	searchFolder := folder
+	if internal := folderMap[strings.ToLower(folder)]; internal != "" {
+		searchFolder = internal
+	}
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
 
@@ -71,7 +78,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	results, err := s.searchSvc.Search(search.MessageSearchOptions{
 		User:   userStr,
-		Folder: folder,
+		Folder: searchFolder,
 		Query:  query,
 		Limit:  limit,
 		Offset: offset,
