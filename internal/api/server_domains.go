@@ -6,6 +6,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,11 +65,21 @@ func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) {
 // Domain handlers
 
 func (s *Server) listDomains(w http.ResponseWriter, r *http.Request) {
+	limit, offset, ok := s.parsePage(w, r)
+	if !ok {
+		return
+	}
 	domains, err := s.db.ListDomains()
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to list domains")
 		return
 	}
+
+	// F6254: stable order, then the requested window.
+	sort.Slice(domains, func(i, j int) bool { return domains[i].Name < domains[j].Name })
+	setTotalCount(w, len(domains))
+	lo, hi := pageBounds(len(domains), limit, offset)
+	domains = domains[lo:hi]
 
 	result := make([]map[string]interface{}, 0, len(domains)) // F6137: [] not null
 	for _, d := range domains {

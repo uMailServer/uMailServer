@@ -208,9 +208,9 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 			return "", false, fmt.Errorf("invalid claims")
 		}
 		user, _ = claims["sub"].(string)
-		isAdmin, _ = claims["admin"].(bool)
-		// F5029: honour the account's current active/admin state.
-		isAdmin, active := srv.sessionAccountState(user, isAdmin)
+		// F5029/F6250: honour the account's current state and the
+		// session revocation cut-off.
+		isAdmin, active := srv.sessionState(claims)
 		if !active {
 			return "", false, fmt.Errorf("account is disabled")
 		}
@@ -316,9 +316,9 @@ func NewServerWithInterfaces(
 			return "", false, fmt.Errorf("invalid claims")
 		}
 		user, _ = claims["sub"].(string)
-		isAdmin, _ = claims["admin"].(bool)
-		// F5029: honour the account's current active/admin state.
-		isAdmin, active := srv.sessionAccountState(user, isAdmin)
+		// F5029/F6250: honour the account's current state and the
+		// session revocation cut-off.
+		isAdmin, active := srv.sessionState(claims)
 		if !active {
 			return "", false, fmt.Errorf("account is disabled")
 		}
@@ -513,6 +513,7 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/spam", http.HandlerFunc(s.mailHandler.handleMailList).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/send", http.HandlerFunc(s.mailHandler.handleMailSend).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/delete", http.HandlerFunc(s.mailHandler.handleMailDelete).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/move", http.HandlerFunc(s.mailHandler.handleMailMove).ServeHTTP)
 
 	// Cluster management (HA) — administrative operations, admin only
 	api.HandleFunc("/api/v1/cluster/status", s.adminMiddleware(http.HandlerFunc(s.handleClusterStatus)).ServeHTTP)
@@ -804,9 +805,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// F5029: the claims are a snapshot from issue time; the account's
 		// current state decides whether the session is live and admin.
-		sub, _ := claims["sub"].(string)
-		claimAdmin, _ := claims["admin"].(bool)
-		isAdmin, active := s.sessionAccountState(sub, claimAdmin)
+		isAdmin, active := s.sessionState(claims)
 		if !active {
 			s.sendError(w, http.StatusUnauthorized, "account is disabled")
 			return

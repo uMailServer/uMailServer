@@ -6,6 +6,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/audit"
 	"github.com/umailserver/umailserver/internal/auth"
+	"github.com/umailserver/umailserver/internal/db"
 )
 
 // TOTP 2FA handlers
@@ -203,10 +204,21 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 		}
 	}
 
-	account.TOTPSecret = ""
-	account.TOTPEnabled = false
-	account.UpdatedAt = time.Now()
-	if err := s.db.UpdateAccount(account); err != nil {
+	// F6256: only the 2FA fields are written, so concurrent changes to the
+	// row are not reverted. F6250: when an admin removes another user's
+	// second factor (account recovery) that user's sessions are revoked, which
+	// also cuts off whoever may hold them; a self-service disable already
+	// proved possession of the factor above and keeps the acting session.
+	selfService := authenticatedUser == email
+	_, err = s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+		a.TOTPSecret = ""
+		a.TOTPEnabled = false
+		if !selfService {
+			revokeSessions(a)
+		}
+		return nil
+	})
+	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to disable TOTP")
 		return
 	}

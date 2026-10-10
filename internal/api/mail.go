@@ -9,6 +9,7 @@ import (
 	"net/mail"
 	"path"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -49,6 +50,7 @@ type MailHandler struct {
 	msgStore *storage.MessageStore
 	mailDB   *storage.Database
 	queueMgr *queue.Manager
+	moveMu   sync.Mutex // serialises folder moves (F6253)
 }
 
 // SetQueueManager wires the outbound delivery queue so sent messages are

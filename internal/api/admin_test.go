@@ -25,6 +25,7 @@ func setupAdminTestServer(t *testing.T) (*AdminServer, *db.DB, func()) {
 	}
 
 	server := NewServer(database, nil, config)
+	seedSessionAccount(t, database, "admin@example.com", true) // F6251: tokens need a live account
 
 	adminConfig := AdminConfig{
 		Addr:      "127.0.0.1:8443",

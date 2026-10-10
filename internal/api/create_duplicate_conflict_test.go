@@ -29,6 +29,7 @@ func a4938Setup(t *testing.T) (*Server, string) {
 	if err := database.CreateAccount(&db.AccountData{Email: "bob@ex.com", LocalPart: "bob", Domain: "ex.com", IsActive: true}); err != nil {
 		t.Fatalf("INVALID account: %v", err)
 	}
+	seedSessionAccount(t, database, "root@ex.com", true)
 	if err := database.CreateAlias(&db.AliasData{Alias: "sales", Domain: "ex.com", Target: "bob@ex.com", IsActive: true}); err != nil {
 		t.Fatalf("INVALID alias: %v", err)
 	}

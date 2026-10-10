@@ -29,6 +29,7 @@ func a4935Setup(t *testing.T) (*Server, http.Handler) {
 	if err := database.CreateAccount(&db.AccountData{Email: "bob@ex.com", LocalPart: "bob", Domain: "ex.com", IsActive: true}); err != nil {
 		t.Fatalf("INVALID account: %v", err)
 	}
+	seedSessionAccount(t, database, "root@ex.com", true)
 	as := NewAdminServer(s, AdminConfig{Addr: "127.0.0.1:0", JWTSecret: a4935Secret})
 	return s, as.router()
 }

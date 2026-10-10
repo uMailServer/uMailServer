@@ -110,6 +110,11 @@ type AccountData struct {
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	LastLoginAt      time.Time `json:"last_login_at,omitempty"`
+	// TokensValidAfter (unix nanoseconds, 0 = unset) is the session
+	// revocation cut-off (F6250): a JWT issued before it is no longer
+	// accepted. It only ever moves forward (UpdateAccount/MutateAccount keep
+	// the stored value when a stale snapshot carries a smaller one).
+	TokensValidAfter int64 `json:"tokens_valid_after,omitempty"`
 }
 
 // DomainData holds domain information
@@ -518,6 +523,11 @@ func (d *DB) UpdateAccount(account *AccountData) error {
 				if stored.TOTPLastUsedStep > account.TOTPLastUsedStep {
 					account.TOTPLastUsedStep = stored.TOTPLastUsedStep
 				}
+				// F6250: a stale snapshot must not re-validate sessions
+				// revoked after it was read.
+				if stored.TokensValidAfter > account.TokensValidAfter {
+					account.TokensValidAfter = stored.TokensValidAfter
+				}
 			}
 		}
 		data, err := json.Marshal(account)
@@ -526,6 +536,58 @@ func (d *DB) UpdateAccount(account *AccountData) error {
 		}
 		return b.Put(key, data)
 	})
+}
+
+// MutateAccount atomically reads an account, applies fn and writes it back in
+// one bbolt transaction (F6255/F6256): callers that did GetAccount -> slow
+// work (password hashing) -> UpdateAccount overwrote concurrent changes
+// (a concurrent password change, disable, role change) with their stale
+// snapshot. fn sees the stored row; returning an error aborts without
+// writing. ErrAccountNotFound if absent. Counters keep the UpdateAccount
+// guarantees: QuotaUsed is never changed by fn, TOTPLastUsedStep and
+// TokensValidAfter never move backwards. The stored result is returned.
+func (d *DB) MutateAccount(domain, localPart string, fn func(*AccountData) error) (*AccountData, error) {
+	key := []byte(AccountKey(domain, localPart))
+	var result AccountData
+	err := d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		cur := b.Get(key)
+		if cur == nil {
+			return ErrAccountNotFound
+		}
+		var acct AccountData
+		if err := json.Unmarshal(cur, &acct); err != nil {
+			return err
+		}
+		quota, step, valid := acct.QuotaUsed, acct.TOTPLastUsedStep, acct.TokensValidAfter
+		if err := fn(&acct); err != nil {
+			return err
+		}
+		acct.QuotaUsed = quota
+		if acct.TOTPLastUsedStep < step {
+			acct.TOTPLastUsedStep = step
+		}
+		if acct.TokensValidAfter < valid {
+			acct.TokensValidAfter = valid
+		}
+		acct.UpdatedAt = time.Now()
+		data, err := json.Marshal(&acct)
+		if err != nil {
+			return fmt.Errorf("failed to marshal value: %w", err)
+		}
+		if err := b.Put(key, data); err != nil {
+			return err
+		}
+		result = acct
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // IncrementQuota atomically adds delta to an account's QuotaUsed inside a bbolt transaction.

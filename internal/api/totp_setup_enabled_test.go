@@ -39,6 +39,7 @@ func a5028Setup(t *testing.T) (*Server, string) {
 		PasswordHash: string(hash), IsActive: true, TOTPEnabled: true, TOTPSecret: enc}); err != nil {
 		t.Fatalf("INVALID create account: %v", err)
 	}
+	seedSessionAccount(t, database, "root@ex.com", true)
 	return NewServer(database, nil, Config{JWTSecret: a5028Secret, TokenExpiry: time.Hour}), totp
 }
 
