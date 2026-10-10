@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // MessageContext holds the message being filtered
@@ -77,6 +78,7 @@ type Interpreter struct {
 	extensions  map[string]bool
 	requireDone map[string]bool
 	timeout     time.Duration // Timeout for regex matching to prevent ReDoS
+	redirected  []string      // addresses already redirected this run (F5961)
 	stopped     bool          // set by "stop"; ends the whole script (F5035)
 }
 
@@ -210,6 +212,7 @@ func (i *Interpreter) Execute(msg *MessageContext) ([]Action, error) {
 	}
 
 	i.stopped = false
+	i.redirected = nil
 
 	// Set built-in variables
 	i.setBuiltInVariables()
@@ -816,7 +819,35 @@ func (i *Interpreter) executeFileinto(cmd *Command) ([]Action, error) {
 		return nil, nil
 	}
 
+	// F5960: RFC 5228 §4.1 lets an implementation fall back to the implicit
+	// keep when a mailbox name cannot be used. Names with control characters
+	// (including NUL, CR, LF) or ".." segments would otherwise be created
+	// verbatim as mailboxes by the delivery layer.
+	if !validFileintoFolder(folder) {
+		return []Action{KeepAction{}}, nil
+	}
+
 	return []Action{FileintoAction{Folder: folder}}, nil
+}
+
+// validFileintoFolder reports whether a fileinto target is a usable mailbox
+// name: valid UTF-8, no control characters, not absolute and without "." or
+// ".." path segments. F5960.
+func validFileintoFolder(name string) bool {
+	if !utf8.ValidString(name) || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	for _, seg := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if seg == ".." || seg == "." {
+			return false
+		}
+	}
+	return true
 }
 
 func (i *Interpreter) executeRedirect(cmd *Command) ([]Action, error) {
@@ -835,9 +866,19 @@ func (i *Interpreter) executeRedirect(cmd *Command) ([]Action, error) {
 	}
 
 	// Validate email address
-	if _, err := mail.ParseAddress(address); err != nil {
+	parsed, err := mail.ParseAddress(address)
+	if err != nil {
 		return nil, fmt.Errorf("invalid redirect address: %s", address)
 	}
+	// F5961: use the bare addr-spec ("Bob <b@x>" is not a valid RCPT TO) and
+	// do not redirect twice to the same address (RFC 5228 §4.2).
+	address = parsed.Address
+	for _, prev := range i.redirected {
+		if strings.EqualFold(prev, address) {
+			return nil, nil
+		}
+	}
+	i.redirected = append(i.redirected, address)
 
 	return []Action{RedirectAction{Address: address}}, nil
 }
@@ -939,6 +980,12 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 		case *NumberValue:
 			vacation.Days = int(a.Value)
 		}
+	}
+
+	// F5962: RFC 5230 §4.1 :days is a positive number; 0 (or less) would
+	// disable the reply suppression window and answer every message.
+	if vacation.Days < 1 && !vacation.SecondsSet {
+		vacation.Days = 1
 	}
 
 	// Only send vacation if enabled
