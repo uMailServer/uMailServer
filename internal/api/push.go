@@ -269,13 +269,35 @@ func (s *Server) unsubscribePush(userID, subscriptionID string) error {
 	return nil
 }
 
+// pushSubscriptionLister is implemented by push services that can list a
+// user's subscriptions (the production *push.Service adapter does).
+type pushSubscriptionLister interface {
+	GetUserSubscriptions(userID string) []*push.Subscription
+}
+
+// pushStatsProvider is implemented by push services that report statistics.
+type pushStatsProvider interface {
+	GetStats() map[string]interface{}
+}
+
+// SetPushService wires the push service used by the /push endpoints.
+func (s *Server) SetPushService(svc PushService) {
+	s.pushSvc = svc
+}
+
 func (s *Server) getPushSubscriptions(userID string) []*push.Subscription {
-	// In real implementation, call push service
+	if l, ok := s.pushSvc.(pushSubscriptionLister); ok {
+		return l.GetUserSubscriptions(userID)
+	}
 	return []*push.Subscription{}
 }
 
 func (s *Server) findSubscriptionByEndpoint(userID, endpoint string) string {
-	// In real implementation, search in push service
+	for _, sub := range s.getPushSubscriptions(userID) {
+		if sub.Endpoint == endpoint {
+			return sub.ID
+		}
+	}
 	return ""
 }
 
@@ -296,6 +318,9 @@ func (s *Server) sendTestPushNotification(userID string) error {
 }
 
 func (s *Server) getPushStats() map[string]interface{} {
+	if p, ok := s.pushSvc.(pushStatsProvider); ok {
+		return p.GetStats()
+	}
 	// In real implementation, get from push service
 	return map[string]interface{}{
 		"totalSubscriptions": 0,

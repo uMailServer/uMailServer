@@ -7,6 +7,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/backup"
+	"github.com/umailserver/umailserver/internal/push"
 )
 
 // startAPI creates and starts the HTTP API server (webmail + admin). The API
@@ -36,6 +37,9 @@ func (s *Server) startAPI() error {
 		s.jmapServer.SetKeyFunc(s.apiServer.JWTKeyFunc)
 	}
 	s.apiServer.SetSearchService(s.searchSvc)
+	if s.pushSvc != nil {
+		s.apiServer.SetPushService(push.NewAPIAdapter(s.pushSvc))
+	}
 	s.apiServer.SetTracingProvider(s.tracingProvider)
 	if s.queue != nil {
 		s.apiServer.SetQueueManager(s.queue)

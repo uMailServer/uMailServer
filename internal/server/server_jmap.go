@@ -26,6 +26,8 @@ func (s *Server) startJMAP() error {
 
 	jmapServer := jmap.NewServer(s.storageDB, s.msgStore, s.logger, jmapConfig)
 	jmapServer.SetTracingProvider(s.tracingProvider)
+	jmapServer.SetQuotaLimitFunc(s.quotaLimit)
+	jmapServer.SetQuotaAdjustFunc(s.quotaAdjust)
 	jmapServer.SetTokenValidator(s.jmapTokenValidator)
 
 	srv := &http.Server{
