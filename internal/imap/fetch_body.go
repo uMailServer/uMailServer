@@ -388,6 +388,21 @@ func imapDisposition(mh textproto.MIMEHeader) string {
 	return "(" + imapNString(strings.ToUpper(disp)) + " " + imapParamList(params) + ")"
 }
 
+// envelopeHeader returns the header fields ENVELOPE is built from: the parsed
+// header when FETCH loaded it, else the flat metadata fields.
+func (m *Message) envelopeHeader() textproto.MIMEHeader {
+	if m.header != nil {
+		return m.header
+	}
+	mh := textproto.MIMEHeader{}
+	for k, v := range map[string]string{"Date": m.Date, "Subject": m.Subject, "From": m.From, "To": m.To} {
+		if v != "" {
+			mh.Set(k, v)
+		}
+	}
+	return mh
+}
+
 // imapEnvelope renders the ENVELOPE of an encapsulated message header.
 func imapEnvelope(mh textproto.MIMEHeader) string {
 	from := imapAddressList(mh.Get("From"))

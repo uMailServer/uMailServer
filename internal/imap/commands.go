@@ -214,7 +214,7 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 // CAPABILITY command
 func (s *Session) handleCapability() error {
 	caps := "CAPABILITY"
-	for _, cap := range s.capabilities {
+	for _, cap := range s.sessionCapabilities() {
 		caps += " " + cap
 	}
 	s.WriteData(caps)
@@ -579,6 +579,7 @@ func (s *Session) handleSelect(args []string) error {
 
 	mailbox, err := s.server.mailstore.SelectMailbox(s.user, mailboxName)
 	if err != nil {
+		s.deselect()
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		if span != nil {
 			tracing.RecordError(span, err)
@@ -640,6 +641,7 @@ func (s *Session) handleExamine(args []string) error {
 
 	mailbox, err := s.examineMailbox(mailboxName)
 	if err != nil {
+		s.deselect()
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
 	}
@@ -672,6 +674,17 @@ func (s *Session) handleExamine(args []string) error {
 
 	s.WriteResponse(s.tag, "OK [READ-ONLY] EXAMINE completed")
 	return nil
+}
+
+// deselect leaves the selected state after a failed SELECT / EXAMINE: RFC 3501
+// §6.3.1 says no mailbox is selected then (F5643).
+func (s *Session) deselect() {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.selected = nil
+	if s.state == StateSelected {
+		s.state = StateAuthenticated
+	}
 }
 
 // mailboxExaminer is implemented by mailstores that can report a mailbox's
@@ -1089,8 +1102,17 @@ func (s *Session) handleAppend(args []string, line string) error {
 	}
 
 	// Append to mailbox
+	var appendValidity uint32
+	var appendedUIDs []uint32
 	if s.server.mailstore != nil {
-		err := s.server.mailstore.AppendMessage(s.user, mailboxName, flags, date, data)
+		// F5643: a missing destination is NO [TRYCREATE], not created (RFC 3501
+		// §6.3.11). The literal has been read, so the stream stays in sync.
+		dest, ok := s.copyDestination(args[0])
+		if !ok {
+			return nil
+		}
+		mailboxName = dest
+		validity, uid, err := s.appendOne(mailboxName, flags, date, data)
 		if err != nil {
 			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 			if span != nil {
@@ -1098,6 +1120,10 @@ func (s *Session) handleAppend(args []string, line string) error {
 				tracing.SetStatus(span, tracing.StatusError, "append failed")
 			}
 			return nil
+		}
+		appendValidity = validity
+		if uid != 0 {
+			appendedUIDs = append(appendedUIDs, uid)
 		}
 	}
 
@@ -1170,10 +1196,13 @@ func (s *Session) handleAppend(args []string, line string) error {
 
 		// Append message with default flags
 		if s.server.mailstore != nil {
-			err := s.server.mailstore.AppendMessage(s.user, mailboxName, nil, time.Now(), data)
+			_, uid, err := s.appendOne(mailboxName, nil, time.Now(), data)
 			if err != nil {
 				s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 				return nil
+			}
+			if uid != 0 {
+				appendedUIDs = append(appendedUIDs, uid)
 			}
 		}
 	}
@@ -1182,8 +1211,28 @@ func (s *Session) handleAppend(args []string, line string) error {
 		tracing.SetStatus(span, tracing.StatusOk, "")
 	}
 
+	// RFC 4315 §3: UIDPLUS servers report the assigned UIDs.
+	if appendValidity != 0 && len(appendedUIDs) > 0 {
+		s.WriteResponse(s.tag, fmt.Sprintf("OK [APPENDUID %d %s] APPEND completed", appendValidity, uidSetString(appendedUIDs)))
+		return nil
+	}
 	s.WriteResponse(s.tag, "OK APPEND completed")
 	return nil
+}
+
+// uidAppender is implemented by mailstores that report the UID an append
+// assigned, for the UIDPLUS APPENDUID response code (RFC 4315 §3) (F5641).
+type uidAppender interface {
+	AppendMessageUID(user, mailbox string, flags []string, date time.Time, data []byte) (uidValidity, uid uint32, err error)
+}
+
+// appendOne stores one APPEND message; validity and uid are 0 when the
+// mailstore cannot report them.
+func (s *Session) appendOne(mailbox string, flags []string, date time.Time, data []byte) (uint32, uint32, error) {
+	if ua, ok := s.server.mailstore.(uidAppender); ok {
+		return ua.AppendMessageUID(s.user, mailbox, flags, date, data)
+	}
+	return 0, 0, s.server.mailstore.AppendMessage(s.user, mailbox, flags, date, data)
 }
 
 // parseAppendParams extracts flags, date, and literal size from APPEND args
@@ -1976,6 +2025,16 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 		}
 	}
 
+	// F5642: ENVELOPE needs Cc / Message-ID / In-Reply-To, which the flat
+	// message metadata lacks; read the header without FETCH side effects.
+	if hr, ok := s.server.mailstore.(messageHeaderReader); ok && hasFetchItem(fetchItems, "ENVELOPE") {
+		for _, msg := range messages {
+			if hb, err := hr.MessageHeader(s.user, s.selected.Name, msg.UID); err == nil {
+				msg.header = partHeader(append(append([]byte{}, hb...), "\r\n"...))
+			}
+		}
+	}
+
 	respItems := fetchItems
 	if uidCmd && !hasFetchItem(fetchItems, "UID") {
 		respItems = append([]string{"UID"}, fetchItems...)
@@ -2223,16 +2282,32 @@ func (s *Session) handleMove(args []string) error {
 	// RFC 6851 §3.3: MOVE behaves as COPY + STORE \Deleted + UID EXPUNGE of
 	// the moved messages, so record their UIDs before they are flagged.
 	moved := map[uint32]bool{}
-	if msgs, ferr := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, nil); ferr == nil {
-		for _, m := range msgs {
-			moved[m.UID] = true
+	if um, ok := s.server.mailstore.(uidMover); ok {
+		// F5640 / F5641: only the messages that were copied are expunged,
+		// and the client is told their new UIDs (RFC 6851 §4.3).
+		validity, src, dst, err := um.MoveMessagesUIDs(s.user, s.selected.Name, destMailbox, seqSet)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
 		}
-	}
+		for _, uid := range src {
+			moved[uid] = true
+		}
+		if validity != 0 && len(src) > 0 && len(src) == len(dst) {
+			s.WriteData(fmt.Sprintf("OK [COPYUID %d %s %s] Moved", validity, uidSetString(src), uidSetString(dst)))
+		}
+	} else {
+		if msgs, ferr := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, nil); ferr == nil {
+			for _, m := range msgs {
+				moved[m.UID] = true
+			}
+		}
 
-	err := s.server.mailstore.MoveMessages(s.user, s.selected.Name, destMailbox, seqSet)
-	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
-		return nil
+		err := s.server.mailstore.MoveMessages(s.user, s.selected.Name, destMailbox, seqSet)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
+		}
 	}
 
 	if ux, ok := s.server.mailstore.(uidExpunger); ok && len(moved) > 0 {
@@ -2244,6 +2319,12 @@ func (s *Session) handleMove(args []string) error {
 
 	s.WriteResponse(s.tag, "OK MOVE completed")
 	return nil
+}
+
+// uidMover is implemented by mailstores that report the UIDs a move copied
+// (and flagged \Deleted), for the RFC 6851 COPYUID response (F5641).
+type uidMover interface {
+	MoveMessagesUIDs(user, sourceMailbox, destMailbox string, seqSet string) (uidValidity uint32, srcUIDs, dstUIDs []uint32, err error)
 }
 
 // UID command (prefix for UID variants)
@@ -3246,12 +3327,9 @@ func formatFetchResponse(msg *Message, items []string) string {
 			// F5496: describe the real MIME tree; BODY is the non-extensible form.
 			parts = append(parts, item+" "+bodyStructure(msg.Data, item == "BODYSTRUCTURE"))
 		case "ENVELOPE":
-			fromLocal, fromDomain := splitAddress(msg.From)
-			toLocal, toDomain := splitAddress(msg.To)
-			parts = append(parts, fmt.Sprintf("ENVELOPE (%s %s ((%s NIL %s %s)) NIL NIL ((%s NIL %s %s)) NIL NIL NIL NIL)",
-				imapQuotedString(msg.Subject), imapQuotedString(msg.Date),
-				imapQuotedString(msg.From), imapQuotedString(fromLocal), imapQuotedString(fromDomain),
-				imapQuotedString(msg.To), imapQuotedString(toLocal), imapQuotedString(toDomain)))
+			// F5642: RFC 3501 §7.4.2 field order and address lists; the
+			// old text put Subject before Date and one raw header per name.
+			parts = append(parts, "ENVELOPE "+imapEnvelope(msg.envelopeHeader()))
 		default:
 			if it, ok := parseBodySectionItem(item); ok {
 				parts = append(parts, it.format(msg.Data))
@@ -3260,11 +3338,6 @@ func formatFetchResponse(msg *Message, items []string) string {
 	}
 
 	return strings.Join(parts, " ")
-}
-
-// imapQuotedString quotes a string for use in an IMAP quoted-string per RFC 3501.
-func imapQuotedString(s string) string {
-	return strconv.Quote(s)
 }
 
 // splitAddress safely splits an email address into local and domain parts.

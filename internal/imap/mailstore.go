@@ -5,6 +5,7 @@ import (
 	"net/mail"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,6 +116,17 @@ func (m *BboltMailstore) ExamineMailbox(user, mailbox string) (*Mailbox, error) 
 }
 
 func (m *BboltMailstore) mailboxInfo(user, mailbox string, clearRecent bool) (*Mailbox, error) {
+	// F5643: GetMailbox answers defaults for a name that does not exist, so
+	// SELECT / EXAMINE / STATUS of a typo succeeded with an empty mailbox.
+	// INBOX is case-insensitive and always exists (RFC 3501 §5.1).
+	if strings.EqualFold(mailbox, "INBOX") {
+		mailbox = "INBOX"
+	} else if names, err := m.db.ListMailboxes(user); err != nil {
+		return nil, err
+	} else if !slices.Contains(names, mailbox) {
+		return nil, fmt.Errorf("[NONEXISTENT] Mailbox does not exist")
+	}
+
 	// Get mailbox info from database
 	mb, err := m.db.GetMailbox(user, mailbox)
 	if err != nil {
@@ -315,12 +327,14 @@ func (m *BboltMailstore) getMessage(user, mailbox string, seqNum, uid uint32, it
 	}
 
 	// Load message data if needed
-	needsData := false
+	needsData, marksSeen := false, false
 	for _, item := range items {
 		item = strings.ToUpper(item)
 		if item == "RFC822" || item == "BODY" || strings.HasPrefix(item, "BODY[") || strings.HasPrefix(item, "BODY.PEEK[") {
 			needsData = true
-			break
+		}
+		if item == "RFC822" || strings.HasPrefix(item, "BODY[") {
+			marksSeen = true
 		}
 	}
 
@@ -328,8 +342,12 @@ func (m *BboltMailstore) getMessage(user, mailbox string, seqNum, uid uint32, it
 		data, err := m.msgStore.ReadMessage(user, meta.MessageID)
 		if err == nil {
 			msg.Data = data
-			// Check for MDN request and send if needed
-			m.checkAndSendMDN(user, meta.MessageID, meta.From, meta.To, data)
+			// F5644: only an item that reads the message (and sets \Seen)
+			// may trigger the read receipt; BODY.PEEK[...] and BODYSTRUCTURE
+			// are side-effect free (RFC 3501 §6.4.5, RFC 8098 §2.1).
+			if marksSeen {
+				m.checkAndSendMDN(user, meta.MessageID, meta.From, meta.To, data)
+			}
 		}
 	}
 
@@ -392,19 +410,27 @@ func (m *BboltMailstore) checkAndSendMDN(user, messageID, from, to string, msgDa
 	}
 }
 
-// parseDispositionHeader extracts Disposition-Notification-To header value
+// parseDispositionHeader extracts the Disposition-Notification-To field value
+// from a message. The field name is matched case-insensitively (F5645: the
+// canonical mixed-case spelling was never stripped).
 func parseDispositionHeader(msgStr string) string {
 	for _, line := range strings.Split(msgStr, "\r\n") {
-		if strings.HasPrefix(strings.ToLower(line), "disposition-notification-to:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "disposition-notification-to:"))
+		if line == "" {
+			break // end of the header section
+		}
+		if len(line) > len("disposition-notification-to:") && strings.EqualFold(line[:len("disposition-notification-to:")], "disposition-notification-to:") {
+			return strings.TrimSpace(line[len("disposition-notification-to:"):])
 		}
 	}
 	return ""
 }
 
-// parseMDNAddress extracts the email address from Disposition-Notification-To
+// parseMDNAddress extracts the first email address from Disposition-Notification-To
 func parseMDNAddress(header string) (string, error) {
 	header = strings.TrimSpace(header)
+	if list, err := mail.ParseAddressList(header); err == nil && len(list) > 0 && strings.Contains(list[0].Address, "@") {
+		return list[0].Address, nil
+	}
 	// Remove angle brackets if present
 	if strings.HasPrefix(header, "<") && strings.HasSuffix(header, ">") {
 		header = header[1 : len(header)-1]
@@ -673,21 +699,29 @@ func parseMessageHeaders(data []byte) (subject, from, to, date string) {
 
 // AppendMessage appends a message to a mailbox
 func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, date time.Time, data []byte) error {
+	_, _, err := m.AppendMessageUID(user, mailbox, flags, date, data)
+	return err
+}
+
+// AppendMessageUID appends like AppendMessage and returns the mailbox's
+// UIDVALIDITY with the UID assigned, for the RFC 4315 APPENDUID response
+// code (F5641).
+func (m *BboltMailstore) AppendMessageUID(user, mailbox string, flags []string, date time.Time, data []byte) (uint32, uint32, error) {
 	// RFC 3629: validate UTF-8 well-formedness before storing
 	if !utf8.Valid(data) {
-		return fmt.Errorf("message contains invalid UTF-8 sequence")
+		return 0, 0, fmt.Errorf("message contains invalid UTF-8 sequence")
 	}
 
 	// Store message
 	messageID, err := m.msgStore.StoreMessage(user, data)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	// Get next UID
 	uid, err := m.db.GetNextUID(user, mailbox)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	// Parse basic headers for indexing
@@ -730,7 +764,7 @@ func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, dat
 	}
 
 	if err := m.db.StoreMessageMetadata(user, mailbox, uid, meta); err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	// Update thread information
@@ -743,14 +777,18 @@ func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, dat
 	if err == nil {
 		uidCount := len(uids)
 		if uidCount > 0x7FFFFFFF {
-			return fmt.Errorf("mailbox exceeds maximum message count")
+			return 0, 0, fmt.Errorf("mailbox exceeds maximum message count")
 		}
 		seqNum := uint32(uidCount)
 		// Notify subscribers about the new message
 		GetNotificationHub().NotifyNewMessage(user, mailbox, uid, seqNum)
 	}
 
-	return nil
+	mb, err := m.db.GetMailbox(user, mailbox)
+	if err != nil {
+		return 0, uid, nil // stored; only the APPENDUID code is lost
+	}
+	return mb.UIDValidity, uid, nil
 }
 
 // updateThreadInfo updates the thread summary information
@@ -1127,6 +1165,18 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 	total := uint32(uidCount)
 
 	var srcUIDs, dstUIDs []uint32
+	var newIDs []string
+	// F5640: a message that cannot be copied fails the whole COPY. The old
+	// loop skipped it and answered OK, and MOVE then deleted the source
+	// message it had never copied. Copies already made are rolled back
+	// (RFC 3501 §6.4.7: an unsuccessful COPY leaves the destination as it was).
+	fail := func(uid uint32, err error) (uint32, []uint32, []uint32, error) {
+		for _, dstUID := range dstUIDs {
+			_ = m.db.DeleteMessage(user, destMailbox, dstUID)
+		}
+		m.releaseBlobs(user, newIDs)
+		return 0, nil, nil, fmt.Errorf("copy of UID %d failed: %w", uid, err)
+	}
 	for i, uid := range uids {
 		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
 		// Check if in set
@@ -1145,25 +1195,25 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 		// Get source metadata
 		meta, err := m.db.GetMessageMetadata(user, sourceMailbox, uid)
 		if err != nil {
-			continue
+			return fail(uid, err)
 		}
 
 		// Get message data
 		data, err := m.msgStore.ReadMessage(user, meta.MessageID)
 		if err != nil {
-			continue
+			return fail(uid, err)
 		}
 
 		// Get next UID for destination
 		newUID, err := m.db.GetNextUID(user, destMailbox)
 		if err != nil {
-			continue
+			return fail(uid, err)
 		}
 
 		// Copy message
 		newMessageID, err := m.msgStore.StoreMessage(user, data)
 		if err != nil {
-			continue
+			return fail(uid, err)
 		}
 
 		// Store metadata in destination
@@ -1180,9 +1230,11 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 		}
 
 		if err := m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta); err != nil {
-			continue
+			newIDs = append(newIDs, newMessageID)
+			return fail(uid, err)
 		}
 		srcUIDs, dstUIDs = append(srcUIDs, uid), append(dstUIDs, newUID)
+		newIDs = append(newIDs, newMessageID)
 	}
 
 	mb, err := m.db.GetMailbox(user, destMailbox)
@@ -1214,57 +1266,40 @@ func (m *BboltMailstore) MessageHeader(user, mailbox string, uid uint32) ([]byte
 
 // MoveMessages moves messages to another mailbox
 func (m *BboltMailstore) MoveMessages(user, sourceMailbox, destMailbox string, seqSet string) error {
-	// Snapshot the source UIDs before copying: when source == destination the
-	// copies are appended to the same list, and re-resolving the set ("*" in
-	// particular) afterwards would flag the new copies \Deleted too.
-	uids, err := m.db.GetMessageUIDs(user, sourceMailbox)
+	_, _, _, err := m.MoveMessagesUIDs(user, sourceMailbox, destMailbox, seqSet)
+	return err
+}
+
+// MoveMessagesUIDs copies the messages and then flags exactly the source
+// messages that were copied \Deleted, returning the destination UIDVALIDITY
+// and the source / destination UIDs for the RFC 6851 COPYUID response (F5641).
+// F5640: it used to flag the whole requested set whether or not each message
+// had been copied.
+func (m *BboltMailstore) MoveMessagesUIDs(user, sourceMailbox, destMailbox string, seqSet string) (uint32, []uint32, []uint32, error) {
+	// CopyMessagesUIDs works from a snapshot of the source UIDs, so the new
+	// copies are never flagged when source == destination.
+	validity, srcUIDs, dstUIDs, err := m.CopyMessagesUIDs(user, sourceMailbox, destMailbox, seqSet)
 	if err != nil {
-		return err
+		return 0, nil, nil, err
 	}
 
-	// First copy
-	if err := m.CopyMessages(user, sourceMailbox, destMailbox, seqSet); err != nil {
-		return err
-	}
-
-	// Then mark as deleted in source
-	ranges, err := ParseSequenceSet(seqSet)
-	if err != nil {
-		return err
-	}
-	uidCount := len(uids)
-	if uidCount > 0x7FFFFFFF {
-		return fmt.Errorf("mailbox exceeds maximum message count")
-	}
-	total := uint32(uidCount)
-
-	for i, uid := range uids {
-		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
-		inSet := false
-		for _, r := range ranges {
-			if r.Contains(seqNum, total) {
-				inSet = true
-				break
-			}
-		}
-
-		if !inSet {
-			continue
-		}
-
+	// Then mark the copied originals as deleted
+	for _, uid := range srcUIDs {
 		meta, err := m.db.GetMessageMetadata(user, sourceMailbox, uid)
 		if err != nil {
-			continue
+			return 0, nil, nil, fmt.Errorf("flag moved UID %d: %w", uid, err)
 		}
 
 		// Add deleted flag
 		if !hasFlag(meta.Flags, "\\Deleted") {
 			meta.Flags = append(meta.Flags, "\\Deleted")
-			_ = m.db.UpdateMessageMetadata(user, sourceMailbox, uid, meta)
+			if err := m.db.UpdateMessageMetadata(user, sourceMailbox, uid, meta); err != nil {
+				return 0, nil, nil, fmt.Errorf("flag moved UID %d: %w", uid, err)
+			}
 		}
 	}
 
-	return nil
+	return validity, srcUIDs, dstUIDs, nil
 }
 
 // GetNextUID returns the next UID for a mailbox

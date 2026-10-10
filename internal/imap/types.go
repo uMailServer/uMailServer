@@ -1,6 +1,9 @@
 package imap
 
-import "time"
+import (
+	"net/textproto"
+	"time"
+)
 
 // Mailbox represents an IMAP mailbox/folder
 type Mailbox struct {
@@ -33,6 +36,10 @@ type Message struct {
 	To            string
 	Envelope      *Envelope
 	BodyStructure *BodyStructure
+
+	// header is the parsed header section, set by FETCH when ENVELOPE is
+	// requested so the envelope carries every address field (F5642).
+	header textproto.MIMEHeader
 }
 
 // Envelope represents the envelope structure of a message (RFC 3501)

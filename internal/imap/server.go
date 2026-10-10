@@ -357,7 +357,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	s.logger.Info("New IMAP session", "session", session.ID(), "remote", conn.RemoteAddr())
 
 	// Send greeting with capability advertisement
-	caps := defaultCapabilities()
+	caps := session.sessionCapabilities()
 	session.WriteResponse("*", "OK [CAPABILITY "+strings.Join(caps, " ")+"] uMailServer ready")
 
 	// Handle commands
@@ -396,9 +396,6 @@ type Session struct {
 	compressReader *gzip.Reader
 	compressWriter *gzip.Writer
 
-	// Capabilities
-	capabilities []string
-
 	// Enabled capabilities (via ENABLE command, RFC 5161)
 	enabledCaps map[string]bool
 
@@ -423,15 +420,19 @@ const (
 
 // NewSession creates a new IMAP session
 func NewSession(conn net.Conn, server *Server) *Session {
+	// F5646: a connection accepted by the implicit-TLS listener is already
+	// encrypted (tls.Listen yields *tls.Conn).
+	tlsConn, tlsActive := conn.(*tls.Conn)
 	return &Session{
-		id:           generateSessionID(),
-		conn:         conn,
-		reader:       bufio.NewReader(conn),
-		writer:       bufio.NewWriter(conn),
-		server:       server,
-		state:        StateNotAuthenticated,
-		capabilities: defaultCapabilities(),
-		enabledCaps:  make(map[string]bool),
+		tlsConn:     tlsConn,
+		tlsActive:   tlsActive,
+		id:          generateSessionID(),
+		conn:        conn,
+		reader:      bufio.NewReader(conn),
+		writer:      bufio.NewWriter(conn),
+		server:      server,
+		state:       StateNotAuthenticated,
+		enabledCaps: make(map[string]bool),
 	}
 }
 
@@ -599,8 +600,10 @@ func generateSessionID() string {
 
 // defaultCapabilities returns the default server capabilities
 func defaultCapabilities() []string {
+	// IMAP4rev2 (RFC 9051) is not advertised (F5647): it needs UNSELECT,
+	// LIST-EXTENDED / LIST-STATUS, SEARCHRES, ESEARCH-only SEARCH and
+	// ENABLE IMAP4rev2, which are not implemented.
 	return []string{
-		"IMAP4rev2",
 		"IMAP4rev1",
 		"STARTTLS",
 		"AUTH=PLAIN",
@@ -622,6 +625,30 @@ func defaultCapabilities() []string {
 		"THREAD=ORDEREDSUBJECT",
 		"MULTIAPPEND",
 	}
+}
+
+// sessionCapabilities returns the capabilities for the session's current
+// transport (F5646). STARTTLS is offered only on a cleartext connection of a
+// server that has a TLS configuration; while LOGIN / AUTHENTICATE are refused
+// (cleartext, no SetAllowPlainAuth) LOGINDISABLED is advertised in place of
+// the AUTH=PLAIN / AUTH=LOGIN mechanisms (RFC 3501 §6.2.3, §7.2.1).
+func (s *Session) sessionCapabilities() []string {
+	authOK := s.tlsActive || s.server.allowPlainAuth
+	var caps []string
+	for _, c := range defaultCapabilities() {
+		switch {
+		case c == "STARTTLS" && (s.tlsActive || s.server.tlsConfig == nil):
+			continue
+		case !authOK && strings.HasPrefix(c, "AUTH="):
+			continue
+		default:
+			caps = append(caps, c)
+		}
+	}
+	if !authOK {
+		caps = append(caps, "LOGINDISABLED")
+	}
+	return caps
 }
 
 // truncateCommand truncates a command line for safe logging.
