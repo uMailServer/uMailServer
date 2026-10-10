@@ -224,6 +224,10 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 		}
 	}
 
+	// RFC 4918 §9.1: Depth 0 targets only the request-URI; an absent header
+	// means infinity. Members are enumerated only when Depth is not 0 (F5472).
+	includeMembers := strings.TrimSpace(r.Header.Get("Depth")) != "0"
+
 	// Build response
 	multistatus := &Multistatus{}
 
@@ -236,21 +240,23 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	if r.URL.Path == "/" || r.URL.Path == "/dav/" || r.URL.Path == "/dav/calendars/" {
 		multistatus.Responses = append(multistatus.Responses, s.buildCalendarHomeResponse(username))
 
-		// Query actual calendars from storage
-		calendars, err := s.storage.GetCalendars(username)
-		if err != nil {
-			s.logger.Error("Failed to query calendars", "error", err)
-			s.sendError(w, http.StatusInternalServerError, "failed to query calendars")
-			return
-		}
-		for _, cal := range calendars {
-			multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
+		if includeMembers {
+			// Query actual calendars from storage
+			calendars, err := s.storage.GetCalendars(username)
+			if err != nil {
+				s.logger.Error("Failed to query calendars", "error", err)
+				s.sendError(w, http.StatusInternalServerError, "failed to query calendars")
+				return
+			}
+			for _, cal := range calendars {
+				multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
+			}
 		}
 	}
 
 	// Handle specific calendar or event path
 	if strings.HasPrefix(r.URL.Path, "/dav/calendars/") {
-		s.handleCalendarPropfind(r.URL.Path, username, multistatus)
+		s.handleCalendarPropfind(r.URL.Path, username, multistatus, includeMembers)
 	}
 
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
@@ -498,8 +504,25 @@ func parseICSTime(value string) (time.Time, bool) {
 // values are zero-length intervals.
 func componentTimeRange(body string) (start, end time.Time, ok bool) {
 	startIsDate := false
+	var duration time.Duration
+	hasDuration := false
+	nested := 0
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSuffix(line, "\r")
+		// DURATION inside a nested component (VALARM repeat interval) does not
+		// describe this component's span (F5471).
+		switch {
+		case strings.HasPrefix(line, "BEGIN:"):
+			nested++
+		case strings.HasPrefix(line, "END:"):
+			nested--
+		case nested == 0 && strings.HasPrefix(line, "DURATION"):
+			if idx := strings.Index(line, ":"); idx >= 0 {
+				if d, parsed := parseICSDuration(line[idx+1:]); parsed {
+					duration, hasDuration = d, true
+				}
+			}
+		}
 		if start.IsZero() && strings.HasPrefix(line, "DTSTART") {
 			if idx := strings.Index(line, ":"); idx >= 0 {
 				if t, parsed := parseICSTime(line[idx+1:]); parsed {
@@ -522,11 +545,66 @@ func componentTimeRange(body string) (start, end time.Time, ok bool) {
 	}
 	if end.IsZero() {
 		end = start
-		if startIsDate {
+		if hasDuration {
+			// RFC 4791 §9.9: DTSTART+DURATION spans [DTSTART, DTSTART+DURATION).
+			end = start.Add(duration)
+		} else if startIsDate {
 			end = start.AddDate(0, 0, 1)
 		}
 	}
 	return start, end, true
+}
+
+// parseICSDuration parses an RFC 5545 §3.3.6 dur-value ("PT2H", "P1DT30M",
+// "P2W"). Negative durations are rejected: a component's DURATION is
+// positive (RFC 5545 §3.8.2.5).
+func parseICSDuration(value string) (time.Duration, bool) {
+	v := strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(value)), "+")
+	if !strings.HasPrefix(v, "P") || len(v) < 3 {
+		return 0, false
+	}
+	v = v[1:]
+	var total time.Duration
+	inTime := false
+	num := ""
+	for _, c := range v {
+		switch {
+		case c >= '0' && c <= '9':
+			num += string(c)
+			continue
+		case c == 'T' && !inTime && num == "":
+			inTime = true
+			continue
+		}
+		if num == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(num)
+		if err != nil {
+			return 0, false
+		}
+		num = ""
+		var unit time.Duration
+		switch {
+		case c == 'W' && !inTime:
+			unit = 7 * 24 * time.Hour
+		case c == 'D' && !inTime:
+			unit = 24 * time.Hour
+		case c == 'H' && inTime:
+			unit = time.Hour
+		case c == 'M' && inTime:
+			unit = time.Minute
+		case c == 'S' && inTime:
+			unit = time.Second
+		default:
+			return 0, false
+		}
+		total += time.Duration(n) * unit
+	}
+	if num != "" || total <= 0 {
+		return 0, false
+	}
+	return total, true
 }
 
 // parseTimeRange parses the RFC 4791 §9.9.3 start/end attributes.
@@ -1113,7 +1191,7 @@ func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response 
 }
 
 // handleCalendarPropfind handles PROPFIND for specific calendar paths
-func (s *Server) handleCalendarPropfind(path string, username string, multistatus *Multistatus) {
+func (s *Server) handleCalendarPropfind(path string, username string, multistatus *Multistatus, includeMembers bool) {
 	// Parse path: /dav/calendars/{calendarID}/{eventUID?}
 	// Request convention matches the item handlers: the authenticated username
 	// scopes storage and is not part of the URL.
@@ -1137,6 +1215,9 @@ func (s *Server) handleCalendarPropfind(path string, username string, multistatu
 	// If it's just the calendar, return calendar info
 	if len(parts) == 3 || (len(parts) == 4 && parts[3] == "") {
 		multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
+		if !includeMembers {
+			return
+		}
 
 		// Also include events
 		events, _ := s.storage.GetEvents(username, calendarID)
@@ -1366,15 +1447,11 @@ func (s *Server) buildEventResponse(username, calendarID, eventUID, eventData st
 
 // extractUIDFromICS extracts the UID from iCalendar data
 func extractUIDFromICS(icsData string) string {
-	lines := strings.Split(icsData, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "UID:") {
-			// RFC 5545 §3.1 lines end with CRLF; strip the carriage return so
-			// the UID matches the request-URL identifier (RFC 4791 §5.3.2).
-			return strings.TrimSuffix(strings.TrimPrefix(line, "UID:"), "\r")
-		}
-	}
-	return ""
+	// RFC 5545 §3.1: CRLF line endings are stripped and folded continuation
+	// lines unfolded, so a long UID matches the request-URL identifier
+	// (RFC 4791 §5.3.2; F5470).
+	uid, _ := extractPropertyValue(icsData, "UID")
+	return uid
 }
 
 // sendError sends an error response
