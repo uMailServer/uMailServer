@@ -362,7 +362,7 @@ func (e *DMARCEvaluator) lookupDMARC(ctx context.Context, domain string) (*DMARC
 	var found string
 	count := 0
 	for _, record := range txtRecords {
-		if strings.HasPrefix(record, "v=DMARC1") {
+		if isDMARCRecord(record) {
 			found = record
 			count++
 		}
@@ -375,6 +375,16 @@ func (e *DMARCEvaluator) lookupDMARC(ctx context.Context, domain string) (*DMARC
 	}
 
 	return nil, errors.New("no DMARC record found")
+}
+
+// isDMARCRecord reports whether a TXT string starts with the "v=DMARC1" tag
+// (F5707: "v=DMARC10" is not a DMARC record, RFC 7489 §6.3).
+func isDMARCRecord(record string) bool {
+	if !strings.HasPrefix(record, "v=DMARC1") {
+		return false
+	}
+	rest := strings.TrimLeft(record[len("v=DMARC1"):], " \t")
+	return rest == "" || rest[0] == ';'
 }
 
 // parseDMARCRecord parses a DMARC DNS TXT record
