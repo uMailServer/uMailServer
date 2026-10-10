@@ -27,7 +27,7 @@ func regF5040Dial(t *testing.T) *regF5040Conn {
 	go srv.handleConn(server)
 	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
 	c := &regF5040Conn{mgr: mgr, client: client, r: bufio.NewReader(client)}
-	if line, err := c.r.ReadString('\n'); err != nil || !strings.HasPrefix(line, "OK") {
+	if line, err := readManageSieveGreeting(c.r); err != nil || !strings.HasPrefix(line, "OK") {
 		t.Fatalf("INVALID greeting %q %v", line, err)
 	}
 	return c

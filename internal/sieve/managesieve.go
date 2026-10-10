@@ -5,10 +5,13 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -156,21 +159,24 @@ func (s *ManageSieveServer) serveTLS(ln net.Listener) {
 // handleConn handles a ManageSieve connection
 func (s *ManageSieveServer) handleConn(conn net.Conn) {
 	defer s.wg.Done()
-	defer func() { _ = conn.Close() }()
 
 	// Create session state for this connection
+	_, isTLS := conn.(*tls.Conn)
 	session := &manageSieveSession{
 		conn:    conn,
 		reader:  &manageSieveReader{r: conn},
 		user:    "", // Not authenticated yet
 		manager: s.manager,
+		tls:     isTLS,
 	}
+	// F5461: STARTTLS replaces session.conn; close whichever is current.
+	defer func() { _ = session.conn.Close() }()
 
 	// Set read timeout
 	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Best-effort
 
-	// Send greeting
-	if err := s.sendResponse(conn, "OK \"ManageSieve server ready\""); err != nil {
+	// F5460: RFC 5804 §1.7 — the greeting is the capability list then OK.
+	if err := s.sendCapabilities(session, "OK \"ManageSieve server ready\""); err != nil {
 		return
 	}
 
@@ -184,14 +190,73 @@ func (s *ManageSieveServer) handleConn(conn net.Conn) {
 		}
 
 		// Reset read deadline on command
-		_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Best-effort
+		_ = session.conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Best-effort
 
-		if err := s.processCommandSession(session, line); err != nil {
-			slog.Error("managesieve command error", "error", err)
-			_ = s.sendResponse(conn, "NO command failed")
+		err = s.processCommandSession(session, line)
+		if err == nil {
+			continue
+		}
+		if err == io.EOF { // LOGOUT already answered OK
+			return
+		}
+		slog.Error("managesieve command error", "error", err)
+		// F5462: a failed command is answered with NO and the session
+		// continues (RFC 5804 §1.3), unless the stream cannot be trusted.
+		if !s.sendNo(session, err) {
 			return
 		}
 	}
+}
+
+// manageSieveNo is a command failure answered with an RFC 5804 NO response.
+// code is an optional response code (§1.3); closeConn ends the session after
+// the NO, for failures that leave the stream out of sync or failed
+// authentication. F5462.
+type manageSieveNo struct {
+	code      string
+	msg       string
+	closeConn bool
+}
+
+func (e *manageSieveNo) Error() string { return e.msg }
+
+// sendNo answers err with a NO response and reports whether the session may
+// continue.
+func (s *ManageSieveServer) sendNo(session *manageSieveSession, err error) bool {
+	resp := "NO "
+	closeConn := false
+	var no *manageSieveNo
+	if errors.As(err, &no) {
+		if no.code != "" {
+			resp += "(" + no.code + ") "
+		}
+		closeConn = no.closeConn
+	}
+	msg := strings.NewReplacer("\r", " ", "\n", " ").Replace(err.Error())
+	if werr := s.sendResponse(session.conn, "%s", resp+quoteManageSieveString(msg)); werr != nil {
+		return false
+	}
+	return !closeConn
+}
+
+// sendCapabilities writes the RFC 5804 §1.7 capability response followed by
+// the final line ok. F5460.
+func (s *ManageSieveServer) sendCapabilities(session *manageSieveSession, ok string) error {
+	exts := make([]string, 0, len(supportedExtensions))
+	for ext := range supportedExtensions {
+		exts = append(exts, ext)
+	}
+	sort.Strings(exts)
+	lines := []string{
+		`"IMPLEMENTATION" "uMailServer"`,
+		`"SASL" "PLAIN LOGIN"`,
+		`"SIEVE" ` + quoteManageSieveString(strings.Join(exts, " ")),
+	}
+	if s.tlsCfg != nil && !session.tls {
+		lines = append(lines, `"STARTTLS"`)
+	}
+	lines = append(lines, `"VERSION" "1.0"`, ok)
+	return s.sendResponse(session.conn, "%s", strings.Join(lines, "\r\n"))
 }
 
 // manageSieveSession holds state for a single ManageSieve session
@@ -200,6 +265,7 @@ type manageSieveSession struct {
 	reader  *manageSieveReader
 	user    string // Authenticated username
 	manager *Manager
+	tls     bool // connection is TLS (implicit or after STARTTLS)
 }
 
 type manageSieveReader struct {
@@ -269,7 +335,24 @@ func (s *ManageSieveServer) processCommandSession(session *manageSieveSession, l
 func (s *ManageSieveServer) dispatchCommand(session *manageSieveSession, cmd string, args []string) error {
 	switch cmd {
 	case "AUTHENTICATE":
-		return s.cmdAuthenticate(session, args)
+		err := s.cmdAuthenticate(session, args)
+		var no *manageSieveNo
+		if err != nil && !errors.As(err, &no) {
+			// A failed authentication ends the connection after the NO.
+			return &manageSieveNo{msg: err.Error(), closeConn: true}
+		}
+		return err
+	case "CAPABILITY":
+		if len(args) != 0 {
+			return fmt.Errorf("CAPABILITY takes no arguments")
+		}
+		return s.sendCapabilities(session, "OK \"Capability completed\"")
+	case "STARTTLS":
+		return s.cmdStartTLS(session, args)
+	case "HAVESPACE":
+		return s.cmdHaveSpace(session, args)
+	case "RENAMESCRIPT":
+		return s.cmdRenameScript(session, args)
 	case "LOGOUT":
 		if err := s.sendResponse(session.conn, "OK \"Logout successful\""); err != nil {
 			return err
@@ -374,6 +457,9 @@ func quoteManageSieveString(v string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(v) + `"`
 }
 
+// maxManageSieveScriptSize bounds one script (PUTSCRIPT/CHECKSCRIPT/HAVESPACE).
+const maxManageSieveScriptSize = 1024 * 1024
+
 // readScriptArg reads the script argument of PUTSCRIPT/CHECKSCRIPT. It accepts
 // an RFC 5804 literal ("{N+}" or "{N}", whose command line ends with the CRLF
 // after the N octets) as well as a bare octet count followed by exactly that
@@ -384,11 +470,11 @@ func readScriptArg(session *manageSieveSession, arg string) (string, error) {
 	if literal {
 		sizeText = strings.TrimSuffix(strings.TrimSuffix(arg[1:], "}"), "+")
 	}
-	scriptSize := 0
-	_, _ = fmt.Sscanf(sizeText, "%d", &scriptSize)
-
-	if scriptSize <= 0 || scriptSize > 1024*1024 {
-		return "", fmt.Errorf("invalid script size")
+	// F5467: an empty script ({0+}) is valid; a malformed size is not. The
+	// octets that may follow cannot be skipped safely, so failures close.
+	scriptSize, err := strconv.Atoi(sizeText)
+	if err != nil || scriptSize < 0 || scriptSize > maxManageSieveScriptSize {
+		return "", &manageSieveNo{msg: "invalid script size", closeConn: true}
 	}
 
 	// Read script content
@@ -397,7 +483,7 @@ func readScriptArg(session *manageSieveSession, arg string) (string, error) {
 	for totalRead < scriptSize {
 		n, err := session.reader.r.Read(scriptBytes[totalRead:])
 		if err != nil {
-			return "", fmt.Errorf("failed to read script: %w", err)
+			return "", &manageSieveNo{msg: fmt.Sprintf("failed to read script: %v", err), closeConn: true}
 		}
 		totalRead += n
 	}
@@ -408,10 +494,10 @@ func readScriptArg(session *manageSieveSession, arg string) (string, error) {
 	if literal {
 		rest, err := session.reader.ReadLine()
 		if err != nil {
-			return "", fmt.Errorf("failed to read end of command: %w", err)
+			return "", &manageSieveNo{msg: fmt.Sprintf("failed to read end of command: %v", err), closeConn: true}
 		}
 		if strings.TrimSpace(rest) != "" {
-			return "", fmt.Errorf("unexpected data after script literal")
+			return "", &manageSieveNo{msg: "unexpected data after script literal", closeConn: true}
 		}
 	}
 	return string(scriptBytes), nil
@@ -433,17 +519,13 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 			// F5040: RFC 5804 §2.1 SASL initial response.
 			data = unquoteManageSieveArg(args[1])
 		} else {
-			// Send continuation request
-			if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
+			// F5466: RFC 5804 §2.1 — the continuation is an (empty)
+			// base64 server-challenge string, not a final OK.
+			line, err := s.saslStep(session, "")
+			if err != nil {
 				return err
 			}
-
-			// Read the authentication data
-			line, err := session.reader.ReadLine()
-			if err != nil {
-				return fmt.Errorf("authentication failed: %w", err)
-			}
-			data = unquoteManageSieveArg(line)
+			data = line
 		}
 
 		// Decode PLAIN auth: [authzid]\x00authcid\x00password
@@ -478,15 +560,10 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 
 	// Handle LOGIN authentication mechanism
 	if mechanism == "LOGIN" {
-		// Request username
-		if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
-			return err
-		}
-
-		// Read username (base64)
-		username64, err := session.reader.ReadLine()
+		// F5466: base64 "Username:" / "Password:" challenges.
+		username64, err := s.saslStep(session, "Username:")
 		if err != nil {
-			return fmt.Errorf("authentication failed")
+			return err
 		}
 
 		username, err := decodeBase64(username64)
@@ -494,15 +571,9 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 			return fmt.Errorf("invalid username")
 		}
 
-		// Request password
-		if err := s.sendResponse(session.conn, "OK \"Continue authentication\""); err != nil {
-			return err
-		}
-
-		// Read password (base64)
-		password64, err := session.reader.ReadLine()
+		password64, err := s.saslStep(session, "Password:")
 		if err != nil {
-			return fmt.Errorf("authentication failed")
+			return err
 		}
 
 		password, err := decodeBase64(password64)
@@ -523,6 +594,24 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 	}
 
 	return fmt.Errorf("unsupported authentication mechanism: %s", mechanism)
+}
+
+// saslStep sends a base64 server-challenge string and returns the client's
+// response with its quotes removed. A "*" response cancels the exchange
+// (RFC 5804 §2.1) with a NO that keeps the session. F5466.
+func (s *ManageSieveServer) saslStep(session *manageSieveSession, challenge string) (string, error) {
+	if err := s.sendResponse(session.conn, "%s", quoteManageSieveString(base64.StdEncoding.EncodeToString([]byte(challenge)))); err != nil {
+		return "", err
+	}
+	line, err := session.reader.ReadLine()
+	if err != nil {
+		return "", fmt.Errorf("authentication failed: %w", err)
+	}
+	resp := unquoteManageSieveArg(line)
+	if resp == "*" {
+		return "", &manageSieveNo{msg: "authentication cancelled"}
+	}
+	return resp, nil
 }
 
 // decodeBase64 decodes a base64 string
@@ -613,12 +702,14 @@ func (s *ManageSieveServer) cmdSetActive(session *manageSieveSession, args []str
 
 	scriptName := unquoteManageSieveArg(args[0])
 	if scriptName == "" {
-		return fmt.Errorf("script name cannot be empty")
+		// F5464: RFC 5804 §2.8 — SETACTIVE "" deactivates all scripts.
+		s.manager.deactivateScript(session.user)
+		return s.sendResponse(session.conn, "OK \"No active script\"")
 	}
 
-	// Set active script for the user
+	// Set active script for the user (its only failure is a missing script)
 	if err := s.manager.SetActiveScriptByName(session.user, scriptName); err != nil {
-		return fmt.Errorf("failed to set active script: %w", err)
+		return &manageSieveNo{code: "NONEXISTENT", msg: fmt.Sprintf("failed to set active script: %v", err)}
 	}
 
 	if err := s.sendResponse(session.conn, "OK \"Set active script\""); err != nil {
@@ -643,8 +734,15 @@ func (s *ManageSieveServer) cmdDeleteScript(session *manageSieveSession, args []
 		return fmt.Errorf("script name cannot be empty")
 	}
 
-	// Delete script for the user
-	s.manager.DeleteScript(session.user, scriptName)
+	// F5463: RFC 5804 §2.10 — the active script cannot be deleted, and a
+	// missing script is NO (NONEXISTENT).
+	if err := s.manager.deleteInactiveScript(session.user, scriptName); err != nil {
+		code := "NONEXISTENT"
+		if errors.Is(err, errScriptActive) {
+			code = "ACTIVE"
+		}
+		return &manageSieveNo{code: code, msg: err.Error()}
+	}
 	if err := s.sendResponse(session.conn, "OK \"Script deleted\""); err != nil {
 		return err
 	}
@@ -665,9 +763,9 @@ func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []str
 	scriptName := unquoteManageSieveArg(args[0])
 
 	// Get script source for the authenticated user
-	source := s.manager.GetScriptSource(session.user, scriptName)
-	if source == "" {
-		return fmt.Errorf("script not found: %s", scriptName)
+	source, ok := s.manager.scriptSource(session.user, scriptName)
+	if !ok {
+		return &manageSieveNo{code: "NONEXISTENT", msg: fmt.Sprintf("script not found: %s", scriptName)}
 	}
 
 	// Send script content
@@ -710,6 +808,76 @@ func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []s
 		return err
 	}
 	return nil
+}
+
+// cmdStartTLS handles STARTTLS (RFC 5804 §2.2). After the handshake the
+// capabilities are sent again. F5461.
+func (s *ManageSieveServer) cmdStartTLS(session *manageSieveSession, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("STARTTLS takes no arguments")
+	}
+	if s.tlsCfg == nil || session.tls {
+		return fmt.Errorf("TLS not available")
+	}
+	if session.user != "" {
+		return fmt.Errorf("STARTTLS is only valid before AUTHENTICATE")
+	}
+	if err := s.sendResponse(session.conn, "OK \"Begin TLS negotiation now\""); err != nil {
+		return err
+	}
+	tlsConn := tls.Server(session.conn, s.tlsCfg)
+	if err := tlsConn.Handshake(); err != nil {
+		return &manageSieveNo{msg: "TLS negotiation failed", closeConn: true}
+	}
+	session.conn = tlsConn
+	session.reader.r = tlsConn
+	session.tls = true
+	return s.sendCapabilities(session, "OK \"TLS negotiation successful\"")
+}
+
+// cmdHaveSpace handles HAVESPACE <script-name> <script-size> (RFC 5804 §2.5).
+// F5465.
+func (s *ManageSieveServer) cmdHaveSpace(session *manageSieveSession, args []string) error {
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
+	if len(args) != 2 {
+		return fmt.Errorf("HAVESPACE requires script-name and script-size")
+	}
+	if unquoteManageSieveArg(args[0]) == "" {
+		return fmt.Errorf("script name cannot be empty")
+	}
+	size, err := strconv.Atoi(args[1])
+	if err != nil || size < 0 {
+		return fmt.Errorf("invalid script size")
+	}
+	if size > maxManageSieveScriptSize {
+		return &manageSieveNo{code: "QUOTA/MAXSIZE", msg: "script exceeds the maximum size"}
+	}
+	return s.sendResponse(session.conn, "OK \"Putscript would succeed\"")
+}
+
+// cmdRenameScript handles RENAMESCRIPT <old-name> <new-name> (RFC 5804
+// §2.11.1). F5465.
+func (s *ManageSieveServer) cmdRenameScript(session *manageSieveSession, args []string) error {
+	if session.user == "" {
+		return fmt.Errorf("not authenticated")
+	}
+	if len(args) != 2 {
+		return fmt.Errorf("RENAMESCRIPT requires old-name and new-name")
+	}
+	oldName, newName := unquoteManageSieveArg(args[0]), unquoteManageSieveArg(args[1])
+	if oldName == "" || newName == "" {
+		return fmt.Errorf("script name cannot be empty")
+	}
+	if err := s.manager.renameScript(session.user, oldName, newName); err != nil {
+		code := "NONEXISTENT"
+		if errors.Is(err, errScriptExists) {
+			code = "ALREADYEXISTS"
+		}
+		return &manageSieveNo{code: code, msg: err.Error()}
+	}
+	return s.sendResponse(session.conn, "OK \"Script renamed\"")
 }
 
 // cmdNoop handles NOOP command
