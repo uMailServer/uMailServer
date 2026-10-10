@@ -99,6 +99,12 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 
 // sendVacationReply generates and enqueues an auto-reply message.
 func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON string) {
+	if senderEmail == "" { // null sender: never auto-reply to a bounce (F5711)
+		return
+	}
+	if senderEmail == "" { // null sender: never auto-reply to a bounce (F5711)
+		return
+	}
 	senderLower := strings.ToLower(senderEmail)
 	for _, prefix := range []string{"mailer-daemon@", "postmaster@", "noreply@", "no-reply@", "bounce@"} {
 		if strings.HasPrefix(senderLower, prefix) {
