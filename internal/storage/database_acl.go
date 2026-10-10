@@ -84,6 +84,20 @@ func aclOwnerMailboxPrefix(owner, mailbox string) string {
 	return fmt.Sprintf("acl:%s:%s:", owner, mailbox)
 }
 
+// aclKeyBelongsTo reports whether the ACL bucket entry (k, v) belongs to
+// exactly owner/mailbox. Keys are "acl:owner:mailbox:grantee" and mailbox
+// names may contain colons, so a prefix scan for mailbox "Work" also matches
+// the entries of "Work:Old". The grantee stored in the value disambiguates
+// (F6121).
+func aclKeyBelongsTo(owner, mailbox string, k, v []byte) bool {
+	var entry ACLEntry
+	if err := json.Unmarshal(v, &entry); err == nil {
+		return string(k) == aclKey(owner, mailbox, entry.Grantee)
+	}
+	prefix := aclOwnerMailboxPrefix(owner, mailbox)
+	return len(k) > len(prefix) && !strings.Contains(string(k[len(prefix):]), ":")
+}
+
 // ParseACLRights parses an RFC 4314 rights string (e.g. "lrs", "-e") into an
 // ACLRights bitmask, and reports whether a leading '-' marked the rights for
 // removal.
@@ -216,8 +230,14 @@ func (db *Database) DeleteACL(owner, mailbox, grantee string) error {
 		}
 
 		prefix := aclOwnerMailboxPrefix(owner, mailbox)
+		var doomed [][]byte
 		c := b.Cursor()
-		for k, _ := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, _ = c.Next() {
+		for k, v := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, v = c.Next() {
+			if aclKeyBelongsTo(owner, mailbox, k, v) {
+				doomed = append(doomed, append([]byte(nil), k...))
+			}
+		}
+		for _, k := range doomed {
 			if err := b.Delete(k); err != nil {
 				return err
 			}
@@ -245,6 +265,9 @@ func (db *Database) ListACL(owner, mailbox string) ([]ACLEntry, error) {
 			var entry ACLEntry
 			if err := json.Unmarshal(v, &entry); err != nil {
 				return err
+			}
+			if !aclKeyBelongsTo(owner, mailbox, k, v) {
+				continue
 			}
 			entries = append(entries, entry)
 		}

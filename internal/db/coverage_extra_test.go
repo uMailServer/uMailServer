@@ -53,8 +53,8 @@ func TestDBForEachPrefix(t *testing.T) {
 	defer database.Close()
 
 	// Create accounts with same domain
-	_ = database.CreateAccount(&AccountData{Email: "user1@example.com", Domain: "example.com", PasswordHash: "hash"})
-	_ = database.CreateAccount(&AccountData{Email: "admin@test.org", Domain: "test.org", PasswordHash: "hash"})
+	_ = database.CreateAccount(&AccountData{Email: "user1@example.com", LocalPart: "user1", Domain: "example.com", PasswordHash: "hash"})
+	_ = database.CreateAccount(&AccountData{Email: "admin@test.org", LocalPart: "admin", Domain: "test.org", PasswordHash: "hash"})
 
 	count := 0
 	_ = database.ForEachPrefix(BucketAccounts, "example.com/", func(key string, value []byte) error {

@@ -29,8 +29,21 @@ func validateDomainName(name string) error {
 	if len(name) > 253 {
 		return fmt.Errorf("domain name exceeds maximum length")
 	}
-	// Basic format check - should have at least one dot for multi-level domains
-	// Single-label domains (like "localhost") are allowed but not ideal
+	// F6060: LDH labels only. The name becomes a DKIM DNS record owner, an
+	// account-key prefix and a path component, so whitespace, control
+	// characters, '@', ';' and leading/trailing hyphens must not get in.
+	// Single-label domains (like "localhost") are allowed.
+	for _, label := range strings.Split(strings.TrimSuffix(name, "."), ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("domain name has an invalid label")
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				return fmt.Errorf("domain name contains invalid characters")
+			}
+		}
+	}
 	return nil
 }
 

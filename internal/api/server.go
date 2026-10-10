@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	pathpkg "path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -655,6 +657,7 @@ func (s *Server) tokenBlacklistCleanup() {
 			return
 		case <-ticker.C:
 			s.CleanupExpiredTokens()
+			s.pruneAuthAttempts()
 		}
 	}
 }
@@ -912,19 +915,23 @@ func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to open the file from webmail FS
-	file, err := webmailFS.Open(path)
+	file, err := openStaticFile(webmailFS, path)
 	if err != nil {
 		// Fallback: check admin FS for shared assets (e.g., /assets/...)
 		// Close the webmail file first if it was opened
 		if file != nil {
 			_ = file.Close()
 		}
-		file, err = adminFS.Open(path)
+		file, err = openStaticFile(adminFS, path)
 		if err != nil {
 			// If file not found, serve index.html for SPA routing
 			// Close the admin file first if it was opened
 			if file != nil {
 				_ = file.Close()
+			}
+			if isMissingAsset(path) {
+				http.NotFound(w, r)
+				return
 			}
 			file, err = webmailFS.Open("index.html")
 			if err != nil {
@@ -959,6 +966,30 @@ func (s *Server) handleWebmail(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, path, stat.ModTime(), file.(io.ReadSeeker))
 }
 
+// openStaticFile opens a regular file. F6064: a directory path ("/assets")
+// used to open successfully and then panic on the io.ReadSeeker assertion
+// (embed directories are not seekable); it is now treated as not found.
+func openStaticFile(fsys FileSystem, name string) (fs.File, error) {
+	f, err := fsys.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		_ = f.Close()
+		return nil, fs.ErrNotExist
+	}
+	return f, nil
+}
+
+// isMissingAsset reports whether a missing path names a static asset (it has
+// a non-html extension). Those must 404 instead of receiving the SPA shell
+// with a 200, which browsers then reject as a wrong-MIME script/stylesheet.
+func isMissingAsset(name string) bool {
+	ext := pathpkg.Ext(name)
+	return ext != "" && ext != ".html"
+}
+
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	// Use injected admin FS
 	adminFS := s.adminFS
@@ -973,12 +1004,16 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to open the file
-	file, err := adminFS.Open(path)
+	file, err := openStaticFile(adminFS, path)
 	if err != nil {
 		// If file not found, serve index.html for SPA routing
 		// Close the first file if it was opened
 		if file != nil {
 			_ = file.Close()
+		}
+		if isMissingAsset(path) {
+			http.NotFound(w, r)
+			return
 		}
 		file, err = adminFS.Open("index.html")
 		if err != nil {

@@ -42,6 +42,11 @@ type Server struct {
 	// Hooks for message processing
 	onAuth              func(username, password string) (bool, error)
 	onValidate          func(from string, to []string) error
+	onSenderAllowed     func(username, from string) bool
+	onLocalDomain       func(domain string) bool
+	rcptPerHour         int
+	userRcpt            map[string][]time.Time
+	userRcptMu          sync.Mutex
 	onDeliverWithNotify func(from string, to []string, notify []string, data []byte) error
 	onDeliver           func(from string, to []string, data []byte) error
 	onDeliverWithAuth   func(from string, to []string, notify []string, data []byte, info *DeliveryAuth) error
@@ -175,6 +180,55 @@ func NewServer(config *Config, logger *slog.Logger) *Server {
 // SetAuthHandler sets the authentication handler
 func (s *Server) SetAuthHandler(handler func(username, password string) (bool, error)) {
 	s.onAuth = handler
+}
+
+// SetSenderAllowedHandler installs the check that an authenticated user may
+// use the MAIL FROM address (the user's own address or one of their aliases).
+// It is also called with an empty from for the null sender. When unset any
+// sender is accepted, which lets one user spoof another (F6041).
+func (s *Server) SetSenderAllowedHandler(handler func(username, from string) bool) {
+	s.onSenderAllowed = handler
+}
+
+// SetLocalDomainHandler installs the predicate telling whether mail for a
+// domain is delivered locally. With it set, an unauthenticated client's RCPT
+// to a non-local domain is refused at once with 554 5.7.1 (F6042).
+func (s *Server) SetLocalDomainHandler(handler func(domain string) bool) {
+	s.onLocalDomain = handler
+}
+
+// SetUserRecipientLimit caps the recipients one authenticated user may have
+// accepted per rolling hour (0 disables the cap) (F6044).
+func (s *Server) SetUserRecipientLimit(perHour int) {
+	s.rcptPerHour = perHour
+}
+
+// allowUserRecipient records one accepted recipient for username and reports
+// whether the hourly cap still allows it.
+func (s *Server) allowUserRecipient(username string) bool {
+	if s.rcptPerHour <= 0 {
+		return true
+	}
+	s.userRcptMu.Lock()
+	defer s.userRcptMu.Unlock()
+	if s.userRcpt == nil {
+		s.userRcpt = make(map[string][]time.Time)
+	}
+	now := time.Now()
+	cutoff := now.Add(-time.Hour)
+	key := strings.ToLower(username)
+	kept := s.userRcpt[key][:0]
+	for _, t := range s.userRcpt[key] {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= s.rcptPerHour {
+		s.userRcpt[key] = kept
+		return false
+	}
+	s.userRcpt[key] = append(kept, now)
+	return true
 }
 
 // SetValidateHandler sets the message validation handler
@@ -484,6 +538,13 @@ func ValidateEmail(email string) (string, error) {
 			return email, nil
 		}
 		return "", err
+	}
+	// net/mail returns a quoted local part unquoted, so "a@evil.com"@local.com
+	// would flatten into the ambiguous a@evil.com@local.com. Refuse local
+	// parts that need quoting (F6040).
+	at := strings.LastIndexByte(addr.Address, '@')
+	if at <= 0 || strings.ContainsAny(addr.Address[:at], "@\"\\ \t,;:<>()[]") {
+		return "", errors.New("unsupported local part")
 	}
 	return addr.Address, nil
 }

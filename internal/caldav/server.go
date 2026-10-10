@@ -90,6 +90,13 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The username names the on-disk namespace; a name that could escape it
+	// is never a valid principal (F6079).
+	if username == "" || strings.ContainsAny(username, "/\\\x00") || strings.Contains(username, "..") {
+		s.sendError(w, http.StatusForbidden, "invalid username")
+		return
+	}
+
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	}
@@ -493,25 +500,34 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 			if expandSet {
 				var instances []time.Time
 				var duration time.Duration
+				var overrideBlocks []string
 				blocks := extractComponentBlocks(eventData, "VEVENT")
-				if len(blocks) > 0 {
-					start, end, ok := componentTimeRange(blocks[0])
-					if ok {
-						duration = end.Sub(start)
-						if r := parseRRULEBlock(blocks[0]); r != nil {
-							instances = rruleInstances(start, end, r, expandStart, expandEnd)
-						} else if !start.Before(expandStart) && start.Before(expandEnd) {
-							instances = []time.Time{start}
+				overridden := overriddenSet(blocks)
+				for _, b := range blocks {
+					if _, isOverride := ownPropValue(b, "RECURRENCE-ID"); isOverride {
+						// Overrides replace the master instance they name and
+						// are returned verbatim when they fall in the window
+						// (F6075).
+						if st, en, ok := componentTimeRange(b); ok && intervalIntersects(st, en, expandStart, expandEnd) {
+							overrideBlocks = append(overrideBlocks, b)
 						}
+						continue
+					}
+					if instances != nil || duration != 0 {
+						continue // first master only
+					}
+					if start, end, ok := componentTimeRange(b); ok {
+						duration = end.Sub(start)
+						instances = recurrenceStarts(b, start, end, overridden, expandStart, expandEnd)
 					}
 				}
 				if limitN > 0 && len(instances) > limitN {
 					instances = instances[:limitN]
 				}
-				if len(instances) == 0 {
+				if len(instances) == 0 && len(overrideBlocks) == 0 {
 					continue
 				}
-				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, buildExpandedICS(eventData, instances, duration)))
+				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, buildExpandedICS(eventData, instances, duration, overrideBlocks)))
 				continue
 			}
 			multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
@@ -533,8 +549,7 @@ func extractComponentBlocks(icsData, name string) []string {
 	var blocks []string
 	inBlock := false
 	var current []string
-	for _, line := range strings.Split(icsData, "\n") {
-		line = strings.TrimSuffix(line, "\r")
+	for _, line := range unfoldLines(icsData) {
 		if strings.HasPrefix(line, "BEGIN:"+name) {
 			inBlock = true
 			current = nil
@@ -599,7 +614,7 @@ func extractPropertyValue(block, name string) (string, bool) {
 // case-insensitive). Unknown collations fail closed; supportedCompFilter
 // answers them with a 403 upstream.
 func propFilterMatches(pf *PropFilter, block string) bool {
-	value, found := extractPropertyValue(block, pf.Name)
+	value, found := ownPropValue(block, strings.ToUpper(pf.Name))
 	if pf.IsNotDefined != nil {
 		return !found
 	}
@@ -646,41 +661,61 @@ func componentTimeRange(body string) (start, end time.Time, ok bool) {
 	startIsDate := false
 	var duration time.Duration
 	hasDuration := false
+	var due time.Time
 	nested := 0
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		// DURATION inside a nested component (VALARM repeat interval) does not
-		// describe this component's span (F5471).
+	startSeen := false
+	for _, line := range unfoldLines(body) {
+		up := strings.ToUpper(line)
 		switch {
-		case strings.HasPrefix(line, "BEGIN:"):
+		case strings.HasPrefix(up, "BEGIN:"):
 			nested++
-		case strings.HasPrefix(line, "END:"):
-			nested--
-		case nested == 0 && strings.HasPrefix(line, "DURATION"):
-			if idx := strings.Index(line, ":"); idx >= 0 {
-				if d, parsed := parseICSDuration(line[idx+1:]); parsed {
-					duration, hasDuration = d, true
-				}
-			}
-		}
-		if start.IsZero() && strings.HasPrefix(line, "DTSTART") {
-			if idx := strings.Index(line, ":"); idx >= 0 {
-				if t, parsed := parseICSTime(line[idx+1:]); parsed {
-					start = t
-					startIsDate = len(line[idx+1:]) == 8
-				}
+			continue
+		case strings.HasPrefix(up, "END:"):
+			if nested > 0 {
+				nested--
 			}
 			continue
 		}
-		if strings.HasPrefix(line, "DTEND") {
-			if idx := strings.Index(line, ":"); idx >= 0 {
-				if t, parsed := parseICSTime(line[idx+1:]); parsed {
-					end = t
-				}
+		if nested > 0 {
+			continue
+		}
+		name, params, value, found := splitPropLine(line)
+		if !found {
+			continue
+		}
+		switch name {
+		case "DURATION":
+			// DURATION inside a nested component (VALARM repeat interval)
+			// does not describe this component's span (F5471); nested lines
+			// are skipped above.
+			if d, parsed := parseICSDuration(value); parsed {
+				duration, hasDuration = d, true
+			}
+		case "DTSTART":
+			if startSeen {
+				continue
+			}
+			if t, isDate, parsed := parseICSTimeProp(params, value); parsed {
+				start, startIsDate, startSeen = t, isDate, true
+			}
+		case "DTEND":
+			if t, _, parsed := parseICSTimeProp(params, value); parsed {
+				end = t
+			}
+		case "DUE":
+			if t, _, parsed := parseICSTimeProp(params, value); parsed {
+				due = t
 			}
 		}
 	}
-	if start.IsZero() {
+	if end.IsZero() {
+		end = due
+	}
+	if !startSeen {
+		if !due.IsZero() {
+			// RFC 4791 §9.9: a VTODO with only DUE spans [DUE, DUE].
+			return due, due, true
+		}
 		return time.Time{}, time.Time{}, false
 	}
 	if end.IsZero() {
@@ -792,41 +827,10 @@ func compFilterMatches(cf *CompFilter, icsData string) bool {
 		if !ok {
 			return false
 		}
-		matched := false
-		for _, body := range blocks {
-			start, end, ok := componentTimeRange(body)
-			if !ok {
-				continue
-			}
-			if r := parseRRULEBlock(body); r != nil {
-				// RFC 4791 §9.9.1: a recurring component matches when ANY
-				// generated instance intersects the range; the base DTSTART
-				// alone is not decisive. Unsupported RRULE parts degrade to
-				// base-only matching (the documented subset).
-				if len(rruleInstances(start, end, r, rStart, rEnd)) > 0 {
-					matched = true
-					break
-				}
-				continue
-			}
-			// RFC 4791 §9.9.1: intervals intersect when the component start
-			// is before the range end and the component end is after the
-			// range start; a zero-length component matches points inside.
-			if end.Equal(start) {
-				// RFC 4791 §9.9.1: a zero-length component matches when its
-				// point lies inside the range (rStart <= start < rEnd).
-				pointInRange := start.Before(rEnd) && !start.Before(rStart)
-				if !pointInRange {
-					continue
-				}
-				matched = true
-				break
-			} else if start.Before(rEnd) && end.After(rStart) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		// RFC 4791 §9.9.1: a recurring component matches when ANY
+		// generated instance intersects the range; EXDATE, RDATE and
+		// RECURRENCE-ID overrides are honored (F6074, F6075).
+		if len(eventOccurrences(blocks, rStart, rEnd, false)) == 0 {
 			return false
 		}
 	}
@@ -916,6 +920,15 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	// Validate iCalendar data
 	if !strings.Contains(icsData, "BEGIN:VCALENDAR") {
 		s.sendError(w, http.StatusUnsupportedMediaType, "invalid calendar data")
+		return
+	}
+	// RFC 4791 §5.3.2.1: structurally invalid iCalendar (truncated, unbalanced,
+	// no component, missing or inconsistent UID) fails the valid-calendar-data
+	// precondition (F6070, F6071).
+	if !validateCalendarData(icsData) {
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(xml.Header + `<d:error xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><c:valid-calendar-data/></d:error>`))
 		return
 	}
 
@@ -1666,6 +1679,9 @@ type rruleSpec struct {
 	interval int
 	count    int
 	until    time.Time
+
+	byDay      []time.Weekday // WEEKLY/DAILY plain weekday codes
+	byMonthDay []int          // MONTHLY day-of-month (negative counts from month end)
 }
 
 // parseRRULEValue parses an RRULE value ("FREQ=DAILY;COUNT=10"). It returns
@@ -1703,7 +1719,27 @@ func parseRRULEValue(value string) *rruleSpec {
 			if !ok {
 				return nil
 			}
+			if len(strings.TrimSpace(v)) == 8 {
+				// A DATE UNTIL is inclusive of the whole day (F6078).
+				t = t.AddDate(0, 0, 1).Add(-time.Nanosecond)
+			}
 			r.until = t
+		case "BYDAY":
+			days, ok := parseByDay(v)
+			if !ok {
+				return nil
+			}
+			r.byDay = days
+		case "BYMONTHDAY":
+			days, ok := parseByMonthDay(v)
+			if !ok {
+				return nil
+			}
+			r.byMonthDay = days
+		case "WKST":
+			if !strings.EqualFold(strings.TrimSpace(v), "MO") {
+				return nil
+			}
 		default:
 			return nil
 		}
@@ -1714,17 +1750,20 @@ func parseRRULEValue(value string) *rruleSpec {
 	if r.interval == 0 {
 		r.interval = 1
 	}
+	if len(r.byDay) > 0 && r.freq != "WEEKLY" && r.freq != "DAILY" {
+		return nil
+	}
+	if len(r.byMonthDay) > 0 && r.freq != "MONTHLY" {
+		return nil
+	}
 	return &r
 }
 
-// parseRRULEBlock extracts the RRULE property line from a component block
-// and parses it; nil when the block has no supported RRULE.
+// parseRRULEBlock extracts the component's own RRULE property and parses it;
+// nil when the block has no supported RRULE.
 func parseRRULEBlock(body string) *rruleSpec {
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		if strings.HasPrefix(strings.ToUpper(line), "RRULE:") {
-			return parseRRULEValue(line[len("RRULE:"):])
-		}
+	if l := ownPropLines(body, "RRULE"); len(l) > 0 {
+		return parseRRULEValue(l[0].value)
 	}
 	return nil
 }
@@ -1751,42 +1790,22 @@ func rruleInstances(baseStart, baseEnd time.Time, r *rruleSpec, windowStart, win
 	dur := baseEnd.Sub(baseStart)
 	var out []time.Time
 	count := 0
-	for i := 0; i < maxRRULEInstances; i++ {
-		var inst time.Time
-		switch r.freq {
-		case "DAILY":
-			inst = baseStart.Add(time.Duration(i*r.interval) * 24 * time.Hour)
-		case "WEEKLY":
-			inst = baseStart.Add(time.Duration(i*r.interval) * 7 * 24 * time.Hour)
-		case "MONTHLY":
-			inst = baseStart.AddDate(0, i*r.interval, 0)
-			// Nonexistent dates are omitted and do not consume COUNT.
-			if inst.Day() != baseStart.Day() {
-				continue
+	first := r.firstPeriod(baseStart, windowStart.Add(-dur))
+	for p := first; p < first+maxRRULEPeriods && len(out) < maxRRULEInstances; p++ {
+		for _, inst := range r.periodCandidates(baseStart, p) {
+			if !r.until.IsZero() && inst.After(r.until) {
+				return out
 			}
-		case "YEARLY":
-			inst = baseStart.AddDate(i*r.interval, 0, 0)
-			if inst.Month() != baseStart.Month() || inst.Day() != baseStart.Day() {
-				continue
+			if r.count > 0 && count >= r.count {
+				return out
 			}
-		}
-		if !r.until.IsZero() && inst.After(r.until) {
-			break
-		}
-		if r.count > 0 && count >= r.count {
-			break
-		}
-		if !inst.Before(windowEnd) {
-			break
-		}
-		count++
-		instEnd := inst.Add(dur)
-		intersects := instEnd.After(windowStart) && inst.Before(windowEnd)
-		if dur == 0 {
-			intersects = !inst.Before(windowStart) && inst.Before(windowEnd)
-		}
-		if intersects {
-			out = append(out, inst)
+			if !inst.Before(windowEnd) {
+				return out
+			}
+			count++
+			if intervalIntersects(inst, inst.Add(dur), windowStart, windowEnd) {
+				out = append(out, inst)
+			}
 		}
 	}
 	return out
@@ -1794,14 +1813,24 @@ func rruleInstances(baseStart, baseEnd time.Time, r *rruleSpec, windowStart, win
 
 // buildExpandedICS renders the recurrence set as one VEVENT per instance
 // (RECURRENCE-ID set) inside a VCALENDAR wrapper.
-func buildExpandedICS(eventData string, instances []time.Time, duration time.Duration) string {
+func buildExpandedICS(eventData string, instances []time.Time, duration time.Duration, overrideBlocks []string) string {
 	blocks := extractComponentBlocks(eventData, "VEVENT")
 	if len(blocks) == 0 {
 		return eventData
 	}
 	block := blocks[0]
-	dtstartVal, _ := extractPropertyValue(block, "DTSTART")
+	for _, b := range blocks {
+		if _, isOverride := ownPropValue(b, "RECURRENCE-ID"); !isOverride {
+			block = b
+			break
+		}
+	}
+	dtstartVal, _ := ownPropValue(block, "DTSTART")
 	layout := icsTimeFormat(strings.TrimSpace(dtstartVal))
+	if l := ownPropLines(block, "DTSTART"); len(l) > 0 && paramValue(l[0].params, "TZID") != "" && layout != "20060102" {
+		// Zoned instances are emitted as UTC (F6073).
+		layout = "20060102T150405Z"
+	}
 	var out []string
 	for _, line := range strings.Split(eventData, "\n") {
 		trimmed := strings.TrimSuffix(line, "\r")
@@ -1823,12 +1852,17 @@ func buildExpandedICS(eventData string, instances []time.Time, duration time.Dur
 				out = append(out, "RECURRENCE-ID:"+inst.UTC().Format(layout))
 			case strings.HasPrefix(upper, "DTEND"):
 				out = append(out, "DTEND:"+inst.Add(duration).UTC().Format(layout))
-			case strings.HasPrefix(upper, "RRULE"):
-				// expanded instances carry RECURRENCE-ID, not RRULE
+			case strings.HasPrefix(upper, "RRULE"), strings.HasPrefix(upper, "EXDATE"), strings.HasPrefix(upper, "RDATE"):
+				// expanded instances carry RECURRENCE-ID, not the rule set
 			default:
 				out = append(out, trimmed)
 			}
 		}
+		out = append(out, "END:VEVENT")
+	}
+	for _, ob := range overrideBlocks {
+		out = append(out, "BEGIN:VEVENT")
+		out = append(out, strings.Split(ob, "\n")...)
 		out = append(out, "END:VEVENT")
 	}
 	out = append(out, "END:VCALENDAR")

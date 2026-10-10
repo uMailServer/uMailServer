@@ -16,6 +16,7 @@ type ClusterConfig struct {
 
 // handleClusterStatus handles GET /api/v1/cluster/status
 func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json") // F6066
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -56,6 +57,7 @@ func (s *Server) handleClusterStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleClusterInstances handles GET /api/v1/cluster/instances
 func (s *Server) handleClusterInstances(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json") // F6066
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -79,6 +81,7 @@ func (s *Server) handleClusterInstances(w http.ResponseWriter, r *http.Request) 
 
 // handleClusterFailover handles POST /api/v1/cluster/failover
 func (s *Server) handleClusterFailover(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json") // F6066
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -138,6 +141,7 @@ func (s *Server) handleClusterFailover(w http.ResponseWriter, r *http.Request) {
 
 // handleClusterHeartbeat handles POST /api/v1/cluster/heartbeat
 func (s *Server) handleClusterHeartbeat(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json") // F6066
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

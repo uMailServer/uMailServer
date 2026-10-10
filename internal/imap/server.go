@@ -553,6 +553,17 @@ func (s *Session) Handle() {
 			continue
 		}
 
+		line, ok, err := s.resolveLiterals(line)
+		if err != nil {
+			if !errors.Is(err, errLiteralFatal) {
+				s.server.logger.Error("Failed to read literal", "error", err)
+			}
+			return
+		}
+		if !ok {
+			continue
+		}
+
 		s.server.logger.Debug("IMAP command", "session", s.id, "line", truncateCommand(line, 80))
 
 		err = s.handleCommand(line)

@@ -715,7 +715,8 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 	}
 
 	var released []blobRef
-	for _, uid := range uids {
+	var gone []uint32 // sequence numbers (before removal) of the expunged messages
+	for i, uid := range uids {
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
 			continue
@@ -725,18 +726,37 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 		if hasFlag(meta.Flags, "\\Deleted") {
 			if m.db.DeleteMessage(user, mailbox, uid) == nil {
 				released = append(released, blobRef{meta.MessageID, meta.Size})
+				gone = append(gone, uint32(i+1))
 			}
 		}
 	}
 
 	m.releaseBlobs(user, released)
+	notifyExpunged(user, mailbox, gone)
 	return nil
+}
+
+// notifyExpunged tells IDLE sessions of user that the messages at the given
+// (ascending, pre-removal) sequence numbers are gone. They are announced
+// highest first so every number is still valid when a client applies it
+// (RFC 3501 §7.4.1). F6031: no EXPUNGE ever reached another session.
+func notifyExpunged(user, mailbox string, seqs []uint32) {
+	for i := len(seqs) - 1; i >= 0; i-- {
+		GetNotificationHub().NotifyExpunge(user, mailbox, seqs[i])
+	}
 }
 
 // ExpungeUIDs removes only the messages whose UID is in uids and that carry
 // \Deleted (RFC 4315 UID EXPUNGE; also used to complete RFC 6851 MOVE).
 func (m *BboltMailstore) ExpungeUIDs(user, mailbox string, uids []uint32) error {
+	seqOf := map[uint32]uint32{}
+	if all, err := m.db.GetMessageUIDs(user, mailbox); err == nil {
+		for i, u := range all {
+			seqOf[u] = uint32(i + 1)
+		}
+	}
 	var released []blobRef
+	var gone []uint32
 	for _, uid := range uids {
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
@@ -745,10 +765,15 @@ func (m *BboltMailstore) ExpungeUIDs(user, mailbox string, uids []uint32) error 
 		if hasFlag(meta.Flags, "\\Deleted") {
 			if m.db.DeleteMessage(user, mailbox, uid) == nil {
 				released = append(released, blobRef{meta.MessageID, meta.Size})
+				if seq, ok := seqOf[uid]; ok {
+					gone = append(gone, seq)
+				}
 			}
 		}
 	}
 	m.releaseBlobs(user, released)
+	sort.Slice(gone, func(i, j int) bool { return gone[i] < gone[j] })
+	notifyExpunged(user, mailbox, gone)
 	return nil
 }
 

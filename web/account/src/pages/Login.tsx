@@ -3,16 +3,25 @@ import { Mail } from 'lucide-react'
 
 const API_URL = window.location.origin + '/api/v1'
 
-async function loginApi(email: string, password: string) {
+class LoginError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function loginApi(email: string, password: string, totpCode: string) {
   const response = await fetch(`${API_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify(totpCode ? { email, password, totp_code: totpCode } : { email, password }),
     credentials: 'include', // Include HttpOnly cookie in request
   })
 
   if (!response.ok) {
-    throw new Error('Invalid credentials')
+    const body = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new LoginError(body?.error ?? 'Invalid credentials', response.status)
   }
 
   const data = await response.json()
@@ -28,6 +37,8 @@ function LoginPage() {
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [totpCode, setTotpCode] = useState('')
+  const [needsTotp, setNeedsTotp] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -35,10 +46,20 @@ function LoginPage() {
     setError('')
 
     try {
-      await loginApi(email, password)
+      await loginApi(email, password, totpCode)
       window.location.href = '/'
     } catch (err) {
-      setError('Invalid email or password')
+      if (err instanceof LoginError && err.status === 401 && /totp/i.test(err.message) && !totpCode) {
+        // Two-factor is enabled: ask for the authenticator code.
+        setNeedsTotp(true)
+        setError('Enter the 6-digit code from your authenticator app')
+      } else if (err instanceof LoginError && err.status === 429) {
+        setError(err.message)
+      } else if (err instanceof LoginError && /totp/i.test(err.message)) {
+        setError('Invalid authentication code')
+      } else {
+        setError('Invalid email or password')
+      }
     } finally {
       setLoading(false)
     }
@@ -89,6 +110,25 @@ function LoginPage() {
               />
             </div>
           </div>
+
+          {needsTotp && (
+            <div>
+              <label htmlFor="totp" className="block text-sm font-medium text-gray-700">
+                Authentication code
+              </label>
+              <input
+                id="totp"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                required
+                maxLength={6}
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value)}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
+              />
+            </div>
+          )}
 
           {error && (
             <div className="rounded-md border border-red-200 bg-red-50 p-3" role="alert">

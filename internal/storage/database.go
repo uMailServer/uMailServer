@@ -310,6 +310,9 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 			var moves []aclKV
 			c := aclB.Cursor()
 			for k, v := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, v = c.Next() {
+				if !aclKeyBelongsTo(user, oldName, k, v) {
+					continue // entry of a mailbox merely prefixed by oldName (F6121)
+				}
 				moves = append(moves, aclKV{append([]byte(nil), k...), append([]byte(nil), v...)})
 			}
 			for _, m := range moves {

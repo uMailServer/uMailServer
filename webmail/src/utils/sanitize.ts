@@ -2,9 +2,35 @@ import DOMPurify from 'isomorphic-dompurify'
 
 // Hook to inject rel="noopener noreferrer" on all links with target="_blank"
 // preventing tabnabbing attacks (CWE-1022)
+let allowRemote = false
+
+const UNSAFE_CSS = /url\s*\(|image-set\s*\(|expression|behavior|-moz-binding|@import|javascript:|\\/i
+const OVERLAY_CSS = /^\s*position\s*:\s*(?:fixed|absolute|sticky)/i
+
+/** Drops declarations that fetch remote resources or escape the message box. */
+function cleanStyle(style: string): string {
+  return style
+    .split(';')
+    .filter((d) => d.includes(':') && !UNSAFE_CSS.test(d) && !OVERLAY_CSS.test(d))
+    .map((d) => d.trim())
+    .join(';')
+}
+
+const REMOTE_URL = /^\s*(?:https?:)?\/\//i
+
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A' && node.getAttribute('target') === '_blank') {
     node.setAttribute('rel', 'noopener noreferrer')
+  }
+  if (node.hasAttribute && node.hasAttribute('style')) {
+    const cleaned = cleanStyle(node.getAttribute('style') || '')
+    if (cleaned) node.setAttribute('style', cleaned)
+    else node.removeAttribute('style')
+  }
+  // Block remote content (tracking pixels) unless explicitly allowed.
+  if (!allowRemote && node.tagName === 'IMG') {
+    const src = node.getAttribute('src')
+    if (src !== null && REMOTE_URL.test(src)) node.removeAttribute('src')
   }
 })
 
@@ -16,7 +42,16 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
  * - Keeps safe HTML tags for email rendering
  * - Injects rel="noopener noreferrer" on target="_blank" links
  */
-export function sanitizeHTML(dirty: string): string {
+export function sanitizeHTML(dirty: string, opts: { allowRemoteContent?: boolean } = {}): string {
+  allowRemote = opts.allowRemoteContent === true
+  try {
+    return sanitizeInner(dirty)
+  } finally {
+    allowRemote = false
+  }
+}
+
+function sanitizeInner(dirty: string): string {
   return DOMPurify.sanitize(dirty, {
     ALLOWED_TAGS: [
       'html', 'body', 'head', 'style',

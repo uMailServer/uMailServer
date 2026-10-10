@@ -17,6 +17,8 @@ export function Login({ onLogin }: LoginProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
+  const [needsTotp, setNeedsTotp] = useState(false);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -28,13 +30,19 @@ export function Login({ onLogin }: LoginProps) {
       const response = await fetch("/api/v1/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(totpCode ? { email, password, totp_code: totpCode } : { email, password }),
         credentials: "include", // Include HttpOnly cookie in request
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
+        // Two-factor accounts must supply totp_code: reveal the field.
+        if (response.status === 401 && /totp/i.test(data.error ?? "") && !totpCode) {
+          setNeedsTotp(true);
+          setError("Enter the 6-digit code from your authenticator app");
+          return;
+        }
         throw new Error(data.error || "Login failed");
       }
 
@@ -122,6 +130,24 @@ export function Login({ onLogin }: LoginProps) {
                 </button>
               </div>
             </div>
+
+            {needsTotp && (
+              <div className="space-y-2">
+                <Label htmlFor="totp" className="text-sm font-medium">
+                  Authentication Code
+                </Label>
+                <Input
+                  id="totp"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value)}
+                  className="h-11"
+                  required
+                />
+              </div>
+            )}
 
             <Button
               type="submit"

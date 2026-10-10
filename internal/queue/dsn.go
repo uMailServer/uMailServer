@@ -133,6 +133,14 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 		originalPart = string(originalMessage)
 	} else {
 		originalPart = extractHeaders(string(originalMessage))
+		// A message with no header/body separator (or enormous headers) makes
+		// extractHeaders return everything; keep the bounce bounded (F6120).
+		if len(originalPart) > maxDSNOriginalSize {
+			originalPart = originalPart[:maxDSNOriginalSize]
+			if i := strings.LastIndexByte(originalPart, '\n'); i >= 0 {
+				originalPart = originalPart[:i]
+			}
+		}
 		originalType = "text/rfc822-headers"
 	}
 	if dsn.MessageID == "" {

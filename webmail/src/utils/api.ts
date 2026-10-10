@@ -146,6 +146,10 @@ class API {
       if (!response.ok) {
         if (response.status === 401) {
           // Token is managed by HttpOnly cookie, server will clear it on logout
+          // Already on the login page: surface the error instead of reloading.
+          if (window.location.pathname === '/login') {
+            throw new Error('HTTP 401')
+          }
           window.location.href = '/login'
           return null as T
         }
@@ -170,7 +174,7 @@ class API {
 
   // Mail
   async getMail(folder: string): Promise<{ emails?: Mail[] }> {
-    return this.get<{ emails?: Mail[] }>(`/mail/${folder}`)
+    return this.get<{ emails?: Mail[] }>(`/mail/${encodeURIComponent(folder)}`)
   }
 
   async sendMail(mail: SendMailRequest): Promise<void> {
@@ -178,7 +182,7 @@ class API {
   }
 
   async deleteMail(id: string): Promise<void> {
-    await this.delete(`/mail/delete?id=${id}`)
+    await this.delete(`/mail/delete?id=${encodeURIComponent(id)}`)
   }
 
   // Filters
@@ -191,11 +195,11 @@ class API {
   }
 
   async updateFilter(id: string, filter: Partial<Filter>): Promise<{ filter?: Filter }> {
-    return this.put<{ filter?: Filter }>(`/filters/${id}`, filter)
+    return this.put<{ filter?: Filter }>(`/filters/${encodeURIComponent(id)}`, filter)
   }
 
   async deleteFilter(id: string): Promise<void> {
-    await this.delete(`/filters/${id}`)
+    await this.delete(`/filters/${encodeURIComponent(id)}`)
   }
 
   // Vacation/Auto-reply
@@ -222,7 +226,7 @@ class API {
   }
 
   async getThread(id: string): Promise<{ thread?: Thread }> {
-    return this.get<{ thread?: Thread }>(`/threads/${id}`)
+    return this.get<{ thread?: Thread }>(`/threads/${encodeURIComponent(id)}`)
   }
 
   // Push notifications

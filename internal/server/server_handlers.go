@@ -155,33 +155,25 @@ func (s *Server) deliverMessageToFolder(from string, to []string, notify []strin
 	var failed []rcptFailure
 	delivered := 0
 	for i, recipient := range to {
-		user, domain := parseEmail(recipient)
 		rcptNotify := ""
 		if i < len(notify) {
 			rcptNotify = notify[i]
 		}
 
-		domainData, err := s.database.GetDomain(domain)
-		if err != nil || domainData == nil || !domainData.IsActive {
-			if relayErr := s.relayMessageWithNotify(from, recipient, notify, data); relayErr != nil {
-				s.logger.Error("Failed to relay message", "to", recipient, "error", relayErr)
+		user, domain, external, routeErr := s.routeRecipient(recipient)
+		if routeErr != nil {
+			s.logger.Error("Recipient routing failed", "to", recipient, "error", routeErr)
+			failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("route %s: %w", recipient, routeErr), local: routeErr})
+			continue
+		}
+		if external != "" {
+			if relayErr := s.relayMessageWithNotify(from, external, []string{rcptNotify}, data); relayErr != nil {
+				s.logger.Error("Failed to relay message", "to", external, "error", relayErr)
 				failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("relay %s: %w", recipient, relayErr)})
 			} else {
 				delivered++
 			}
 			continue
-		}
-
-		target, aliasErr := s.database.ResolveAlias(domain, user)
-		if aliasErr != nil {
-			s.logger.Debug("Alias resolution failed, trying direct delivery", "domain", domain, "user", user, "error", aliasErr)
-		}
-		if target != "" {
-			tUser, tDomain := parseEmail(target)
-			if tUser != "" && tDomain != "" {
-				user = tUser
-				domain = tDomain
-			}
 		}
 
 		// The mailbox owner's Sieve script decides the folder, redirects,
@@ -405,12 +397,16 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 	// Handle redirects - queue copies to redirect addresses
 	for _, redirectAddr := range redirectAddrs {
 		// Check for forwarding loop
-		loopAddrs := getMailLoopHeaders(data)
-		for _, loopAddr := range loopAddrs {
+		looped := false
+		for _, loopAddr := range getMailLoopHeaders(data) {
 			if strings.EqualFold(loopAddr, redirectAddr) {
 				s.logger.Warn("Forwarding loop detected, skipping redirect", "loop_addr", loopAddr, "redirect_to", redirectAddr)
-				continue
+				looped = true
+				break
 			}
+		}
+		if looped {
+			continue
 		}
 		// Add this sender to the loop tracking header
 		dataWithLoop := addMailLoopHeader(data, from)
@@ -425,30 +421,20 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 	var failed []rcptFailure
 	delivered := 0
 	for _, recipient := range to {
-		user, domain := parseEmail(recipient)
-
-		domainData, err := s.database.GetDomain(domain)
-		if err != nil || domainData == nil || !domainData.IsActive {
-			if relayErr := s.relayMessage(from, recipient, data); relayErr != nil {
-				s.logger.Error("Failed to relay message", "to", recipient, "error", relayErr)
+		user, domain, external, routeErr := s.routeRecipient(recipient)
+		if routeErr != nil {
+			s.logger.Error("Recipient routing failed", "to", recipient, "error", routeErr)
+			failed = append(failed, rcptFailure{rcpt: recipient, err: fmt.Errorf("route %s: %w", recipient, routeErr), local: routeErr})
+			continue
+		}
+		if external != "" {
+			if relayErr := s.relayMessage(from, external, data); relayErr != nil {
+				s.logger.Error("Failed to relay message", "to", external, "error", relayErr)
 				failed = append(failed, rcptFailure{rcpt: recipient, err: fmt.Errorf("relay %s: %w", recipient, relayErr)})
 			} else {
 				delivered++
 			}
 			continue
-		}
-
-		// Resolve alias
-		target, aliasErr := s.database.ResolveAlias(domain, user)
-		if aliasErr != nil {
-			s.logger.Debug("Alias resolution failed, trying direct delivery", "domain", domain, "user", user, "error", aliasErr)
-		}
-		if target != "" {
-			tUser, tDomain := parseEmail(target)
-			if tUser != "" && tDomain != "" {
-				user = tUser
-				domain = tDomain
-			}
 		}
 
 		// Deliver with optional target folder from sieve

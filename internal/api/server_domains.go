@@ -83,6 +83,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.Name = strings.ToLower(strings.TrimSpace(req.Name)) // F6060: lookups use lower-case names
 	if req.Name == "" {
 		s.sendError(w, http.StatusBadRequest, "domain name is required")
 		return

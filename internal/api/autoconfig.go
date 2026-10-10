@@ -133,24 +133,38 @@ func getAuthMethod(ssl bool) string {
 	return "password-cleartext"
 }
 
-// extractDomainFromRequest extracts the domain from the autoconfig request
+// extractDomainFromRequest extracts the mail domain from the autoconfig request.
+// F6067: clients fetch the config from autoconfig.<domain>, autodiscover.<domain>
+// or mail.<domain>, so using the Host as the domain produced hostnames such as
+// mail.autoconfig.<domain> that do not resolve. An ?emailaddress= parameter
+// (Thunderbird sends it) names the domain directly when it is well formed.
 func extractDomainFromRequest(r *http.Request) string {
-	// Try to get domain from Host header
-	host := r.Host
+	if email := r.URL.Query().Get("emailaddress"); email != "" {
+		if at := strings.LastIndex(email, "@"); at > 0 && at < len(email)-1 {
+			d := strings.ToLower(email[at+1:])
+			if strings.Contains(d, ".") && validateDomainName(d) == nil {
+				return d
+			}
+		}
+	}
 
-	// Remove port if present
+	host := r.Host
+	if strings.HasPrefix(host, "[") { // IPv6 literal: not a mail domain
+		return ""
+	}
 	if idx := strings.Index(host, ":"); idx > 0 {
 		host = host[:idx]
 	}
-
-	// If host contains the domain, use it
-	if strings.Contains(host, ".") {
-		return strings.ToLower(host)
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if !strings.Contains(host, ".") {
+		return ""
 	}
-
-	// Try to extract from the request URL path (for POST requests)
-	// Path format: /autodiscover/autodiscover.xml or /.well-known/autoconfig/mail/config-v1.1.xml
-	return ""
+	for _, prefix := range []string{"autoconfig.", "autodiscover."} {
+		if rest := strings.TrimPrefix(host, prefix); rest != host && strings.Contains(rest, ".") {
+			return rest
+		}
+	}
+	return host
 }
 
 // sendAutoconfigError sends an XML error response for autoconfig

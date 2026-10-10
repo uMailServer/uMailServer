@@ -156,9 +156,14 @@ func TestCRLFUID_PropfindHrefsAreCleanURIs(t *testing.T) {
 		t.Errorf("PROPFIND did not list the CRLF event at its request-URL path; hrefs=%v", ms.Responses)
 	}
 
-	// A stored UID without a trailing EOL on its line must also stay intact.
-	if w := crlfUIDRequest(t, server, "PUT", "/dav/calendars/work-cal/evt-lastline", crlfICSNoTrailingEOL); w.Code != http.StatusCreated {
-		t.Fatalf("last-line-UID PUT = %d, want %d", w.Code, http.StatusCreated)
+	// A truncated body (no END lines) is rejected (F6070), so the unterminated
+	// UID line is exercised through a body that closes without a trailing EOL.
+	if w := crlfUIDRequest(t, server, "PUT", "/dav/calendars/work-cal/evt-lastline", crlfICSNoTrailingEOL); w.Code != http.StatusForbidden {
+		t.Fatalf("truncated PUT = %d, want %d", w.Code, http.StatusForbidden)
+	}
+	complete := "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nDTSTART:20260101T100000Z\r\nUID:evt-lastline\r\nEND:VEVENT\r\nEND:VCALENDAR"
+	if w := crlfUIDRequest(t, server, "PUT", "/dav/calendars/work-cal/evt-lastline", complete); w.Code != http.StatusCreated {
+		t.Fatalf("last-line PUT = %d, want %d", w.Code, http.StatusCreated)
 	}
 	if w := crlfUIDRequest(t, server, "GET", "/dav/calendars/work-cal/evt-lastline", ""); w.Code != http.StatusOK {
 		t.Errorf("last-line-UID GET = %d, want %d", w.Code, http.StatusOK)

@@ -200,13 +200,21 @@ console.log('EXPECTED: verification posts the code and only then reports enabled
 // --- 4. disable flow --------------------------------------------------------
 queueFetch('/api/v1/account/totp/disable', 'POST', 200, { enabled: false })
 queueFetch('/api/v1/account/totp', 'GET', 200, { enabled: false, pending_setup: false })
+// F6100: the server requires a current TOTP code to disable an enabled factor.
+const disableBtn0 = findNode(rerender(), (n) => n.props && typeof n.props.onClick === 'function' && /disable/i.test(textOf(n)))
+assert.ok(disableBtn0, 'CONTROL FAILED: no Disable control rendered while TOTP is enabled')
+await disableBtn0.props.onClick()
+assert.ok(!fetchCalls.find((c) => c.url === '/api/v1/account/totp/disable'), 'F6100: disable must not be sent without a code')
+const disableCode = findNode(rerender(), (n) => n.props && n.props.onChange && /current/i.test(n.props['aria-label'] || ''))
+assert.ok(disableCode, 'F6100: no current-code input rendered while TOTP is enabled')
+disableCode.props.onChange({ target: { value: '654321' } })
 const disableBtn = findNode(rerender(), (n) => n.props && typeof n.props.onClick === 'function' && /disable/i.test(textOf(n)))
-assert.ok(disableBtn, 'CONTROL FAILED: no Disable control rendered while TOTP is enabled')
 await disableBtn.props.onClick()
 await runEffects()
 const disableCall = fetchCalls.find((c) => c.url === '/api/v1/account/totp/disable' && c.method === 'POST')
 assert.ok(disableCall, 'PROBLEM CONFIRMED: Disable did not call the disable endpoint')
 assert.strictEqual(disableCall.options.credentials, 'include', 'disable request must include credentials')
+assert.strictEqual(JSON.parse(disableCall.options.body).code, '654321', 'F6100: disable must carry the current TOTP code')
 console.log('CONTROL EXPECTED: disable posts to the disable endpoint | ACTUAL: ok')
 
 // --- 5. pending setup is continued; server rejection surfaces the error -----
