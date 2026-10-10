@@ -88,12 +88,13 @@ export function Domains() {
   const handleDeleteDomain = async () => {
     if (!selectedDomain) return;
 
+    setFormError("");
     try {
       await deleteDomain(selectedDomain.name);
       setIsDeleteDialogOpen(false);
       setSelectedDomain(null);
     } catch (err) {
-      console.error("Failed to delete domain:", err);
+      setFormError(err instanceof Error ? err.message : "Failed to delete domain");
     }
   };
 
@@ -246,6 +247,7 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
               onToggle={() => handleToggleDomain(domain)}
               onDelete={() => {
                 setSelectedDomain(domain);
+                setFormError("");
                 setIsDeleteDialogOpen(true);
               }}
               onCopyDNS={() => copyDNSToClipboard(domain)}
@@ -265,6 +267,12 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
               undone and all associated accounts will be removed.
             </DialogDescription>
           </DialogHeader>
+          {formError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
               Cancel

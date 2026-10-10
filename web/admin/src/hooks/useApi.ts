@@ -115,7 +115,7 @@ export function useDomains() {
   }, [fetchDomains]);
 
   const updateDomain = useCallback(async (name: string, updates: Partial<Domain>) => {
-    const result = await apiRequest<Domain>(`/domains/${name}`, {
+    const result = await apiRequest<Domain>(`/domains/${encodeURIComponent(name)}`, {
       method: "PUT",
       body: JSON.stringify(updates),
     });
@@ -124,7 +124,7 @@ export function useDomains() {
   }, [fetchDomains]);
 
   const deleteDomain = useCallback(async (name: string) => {
-    await apiRequest(`/domains/${name}`, { method: "DELETE" });
+    await apiRequest(`/domains/${encodeURIComponent(name)}`, { method: "DELETE" });
     await fetchDomains();
   }, [fetchDomains]);
 
@@ -149,7 +149,7 @@ export function useAccounts() {
     setLoading(true);
     setError(null);
     try {
-      const url = domain ? `/accounts?domain=${domain}` : "/accounts";
+      const url = domain ? `/accounts?domain=${encodeURIComponent(domain)}` : "/accounts";
       const result = await apiRequest<Account[]>(url);
       setData(result);
       return result;
@@ -171,7 +171,7 @@ export function useAccounts() {
   }, [fetchAccounts]);
 
   const updateAccount = useCallback(async (email: string, updates: Partial<Account>) => {
-    const result = await apiRequest<Account>(`/accounts/${email}`, {
+    const result = await apiRequest<Account>(`/accounts/${encodeURIComponent(email)}`, {
       method: "PUT",
       body: JSON.stringify(updates),
     });
@@ -180,7 +180,7 @@ export function useAccounts() {
   }, [fetchAccounts]);
 
   const deleteAccount = useCallback(async (email: string) => {
-    await apiRequest(`/accounts/${email}`, { method: "DELETE" });
+    await apiRequest(`/accounts/${encodeURIComponent(email)}`, { method: "DELETE" });
     await fetchAccounts();
   }, [fetchAccounts]);
 
@@ -241,12 +241,12 @@ export function useQueue() {
   }, []);
 
   const retryEntry = useCallback(async (id: string) => {
-    await apiRequest(`/queue/${id}`, { method: "POST" });
+    await apiRequest(`/queue/${encodeURIComponent(id)}`, { method: "POST" });
     await fetchQueue();
   }, [fetchQueue]);
 
   const dropEntry = useCallback(async (id: string) => {
-    await apiRequest(`/queue/${id}`, { method: "DELETE" });
+    await apiRequest(`/queue/${encodeURIComponent(id)}`, { method: "DELETE" });
     await fetchQueue();
   }, [fetchQueue]);
 

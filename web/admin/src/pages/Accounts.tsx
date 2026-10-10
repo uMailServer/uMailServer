@@ -62,6 +62,11 @@ export function Accounts() {
   const [newAccountPassword, setNewAccountPassword] = useState("");
   const [newAccountIsAdmin, setNewAccountIsAdmin] = useState(false);
   const [formError, setFormError] = useState("");
+  // Edit dialog state is separate from the create form so a half-typed
+  // create password can never be sent as a password reset for another account.
+  const [editPassword, setEditPassword] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [originalIsAdmin, setOriginalIsAdmin] = useState(false);
 
   useEffect(() => {
     fetchAccounts();
@@ -92,12 +97,13 @@ export function Accounts() {
   const handleDeleteAccount = async () => {
     if (!selectedAccount) return;
 
+    setFormError("");
     try {
       await deleteAccount(selectedAccount.email);
       setIsDeleteDialogOpen(false);
       setSelectedAccount(null);
     } catch (err) {
-      console.error("Failed to delete account:", err);
+      setFormError(err instanceof Error ? err.message : "Failed to delete account");
     }
   };
 
@@ -105,17 +111,26 @@ export function Accounts() {
     if (!selectedAccount) return;
 
     try {
-      const updates: Partial<Account> & { password?: string } = {
+      const updates: Partial<Account> & { password?: string; current_admin_password?: string } = {
         is_admin: selectedAccount.is_admin,
         is_active: selectedAccount.is_active,
       };
-      if (newAccountPassword) {
-        updates.password = newAccountPassword;
+      if (editPassword) {
+        updates.password = editPassword;
+      }
+      if (selectedAccount.is_admin !== originalIsAdmin) {
+        // Server requires re-authentication for admin privilege changes.
+        if (!adminPassword) {
+          setFormError("Your current admin password is required to change admin status");
+          return;
+        }
+        updates.current_admin_password = adminPassword;
       }
       await updateAccount(selectedAccount.email, updates);
       setIsEditDialogOpen(false);
       setSelectedAccount(null);
-      setNewAccountPassword("");
+      setEditPassword("");
+      setAdminPassword("");
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to update account");
     }
@@ -259,10 +274,15 @@ export function Accounts() {
               account={account}
               onEdit={() => {
                 setSelectedAccount(account);
+                setOriginalIsAdmin(account.is_admin);
+                setEditPassword("");
+                setAdminPassword("");
+                setFormError("");
                 setIsEditDialogOpen(true);
               }}
               onDelete={() => {
                 setSelectedAccount(account);
+                setFormError("");
                 setIsDeleteDialogOpen(true);
               }}
               formatBytes={formatBytes}
@@ -314,10 +334,21 @@ export function Accounts() {
                   id="new-password"
                   type="password"
                   placeholder="Leave empty to keep current"
-                  value={newAccountPassword}
-                  onChange={(e) => setNewAccountPassword(e.target.value)}
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
                 />
               </div>
+              {selectedAccount.is_admin !== originalIsAdmin && (
+                <div className="space-y-2">
+                  <Label htmlFor="admin-password">Your admin password (required to change admin status)</Label>
+                  <Input
+                    id="admin-password"
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                  />
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>
@@ -339,6 +370,12 @@ export function Accounts() {
               cannot be undone.
             </DialogDescription>
           </DialogHeader>
+          {formError && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
               Cancel

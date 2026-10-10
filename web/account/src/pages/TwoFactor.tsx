@@ -107,11 +107,26 @@ function TwoFactorPage() {
 
   const disable = async () => {
     setError('')
+    // The server requires a current TOTP code to disable an enabled factor.
+    if (code.trim() === '') {
+      setError('Enter a current code from your authenticator app to disable two-factor.')
+      return
+    }
     setBusy(true)
     try {
-      const res = await fetch('/api/v1/account/totp/disable', { method: 'POST', credentials: 'include' })
-      if (!res.ok) throw new Error('disable failed')
+      const res = await fetch('/api/v1/account/totp/disable', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code.trim() }),
+      })
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null
+        setError(data?.error ?? 'Could not disable two-factor authentication. Please try again.')
+        return
+      }
       await refreshStatus()
+      setCode('')
     } catch {
       setError('Could not disable two-factor authentication. Please try again.')
     } finally {
@@ -142,6 +157,15 @@ function TwoFactorPage() {
           <p className="text-sm text-green-700 mt-1">
             Sign-in attempts require a code from your authenticator app.
           </p>
+          <input
+            type="text"
+            value={code}
+            onChange={onCodeChange}
+            maxLength={6}
+            aria-label="Current authenticator code"
+            placeholder="123456"
+            className="mt-3 block w-32 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          />
           <button
             type="button"
             onClick={disable}
