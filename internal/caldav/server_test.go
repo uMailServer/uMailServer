@@ -507,8 +507,9 @@ END:VCALENDAR`
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	// The destination did not exist, so it is created (RFC 4918; F5587).
+	if w.Code != http.StatusCreated {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusCreated)
 	}
 
 	// Verify original is gone
@@ -562,8 +563,9 @@ END:VCALENDAR`
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNoContent {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusNoContent)
+	// The destination did not exist, so it is created (RFC 4918; F5587).
+	if w.Code != http.StatusCreated {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusCreated)
 	}
 
 	// Verify original still exists
@@ -1245,7 +1247,8 @@ func TestHandlePropfind_InvalidBody(t *testing.T) {
 	// Send invalid XML body - should still work (falls back to allprop)
 	body := "invalid xml <"
 
-	req := httptest.NewRequest("PROPFIND", "/dav/calendars/user@example.com", strings.NewReader(body))
+	// The home collection: a calendar path that does not exist is 404 (F5586).
+	req := httptest.NewRequest("PROPFIND", "/dav/calendars/", strings.NewReader(body))
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	req.Header.Set("Depth", "1")
 	w := httptest.NewRecorder()
@@ -1320,7 +1323,9 @@ func TestHandlePropfind_Depth0(t *testing.T) {
 	cal := &Calendar{ID: "test-cal", Name: "Test"}
 	_ = server.storage.CreateCalendar("user@example.com", cal)
 
-	req := httptest.NewRequest("PROPFIND", "/dav/calendars/user@example.com/test-cal", nil)
+	// Calendars are addressed as /dav/calendars/{calendarID}; the old
+	// /{user}/ segment named a missing calendar, which is now 404 (F5586).
+	req := httptest.NewRequest("PROPFIND", "/dav/calendars/test-cal", nil)
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	req.Header.Set("Depth", "0")
 	w := httptest.NewRecorder()
