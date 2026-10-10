@@ -530,13 +530,10 @@ func TestInterpreter_StringTest_ValueMatch(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action, got %d", len(actions))
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
 }
 

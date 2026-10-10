@@ -93,6 +93,32 @@ func (s *Server) hashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+// bcryptMaxPasswordBytes is bcrypt's input limit; GenerateFromPassword
+// rejects longer passwords with bcrypt.ErrPasswordTooLong.
+const bcryptMaxPasswordBytes = 72
+
+// checkHasherPasswordLength rejects a password the configured hasher cannot
+// hash. F5282: validatePassword allows 128 characters and self-service only
+// checks a minimum, but the bcrypt hasher refuses more than 72 bytes, which
+// surfaced as a 500 instead of a validation error.
+func (s *Server) checkHasherPasswordLength(password string) error {
+	if s.config.PasswordHasher != "argon2id" && len(password) > bcryptMaxPasswordBytes {
+		return fmt.Errorf("password exceeds maximum length of %d bytes", bcryptMaxPasswordBytes)
+	}
+	return nil
+}
+
+// validateNewPassword is the policy for passwords set by an admin (account
+// creation and admin reset). F5281: only creation applied validatePassword,
+// so an admin reset could store any non-empty password, including one the
+// create endpoint rejects.
+func (s *Server) validateNewPassword(password string) error {
+	if err := validatePassword(password); err != nil {
+		return err
+	}
+	return s.checkHasherPasswordLength(password)
+}
+
 // verifyPassword verifies a password against a stored hash
 // Returns (matches, needsRehash) where needsRehash is true if the hash uses an older algorithm
 func (s *Server) verifyPassword(password, encodedHash string) (bool, bool) {

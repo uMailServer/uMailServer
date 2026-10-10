@@ -240,11 +240,14 @@ func TestFetchPolicy_WrongVersion_Cov3(t *testing.T) {
 	}
 }
 
+// F5310: the TXT id is an opaque change marker (RFC 8461 §3.1), not a hash
+// of the policy, so an id that differs from SHA-256(policy) is accepted.
 func TestFetchPolicy_PolicyIDMismatch_Cov3(t *testing.T) {
 	policyText := "version: STSv1\nmode: enforce\nmax_age: 86400\nmx: mail.example.com\n"
 
 	resolver := newMockDNSResolver()
 	resolver.txtRecords["_mta-sts.example.com"] = []string{"v=STSv1; id=wrongid123"}
+	resolver.ipRecords["mta-sts.example.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	validator := NewMTASTSValidator(resolver)
 	validator.httpClient = &http.Client{
 		Transport: &mockTransport{statusCode: 200, body: policyText},
@@ -252,11 +255,11 @@ func TestFetchPolicy_PolicyIDMismatch_Cov3(t *testing.T) {
 	}
 
 	policy, err := validator.fetchPolicy(context.Background(), "example.com")
-	if err == nil {
-		t.Error("expected error for policy ID mismatch")
+	if err != nil {
+		t.Fatalf("opaque policy id rejected: %v", err)
 	}
-	if policy != nil {
-		t.Error("expected nil policy for ID mismatch")
+	if policy == nil || policy.Mode != MTASTSModeEnforce {
+		t.Errorf("expected enforce policy, got %+v", policy)
 	}
 }
 

@@ -116,6 +116,10 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, "new password must be at least 8 characters")
 		return
 	}
+	if err := s.checkHasherPasswordLength(req.NewPassword); err != nil { // F5282
+		s.sendError(w, http.StatusBadRequest, "new "+err.Error())
+		return
+	}
 
 	user, domain := parseEmail(authUser)
 	account, err := s.db.GetAccount(domain, user)
@@ -247,7 +251,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate password strength
-	if err := validatePassword(req.Password); err != nil {
+	if err := s.validateNewPassword(req.Password); err != nil { // F5282
 		s.sendError(w, http.StatusBadRequest, "password does not meet complexity requirements")
 		return
 	}
@@ -338,16 +342,20 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
-	// Parse request body first to check IsAdmin modification
+	// Parse request body first to check IsAdmin modification. F5280: optional
+	// fields are pointers so an omitted field keeps its stored value; the
+	// admin panel's edit dialog sends only is_admin/is_active/password, and
+	// zero-filling the rest wiped forwarding, the vacation reply and the
+	// quota (0 = unlimited) on every edit.
 	var req struct {
-		Password             string `json:"password"`
-		IsAdmin              bool   `json:"is_admin"`
-		IsActive             *bool  `json:"is_active"`
-		ForwardTo            string `json:"forward_to"`
-		ForwardKeepCopy      bool   `json:"forward_keep_copy"`
-		QuotaLimit           int64  `json:"quota_limit"`
-		VacationSettings     string `json:"vacation_settings"`
-		CurrentAdminPassword string `json:"current_admin_password"`
+		Password             string  `json:"password"`
+		IsAdmin              *bool   `json:"is_admin"`
+		IsActive             *bool   `json:"is_active"`
+		ForwardTo            *string `json:"forward_to"`
+		ForwardKeepCopy      *bool   `json:"forward_keep_copy"`
+		QuotaLimit           *int64  `json:"quota_limit"`
+		VacationSettings     *string `json:"vacation_settings"`
+		CurrentAdminPassword string  `json:"current_admin_password"`
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
@@ -355,25 +363,31 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
-	if req.QuotaLimit < 0 {
+	if req.QuotaLimit != nil && *req.QuotaLimit < 0 {
 		s.sendError(w, http.StatusBadRequest, "quota_limit must be non-negative")
 		return
 	}
 
+	// F5280: an omitted is_admin keeps the stored role.
+	wantAdmin := account.IsAdmin
+	if req.IsAdmin != nil {
+		wantAdmin = *req.IsAdmin
+	}
+
 	// Non-admin cannot grant admin privileges
-	if !isAdmin && req.IsAdmin {
+	if !isAdmin && wantAdmin {
 		s.sendError(w, http.StatusForbidden, "only admins can grant admin privileges")
 		return
 	}
 
 	// Admins can only promote other users (not themselves) to admin
-	if isAdmin && req.IsAdmin && authUser == email && account.IsAdmin != req.IsAdmin {
+	if isAdmin && wantAdmin && authUser == email && account.IsAdmin != wantAdmin {
 		s.sendError(w, http.StatusForbidden, "cannot modify your own admin status")
 		return
 	}
 
 	// Admin status changes require re-authentication (current admin password)
-	if isAdmin && account.IsAdmin != req.IsAdmin {
+	if isAdmin && account.IsAdmin != wantAdmin {
 		if req.CurrentAdminPassword == "" {
 			s.sendError(w, http.StatusForbidden, "current_admin_password required for admin privilege changes")
 			return
@@ -393,13 +407,17 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		// Audit log the privilege change
 		ip := audit.ExtractIP(r)
 		action := "demoted"
-		if req.IsAdmin {
+		if wantAdmin {
 			action = "promoted"
 		}
 		s.auditLogger.LogAccountUpdate(authUser, email, ip, []string{"admin_status_" + action})
 	}
 
 	if req.Password != "" {
+		if err := s.validateNewPassword(req.Password); err != nil { // F5281
+			s.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		// Hash new password with configured hasher
 		hashedPassword, err := s.hashPassword(req.Password)
 		if err != nil {
@@ -409,14 +427,22 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		account.PasswordHash = hashedPassword
 		account.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
 	}
-	account.IsAdmin = req.IsAdmin
+	account.IsAdmin = wantAdmin
 	if req.IsActive != nil {
 		account.IsActive = *req.IsActive
 	}
-	account.ForwardTo = req.ForwardTo
-	account.ForwardKeepCopy = req.ForwardKeepCopy
-	account.QuotaLimit = req.QuotaLimit
-	account.VacationSettings = req.VacationSettings
+	if req.ForwardTo != nil {
+		account.ForwardTo = *req.ForwardTo
+	}
+	if req.ForwardKeepCopy != nil {
+		account.ForwardKeepCopy = *req.ForwardKeepCopy
+	}
+	if req.QuotaLimit != nil {
+		account.QuotaLimit = *req.QuotaLimit
+	}
+	if req.VacationSettings != nil {
+		account.VacationSettings = *req.VacationSettings
+	}
 	account.UpdatedAt = time.Now()
 
 	if err := s.db.UpdateAccount(account); err != nil {

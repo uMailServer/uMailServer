@@ -398,61 +398,83 @@ type DMARCConfig struct {
 
 // Load loads configuration from file with defaults and env overrides
 func Load(path string) (*Config, error) {
+	cfg, _, err := loadWithData(path)
+	return cfg, err
+}
+
+// loadWithData is Load that also returns the exact file bytes the config was
+// parsed from (nil when no file was read), so callers can fingerprint the
+// loaded content without a second, racy read.
+func loadWithData(path string) (*Config, []byte, error) {
 	// Start with defaults
 	cfg := DefaultConfig()
+	var data []byte
 
 	// Load from file if provided
 	if path != "" {
-		data, err := os.ReadFile(filepath.Clean(path))
+		raw, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("failed to read config file: %w", err)
+				return nil, nil, fmt.Errorf("failed to read config file: %w", err)
 			}
 			// Config file doesn't exist, use defaults
 		} else {
+			data = raw
 			if err := yaml.Unmarshal(data, cfg); err != nil {
-				return nil, fmt.Errorf("failed to parse config file: %w", err)
+				return nil, nil, fmt.Errorf("failed to parse config file: %w", err)
 			}
 		}
 	}
 
 	// Apply environment variable overrides
 	if err := loadFromEnv(cfg); err != nil {
-		return nil, fmt.Errorf("failed to load env vars: %w", err)
+		return nil, nil, fmt.Errorf("failed to load env vars: %w", err)
 	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("config validation failed: %w", err)
+		return nil, nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
-	return cfg, nil
+	return cfg, data, nil
 }
 
 // loadFromEnv loads configuration from environment variables
 // Format: UMAILSERVER_<SECTION>_<KEY>
 // Example: UMAILSERVER_SMTP_INBOUND_PORT=2525
+//
+// <SECTION>/<KEY> may be spelled like the YAML key (UMAILSERVER_SERVER_DATA_DIR,
+// as documented) or like the Go field name (UMAILSERVER_SERVER_DATADIR, legacy).
+// When both spellings are set, the YAML spelling wins.
 func loadFromEnv(cfg *Config) error {
-	prefix := "UMAILSERVER_"
+	return loadSectionFromEnv(reflect.ValueOf(cfg), "UMAILSERVER_")
+}
 
-	v := reflect.ValueOf(cfg).Elem()
-	t := v.Type()
-
-	for i := 0; i < v.NumField(); i++ {
-		field := v.Field(i)
-		fieldType := t.Field(i)
-		section := strings.ToUpper(fieldType.Name)
-
-		if err := loadSectionFromEnv(field, prefix+section+"_"); err != nil {
-			return err
+// envKeysFor returns the candidate env keys for a struct field under each
+// prefix: YAML-key spelling first, then the legacy Go-field-name spelling.
+func envKeysFor(prefixes []string, f reflect.StructField) []string {
+	names := []string{}
+	if tag := strings.Split(f.Tag.Get("yaml"), ",")[0]; tag != "" && tag != "-" {
+		names = append(names, strings.ToUpper(tag))
+	}
+	if legacy := strings.ToUpper(f.Name); len(names) == 0 || names[0] != legacy {
+		names = append(names, legacy)
+	}
+	keys := make([]string, 0, len(prefixes)*len(names))
+	for _, name := range names {
+		for _, p := range prefixes {
+			keys = append(keys, p+name)
 		}
 	}
-
-	return nil
+	return keys
 }
 
 // loadSectionFromEnv recursively loads struct fields from environment variables
 func loadSectionFromEnv(v reflect.Value, prefix string) error {
+	return loadSectionFromEnvKeys(v, []string{prefix})
+}
+
+func loadSectionFromEnvKeys(v reflect.Value, prefixes []string) error {
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
 	}
@@ -471,18 +493,25 @@ func loadSectionFromEnv(v reflect.Value, prefix string) error {
 			continue
 		}
 
-		envKey := prefix + strings.ToUpper(fieldType.Name)
-		envVal := os.Getenv(envKey)
-
-		if envVal != "" {
+		keys := envKeysFor(prefixes, fieldType)
+		for _, envKey := range keys {
+			envVal := os.Getenv(envKey)
+			if envVal == "" {
+				continue
+			}
 			if err := setFieldFromString(field, envVal); err != nil {
 				return fmt.Errorf("failed to set %s: %w", envKey, err)
 			}
+			break
 		}
 
 		// Recurse into nested structs
 		if field.Kind() == reflect.Struct {
-			if err := loadSectionFromEnv(field, envKey+"_"); err != nil {
+			nested := make([]string, len(keys))
+			for j, k := range keys {
+				nested[j] = k + "_"
+			}
+			if err := loadSectionFromEnvKeys(field, nested); err != nil {
 				return err
 			}
 		}

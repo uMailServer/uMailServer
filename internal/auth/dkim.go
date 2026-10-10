@@ -663,11 +663,11 @@ func canonicalizeHeader(name, value, canon string) string {
 	switch canon {
 	case "relaxed":
 		return canonicalizeHeaderRelaxed(name, value)
-	case "simple":
 	default:
+		// F5313: "simple" (and unknown) keep the field with its CRLF; the
+		// former empty `case "simple":` dropped the CRLF.
 		return canonicalizeHeaderSimple(name, value)
 	}
-	return name + ": " + value
 }
 
 // canonicalizeHeaderSimple preserves header exactly as-is

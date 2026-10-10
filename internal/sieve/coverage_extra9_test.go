@@ -1,6 +1,7 @@
 package sieve
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -645,9 +646,10 @@ func TestInterpreter_ExecuteIf_StringTest(t *testing.T) {
 		Body:    []byte("hello world"),
 	}
 
-	_, err = interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
 }
 
@@ -873,14 +875,10 @@ func TestInterpreter_StringTestContainsDirect(t *testing.T) {
 		Body:    []byte("Hello World"),
 	}
 
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// Should have keep action since "Hello World" contains "hello" case-insensitively
-	if len(actions) != 1 {
-		t.Fatalf("Expected 1 action, got %d", len(actions))
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
 }
 
@@ -905,13 +903,10 @@ func TestInterpreter_StringTestMatchesDirect(t *testing.T) {
 		Body:    []byte("Hello World"),
 	}
 
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	if len(actions) != 1 {
-		t.Fatalf("Expected 1 action, got %d", len(actions))
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
 }
 

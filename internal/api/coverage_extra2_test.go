@@ -131,7 +131,8 @@ func TestUpdateAccount_WithPasswordChange(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(map[string]interface{}{
-		"password": "newpassword", "is_admin": false, "is_active": true,
+		// F5281: admin resets now apply the create-time password policy.
+		"password": strings.Repeat("Nw0!", 3), "is_admin": false, "is_active": true,
 	})
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/accounts/u@pwchg.com", bytes.NewReader(body))
 	req = req.WithContext(context.WithValue(req.Context(), "user", "u@pwchg.com"))
@@ -147,7 +148,7 @@ func TestUpdateAccount_WithPasswordChange(t *testing.T) {
 		t.Error("Expected password hash to be updated")
 	}
 	// Verify the new hash is valid bcrypt
-	if err := bcrypt.CompareHashAndPassword([]byte(updated.PasswordHash), []byte("newpassword")); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(updated.PasswordHash), []byte(strings.Repeat("Nw0!", 3))); err != nil {
 		t.Errorf("New password hash does not match: %v", err)
 	}
 }

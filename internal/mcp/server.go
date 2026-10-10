@@ -14,6 +14,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/tracing"
+	"go.etcd.io/bbolt"
 	"go.opentelemetry.io/otel/attribute"
 	otrace "go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/bcrypt"
@@ -40,6 +41,9 @@ type Server struct {
 	rateLimit    int // requests per minute, 0 = disabled
 	rateMu       sync.Mutex
 	rateAttempts map[string]*rateAttempt
+	// rateLastSweep is when expired rateAttempts entries were last evicted
+	// (F5252).
+	rateLastSweep time.Time
 
 	// tracingProvider wraps every JSON-RPC method dispatch in an
 	// `mcp.<method>` server-kind span when set.
@@ -105,6 +109,16 @@ func (s *Server) checkRateLimit(ip string) bool {
 	}
 
 	now := time.Now()
+	// F5252: evict entries whose window expired, at most once per window,
+	// so the map does not grow by one entry per client IP forever.
+	if now.Sub(s.rateLastSweep) > time.Minute {
+		for k, a := range s.rateAttempts {
+			if now.Sub(a.windowStart) > time.Minute {
+				delete(s.rateAttempts, k)
+			}
+		}
+		s.rateLastSweep = now
+	}
 	attempt, exists := s.rateAttempts[ip]
 
 	// Check if window has expired (1 minute window)
@@ -804,6 +818,7 @@ func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (ma
 	domain := &db.DomainData{
 		Name:        name,
 		MaxAccounts: maxAccounts,
+		IsActive:    true, // F5250: inactive domains are not local
 	}
 	if err := s.db.CreateDomain(domain); err != nil {
 		if errors.Is(err, db.ErrDomainExists) {
@@ -826,6 +841,13 @@ func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("domain name is required")
 	}
 
+	// F5251: a missing domain is an error, not a successful deletion.
+	if exists, err := s.keyExists(db.BucketDomains, name); err != nil {
+		slog.Error("mcp tool error", "tool", "delete_domain", "error", err)
+		return nil, fmt.Errorf("internal server error")
+	} else if !exists {
+		return nil, fmt.Errorf("domain not found")
+	}
 	if err := s.db.DeleteDomain(name); err != nil {
 		slog.Error("mcp tool error", "tool", "delete_domain", "error", err)
 		return nil, fmt.Errorf("internal server error")
@@ -884,6 +906,7 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 		Domain:       domain,
 		PasswordHash: string(hash),
 		IsAdmin:      false,
+		IsActive:     true, // F5250: inactive accounts cannot authenticate
 	}
 	if err := s.db.CreateAccount(account); err != nil {
 		if errors.Is(err, db.ErrAccountExists) {
@@ -911,6 +934,14 @@ func (s *Server) toolDeleteAccount(email string) (map[string]interface{}, error)
 		return nil, fmt.Errorf("invalid email address")
 	}
 
+	// F5251: a missing account (including a case variant of a stored
+	// address) is an error, not a successful deletion.
+	if exists, err := s.keyExists(db.BucketAccounts, db.AccountKey(parts[1], parts[0])); err != nil {
+		slog.Error("mcp tool error", "tool", "delete_account", "error", err)
+		return nil, fmt.Errorf("internal server error")
+	} else if !exists {
+		return nil, fmt.Errorf("account not found")
+	}
 	if err := s.db.DeleteAccount(parts[1], parts[0]); err != nil {
 		slog.Error("mcp tool error", "tool", "delete_account", "error", err)
 		return nil, fmt.Errorf("internal server error")
@@ -922,6 +953,20 @@ func (s *Server) toolDeleteAccount(email string) (map[string]interface{}, error)
 			{"type": "text", "text": text},
 		},
 	}, nil
+}
+
+// keyExists reports whether key is stored in bucket (F5251).
+func (s *Server) keyExists(bucket, key string) (bool, error) {
+	found := false
+	err := s.db.BoltDB().View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", bucket)
+		}
+		found = b.Get([]byte(key)) != nil
+		return nil
+	})
+	return found, err
 }
 
 func (s *Server) toolGetAccountInfo(email string) (map[string]interface{}, error) {
