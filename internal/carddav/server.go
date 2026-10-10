@@ -349,19 +349,36 @@ func (s *Server) propfindTarget(w http.ResponseWriter, ms *Multistatus, username
 	return true
 }
 
-// handleReport handles REPORT requests
+// handleReport handles REPORT requests: addressbook-query (filtered,
+// F5570/F5571) and addressbook-multiget (F5572).
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username string) {
 	body, ok := s.readBody(w, r)
 	if !ok {
 		return
 	}
 
-	// Parse addressbook query
 	var query AddressbookQuery
-	if err := xml.Unmarshal(body, &query); err != nil {
+	var multiget *AddressbookMultiget
+	if reportRootName(body) == "addressbook-multiget" {
+		multiget = &AddressbookMultiget{}
+		if err := xml.Unmarshal(body, multiget); err != nil || len(multiget.Hrefs) == 0 {
+			s.sendError(w, http.StatusBadRequest, "invalid addressbook multiget")
+			return
+		}
+	} else if err := xml.Unmarshal(body, &query); err != nil {
 		s.logger.Debug("Failed to parse REPORT", "error", err)
 		s.sendError(w, http.StatusBadRequest, "invalid addressbook query")
 		return
+	}
+	if query.Filter != nil {
+		if err := query.Filter.validate(); err != nil {
+			if errors.Is(err, errUnsupportedCollation) {
+				s.sendPreconditionError(w, "supported-collation")
+				return
+			}
+			s.sendError(w, http.StatusBadRequest, "invalid addressbook query filter")
+			return
+		}
 	}
 
 	// Build response
@@ -380,18 +397,27 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 			return
 		}
 
-		contacts, err := s.storage.GetContacts(username, addressbookID)
-		if err == nil {
-			for _, contact := range contacts {
-				uid := s.extractUIDFromVCard(contact)
-				if uid != "" {
-					multistatus.Responses = append(multistatus.Responses, s.buildContactResponse(username, addressbookID, uid, contact))
-				}
+		if multiget != nil {
+			for _, href := range multiget.Hrefs {
+				multistatus.Responses = append(multistatus.Responses, s.multigetResponse(username, addressbookID, strings.TrimSpace(href)))
 			}
 		} else {
-			s.logger.Error("Failed to query addressbook contacts", "error", err)
-			s.sendError(w, http.StatusInternalServerError, "failed to query addressbook contacts")
-			return
+			contacts, err := s.storage.GetContacts(username, addressbookID)
+			if err != nil {
+				s.logger.Error("Failed to query addressbook contacts", "error", err)
+				s.sendError(w, http.StatusInternalServerError, "failed to query addressbook contacts")
+				return
+			}
+			for _, contact := range contacts {
+				uid := s.extractUIDFromVCard(contact)
+				if uid == "" {
+					continue
+				}
+				if query.Filter != nil && !query.Filter.matches(parseVCardProps(contact)) {
+					continue
+				}
+				multistatus.Responses = append(multistatus.Responses, s.buildContactResponse(username, addressbookID, uid, contact))
+			}
 		}
 	}
 
@@ -401,6 +427,60 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 	output, _ := xml.MarshalIndent(multistatus, "", "  ")
 	_, _ = w.Write([]byte(xml.Header))
 	_, _ = w.Write(output)
+}
+
+// reportRootName returns the local name of the REPORT body's root element,
+// or "" when none can be read.
+func reportRootName(body []byte) string {
+	dec := xml.NewDecoder(strings.NewReader(string(body)))
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return ""
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			return start.Name.Local
+		}
+	}
+}
+
+// multigetResponse answers one addressbook-multiget href (RFC 6352 §8.7).
+// The href must name a contact in the request-URI's address book of the
+// authenticated user; anything else gets a per-href error status rather than
+// failing the whole report. The client's href is echoed so it can match the
+// response to its request.
+func (s *Server) multigetResponse(username, addressbookID, href string) Response {
+	status := func(code int) Response {
+		return Response{Href: href, Status: fmt.Sprintf("HTTP/1.1 %d %s", code, http.StatusText(code))}
+	}
+	u, err := url.Parse(href)
+	if err != nil {
+		return status(http.StatusBadRequest)
+	}
+	rest, ok := strings.CutPrefix(u.Path, "/dav/addressbooks/"+addressbookID+"/")
+	if !ok || rest == "" || strings.Contains(rest, "/") {
+		return status(http.StatusNotFound)
+	}
+	contactUID := strings.TrimSuffix(rest, filepath.Ext(rest))
+	vcardData, err := s.storage.GetContact(username, addressbookID, contactUID)
+	if err != nil && !errors.Is(err, errInvalidID) {
+		s.logger.Error("Failed to read contact", "error", err)
+		return status(http.StatusInternalServerError)
+	}
+	if vcardData == "" {
+		return status(http.StatusNotFound)
+	}
+	resp := s.buildContactResponse(username, addressbookID, contactUID, vcardData)
+	resp.Href = href
+	return resp
+}
+
+// sendPreconditionError answers a CardDAV precondition failure with 403 and
+// a DAV:error body naming the precondition (RFC 4918 §16, RFC 6352 §8.6).
+func (s *Server) sendPreconditionError(w http.ResponseWriter, precondition string) {
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	_, _ = w.Write([]byte(xml.Header + `<D:error xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav"><C:` + precondition + `/></D:error>`))
 }
 
 // handlePut handles PUT requests for creating/updating contacts
@@ -708,6 +788,16 @@ func (s *Server) destinationWritable(w http.ResponseWriter, r *http.Request, use
 	return true
 }
 
+// moveCopyStatus is the success status of MOVE/COPY: 201 Created when the
+// destination did not exist, 204 No Content when an existing resource was
+// replaced (RFC 4918 §9.8.5, §9.9.4). Both used to answer 204 (F5574).
+func moveCopyStatus(priorDestination string) int {
+	if priorDestination == "" {
+		return http.StatusCreated
+	}
+	return http.StatusNoContent
+}
+
 // handleMove handles MOVE requests
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username string) {
 	// Extract source address book and contact from URL path
@@ -770,6 +860,10 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	if !s.destinationWritable(w, r, username, destAddressbookID, destContactUID) {
 		return
 	}
+	// Whether the destination already exists decides 201 vs 204 (F5574).
+	// The error is ignored on purpose: an invalid destination fails in
+	// SaveContact below, which reports it.
+	prior, _ := s.storage.GetContact(username, destAddressbookID, destContactUID)
 
 	// Get contact data
 	vcardData, err := s.storage.GetContact(username, srcAddressbookID, srcContactUID)
@@ -778,9 +872,10 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
-	// If UID changed in destination, update vCard
+	// If UID changed in destination, rewrite the UID property whatever its
+	// case or parameters, so no stale UID survives the rename (F5573).
 	if destContactUID != srcContactUID {
-		vcardData = strings.Replace(vcardData, fmt.Sprintf("UID:%s", srcContactUID), fmt.Sprintf("UID:%s", destContactUID), 1)
+		vcardData = rewriteVCardUID(vcardData, destContactUID)
 	}
 
 	// Create contact in destination
@@ -803,7 +898,7 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(moveCopyStatus(prior))
 }
 
 // handleCopy handles COPY requests
@@ -861,6 +956,10 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	if !s.destinationWritable(w, r, username, destAddressbookID, destContactUID) {
 		return
 	}
+	// Whether the destination already exists decides 201 vs 204 (F5574).
+	// The error is ignored on purpose: an invalid destination fails in
+	// SaveContact below, which reports it.
+	prior, _ := s.storage.GetContact(username, destAddressbookID, destContactUID)
 
 	// Get contact data
 	vcardData, err := s.storage.GetContact(username, srcAddressbookID, srcContactUID)
@@ -869,9 +968,10 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
-	// If UID changed in destination, update vCard
+	// If UID changed in destination, rewrite the UID property whatever its
+	// case or parameters, so no stale UID survives the rename (F5573).
 	if destContactUID != srcContactUID {
-		vcardData = strings.Replace(vcardData, fmt.Sprintf("UID:%s", srcContactUID), fmt.Sprintf("UID:%s", destContactUID), 1)
+		vcardData = rewriteVCardUID(vcardData, destContactUID)
 	}
 
 	// Create contact in destination
@@ -887,7 +987,7 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(moveCopyStatus(prior))
 }
 
 // buildPrincipalResponse builds a response for the principal resource
@@ -986,13 +1086,16 @@ func insertVCardUID(data []byte, uid string) []byte {
 	return []byte(text[:end] + "UID:" + uid + eol + text[end:])
 }
 
-// extractUIDFromVCard extracts the UID from vCard data
+// extractUIDFromVCard extracts the UID from vCard data. The property name is
+// case-insensitive and may carry a group and parameters ("uid:x",
+// "UID;VALUE=text:x"); such cards were previously unlisted and got a second
+// UID line on PUT (F5573).
 func (s *Server) extractUIDFromVCard(vcardData string) string {
 	lines := strings.Split(vcardData, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "UID:") {
-			return strings.TrimPrefix(line, "UID:")
+		if uid, ok := isUIDLine(line); ok {
+			return uid
 		}
 		if strings.HasPrefix(line, "UID=") {
 			return strings.TrimPrefix(line, "UID=")
@@ -1024,11 +1127,13 @@ type Multistatus struct {
 	Responses []Response `xml:"response"`
 }
 
-// Response represents a response element in multistatus
+// Response represents a response element in multistatus. Status is set
+// instead of Propstat for an href that could not be served (RFC 4918 §14.24).
 type Response struct {
 	XMLName  xml.Name   `xml:"response"`
 	Href     string     `xml:"href"`
 	Propstat []Propstat `xml:"propstat"`
+	Status   string     `xml:"status,omitempty"`
 }
 
 // Propstat represents property status
@@ -1044,17 +1149,20 @@ type Property struct {
 	Value   string   `xml:",chardata"`
 }
 
-// AddressbookQuery represents an addressbook-query REPORT
+// AddressbookQuery represents an addressbook-query REPORT (RFC 6352 §10.3).
+// The prop-filters live inside CARDDAV:filter (F5570).
 type AddressbookQuery struct {
-	XMLName    xml.Name    `xml:"addressbook-query"`
-	PropFilter *PropFilter `xml:"prop-filter,omitempty"`
-	Prop       *Prop       `xml:"prop,omitempty"`
+	XMLName xml.Name     `xml:"addressbook-query"`
+	Prop    *Prop        `xml:"prop,omitempty"`
+	Filter  *QueryFilter `xml:"filter"`
 }
 
-// PropFilter represents a property filter
-type PropFilter struct {
-	XMLName xml.Name `xml:"prop-filter"`
-	Name    string   `xml:"name,attr"`
+// AddressbookMultiget represents an addressbook-multiget REPORT
+// (RFC 6352 §10.7) (F5572).
+type AddressbookMultiget struct {
+	XMLName xml.Name `xml:"addressbook-multiget"`
+	Prop    *Prop    `xml:"prop,omitempty"`
+	Hrefs   []string `xml:"href"`
 }
 
 // Contact represents a vCard contact

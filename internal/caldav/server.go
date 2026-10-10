@@ -256,7 +256,10 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 
 	// Handle specific calendar or event path
 	if strings.HasPrefix(r.URL.Path, "/dav/calendars/") {
-		s.handleCalendarPropfind(r.URL.Path, username, multistatus, includeMembers)
+		if !s.handleCalendarPropfind(r.URL.Path, username, multistatus, includeMembers) {
+			s.sendError(w, http.StatusNotFound, "not found")
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
@@ -880,6 +883,10 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username string) {
 	// Parse path
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) == 3 {
+		s.deleteCalendar(w, r, username, parts[2])
+		return
+	}
 	if len(parts) < 4 {
 		s.sendError(w, http.StatusBadRequest, "invalid path")
 		return
@@ -918,6 +925,39 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// deleteCalendar deletes a calendar collection and its events (RFC 4918
+// §9.6.1; F5585). If-Match/If-None-Match are evaluated against the
+// calendar's ETag under writeMu.
+func (s *Server) deleteCalendar(w http.ResponseWriter, r *http.Request, username, calendarID string) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cal, err := s.storage.GetCalendar(username, calendarID)
+	if err != nil {
+		if errors.Is(err, errInvalidID) {
+			s.sendError(w, http.StatusBadRequest, "invalid calendar ID")
+			return
+		}
+		s.logger.Error("Failed to read calendar", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to read calendar")
+		return
+	}
+	if cal == nil {
+		s.sendError(w, http.StatusNotFound, "calendar not found")
+		return
+	}
+	if !preconditionsHold(r, true, s.storage.GetCalendarETag(username, calendarID)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
+		return
+	}
+	if err := s.storage.DeleteCalendar(username, calendarID); err != nil {
+		s.logger.Error("Failed to delete calendar", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to delete calendar")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // handleMkCalendar handles MKCALENDAR requests
 func (s *Server) handleMkCalendar(w http.ResponseWriter, r *http.Request, username string) {
 	// Parse path to get calendar ID
@@ -928,6 +968,27 @@ func (s *Server) handleMkCalendar(w http.ResponseWriter, r *http.Request, userna
 	}
 
 	calendarID := parts[2]
+
+	// RFC 4791 §5.3.1.2 (DAV:resource-must-be-null), RFC 4918 §9.3.1: an
+	// existing calendar is never re-created, which would reset its metadata
+	// (F5584). The check and the create are atomic under writeMu.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	existing, err := s.storage.GetCalendar(username, calendarID)
+	if err != nil {
+		if errors.Is(err, errInvalidID) {
+			s.sendError(w, http.StatusBadRequest, "invalid calendar ID")
+			return
+		}
+		s.logger.Error("Failed to read calendar", "error", err)
+		s.sendError(w, http.StatusInternalServerError, "failed to read calendar")
+		return
+	}
+	if existing != nil {
+		w.Header().Set("Allow", "OPTIONS, GET, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MOVE, COPY")
+		s.sendError(w, http.StatusMethodNotAllowed, "calendar already exists")
+		return
+	}
 
 	// Create default calendar
 	cal := &Calendar{
@@ -980,6 +1041,19 @@ func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, usernam
 
 // handleMove handles MOVE requests
 func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username string) {
+	s.transferEvent(w, r, username, true)
+}
+
+// handleCopy handles COPY requests
+func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username string) {
+	s.transferEvent(w, r, username, false)
+}
+
+// transferEvent implements MOVE (move=true) and COPY of one event. The
+// source preconditions (F5581), the Overwrite check (F5580), and the write
+// run under writeMu like PUT and DELETE (F5582). The status is 201 when the
+// destination was created and 204 when it was replaced (F5587).
+func (s *Server) transferEvent(w http.ResponseWriter, r *http.Request, username string, move bool) {
 	// Get source path
 	sourceParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(sourceParts) < 4 {
@@ -1018,6 +1092,9 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	destCalendarID := destParts[2]
 	destEventUID := destParts[3]
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	// Get event data
 	eventData, err := s.storage.GetEvent(username, sourceCalendarID, sourceEventUID)
 	if err != nil || eventData == "" {
@@ -1029,6 +1106,12 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	destCal, err := s.storage.GetCalendar(username, destCalendarID)
 	if err != nil || destCal == nil {
 		s.sendError(w, http.StatusPreconditionFailed, "destination calendar does not exist")
+		return
+	}
+
+	// RFC 7232 §3.1: If-Match/If-None-Match apply to the request-URI, the source.
+	if !preconditionsHold(r, true, s.storage.GetETag(username, sourceCalendarID, sourceEventUID)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
 
@@ -1037,9 +1120,20 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 		return
 	}
 
+	existing, err := s.storage.GetEvent(username, destCalendarID, destEventUID)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid destination event")
+		return
+	}
+	// RFC 4918 §10.6: with "Overwrite: F" an existing destination is kept.
+	if existing != "" && strings.EqualFold(strings.TrimSpace(r.Header.Get("Overwrite")), "F") {
+		s.sendError(w, http.StatusPreconditionFailed, "destination exists and Overwrite is F")
+		return
+	}
+
 	// Update UID if different
 	if sourceEventUID != destEventUID {
-		eventData = strings.Replace(eventData, "UID:"+sourceEventUID, "UID:"+destEventUID, 1)
+		eventData = rewriteUID(eventData, extractUIDFromICS(eventData), destEventUID)
 	}
 
 	// Create event at destination
@@ -1050,92 +1144,74 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 
 	if err := s.storage.SaveEvent(username, destCalendarID, event, eventData); err != nil {
 		s.logger.Error("Failed to save event at destination", "error", err)
-		s.sendError(w, http.StatusInternalServerError, "failed to move event")
+		if move {
+			s.sendError(w, http.StatusInternalServerError, "failed to move event")
+		} else {
+			s.sendError(w, http.StatusInternalServerError, "failed to copy event")
+		}
 		return
 	}
 
-	// Delete from source — failure here means the event exists at both source and destination
-	if err := s.storage.DeleteEvent(username, sourceCalendarID, sourceEventUID); err != nil {
-		s.logger.Error("Failed to delete source event after move", "error", err)
-		s.sendError(w, http.StatusInternalServerError, "failed to delete source event")
-		return
+	if move {
+		// Delete from source — failure here means the event exists at both source and destination
+		if err := s.storage.DeleteEvent(username, sourceCalendarID, sourceEventUID); err != nil {
+			s.logger.Error("Failed to delete source event after move", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to delete source event")
+			return
+		}
 	}
 
+	if existing == "" {
+		w.WriteHeader(http.StatusCreated)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleCopy handles COPY requests
-func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username string) {
-	// Get source path
-	sourceParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(sourceParts) < 4 {
-		s.sendError(w, http.StatusBadRequest, "invalid source path")
-		return
+// rewriteUID replaces the value of every UID property whose unfolded value is
+// oldUID with newUID (F5583). It works on RFC 5545 §3.1 logical lines, so
+// folded, parameterised and lower-case UID lines are handled, every
+// component of a recurrence set is renamed, and other properties (X-ALT-UID)
+// or a nested UID with a different value are left alone. Line endings follow
+// the original line.
+func rewriteUID(icsData, oldUID, newUID string) string {
+	if oldUID == "" || oldUID == newUID {
+		return icsData
 	}
-
-	sourceCalendarID := sourceParts[2]
-	sourceEventUID := sourceParts[3]
-
-	// Verify source calendar belongs to this user
-	sourceCal, err := s.storage.GetCalendar(username, sourceCalendarID)
-	if err != nil || sourceCal == nil {
-		s.sendError(w, http.StatusForbidden, "calendar not found")
-		return
+	physical := strings.SplitAfter(icsData, "\n")
+	var out strings.Builder
+	for i := 0; i < len(physical); {
+		j := i + 1
+		for j < len(physical) && physical[j] != "" && (physical[j][0] == ' ' || physical[j][0] == '\t') {
+			j++
+		}
+		var logical strings.Builder
+		for k := i; k < j; k++ {
+			line := strings.TrimSuffix(strings.TrimSuffix(physical[k], "\n"), "\r")
+			if k > i {
+				line = line[1:]
+			}
+			logical.WriteString(line)
+		}
+		unfolded := logical.String()
+		if colon := strings.Index(unfolded, ":"); colon >= 0 {
+			name := unfolded[:colon]
+			if semi := strings.Index(name, ";"); semi >= 0 {
+				name = name[:semi]
+			}
+			if strings.EqualFold(name, "UID") && strings.TrimSpace(unfolded[colon+1:]) == oldUID {
+				ending := physical[i][len(strings.TrimRight(physical[i], "\r\n")):]
+				out.WriteString(unfolded[:colon+1] + newUID + ending)
+				i = j
+				continue
+			}
+		}
+		for k := i; k < j; k++ {
+			out.WriteString(physical[k])
+		}
+		i = j
 	}
-
-	// Get destination from header
-	destination := r.Header.Get("Destination")
-	if destination == "" {
-		s.sendError(w, http.StatusBadRequest, "missing destination header")
-		return
-	}
-
-	// Parse destination path
-	destParts, destOK := destinationSegments(destination)
-	if !destOK {
-		s.sendError(w, http.StatusForbidden, "destination outside calendar namespace")
-		return
-	}
-	if len(destParts) < 4 {
-		s.sendError(w, http.StatusBadRequest, "invalid destination path")
-		return
-	}
-
-	destCalendarID := destParts[2]
-	destEventUID := destParts[3]
-
-	// Get event data
-	eventData, err := s.storage.GetEvent(username, sourceCalendarID, sourceEventUID)
-	if err != nil || eventData == "" {
-		s.sendError(w, http.StatusNotFound, "source event not found")
-		return
-	}
-
-	// Verify destination calendar exists before writing (RFC 4791 §7.5)
-	destCal, err := s.storage.GetCalendar(username, destCalendarID)
-	if err != nil || destCal == nil {
-		s.sendError(w, http.StatusPreconditionFailed, "destination calendar does not exist")
-		return
-	}
-
-	// Update UID if different
-	if sourceEventUID != destEventUID {
-		eventData = strings.Replace(eventData, "UID:"+sourceEventUID, "UID:"+destEventUID, 1)
-	}
-
-	// Create event at destination
-	event := &CalendarEvent{
-		UID:      destEventUID,
-		Modified: time.Now(),
-	}
-
-	if err := s.storage.SaveEvent(username, destCalendarID, event, eventData); err != nil {
-		s.logger.Error("Failed to save event at destination", "error", err)
-		s.sendError(w, http.StatusInternalServerError, "failed to copy event")
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
+	return out.String()
 }
 
 // buildPrincipalResponse builds a response for the principal resource
@@ -1190,33 +1266,35 @@ func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response 
 	}
 }
 
-// handleCalendarPropfind handles PROPFIND for specific calendar paths
-func (s *Server) handleCalendarPropfind(path string, username string, multistatus *Multistatus, includeMembers bool) {
+// handleCalendarPropfind handles PROPFIND for specific calendar paths. It
+// returns false when the addressed calendar or event does not exist, which
+// the caller answers with 404 instead of an empty 207 (F5586).
+func (s *Server) handleCalendarPropfind(path string, username string, multistatus *Multistatus, includeMembers bool) bool {
 	// Parse path: /dav/calendars/{calendarID}/{eventUID?}
 	// Request convention matches the item handlers: the authenticated username
 	// scopes storage and is not part of the URL.
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	// Minimum path: /dav/calendars/{calendarID} = 3 parts
 	if len(parts) < 3 {
-		return
+		return true
 	}
 
 	calendarID := parts[2]
 	if calendarID == "" {
-		return
+		return true
 	}
 
 	// Get calendar
 	cal, err := s.storage.GetCalendar(username, calendarID)
 	if err != nil || cal == nil {
-		return
+		return false
 	}
 
 	// If it's just the calendar, return calendar info
 	if len(parts) == 3 || (len(parts) == 4 && parts[3] == "") {
 		multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
 		if !includeMembers {
-			return
+			return true
 		}
 
 		// Also include events
@@ -1227,18 +1305,20 @@ func (s *Server) handleCalendarPropfind(path string, username string, multistatu
 				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
 			}
 		}
-		return
+		return true
 	}
 
 	// Specific event
 	eventUID := parts[3]
 	if eventUID == "" {
-		return
+		return true
 	}
 	eventData, err := s.storage.GetEvent(username, calendarID, eventUID)
-	if err == nil && eventData != "" {
-		multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, eventUID, eventData))
+	if err != nil || eventData == "" {
+		return false
 	}
+	multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, eventUID, eventData))
+	return true
 }
 
 // maxRRULEInstances bounds recurrence expansion so a malformed or

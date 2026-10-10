@@ -1,7 +1,9 @@
 package server
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -13,28 +15,59 @@ import (
 
 // startSMTP starts the configured SMTP listeners: the inbound MX server,
 // plus the optional submission (587) and submission-TLS (465) servers.
-// Each honours its own Enabled toggle.
-func (s *Server) startSMTP() {
+// Each honours its own Enabled toggle. A listener that cannot bind fails
+// Start (F5530) instead of only being logged.
+func (s *Server) startSMTP() error {
 	if s.config.SMTP.Inbound.Enabled {
-		s.startInboundSMTP()
+		if err := s.startInboundSMTP(); err != nil {
+			return err
+		}
 	} else {
 		s.logger.Info("Inbound SMTP disabled; skipping listener")
 	}
 
 	// Submission SMTP server (port 587, STARTTLS)
 	if s.config.SMTP.Submission.Enabled {
-		s.startSubmissionSMTP()
+		if err := s.startSubmissionSMTP(); err != nil {
+			return err
+		}
 	}
 
 	// Submission TLS SMTP server (port 465, implicit TLS)
 	if s.config.SMTP.SubmissionTLS.Enabled {
-		s.startSubmissionTLSSMTP()
+		if err := s.startSubmissionTLSSMTP(); err != nil {
+			return err
+		}
 	}
+	return nil
+}
+
+// serveSMTP binds addr synchronously, so a bind failure reaches the caller
+// (F5530), and then serves srv in the background. A non-nil tlsConfig
+// selects implicit TLS. smtp.Server.Serve closes the listener when it
+// returns, including when Stop ran before it started.
+func (s *Server) serveSMTP(name string, srv *smtp.Server, addr string, tlsConfig *tls.Config) error {
+	var ln net.Listener
+	var err error
+	if tlsConfig != nil {
+		ln, err = tls.Listen("tcp", addr, tlsConfig)
+	} else {
+		ln, err = net.Listen("tcp", addr)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to start %s server: %w", name, err)
+	}
+	go func() {
+		if err := srv.Serve(ln); err != nil {
+			s.logger.Error(name+" server error", "error", err)
+		}
+	}()
+	return nil
 }
 
 // startInboundSMTP creates and starts the inbound SMTP server with the
 // message processing pipeline.
-func (s *Server) startInboundSMTP() {
+func (s *Server) startInboundSMTP() error {
 	smtpAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Inbound.Bind, s.config.SMTP.Inbound.Port)
 	smtpCfg := &smtp.Config{
 		Hostname:       s.config.Server.Hostname,
@@ -143,13 +176,12 @@ func (s *Server) startInboundSMTP() {
 
 	smtpServer.SetPipeline(pipeline)
 
-	go func() {
-		if err := smtpServer.ListenAndServe(smtpAddr); err != nil {
-			s.logger.Error("SMTP server error", "error", err)
-		}
-	}()
+	if err := s.serveSMTP("SMTP", smtpServer, smtpAddr, nil); err != nil {
+		return err
+	}
 	s.smtpServer = smtpServer
 	s.logger.Info("SMTP server started", "addr", smtpAddr)
+	return nil
 }
 
 // relayPolicyStage refuses to relay for unauthenticated clients: without
@@ -209,7 +241,7 @@ func (s *Server) isLocalDomain(domain string) bool {
 }
 
 // startSubmissionSMTP creates and starts the submission (587) server.
-func (s *Server) startSubmissionSMTP() {
+func (s *Server) startSubmissionSMTP() error {
 	submissionAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Submission.Bind, s.config.SMTP.Submission.Port)
 	submissionCfg := &smtp.Config{
 		Hostname:       s.config.Server.Hostname,
@@ -232,17 +264,16 @@ func (s *Server) startSubmissionSMTP() {
 	submissionServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	submissionServer.SetTracingProvider(s.tracingProvider)
 
-	go func() {
-		if err := submissionServer.ListenAndServe(submissionAddr); err != nil {
-			s.logger.Error("Submission server error", "error", err)
-		}
-	}()
+	if err := s.serveSMTP("Submission", submissionServer, submissionAddr, nil); err != nil {
+		return err
+	}
 	s.submissionServer = submissionServer
 	s.logger.Info("Submission server started", "addr", submissionAddr)
+	return nil
 }
 
 // startSubmissionTLSSMTP creates and starts the implicit-TLS (465) server.
-func (s *Server) startSubmissionTLSSMTP() {
+func (s *Server) startSubmissionTLSSMTP() error {
 	submissionTLSAddr := fmt.Sprintf("%s:%d", s.config.SMTP.SubmissionTLS.Bind, s.config.SMTP.SubmissionTLS.Port)
 	submissionTLSCfg := &smtp.Config{
 		Hostname:       s.config.Server.Hostname,
@@ -265,12 +296,10 @@ func (s *Server) startSubmissionTLSSMTP() {
 	submissionTLSServer.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	submissionTLSServer.SetTracingProvider(s.tracingProvider)
 
-	tlsConfig := s.tlsManager.GetTLSConfig()
-	go func() {
-		if err := submissionTLSServer.ListenAndServeTLS(submissionTLSAddr, tlsConfig); err != nil {
-			s.logger.Error("Submission TLS server error", "error", err)
-		}
-	}()
+	if err := s.serveSMTP("Submission TLS", submissionTLSServer, submissionTLSAddr, s.tlsManager.GetTLSConfig()); err != nil {
+		return err
+	}
 	s.submissionTLSServer = submissionTLSServer
 	s.logger.Info("Submission TLS server started", "addr", submissionTLSAddr)
+	return nil
 }

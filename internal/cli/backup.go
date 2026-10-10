@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 	"golang.org/x/crypto/scrypt"
 
 	"github.com/umailserver/umailserver/internal/config"
@@ -31,6 +34,9 @@ const (
 	nonceSize     = 12
 	keySize       = 32 // AES-256
 )
+
+// backupLockTimeout bounds the wait for the bbolt file lock (F5551).
+const backupLockTimeout = time.Second
 
 // fileHash tracks a file's hash for integrity verification
 type fileHash struct {
@@ -69,6 +75,14 @@ func (bm *BackupManager) Backup(backupPath string) error {
 		extension = ".tar.gz.enc"
 	}
 	backupFile := filepath.Join(backupPath, fmt.Sprintf("umailserver_backup_%s%s", timestamp, extension))
+
+	// Hold the bbolt shared lock on the databases for the whole backup so no
+	// writer can commit while they are copied (F5551).
+	release, err := bm.lockDatabases()
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	// Create backup directory
 	if err := os.MkdirAll(backupPath, 0o750); err != nil {
@@ -140,6 +154,43 @@ func (bm *BackupManager) Backup(backupPath string) error {
 
 	fmt.Printf("Backup completed successfully: %s\n", backupFile)
 	return nil
+}
+
+// lockDatabases opens the bbolt databases the server keeps under DataDir
+// (umailserver.db and mail/mail.db, see server.New) read-only, which takes
+// bbolt's shared file lock, and keeps them open until release is called. A
+// running server holds both files under bbolt's exclusive lock and commits to
+// them at any time; a plain sequential copy taken meanwhile can pair an old
+// meta page with pages a later commit reused, so the archived database
+// silently holds wrong data. Backup therefore refuses while the lock is held
+// by another process. A file that is not a bbolt database is archived
+// byte-for-byte as before.
+func (bm *BackupManager) lockDatabases() (release func(), err error) {
+	var held []*bolt.DB
+	release = func() {
+		for _, d := range held {
+			// Read-only handle: nothing to flush; Close only drops the lock.
+			_ = d.Close()
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(bm.config.Server.DataDir, "umailserver.db"),
+		filepath.Join(bm.config.Server.DataDir, "mail", "mail.db"),
+	} {
+		if info, statErr := os.Stat(p); statErr != nil || !info.Mode().IsRegular() {
+			continue // absent or not a regular file: handled by the copy step
+		}
+		d, openErr := bolt.Open(p, 0o600, &bolt.Options{ReadOnly: true, Timeout: backupLockTimeout})
+		if errors.Is(openErr, bolterrors.ErrTimeout) {
+			release()
+			return nil, fmt.Errorf("database %s is locked by another process (is uMailServer running?); stop the server before taking a backup so the copy is consistent", p)
+		}
+		if openErr != nil {
+			continue // not a bbolt database: archived byte-for-byte
+		}
+		held = append(held, d)
+	}
+	return release, nil
 }
 
 // writeNewFile writes data to a file that must not already exist. Backup file
@@ -346,8 +397,12 @@ func (bm *BackupManager) backupDatabase(tw *tar.Writer) error {
 // database mail/mail.db, see server.New); <DataDir>/messages is the legacy
 // location. Both are archived under "messages/" so that copying
 // restore_temp/messages/* into the data directory restores them (F5450).
+// The other stores the server keeps under DataDir travel the same way
+// (F5550): queue/ (pending outbound message bodies; their queue entries are
+// in umailserver.db), caldav/, carddav/, push/ (VAPID keys and
+// subscriptions), vacation/ (auto-reply settings) and dkim/ (signing keys).
 func (bm *BackupManager) backupMaildir(tw *tar.Writer) error {
-	for _, sub := range []string{"messages", "mail"} {
+	for _, sub := range []string{"messages", "mail", "queue", "caldav", "carddav", "push", "vacation", "dkim"} {
 		if err := bm.backupDataSubdir(tw, sub); err != nil {
 			return err
 		}
@@ -694,7 +749,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 	fmt.Println("1. Stop uMailServer")
 	fmt.Println("2. Copy restore_temp/config/* to data directory")
 	fmt.Println("3. Copy restore_temp/database/* to data directory")
-	fmt.Println("4. Copy restore_temp/messages/* to data directory")
+	fmt.Println("4. Copy restore_temp/messages/* to data directory (mail, queue, calendars, contacts, push, vacation, DKIM keys)")
 	fmt.Println("5. Start uMailServer")
 
 	return nil

@@ -9,10 +9,11 @@ import (
 	"github.com/umailserver/umailserver/internal/jmap"
 )
 
-// startJMAP creates and starts the JMAP server
-func (s *Server) startJMAP() {
+// startJMAP creates and starts the JMAP server. A bind failure is returned
+// (F5530), as for the other listeners, instead of only being logged.
+func (s *Server) startJMAP() error {
 	if !s.config.JMAP.Enabled {
-		return
+		return nil
 	}
 
 	addr := fmt.Sprintf("%s:%d", s.config.JMAP.Bind, s.config.JMAP.Port)
@@ -27,8 +28,6 @@ func (s *Server) startJMAP() {
 	jmapServer.SetTracingProvider(s.tracingProvider)
 	jmapServer.SetTokenValidator(s.jmapTokenValidator)
 
-	s.jmapServer = jmapServer
-
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           jmapServer,
@@ -37,15 +36,14 @@ func (s *Server) startJMAP() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	if err := s.serveHTTP("JMAP", srv); err != nil {
+		return err
+	}
+	s.jmapServer = jmapServer
 	s.jmapHTTPServer = srv
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.logger.Error("JMAP server error", "error", err)
-		}
-	}()
-
 	s.logger.Info("JMAP server started", "addr", addr)
+	return nil
 }
 
 // jmapTokenValidator applies the HTTP API's token-state checks to JMAP bearer

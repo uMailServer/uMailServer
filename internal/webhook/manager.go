@@ -372,6 +372,20 @@ func (m *Manager) dialControl(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
+// DeriveSigningKey derives the webhook HMAC key from a master secret as
+// hex(HMAC-SHA256(master, "umailserver webhook signing v1")). Receivers verify
+// X-Webhook-Signature with this derived key, so holding it does not reveal the
+// master (the JWT signing secret) and cannot mint tokens (F5600). An empty
+// master yields "" (deliveries stay unsigned) rather than a public fixed key.
+func DeriveSigningKey(master string) string {
+	if master == "" {
+		return ""
+	}
+	h := hmac.New(sha256.New, []byte(master))
+	h.Write([]byte("umailserver webhook signing v1"))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // sign creates HMAC signature
 func (m *Manager) sign(payload []byte) string {
 	h := hmac.New(sha256.New, []byte(m.secret))

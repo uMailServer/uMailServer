@@ -35,7 +35,7 @@ func TestMoveAcrossCalendarsPreservesEvent(t *testing.T) {
 	w := selfMoveRegressionMove(s, "/dav/calendars/target/meeting")
 	v, e := s.storage.GetEvent("fixture", "target", "meeting")
 	old, oe := s.storage.GetEvent("fixture", "source", "meeting")
-	ok := w.Code == http.StatusNoContent && e == nil && oe == nil && v == selfMoveRegressionICS && old == ""
+	ok := w.Code == http.StatusCreated && e == nil && oe == nil && v == selfMoveRegressionICS && old == ""
 	fmt.Printf("CONTROL EXPECTED: cross-calendar move preserves destination ACTUAL: %v\n", ok)
 	if !ok {
 		t.Fatal("invalid control")
@@ -64,7 +64,7 @@ func TestMoveSameResourceRepeatedAndMissing(t *testing.T) {
 	}
 	w := selfMoveRegressionMove(s, "/dav/calendars/target/renamed")
 	v, e := s.storage.GetEvent("fixture", "target", "renamed")
-	if w.Code != http.StatusNoContent || e != nil || !strings.Contains(v, "UID:renamed") {
+	if w.Code != http.StatusCreated || e != nil || !strings.Contains(v, "UID:renamed") {
 		t.Fatal(w.Code, v, e)
 	}
 	w = selfMoveRegressionMove(s, "/dav/calendars/source/meeting")

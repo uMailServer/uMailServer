@@ -966,28 +966,25 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 		return false
 	}
 
-	// Check sent date criteria (from Date header)
-	if !criteria.SentBefore.IsZero() {
-		if sentDate, err := parseMessageDate(meta.Date); err == nil {
-			if !sentDate.Before(criteria.SentBefore) {
-				return false
-			}
+	// Check sent date criteria: the Date header's own calendar date,
+	// disregarding time and timezone (RFC 3501 §6.4.4). F5562: a missing or
+	// unparsable Date matched every SENT* key, and the instant was compared
+	// in UTC, so a 23:00 -0500 message fell on the next day.
+	if !criteria.SentBefore.IsZero() || !criteria.SentOn.IsZero() || !criteria.SentSince.IsZero() {
+		sent, err := parseMessageDate(meta.Date)
+		if err != nil {
+			return false
 		}
-	}
-	if !criteria.SentOn.IsZero() {
-		if sentDate, err := parseMessageDate(meta.Date); err == nil {
-			metaDate := time.Date(sentDate.Year(), sentDate.Month(), sentDate.Day(), 0, 0, 0, 0, sentDate.Location())
-			critDate := time.Date(criteria.SentOn.Year(), criteria.SentOn.Month(), criteria.SentOn.Day(), 0, 0, 0, 0, criteria.SentOn.Location())
-			if !metaDate.Equal(critDate) {
-				return false
-			}
+		day := time.Date(sent.Year(), sent.Month(), sent.Day(), 0, 0, 0, 0, time.UTC)
+		dayOf := func(t time.Time) time.Time { return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC) }
+		if !criteria.SentBefore.IsZero() && !day.Before(dayOf(criteria.SentBefore)) {
+			return false
 		}
-	}
-	if !criteria.SentSince.IsZero() {
-		if sentDate, err := parseMessageDate(meta.Date); err == nil {
-			if sentDate.Before(criteria.SentSince) {
-				return false
-			}
+		if !criteria.SentOn.IsZero() && !day.Equal(dayOf(criteria.SentOn)) {
+			return false
+		}
+		if !criteria.SentSince.IsZero() && day.Before(dayOf(criteria.SentSince)) {
+			return false
 		}
 	}
 
@@ -1072,6 +1069,12 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 // parseMessageDate parses an email Date header (RFC 2822 format)
 // Format: "Mon, 01 Jan 2024 10:00:00 +0000" or similar variants
 func parseMessageDate(dateStr string) (time.Time, error) {
+	// RFC 5322 (one- or two-digit day, optional weekday, obsolete zones,
+	// trailing comment). F5562: only "02" days parsed, so the common
+	// "Tue, 2 Jan 2024 ..." form was treated as having no date.
+	if t, err := mail.ParseDate(dateStr); err == nil {
+		return t, nil
+	}
 	// Try RFC 2822 format first
 	t, err := time.Parse("Mon, 02 Jan 2006 15:04:05 -0700", dateStr)
 	if err == nil {
@@ -1098,23 +1101,32 @@ func parseMessageDate(dateStr string) (time.Time, error) {
 
 // CopyMessages copies messages to another mailbox
 func (m *BboltMailstore) CopyMessages(user, sourceMailbox, destMailbox string, seqSet string) error {
+	_, _, _, err := m.CopyMessagesUIDs(user, sourceMailbox, destMailbox, seqSet)
+	return err
+}
+
+// CopyMessagesUIDs copies like CopyMessages and returns the destination
+// UIDVALIDITY with the source and destination UIDs of every copied message,
+// in the same order, for the RFC 4315 COPYUID response code (F5564).
+func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox string, seqSet string) (uint32, []uint32, []uint32, error) {
 	// Parse sequence set
 	ranges, err := ParseSequenceSet(seqSet)
 	if err != nil {
-		return err
+		return 0, nil, nil, err
 	}
 
 	// Get source message UIDs
 	uids, err := m.db.GetMessageUIDs(user, sourceMailbox)
 	if err != nil {
-		return err
+		return 0, nil, nil, err
 	}
 	uidCount := len(uids)
 	if uidCount > 0x7FFFFFFF {
-		return fmt.Errorf("mailbox exceeds maximum message count")
+		return 0, nil, nil, fmt.Errorf("mailbox exceeds maximum message count")
 	}
 	total := uint32(uidCount)
 
+	var srcUIDs, dstUIDs []uint32
 	for i, uid := range uids {
 		seqNum := uint32(i + 1) // IMAP uses 1-based sequence numbers
 		// Check if in set
@@ -1167,10 +1179,37 @@ func (m *BboltMailstore) CopyMessages(user, sourceMailbox, destMailbox string, s
 			To:           meta.To,
 		}
 
-		_ = m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta)
+		if err := m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta); err != nil {
+			continue
+		}
+		srcUIDs, dstUIDs = append(srcUIDs, uid), append(dstUIDs, newUID)
 	}
 
-	return nil
+	mb, err := m.db.GetMailbox(user, destMailbox)
+	if err != nil {
+		return 0, srcUIDs, dstUIDs, nil // copied; only the COPYUID code is lost
+	}
+	return mb.UIDValidity, srcUIDs, dstUIDs, nil
+}
+
+// MessageHeader returns the header section of the message with the given
+// UID, without FETCH side effects (no \Seen, no MDN), for THREAD and SORT CC.
+func (m *BboltMailstore) MessageHeader(user, mailbox string, uid uint32) ([]byte, error) {
+	meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
+	if err != nil {
+		return nil, err
+	}
+	data, err := m.msgStore.ReadMessage(user, meta.MessageID)
+	if err != nil {
+		return nil, err
+	}
+	if i := strings.Index(string(data), "\r\n\r\n"); i >= 0 {
+		return data[:i+2], nil
+	}
+	if i := strings.Index(string(data), "\n\n"); i >= 0 {
+		return data[:i+1], nil
+	}
+	return data, nil
 }
 
 // MoveMessages moves messages to another mailbox

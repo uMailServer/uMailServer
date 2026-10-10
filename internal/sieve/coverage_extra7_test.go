@@ -30,13 +30,9 @@ func TestDecodeBase64_Empty(t *testing.T) {
 }
 
 func TestDecodeBase64_Invalid(t *testing.T) {
-	input := "not-valid-base64!!!"
-	decoded, err := decodeBase64(input)
-	if err != nil {
-		t.Fatalf("Unexpected error: %v", err)
-	}
-	if string(decoded) != input {
-		t.Errorf("Expected original string on invalid base64, got %q", string(decoded))
+	// F5611: invalid base64 is rejected, not passed through as raw text.
+	if _, err := decodeBase64("not-valid-base64!!!"); err == nil {
+		t.Fatal("Expected an error on invalid base64")
 	}
 }
 

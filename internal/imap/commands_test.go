@@ -1471,7 +1471,7 @@ func TestHandleMove(t *testing.T) {
 	session.user = "test"
 	session.selected = &Mailbox{Name: "INBOX"}
 
-	err := session.handleMove([]string{"1:*", "Archive"})
+	err := session.handleMove([]string{"1:*", "Sent"})
 	if err != nil {
 		t.Errorf("handleMove failed: %v", err)
 	}
@@ -1646,7 +1646,7 @@ func TestHandleUIDMove(t *testing.T) {
 	session.user = "test"
 	session.selected = &Mailbox{Name: "INBOX"}
 
-	err := session.handleUIDMove([]string{"1:*", "Archive"})
+	err := session.handleUIDMove([]string{"1:*", "Sent"})
 	if err != nil {
 		t.Errorf("handleUIDMove failed: %v", err)
 	}
@@ -2089,7 +2089,7 @@ func TestHandleSelectedMove(t *testing.T) {
 	session.selected = &Mailbox{Name: "INBOX"}
 	session.tag = "A1"
 
-	err := session.handleSelected("MOVE", []string{"1", "Trash"}, "A1 MOVE 1 Trash")
+	err := session.handleSelected("MOVE", []string{"1", "Drafts"}, "A1 MOVE 1 Drafts")
 	if err != nil {
 		t.Errorf("handleSelected MOVE failed: %v", err)
 	}
@@ -2142,7 +2142,7 @@ func TestHandleSelectedUidCommands(t *testing.T) {
 			case "UID COPY":
 				err = session.handleSelected("UID", []string{"COPY", "1", "Sent"}, "A1 UID COPY 1 Sent")
 			case "UID MOVE":
-				err = session.handleSelected("UID", []string{"MOVE", "1", "Trash"}, "A1 UID MOVE 1 Trash")
+				err = session.handleSelected("UID", []string{"MOVE", "1", "Drafts"}, "A1 UID MOVE 1 Drafts")
 			case "UID SEARCH":
 				err = session.handleSelected("UID", []string{"SEARCH", "ALL"}, "A1 UID SEARCH ALL")
 			}

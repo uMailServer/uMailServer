@@ -856,7 +856,6 @@ func TestDefaultCapabilitiesContent(t *testing.T) {
 		"CHILDREN",
 		"UIDPLUS",
 		"MOVE",
-		"CONDSTORE",
 		"ENABLE",
 		"LITERAL+",
 		"SASL-IR",

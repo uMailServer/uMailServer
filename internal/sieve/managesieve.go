@@ -247,9 +247,15 @@ func (s *ManageSieveServer) sendCapabilities(session *manageSieveSession, ok str
 		exts = append(exts, ext)
 	}
 	sort.Strings(exts)
+	// F5614: no cleartext-password mechanism is offered while STARTTLS is
+	// still available (RFC 5804 §2.1; IMAP LOGINDISABLED / SMTP 538 here).
+	sasl := `"SASL" "PLAIN LOGIN"`
+	if s.authNeedsTLS(session) {
+		sasl = `"SASL" ""`
+	}
 	lines := []string{
 		`"IMPLEMENTATION" "uMailServer"`,
-		`"SASL" "PLAIN LOGIN"`,
+		sasl,
 		`"SIEVE" ` + quoteManageSieveString(strings.Join(exts, " ")),
 	}
 	if s.tlsCfg != nil && !session.tls {
@@ -257,6 +263,12 @@ func (s *ManageSieveServer) sendCapabilities(session *manageSieveSession, ok str
 	}
 	lines = append(lines, `"VERSION" "1.0"`, ok)
 	return s.sendResponse(session.conn, "%s", strings.Join(lines, "\r\n"))
+}
+
+// authNeedsTLS reports whether AUTHENTICATE must wait for STARTTLS: TLS is
+// configured but this connection is still cleartext. F5614.
+func (s *ManageSieveServer) authNeedsTLS(session *manageSieveSession) bool {
+	return s.tlsCfg != nil && !session.tls
 }
 
 // manageSieveSession holds state for a single ManageSieve session
@@ -465,6 +477,15 @@ const maxManageSieveScriptSize = 1024 * 1024
 // after the N octets) as well as a bare octet count followed by exactly that
 // many octets. F5040.
 func readScriptArg(session *manageSieveSession, arg string) (string, error) {
+	// F5615: RFC 5804 §2.6/§2.12 — the script is a string, which may be a
+	// quoted string as well as a literal. Nothing follows on the wire, so a
+	// malformed one keeps the session.
+	if strings.HasPrefix(arg, `"`) {
+		if !quotedStringComplete(arg) {
+			return "", fmt.Errorf("invalid quoted script")
+		}
+		return unquoteManageSieveArg(arg), nil
+	}
 	literal := strings.HasPrefix(arg, "{") && strings.HasSuffix(arg, "}")
 	sizeText := arg
 	if literal {
@@ -503,9 +524,36 @@ func readScriptArg(session *manageSieveSession, arg string) (string, error) {
 	return string(scriptBytes), nil
 }
 
+// quotedStringComplete reports whether arg is exactly one quoted string whose
+// closing quote is not escaped. F5615.
+func quotedStringComplete(arg string) bool {
+	if len(arg) < 2 || arg[0] != '"' {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case '\\':
+			i++
+		case '"':
+			return i == len(arg)-1
+		}
+	}
+	return false
+}
+
 // cmdAuthenticate handles AUTHENTICATE command
 // Format: AUTHENTICATE <mechanism> <initial-response>
 func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []string) error {
+	// F5612: AUTHENTICATE is only valid in non-authenticated state; a second
+	// one must not switch the session identity.
+	if session.user != "" {
+		return &manageSieveNo{msg: "already authenticated"}
+	}
+	// F5614: refuse cleartext passwords while STARTTLS is available, before
+	// any challenge solicits one.
+	if s.authNeedsTLS(session) {
+		return &manageSieveNo{code: "ENCRYPT-NEEDED", msg: "use STARTTLS before AUTHENTICATE"}
+	}
 	if len(args) < 1 {
 		return fmt.Errorf("AUTHENTICATE requires mechanism")
 	}
@@ -545,6 +593,12 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 		// parts[2] = password
 		authcid := parts[1]
 		password := parts[2]
+
+		// F5613: proxy authorization is not supported, so an authzid other
+		// than the authcid must fail (RFC 4616 §2) rather than be ignored.
+		if parts[0] != "" && !strings.EqualFold(parts[0], authcid) {
+			return fmt.Errorf("authorization identity not permitted")
+		}
 
 		// Validate credentials using auth handler
 		if s.authHandler != nil && s.authHandler(authcid, password) {
@@ -614,15 +668,10 @@ func (s *ManageSieveServer) saslStep(session *manageSieveSession, challenge stri
 	return resp, nil
 }
 
-// decodeBase64 decodes a base64 string
+// decodeBase64 decodes a SASL response. RFC 5804 §2.1 requires base64; F5611:
+// invalid input is an error, not raw text taken as credentials.
 func decodeBase64(s string) ([]byte, error) {
-	// First try to decode as base64
-	decoded, err := base64.StdEncoding.DecodeString(s)
-	if err == nil {
-		return decoded, nil
-	}
-	// If it fails, return the original string as-is (some clients send plain text)
-	return []byte(s), nil
+	return base64.StdEncoding.DecodeString(s)
 }
 
 // cmdPutScript handles PUTSCRIPT command
@@ -647,8 +696,11 @@ func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []str
 		return fmt.Errorf("script validation failed: %w", err)
 	}
 
-	// Store script for authenticated user
-	if err := s.manager.StoreScript(session.user, scriptName, scriptContent); err != nil {
+	// Store script for authenticated user, within the per-user quota (F5610)
+	if err := s.manager.storeScript(session.user, scriptName, scriptContent, true); err != nil {
+		if code := quotaResponseCode(err); code != "" {
+			return &manageSieveNo{code: code, msg: err.Error()}
+		}
 		return fmt.Errorf("failed to store script: %w", err)
 	}
 
@@ -854,7 +906,23 @@ func (s *ManageSieveServer) cmdHaveSpace(session *manageSieveSession, args []str
 	if size > maxManageSieveScriptSize {
 		return &manageSieveNo{code: "QUOTA/MAXSIZE", msg: "script exceeds the maximum size"}
 	}
+	// F5610: the per-user script count and storage quota.
+	if err := s.manager.haveSpace(session.user, unquoteManageSieveArg(args[0]), size); err != nil {
+		return &manageSieveNo{code: quotaResponseCode(err), msg: err.Error()}
+	}
 	return s.sendResponse(session.conn, "OK \"Putscript would succeed\"")
+}
+
+// quotaResponseCode maps a quota error to its RFC 5804 §1.3 response code,
+// or "" for other errors. F5610.
+func quotaResponseCode(err error) string {
+	switch {
+	case errors.Is(err, errQuotaMaxScripts):
+		return "QUOTA/MAXSCRIPTS"
+	case errors.Is(err, errQuotaStorage):
+		return "QUOTA"
+	}
+	return ""
 }
 
 // cmdRenameScript handles RENAMESCRIPT <old-name> <new-name> (RFC 5804

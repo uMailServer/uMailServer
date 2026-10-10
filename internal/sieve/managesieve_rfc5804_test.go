@@ -263,6 +263,10 @@ func TestF5461_Edges(t *testing.T) {
 	if got := c.put("s", "keep;"); !strings.HasPrefix(got, "OK") || c.mgr.GetScriptSource("user", "s") != "keep;" {
 		t.Fatalf("PUTSCRIPT over TLS: %q", got)
 	}
+	// STARTTLS after AUTHENTICATE is not allowed (non-authenticated state only).
+	if got := c.last("STARTTLS\r\n"); !strings.HasPrefix(got, "NO") {
+		t.Fatalf("STARTTLS after auth: %q", got)
+	}
 
 	// No TLS config: STARTTLS is refused with NO and the session continues.
 	p := reg5460Dial(t, nil)
@@ -272,14 +276,6 @@ func TestF5461_Edges(t *testing.T) {
 	}
 	if got := p.last("NOOP\r\n"); !strings.HasPrefix(got, "OK") {
 		t.Fatalf("session after refused STARTTLS: %q", got)
-	}
-
-	// STARTTLS after AUTHENTICATE is not allowed (non-authenticated state only).
-	q := reg5460Dial(t, srvCfg)
-	defer q.client.Close()
-	q.auth()
-	if got := q.last("STARTTLS\r\n"); !strings.HasPrefix(got, "NO") {
-		t.Fatalf("STARTTLS after auth: %q", got)
 	}
 }
 

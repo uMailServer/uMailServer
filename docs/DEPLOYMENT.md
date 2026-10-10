@@ -390,54 +390,62 @@ tracing:
 
 ## Backup & Recovery
 
+### What a backup contains
+
+`umailserver backup <directory>` writes `umailserver_backup_<timestamp>.tar.gz`
+(or `.tar.gz.enc` with `--password`) into the given directory. The archive holds
+the accounts database, the mail store (`mail/messages` and `mail/mail.db`), the
+outbound queue, CalDAV and CardDAV data, push (VAPID) keys, vacation state and
+DKIM keys, plus a manifest with a SHA-256 hash per file.
+
+The server keeps its databases locked while it runs, so **stop uMailServer
+before taking a backup**. `umailserver backup` refuses to run against a live
+server ("database ... is locked by another process") instead of writing a torn
+copy.
+
 ### Automated Backups
-
-```bash
-# Add to crontab
-0 2 * * * /usr/local/bin/umailserver backup --output /backup/umailserver-$(date +\%Y\%m\%d).tar.gz
-```
-
-### Backup Script
 
 ```bash
 #!/bin/bash
 # /usr/local/bin/umailserver-backup.sh
+set -euo pipefail
 
 BACKUP_DIR="/backup/umailserver"
-DATE=$(date +%Y%m%d_%H%M%S)
 RETENTION_DAYS=30
+mkdir -p "$BACKUP_DIR"
 
-# Create backup
-mkdir -p $BACKUP_DIR
-umailserver backup --output $BACKUP_DIR/umailserver-$DATE.tar.gz
+# The databases must not be open while the backup reads them.
+systemctl stop umailserver
+trap 'systemctl start umailserver' EXIT
 
-# Verify backup
-if [ -f "$BACKUP_DIR/umailserver-$DATE.tar.gz" ]; then
-    echo "Backup completed: umailserver-$DATE.tar.gz"
-    
-    # Clean old backups
-    find $BACKUP_DIR -name "umailserver-*.tar.gz" -mtime +$RETENTION_DAYS -delete
-else
-    echo "Backup failed!" >&2
-    exit 1
-fi
+umailserver backup "$BACKUP_DIR" --config /etc/umailserver/umailserver.yaml
+
+find "$BACKUP_DIR" -name 'umailserver_backup_*' -mtime +$RETENTION_DAYS -delete
+```
+
+```bash
+# Add to crontab (runs at 02:00; mail is unavailable for the few seconds the backup takes)
+0 2 * * * /usr/local/bin/umailserver-backup.sh
 ```
 
 ### Restore from Backup
 
 ```bash
-# Stop server
+# Extract and verify the archive into restore_temp/ next to the data directory
+umailserver restore /backup/umailserver/umailserver_backup_<timestamp>.tar.gz \
+    --config /etc/umailserver/umailserver.yaml
+
+# Stop the server and copy the restored files into the data directory
 sudo systemctl stop umailserver
-
-# Restore data
-sudo tar -xzf umailserver-20240101.tar.gz -C /
-
-# Fix permissions
+sudo cp -a /var/lib/restore_temp/database/. /var/lib/umailserver/
+sudo cp -a /var/lib/restore_temp/messages/. /var/lib/umailserver/
 sudo chown -R umailserver:umailserver /var/lib/umailserver
-
-# Start server
 sudo systemctl start umailserver
 ```
+
+`restore` checks every file hash and the gzip checksum before it publishes
+`restore_temp/`; it never writes into the live data directory itself. The
+example paths assume `server.data_dir: /var/lib/umailserver`.
 
 ## Troubleshooting
 

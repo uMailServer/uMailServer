@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -115,6 +116,9 @@ type Server struct {
 	jwtSecrets map[string]string // kid -> secret
 	currentKid string            // active key ID
 	jwtMu      sync.RWMutex      // guards jwtSecrets and currentKid (F4847)
+	// jwtRotateMu serializes handleJWTRotate so each rotation persists and
+	// then publishes a key set derived from the previous one (F5540).
+	jwtRotateMu sync.Mutex
 
 	// Draining state for zero-downtime deployment
 	draining atomic.Bool
@@ -243,6 +247,10 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	if config.DataDir != "" {
 		srv.vacationMgr = newProductionVacationManager(config.DataDir, logger)
 	}
+	// F5540: rotated keys survive a restart unless keys are configured.
+	if len(config.JWTSecretVersions) == 0 {
+		srv.loadJWTKeys()
+	}
 	return srv
 }
 
@@ -351,6 +359,10 @@ func NewServerWithInterfaces(
 		jwtSecrets:     jwtSecrets,
 		currentKid:     currentKid,
 		stopCh:         make(chan struct{}),
+	}
+	// F5540: rotated keys survive a restart unless keys are configured.
+	if len(config.JWTSecretVersions) == 0 {
+		srv.loadJWTKeys()
 	}
 	return srv
 }
@@ -589,6 +601,21 @@ func (s *Server) AuditLogger() *audit.Logger {
 
 // Start starts the API server
 func (s *Server) Start(addr string) error {
+	ln, err := s.Listen(addr)
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+// Listen binds addr and prepares the HTTP server without serving, so a
+// caller sees a bind failure synchronously (F5530). Pass the listener to
+// Serve; Stop before Serve makes Serve close it and return.
+func (s *Server) Listen(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
+	}
 	s.config.Addr = addr
 
 	s.serverMu.Lock()
@@ -601,12 +628,20 @@ func (s *Server) Start(addr string) error {
 		IdleTimeout:       60 * time.Second,
 	}
 	s.serverMu.Unlock()
+	return ln, nil
+}
+
+// Serve serves the listener returned by Listen until Stop.
+func (s *Server) Serve(ln net.Listener) error {
+	s.serverMu.Lock()
+	srv := s.httpServer
+	s.serverMu.Unlock()
 
 	// Start background token blacklist cleanup
 	go s.tokenBlacklistCleanup()
 
-	s.logger.Info("Admin API server starting", "addr", addr)
-	return s.httpServer.ListenAndServe()
+	s.logger.Info("Admin API server starting", "addr", ln.Addr().String())
+	return srv.Serve(ln)
 }
 
 // tokenBlacklistCleanup periodically removes expired entries from the token blacklist

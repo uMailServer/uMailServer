@@ -204,12 +204,12 @@ func TestHandleCalendarPropfind_ConventionBoundaries(t *testing.T) {
 		t.Errorf("PROPFIND specific event hrefs = %v, want one /dav/calendars/work-cal/evt-1", hrefs)
 	}
 
-	// Unknown calendar: 207 with no resource responses (ownership gate holds).
+	// Unknown calendar: 404 with no resource data (ownership gate holds; F5586).
 	w = hrefRoundTripRequest(t, server, "PROPFIND", "/dav/calendars/missing-cal/", "")
-	if w.Code != http.StatusMultiStatus {
-		t.Fatalf("PROPFIND unknown calendar = %d, want %d", w.Code, http.StatusMultiStatus)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("PROPFIND unknown calendar = %d, want %d", w.Code, http.StatusNotFound)
 	}
-	if hrefs := hrefRoundTripHrefs(t, w.Body.Bytes()); len(hrefs) != 0 {
-		t.Errorf("PROPFIND unknown calendar returned responses %v, want none", hrefs)
+	if strings.Contains(w.Body.String(), "evt-1") {
+		t.Errorf("PROPFIND unknown calendar leaked resource data: %s", w.Body.String())
 	}
 }

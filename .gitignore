@@ -1,7 +1,7 @@
 dist/
 
 # Binaries
-umailserver
+/umailserver
 umailserver.exe
 umailserver.yaml
 *.exe

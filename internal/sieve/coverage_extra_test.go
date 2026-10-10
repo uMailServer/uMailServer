@@ -1935,8 +1935,8 @@ func TestDecodeBase64(t *testing.T) {
 		{"SGVsbG8=", "Hello", false},
 		{"dGVzdA==", "test", false},
 		{"", "", false},
-		// Invalid base64 returns original string
-		{"not-valid-base64!", "not-valid-base64!", false},
+		// F5611: invalid base64 is an error (RFC 5804 §2.1)
+		{"not-valid-base64!", "", true},
 	}
 
 	for _, tt := range tests {

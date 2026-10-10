@@ -1,8 +1,12 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,13 +21,20 @@ func (s *Server) startMCP() error {
 
 	mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
 	mcpSrv := mcp.NewServer(s.database)
-	if s.config.MCP.AuthToken == "" {
-		token := generateSecureToken()
+	if s.config.MCP.AuthToken == "" && s.config.MCP.AdminAuthToken == "" {
+		// F5590: a generated token must be obtainable by the operator, or
+		// no client can ever authenticate. Keep it in data_dir (0600, stable
+		// across restarts) instead of logging the secret.
+		token, path, err := s.loadOrCreateMCPToken()
+		if err != nil {
+			return fmt.Errorf("MCP: no auth token configured and generated token could not be stored: %w", err)
+		}
 		s.config.MCP.AuthToken = token
-		s.logger.Warn("MCP: no auth token configured; generated a random token - check server logs for token on first start")
-		s.logger.Info("MCP auth token generated", "token_length", len(token))
+		s.logger.Warn("MCP: no auth token configured; using generated token stored in file (set mcp.auth_token to override)", "path", path)
 	}
-	mcpSrv.SetAuthToken(s.config.MCP.AuthToken)
+	if s.config.MCP.AuthToken != "" {
+		mcpSrv.SetAuthToken(s.config.MCP.AuthToken)
+	}
 	if s.config.MCP.AdminAuthToken != "" {
 		mcpSrv.SetAdminAuthToken(s.config.MCP.AdminAuthToken)
 	}
@@ -50,4 +61,26 @@ func (s *Server) startMCP() error {
 	s.mcpHTTPServer = srv
 	s.logger.Info("MCP server started", "addr", mcpAddr)
 	return nil
+}
+
+// mcpTokenFile is the data_dir file holding the generated MCP auth token.
+const mcpTokenFile = "mcp_auth_token"
+
+// loadOrCreateMCPToken returns the generated MCP token from data_dir,
+// creating it (mode 0600) on first use (F5590).
+func (s *Server) loadOrCreateMCPToken() (token, path string, err error) {
+	path = filepath.Join(s.config.Server.DataDir, mcpTokenFile)
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if token = strings.TrimSpace(string(data)); token != "" {
+			return token, path, nil
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", path, err
+	}
+	token = generateSecureToken()
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		return "", path, err
+	}
+	return token, path, nil
 }

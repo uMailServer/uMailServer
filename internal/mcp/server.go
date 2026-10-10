@@ -82,6 +82,33 @@ func (s *Server) SetCorsOrigin(origin string) {
 	s.corsOrigin = origin
 }
 
+// corsAllowOrigin returns the Access-Control-Allow-Origin value for a
+// request Origin and whether that origin is allowed. corsOrigin is a
+// comma-separated allowlist (server wiring joins http.cors_origins); a
+// header may carry only one origin, so a listed origin is reflected
+// (F5591). A single configured origin is still emitted for requests that
+// do not match, as before; browsers reject the mismatch.
+func (s *Server) corsAllowOrigin(origin string) (string, bool) {
+	var entries []string
+	for _, e := range strings.Split(s.corsOrigin, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			entries = append(entries, e)
+		}
+	}
+	for _, e := range entries {
+		if e == "*" {
+			return "*", true
+		}
+		if origin != "" && e == origin {
+			return origin, true
+		}
+	}
+	if len(entries) == 1 {
+		return entries[0], false
+	}
+	return "", false
+}
+
 // SetRateLimit sets the rate limit for MCP requests (requests per minute, 0 = disabled)
 func (s *Server) SetRateLimit(limit int) {
 	s.rateMu.Lock()
@@ -142,11 +169,17 @@ const maxRequestBodyBytes = 1 << 20
 // HandleHTTP handles MCP requests
 func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	origin := r.Header.Get("Origin")
+	allowOrigin, originAllowed := s.corsAllowOrigin(origin)
 	// Only set CORS if explicitly configured; empty means no CORS headers (secure default)
 	if s.corsOrigin != "" {
-		w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
+		w.Header().Add("Vary", "Origin")
+		if allowOrigin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		// F5591: browser clients must send the Bearer token.
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	}
 
 	if r.Method == "OPTIONS" {
@@ -156,6 +189,15 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != "POST" {
 		s.writeError(w, http.StatusMethodNotAllowed, rpcInvalidRequest, nil, "Method not allowed")
+		return
+	}
+
+	// F5592: refuse browser requests from origins that are not allowed
+	// (DNS rebinding / cross-site POSTs to the loopback listener) before
+	// they count against the per-IP rate limit shared by local clients.
+	// Non-browser clients send no Origin and are unaffected.
+	if origin != "" && !originAllowed {
+		s.writeError(w, http.StatusForbidden, rpcAccessDenied, nil, "Origin not allowed")
 		return
 	}
 
