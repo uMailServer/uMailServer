@@ -2,6 +2,7 @@
 package caldav
 
 import (
+	"bytes"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -65,6 +66,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handle does the auth+dispatch work; ServeHTTP wraps it in a tracing span.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	// RFC 6764 §6: the well-known bootstrap URI redirects to the DAV context
+	// path. Clients probe it before they have credentials (F5652).
+	if strings.TrimRight(r.URL.Path, "/") == "/.well-known/caldav" {
+		http.Redirect(w, r, "/dav/", http.StatusMovedPermanently)
+		return
+	}
+
 	// Authenticate request
 	username, password, ok := r.BasicAuth()
 	if !ok {
@@ -125,7 +133,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 // handleOptions handles OPTIONS requests
 func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Allow", "OPTIONS, GET, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCALENDAR, MKCOL, MOVE, COPY")
-	w.Header().Set("DAV", "1, 2, 3, calendar-access, calendar-schedule")
+	// Only advertise what is implemented (F5656): there is no LOCK (class 2)
+	// and no scheduling (calendar-schedule).
+	w.Header().Set("DAV", "1, 3, calendar-access")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -230,14 +240,29 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 
 	// Build response
 	multistatus := &Multistatus{}
+	path := r.URL.Path
+	pathParts := strings.Split(strings.Trim(path, "/"), "/")
 
-	// Root principal
-	if r.URL.Path == "/" || r.URL.Path == "/dav/" {
+	// Principal resources (RFC 5397, RFC 4791 §6.2.1): the principal URL the
+	// server advertises must itself answer PROPFIND (F5651).
+	if len(pathParts) >= 2 && pathParts[0] == "dav" && pathParts[1] == "principals" {
+		if !s.propfindPrincipals(multistatus, pathParts, username, includeMembers) {
+			s.sendError(w, http.StatusNotFound, "not found")
+			return
+		}
+		applyPropSelection(multistatus, requestedProps(&propfind))
+		s.writeMultistatus(w, multistatus)
+		return
+	}
+
+	// Root: the entry point where current-user-principal is discovered.
+	if path == "/" || path == "/dav/" {
+		multistatus.Responses = append(multistatus.Responses, s.buildRootResponse(path, username))
 		multistatus.Responses = append(multistatus.Responses, s.buildPrincipalResponse(username))
 	}
 
 	// Calendar home
-	if r.URL.Path == "/" || r.URL.Path == "/dav/" || r.URL.Path == "/dav/calendars/" {
+	if path == "/" || path == "/dav/" || path == "/dav/calendars/" {
 		multistatus.Responses = append(multistatus.Responses, s.buildCalendarHomeResponse(username))
 
 		if includeMembers {
@@ -255,19 +280,122 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	}
 
 	// Handle specific calendar or event path
-	if strings.HasPrefix(r.URL.Path, "/dav/calendars/") {
-		if !s.handleCalendarPropfind(r.URL.Path, username, multistatus, includeMembers) {
+	if strings.HasPrefix(path, "/dav/calendars/") {
+		found, err := s.handleCalendarPropfind(path, username, multistatus, includeMembers)
+		if err != nil {
+			s.logger.Error("Failed to query calendar", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to query calendar")
+			return
+		}
+		if !found {
 			s.sendError(w, http.StatusNotFound, "not found")
 			return
 		}
 	}
 
+	applyPropSelection(multistatus, requestedProps(&propfind))
+	s.writeMultistatus(w, multistatus)
+}
+
+// writeMultistatus writes a 207 response carrying multistatus.
+func (s *Server) writeMultistatus(w http.ResponseWriter, multistatus *Multistatus) {
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
 	w.WriteHeader(http.StatusMultiStatus)
 
 	output, _ := xml.MarshalIndent(multistatus, "", "  ")
 	_, _ = w.Write([]byte(xml.Header))
 	_, _ = w.Write(output)
+}
+
+// propfindPrincipals answers PROPFIND below /dav/principals/. It reports
+// false when the target is not the authenticated user's own principal, so
+// other users' principals are not disclosed.
+func (s *Server) propfindPrincipals(multistatus *Multistatus, parts []string, username string, includeMembers bool) bool {
+	switch {
+	case len(parts) == 2:
+		multistatus.Responses = append(multistatus.Responses, Response{
+			Href: "/dav/principals/",
+			Propstat: []Propstat{{
+				Prop: []Property{
+					{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}, Inner: "<collection/>"},
+					{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: "Principals"},
+				},
+				Status: statusLine(http.StatusOK),
+			}},
+		})
+		if includeMembers {
+			multistatus.Responses = append(multistatus.Responses, s.buildPrincipalResponse(username))
+		}
+		return true
+	case len(parts) == 3 && parts[2] == username:
+		multistatus.Responses = append(multistatus.Responses, s.buildPrincipalResponse(username))
+		return true
+	default:
+		return false
+	}
+}
+
+// requestedProps returns the property names a PROPFIND body asks for, or nil
+// when every property is wanted (no body, allprop, or an empty prop list).
+func requestedProps(pf *Propfind) []xml.Name {
+	if pf.AllProp != nil || pf.Prop == nil {
+		return nil
+	}
+	var names []xml.Name
+	for _, p := range pf.Prop.Names {
+		names = append(names, p.XMLName)
+	}
+	if pf.Prop.CalendarData != nil {
+		names = append(names, xml.Name{Space: nsCalDAV, Local: "calendar-data"})
+	}
+	return names
+}
+
+// applyPropSelection restricts every response to the requested properties and
+// reports requested-but-unknown ones in a 404 propstat (RFC 4918 §9.1). A nil
+// want leaves the full property set in place (allprop).
+func applyPropSelection(multistatus *Multistatus, want []xml.Name) {
+	if len(want) == 0 {
+		return
+	}
+	for i := range multistatus.Responses {
+		resp := &multistatus.Responses[i]
+		var have []Property
+		for _, ps := range resp.Propstat {
+			have = append(have, ps.Prop...)
+		}
+		var found, missing []Property
+		seen := make(map[xml.Name]bool, len(want))
+		for _, w := range want {
+			if seen[w] {
+				continue
+			}
+			seen[w] = true
+			matched := false
+			for _, h := range have {
+				if h.XMLName.Local == w.Local && (w.Space == "" || h.XMLName.Space == w.Space) {
+					found = append(found, h)
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				missing = append(missing, Property{XMLName: w})
+			}
+		}
+		resp.Propstat = nil
+		if len(found) > 0 {
+			resp.Propstat = append(resp.Propstat, Propstat{Prop: found, Status: statusLine(http.StatusOK)})
+		}
+		if len(missing) > 0 {
+			resp.Propstat = append(resp.Propstat, Propstat{Prop: missing, Status: statusLine(http.StatusNotFound)})
+		}
+	}
+}
+
+// statusLine renders an HTTP status for a DAV:status element.
+func statusLine(code int) string {
+	return "HTTP/1.1 " + strconv.Itoa(code) + " " + http.StatusText(code)
 }
 
 // handleReport handles REPORT requests
@@ -382,12 +510,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-	w.WriteHeader(http.StatusMultiStatus)
-
-	output, _ := xml.MarshalIndent(multistatus, "", "  ")
-	_, _ = w.Write([]byte(xml.Header))
-	_, _ = w.Write(output)
+	s.writeMultistatus(w, multistatus)
 }
 
 // extractComponentBlocks returns the bodies of all BEGIN:<name>...END:<name>
@@ -818,7 +941,12 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		s.sendError(w, http.StatusInternalServerError, "failed to read event")
 		return
 	}
-	if !preconditionsHold(r, existing != "", s.storage.GetETag(username, calendarID, uid)) {
+	currentETag := s.storage.GetETag(username, calendarID, uid)
+	if existing != "" && currentETag == "" {
+		s.sendError(w, http.StatusInternalServerError, "failed to read event state")
+		return
+	}
+	if !preconditionsHold(r, existing != "", currentETag) {
 		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
@@ -838,8 +966,9 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	}
 
 	// Set ETag header
-	etag := s.storage.GetETag(username, calendarID, uid)
-	w.Header().Set("ETag", etag)
+	if etag := s.storage.GetETag(username, calendarID, uid); etag != "" {
+		w.Header().Set("ETag", etag)
+	}
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -871,8 +1000,9 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 
 	// Set content type and ETag
 	w.Header().Set("Content-Type", "text/calendar; charset=utf-8")
-	etag := s.storage.GetETag(username, calendarID, eventUID)
-	w.Header().Set("ETag", etag)
+	if etag := s.storage.GetETag(username, calendarID, eventUID); etag != "" {
+		w.Header().Set("ETag", etag)
+	}
 
 	w.WriteHeader(http.StatusOK)
 	// #nosec G705 -- Content-Type is explicitly text/calendar, not executable HTML
@@ -910,7 +1040,12 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 		s.sendError(w, http.StatusBadRequest, "invalid event")
 		return
 	}
-	if !preconditionsHold(r, existing != "", s.storage.GetETag(username, calendarID, eventUID)) {
+	currentETag := s.storage.GetETag(username, calendarID, eventUID)
+	if existing != "" && currentETag == "" {
+		s.sendError(w, http.StatusInternalServerError, "failed to read event state")
+		return
+	}
+	if !preconditionsHold(r, existing != "", currentETag) {
 		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
@@ -946,7 +1081,12 @@ func (s *Server) deleteCalendar(w http.ResponseWriter, r *http.Request, username
 		s.sendError(w, http.StatusNotFound, "calendar not found")
 		return
 	}
-	if !preconditionsHold(r, true, s.storage.GetCalendarETag(username, calendarID)) {
+	calETag := s.storage.GetCalendarETag(username, calendarID)
+	if calETag == "" {
+		s.sendError(w, http.StatusInternalServerError, "failed to read calendar state")
+		return
+	}
+	if !preconditionsHold(r, true, calETag) {
 		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
@@ -1017,7 +1157,69 @@ func (s *Server) handleMkCol(w http.ResponseWriter, r *http.Request, username st
 	s.handleMkCalendar(w, r, username)
 }
 
-// handleProppatch handles PROPPATCH requests
+// proppatchItem is one property change of a PROPPATCH request.
+type proppatchItem struct {
+	name   xml.Name
+	value  string
+	remove bool
+}
+
+// parsePropertyUpdate reads the RFC 4918 §14.19 propertyupdate body into its
+// ordered set/remove items.
+func parsePropertyUpdate(body []byte) ([]proppatchItem, error) {
+	dec := xml.NewDecoder(bytes.NewReader(body))
+	var items []proppatchItem
+	depth := 0
+	remove := false
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch el := tok.(type) {
+		case xml.StartElement:
+			depth++
+			switch depth {
+			case 1:
+				if el.Name.Space != nsDAV || el.Name.Local != "propertyupdate" {
+					return nil, errors.New("root element is not DAV:propertyupdate")
+				}
+			case 2:
+				remove = el.Name.Local == "remove"
+			case 4:
+				var v struct {
+					Text string `xml:",chardata"`
+				}
+				if err := dec.DecodeElement(&v, &el); err != nil {
+					return nil, err
+				}
+				depth-- // DecodeElement consumed the end tag
+				items = append(items, proppatchItem{name: el.Name, value: strings.TrimSpace(v.Text), remove: remove})
+			}
+		case xml.EndElement:
+			depth--
+		}
+	}
+	if len(items) == 0 {
+		return nil, errors.New("propertyupdate has no properties")
+	}
+	return items, nil
+}
+
+// proppatchSetters are the dead properties a calendar collection stores.
+var proppatchSetters = map[xml.Name]func(*Calendar, string){
+	{Space: nsDAV, Local: "displayname"}:             func(c *Calendar, v string) { c.Name = v },
+	{Space: nsCalDAV, Local: "calendar-description"}: func(c *Calendar, v string) { c.Description = v },
+	{Space: nsCalDAV, Local: "calendar-timezone"}:    func(c *Calendar, v string) { c.Timezone = v },
+	{Space: nsAppleICal, Local: "calendar-color"}:    func(c *Calendar, v string) { c.Color = v },
+}
+
+// handleProppatch handles PROPPATCH requests (RFC 4918 §9.2). The changes are
+// applied atomically: when any property cannot be set nothing is applied, the
+// offending properties report 403 and the others 424 (F5653).
 func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, username string) {
 	// Parse path
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -1027,6 +1229,11 @@ func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, usernam
 	}
 
 	calendarID := parts[2]
+	// A PROPPATCH addressed at an event must not change its calendar.
+	onEvent := len(parts) > 3 && parts[3] != ""
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	// Verify calendar belongs to this user (ownership check)
 	cal, err := s.storage.GetCalendar(username, calendarID)
@@ -1035,8 +1242,60 @@ func (s *Server) handleProppatch(w http.ResponseWriter, r *http.Request, usernam
 		return
 	}
 
-	// For now, just return success without parsing PROPPATCH body
-	w.WriteHeader(http.StatusOK)
+	body, ok := s.readBody(w, r)
+	if !ok {
+		return
+	}
+	items, err := parsePropertyUpdate(body)
+	if err != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid propertyupdate")
+		return
+	}
+
+	failed := onEvent
+	for _, it := range items {
+		if _, ok := proppatchSetters[it.name]; !ok {
+			failed = true
+		}
+	}
+
+	byStatus := map[int][]Property{}
+	var order []int
+	add := func(code int, name xml.Name) {
+		if _, seen := byStatus[code]; !seen {
+			order = append(order, code)
+		}
+		byStatus[code] = append(byStatus[code], Property{XMLName: name})
+	}
+	if failed {
+		for _, it := range items {
+			if _, ok := proppatchSetters[it.name]; ok && !onEvent {
+				add(http.StatusFailedDependency, it.name)
+			} else {
+				add(http.StatusForbidden, it.name)
+			}
+		}
+	} else {
+		for _, it := range items {
+			value := it.value
+			if it.remove {
+				value = ""
+			}
+			proppatchSetters[it.name](cal, value)
+			add(http.StatusOK, it.name)
+		}
+		if err := s.storage.UpdateCalendar(username, cal); err != nil {
+			s.logger.Error("Failed to update calendar", "error", err)
+			s.sendError(w, http.StatusInternalServerError, "failed to update calendar")
+			return
+		}
+	}
+
+	resp := Response{Href: (&url.URL{Path: r.URL.Path}).EscapedPath()}
+	for _, code := range order {
+		resp.Propstat = append(resp.Propstat, Propstat{Prop: byStatus[code], Status: statusLine(code)})
+	}
+	s.writeMultistatus(w, &Multistatus{Responses: []Response{resp}})
 }
 
 // handleMove handles MOVE requests
@@ -1110,7 +1369,12 @@ func (s *Server) transferEvent(w http.ResponseWriter, r *http.Request, username 
 	}
 
 	// RFC 7232 §3.1: If-Match/If-None-Match apply to the request-URI, the source.
-	if !preconditionsHold(r, true, s.storage.GetETag(username, sourceCalendarID, sourceEventUID)) {
+	sourceETag := s.storage.GetETag(username, sourceCalendarID, sourceEventUID)
+	if sourceETag == "" {
+		s.sendError(w, http.StatusInternalServerError, "failed to read source state")
+		return
+	}
+	if !preconditionsHold(r, true, sourceETag) {
 		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
@@ -1214,17 +1478,49 @@ func rewriteUID(icsData, oldUID, newUID string) string {
 	return out.String()
 }
 
+// davHref renders a DAV:href element for an href path.
+func davHref(path string) string {
+	var b bytes.Buffer
+	b.WriteString(`<href xmlns="DAV:">`)
+	_ = xml.EscapeText(&b, []byte(path))
+	b.WriteString("</href>")
+	return b.String()
+}
+
+// principalHref returns the principal URL of username.
+func principalHref(username string) string {
+	return (&url.URL{Path: "/dav/principals/" + username + "/"}).EscapedPath()
+}
+
+// buildRootResponse builds the response for the DAV root, where clients look
+// up current-user-principal (RFC 5397).
+func (s *Server) buildRootResponse(path, username string) Response {
+	return Response{
+		Href: path,
+		Propstat: []Propstat{{
+			Prop: []Property{
+				{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}, Inner: "<collection/>"},
+				{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: "DAV"},
+				{XMLName: xml.Name{Space: nsDAV, Local: "current-user-principal"}, Inner: davHref(principalHref(username))},
+			},
+			Status: statusLine(http.StatusOK),
+		}},
+	}
+}
+
 // buildPrincipalResponse builds a response for the principal resource
 func (s *Server) buildPrincipalResponse(username string) Response {
 	return Response{
-		Href: fmt.Sprintf("/dav/principals/%s/", username),
+		Href: principalHref(username),
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <D:collection/>\n        <D:principal/>\n      "},
-				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: username},
-				{XMLName: xml.Name{Space: "CALDAV:", Local: "calendar-home-set"}, Value: "<href>/dav/calendars/</href>"},
+				{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}, Inner: "<collection/><principal/>"},
+				{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: username},
+				{XMLName: xml.Name{Space: nsDAV, Local: "current-user-principal"}, Inner: davHref(principalHref(username))},
+				{XMLName: xml.Name{Space: nsDAV, Local: "principal-URL"}, Inner: davHref(principalHref(username))},
+				{XMLName: xml.Name{Space: nsCalDAV, Local: "calendar-home-set"}, Inner: davHref("/dav/calendars/")},
 			},
-			Status: "HTTP/1.1 200 OK",
+			Status: statusLine(http.StatusOK),
 		}},
 	}
 }
@@ -1235,10 +1531,11 @@ func (s *Server) buildCalendarHomeResponse(username string) Response {
 		Href: "/dav/calendars/",
 		Propstat: []Propstat{{
 			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "<D:collection/>"},
-				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: "Calendars"},
+				{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}, Inner: "<collection/>"},
+				{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: "Calendars"},
+				{XMLName: xml.Name{Space: nsDAV, Local: "current-user-principal"}, Inner: davHref(principalHref(username))},
 			},
-			Status: "HTTP/1.1 200 OK",
+			Status: statusLine(http.StatusOK),
 		}},
 	}
 }
@@ -1249,76 +1546,91 @@ func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response 
 	// (the authenticated username scopes storage and is not part of the URL), so
 	// clients operating on these hrefs (RFC 4918 §8.3) reach the item handlers.
 	href := fmt.Sprintf("/dav/calendars/%s/", cal.ID)
-	etag := s.storage.GetCalendarETag(username, cal.ID)
+	props := []Property{
+		{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}, Inner: `<collection/><calendar xmlns="` + nsCalDAV + `"/>`},
+		{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: cal.Name},
+	}
+	if etag := s.storage.GetCalendarETag(username, cal.ID); etag != "" {
+		props = append(props, Property{XMLName: xml.Name{Space: nsDAV, Local: "getetag"}, Value: etag})
+	}
+	props = append(props,
+		Property{XMLName: xml.Name{Space: nsCalDAV, Local: "calendar-description"}, Value: cal.Description},
+		Property{XMLName: xml.Name{Space: nsCalDAV, Local: "supported-calendar-component-set"}, Inner: `<comp name="VEVENT"/><comp name="VTODO"/>`},
+		Property{XMLName: xml.Name{Space: nsDAV, Local: "supported-report-set"}, Inner: `<supported-report><report><calendar-query xmlns="` + nsCalDAV + `"/></report></supported-report>`},
+	)
+	if cal.Color != "" {
+		props = append(props, Property{XMLName: xml.Name{Space: nsAppleICal, Local: "calendar-color"}, Value: cal.Color})
+	}
+	// calendar-timezone carries iCalendar text (RFC 4791 §5.2.2); only a
+	// stored VCALENDAR is returned, not a bare zone identifier.
+	if strings.HasPrefix(cal.Timezone, "BEGIN:VCALENDAR") {
+		props = append(props, Property{XMLName: xml.Name{Space: nsCalDAV, Local: "calendar-timezone"}, Value: cal.Timezone})
+	}
 
 	return Response{
-		Href: href,
-		Propstat: []Propstat{{
-			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: "\n        <D:collection/>\n        <C:calendar xmlns:C=\"urn:ietf:params:xml:ns:caldav\"/>\n      "},
-				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: cal.Name},
-				{XMLName: xml.Name{Space: "DAV:", Local: "getetag"}, Value: etag},
-				{XMLName: xml.Name{Space: "CALDAV:", Local: "calendar-description"}, Value: cal.Description},
-				{XMLName: xml.Name{Space: "CALDAV:", Local: "supported-calendar-component-set"}, Value: "<comp name=\"VEVENT\"/><comp name=\"VTODO\"/>"},
-			},
-			Status: "HTTP/1.1 200 OK",
-		}},
+		Href:     href,
+		Propstat: []Propstat{{Prop: props, Status: statusLine(http.StatusOK)}},
 	}
 }
 
 // handleCalendarPropfind handles PROPFIND for specific calendar paths. It
 // returns false when the addressed calendar or event does not exist, which
-// the caller answers with 404 instead of an empty 207 (F5586).
-func (s *Server) handleCalendarPropfind(path string, username string, multistatus *Multistatus, includeMembers bool) bool {
+// the caller answers with 404 instead of an empty 207 (F5586). A storage
+// error while listing members is returned instead of a partial listing
+// (F5654).
+func (s *Server) handleCalendarPropfind(path string, username string, multistatus *Multistatus, includeMembers bool) (bool, error) {
 	// Parse path: /dav/calendars/{calendarID}/{eventUID?}
 	// Request convention matches the item handlers: the authenticated username
 	// scopes storage and is not part of the URL.
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	// Minimum path: /dav/calendars/{calendarID} = 3 parts
 	if len(parts) < 3 {
-		return true
+		return true, nil
 	}
 
 	calendarID := parts[2]
 	if calendarID == "" {
-		return true
+		return true, nil
 	}
 
 	// Get calendar
 	cal, err := s.storage.GetCalendar(username, calendarID)
 	if err != nil || cal == nil {
-		return false
+		return false, nil
 	}
 
 	// If it's just the calendar, return calendar info
 	if len(parts) == 3 || (len(parts) == 4 && parts[3] == "") {
 		multistatus.Responses = append(multistatus.Responses, s.buildCalendarResponse(username, cal))
 		if !includeMembers {
-			return true
+			return true, nil
 		}
 
 		// Also include events
-		events, _ := s.storage.GetEvents(username, calendarID)
+		events, err := s.storage.GetEvents(username, calendarID)
+		if err != nil {
+			return true, err
+		}
 		for _, eventData := range events {
 			uid := extractUIDFromICS(eventData)
 			if uid != "" {
 				multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, uid, eventData))
 			}
 		}
-		return true
+		return true, nil
 	}
 
 	// Specific event
 	eventUID := parts[3]
 	if eventUID == "" {
-		return true
+		return true, nil
 	}
 	eventData, err := s.storage.GetEvent(username, calendarID, eventUID)
 	if err != nil || eventData == "" {
-		return false
+		return false, nil
 	}
 	multistatus.Responses = append(multistatus.Responses, s.buildEventResponse(username, calendarID, eventUID, eventData))
-	return true
+	return true, nil
 }
 
 // maxRRULEInstances bounds recurrence expansion so a malformed or
@@ -1507,21 +1819,22 @@ func buildExpandedICS(eventData string, instances []time.Time, duration time.Dur
 func (s *Server) buildEventResponse(username, calendarID, eventUID, eventData string) Response {
 	// Request convention: "/dav/calendars/{calendarID}/{eventUID}" (no username segment).
 	href := fmt.Sprintf("/dav/calendars/%s/%s", calendarID, eventUID)
-	etag := s.storage.GetETag(username, calendarID, eventUID)
+	props := []Property{
+		{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}},
+		{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: eventUID},
+	}
+	if etag := s.storage.GetETag(username, calendarID, eventUID); etag != "" {
+		props = append(props, Property{XMLName: xml.Name{Space: nsDAV, Local: "getetag"}, Value: etag})
+	}
+	props = append(props,
+		Property{XMLName: xml.Name{Space: nsDAV, Local: "getcontenttype"}, Value: "text/calendar; component=vevent"},
+		Property{XMLName: xml.Name{Space: nsDAV, Local: "getcontentlength"}, Value: fmt.Sprintf("%d", len(eventData))},
+		Property{XMLName: xml.Name{Space: nsCalDAV, Local: "calendar-data"}, Value: eventData},
+	)
 
 	return Response{
-		Href: href,
-		Propstat: []Propstat{{
-			Prop: []Property{
-				{XMLName: xml.Name{Space: "DAV:", Local: "resourcetype"}, Value: ""},
-				{XMLName: xml.Name{Space: "DAV:", Local: "displayname"}, Value: eventUID},
-				{XMLName: xml.Name{Space: "DAV:", Local: "getetag"}, Value: etag},
-				{XMLName: xml.Name{Space: "DAV:", Local: "getcontenttype"}, Value: "text/calendar; component=vevent"},
-				{XMLName: xml.Name{Space: "DAV:", Local: "getcontentlength"}, Value: fmt.Sprintf("%d", len(eventData))},
-				{XMLName: xml.Name{Space: "CALDAV:", Local: "calendar-data"}, Value: eventData},
-			},
-			Status: "HTTP/1.1 200 OK",
-		}},
+		Href:     href,
+		Propstat: []Propstat{{Prop: props, Status: statusLine(http.StatusOK)}},
 	}
 }
 
@@ -1550,18 +1863,30 @@ type Propfind struct {
 	Prop    *Prop     `xml:"prop,omitempty"`
 }
 
+// Namespaces used in WebDAV/CalDAV XML.
+const (
+	nsDAV       = "DAV:"
+	nsCalDAV    = "urn:ietf:params:xml:ns:caldav"
+	nsAppleICal = "http://apple.com/ns/ical/"
+)
+
+// propName is one requested property element, namespace resolved.
+type propName struct {
+	XMLName xml.Name
+}
+
 // Prop represents properties
 type Prop struct {
 	XMLName      xml.Name      `xml:"prop"`
 	Inner        []byte        `xml:",innerxml"`
 	CalendarData *CalendarData `xml:"calendar-data"`
+	Names        []propName    `xml:",any"`
 }
 
-// Multistatus represents a 207 Multi-Status response
+// Multistatus represents a 207 Multi-Status response. The root and its
+// unprefixed children are in the DAV: namespace (RFC 4918 §14.16).
 type Multistatus struct {
-	XMLName   xml.Name   `xml:"multistatus"`
-	XMLNSDav  string     `xml:"xmlns:dav,attr,omitempty"`
-	XMLNSCal  string     `xml:"xmlns:cal,attr,omitempty"`
+	XMLName   xml.Name   `xml:"DAV: multistatus"`
 	Responses []Response `xml:"response"`
 }
 
@@ -1579,10 +1904,29 @@ type Propstat struct {
 	Status  string     `xml:"status"`
 }
 
-// Property represents a single property
+// propstatWire is the encoded shape of Propstat: the properties sit inside a
+// single prop element (RFC 4918 §14.18).
+type propstatWire struct {
+	Prop struct {
+		Items []Property `xml:",any"`
+	} `xml:"prop"`
+	Status string `xml:"status"`
+}
+
+// MarshalXML wraps the properties in one prop element.
+func (p Propstat) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+	var wire propstatWire
+	wire.Prop.Items = p.Prop
+	wire.Status = p.Status
+	return e.EncodeElement(wire, start)
+}
+
+// Property represents a single property. Value is escaped text; Inner is raw
+// XML for structured values (resourcetype, calendar-home-set, ...).
 type Property struct {
 	XMLName xml.Name `xml:""`
 	Value   string   `xml:",chardata"`
+	Inner   string   `xml:",innerxml"`
 }
 
 // CalendarQuery represents a calendar-query REPORT

@@ -334,22 +334,26 @@ func (s *Storage) DeleteEvent(username, calendarID, eventUID string) error {
 	return nil
 }
 
-// GetETag generates an ETag for an event based on modification time
+// GetETag generates an ETag for an event based on modification time. It
+// returns "" when the file cannot be inspected: an ETag must be stable, so a
+// fresh random value (which could never match an If-Match) is not invented
+// (F5655). Callers treat "" as unavailable.
 func (s *Storage) GetETag(username, calendarID, eventUID string) string {
 	path := s.eventPath(username, calendarID, eventUID)
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Sprintf("\"%s\"", uuid.New().String())
+		return ""
 	}
 	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
 }
 
-// GetCalendarETag generates an ETag for a calendar
+// GetCalendarETag generates an ETag for a calendar, or "" when the metadata
+// cannot be inspected (F5655).
 func (s *Storage) GetCalendarETag(username, calendarID string) string {
 	path := s.calendarPath(username, calendarID)
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Sprintf("\"%s\"", uuid.New().String())
+		return ""
 	}
 	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
 }
