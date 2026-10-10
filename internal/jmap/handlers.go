@@ -456,6 +456,13 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 		}
 	}
 
+	// RFC 8621 §4.2: maxBodyValueBytes must be a non-negative integer.
+	if raw, present := args["maxBodyValueBytes"]; present && raw != nil {
+		if n, ok := raw.(float64); !ok || n < 0 || n != math.Trunc(n) {
+			return invalidArgumentsResponse(call.ID, "maxBodyValueBytes must be a non-negative integer", "maxBodyValueBytes")
+		}
+	}
+
 	emails := []Email{}
 	var projected []interface{}
 	notFound := []string{}
@@ -475,7 +482,9 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 			}
 			emails = append(emails, email)
 			if wantProps != nil {
-				projected = append(projected, projectEmail(email, wantProps))
+				pe := projectEmail(email, wantProps)
+				s.augmentEmailProps(user, copies[0].meta.MessageID, wantProps, args, pe)
+				projected = append(projected, pe)
 			}
 		}
 	}
@@ -524,7 +533,11 @@ var emailPropertyNames = map[string]bool{
 }
 
 func validEmailProperty(p string) bool {
-	return emailPropertyNames[p] || strings.HasPrefix(p, "header:")
+	if strings.HasPrefix(p, "header:") {
+		_, ok := parseHeaderProp(p)
+		return ok
+	}
+	return emailPropertyNames[p]
 }
 
 // projectEmail returns only the requested properties of email; "id" is
@@ -593,29 +606,59 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 	// negative and make the ids loop a negative-index panic, so floor it at
 	// 0 first.
 	total := len(fullIDs)
-	start := resolveQueryPosition(position, total)
+	var start int
+	if anchor, hasAnchor := args["anchor"].(string); hasAnchor && anchor != "" {
+		// RFC 8620 §5.5: with an anchor, position is ignored and the result
+		// starts at anchor's index + anchorOffset (floored at 0). An
+		// anchor that is not in the results is anchorNotFound.
+		idx := -1
+		for i, id := range fullIDs {
+			if id == anchor {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return Response{Name: "error", Args: map[string]interface{}{"type": "anchorNotFound"}, ID: call.ID}
+		}
+		offset, _ := args["anchorOffset"].(float64)
+		start = idx + int(math.Trunc(offset))
+		if offset > float64(total) { // guard float->int overflow
+			start = total
+		} else if offset < -float64(total) {
+			start = 0
+		}
+		if start < 0 {
+			start = 0
+		}
+		if start > total {
+			start = total
+		}
+	} else {
+		start = resolveQueryPosition(position, total)
+	}
 	end := start + int(limit)
 	if end > total {
 		end = total
 	}
 
-	var ids []string
+	ids := []string{}
 	for i := start; i < end; i++ {
 		ids = append(ids, fullIDs[i])
 	}
 
-	return Response{
-		Name: "Email/query",
-		Args: map[string]interface{}{
-			"accountId":           accountID,
-			"queryState":          queryState,
-			"canCalculateChanges": false,
-			"position":            start,
-			"total":               total,
-			"ids":                 ids,
-		},
-		ID: call.ID,
+	resp := map[string]interface{}{
+		"accountId":           accountID,
+		"queryState":          queryState,
+		"canCalculateChanges": false,
+		"position":            start,
+		"ids":                 ids,
 	}
+	// RFC 8620 §5.5: total is present only when calculateTotal is true.
+	if ct, _ := args["calculateTotal"].(bool); ct {
+		resp["total"] = total
+	}
+	return Response{Name: "Email/query", Args: resp, ID: call.ID}
 }
 
 // resolveQueryPosition maps a client-supplied /query position onto a
@@ -1018,6 +1061,15 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			continue
 		}
 
+		if errType, props := validateEmailPatch(updateData); errType != "" {
+			e := map[string]interface{}{"type": errType}
+			if len(props) > 0 {
+				e["properties"] = props
+			}
+			notUpdated[emailID] = e
+			continue
+		}
+
 		patchFlags, ok := emailKeywordPatch(updateData)
 		if !ok {
 			notUpdated[emailID] = map[string]interface{}{
@@ -1163,6 +1215,59 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		},
 		ID: call.ID,
 	}
+}
+
+// validateEmailPatch checks the PatchObject syntax of an Email/set update
+// (RFC 8620 §5.3). A path into an unknown or immutable property, a
+// non-object keywords/mailboxIds value or a non-true keyword in the full
+// form is invalidProperties; a nested or empty JSON-pointer path, or a
+// patch that sets a property both whole and by path, is invalidPatch.
+func validateEmailPatch(update map[string]interface{}) (string, []string) {
+	keys := make([]string, 0, len(update))
+	for k := range update {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var badProps []string
+	hasWhole := map[string]bool{}
+	hasPath := map[string]bool{}
+	for _, k := range keys {
+		base, rest, isPath := strings.Cut(k, "/")
+		if base != "keywords" && base != "mailboxIds" {
+			badProps = append(badProps, k)
+			continue
+		}
+		if !isPath {
+			hasWhole[base] = true
+			m, ok := update[k].(map[string]interface{})
+			if !ok {
+				badProps = append(badProps, k)
+				continue
+			}
+			if base == "keywords" {
+				for _, v := range m {
+					if b, ok := v.(bool); !ok || !b {
+						badProps = append(badProps, k)
+						break
+					}
+				}
+			}
+			continue
+		}
+		if rest == "" || strings.Contains(rest, "/") {
+			return "invalidPatch", nil
+		}
+		hasPath[base] = true
+	}
+	if len(badProps) > 0 {
+		return "invalidProperties", badProps
+	}
+	for base := range hasWhole {
+		if hasPath[base] {
+			return "invalidPatch", nil
+		}
+	}
+	return "", nil
 }
 
 // emailKeywordPatch parses the keyword part of an Email/set update. RFC 8620
@@ -1379,151 +1484,178 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 	notCreated := make(map[string]interface{})
 
 	for key, val := range emails {
-		importData, ok := val.(map[string]interface{})
-		if !ok {
-			notCreated[key] = map[string]interface{}{
-				"type":        "invalidArguments",
-				"description": "Invalid email import data",
+		func() {
+			// Serialize with the upload GC: the blob must not be expired
+			// between being read and its metadata being stored.
+			mu := s.userUploadLock(user)
+			mu.Lock()
+			defer mu.Unlock()
+			importData, ok := val.(map[string]interface{})
+			if !ok {
+				notCreated[key] = map[string]interface{}{
+					"type":        "invalidArguments",
+					"description": "Invalid email import data",
+				}
+				return
 			}
-			continue
-		}
 
-		blobID, _ := importData["blobId"].(string)
-		mailboxIDs, _ := importData["mailboxIds"].(map[string]interface{})
-		keywords, _ := importData["keywords"].(map[string]interface{})
-		receivedAt, _ := importData["receivedAt"].(string)
+			blobID, _ := importData["blobId"].(string)
+			mailboxIDs, _ := importData["mailboxIds"].(map[string]interface{})
+			keywords, _ := importData["keywords"].(map[string]interface{})
+			receivedAt, _ := importData["receivedAt"].(string)
 
-		if blobID == "" {
-			notCreated[key] = map[string]interface{}{
-				"type":        "invalidArguments",
-				"description": "blobId is required",
+			if blobID == "" {
+				notCreated[key] = map[string]interface{}{
+					"type":        "invalidArguments",
+					"description": "blobId is required",
+				}
+				return
 			}
-			continue
-		}
 
-		// RFC 8621 §4.6: mailboxIds is Id[Boolean] — the email is imported
-		// into EVERY mailbox whose value is true, not just the first (the
-		// old loop broke after the first entry and silently dropped the
-		// rest). Resolve and dedupe names: two ids may map to one name.
-		var targetNames []string
-		seenNames := make(map[string]bool)
-		for id, v := range mailboxIDs {
-			if b, ok := v.(bool); ok && b {
-				name := getMailboxNameFromID(id)
-				if !seenNames[name] {
-					seenNames[name] = true
-					targetNames = append(targetNames, name)
+			// RFC 8621 §4.6: mailboxIds is Id[Boolean] — the email is imported
+			// into EVERY mailbox whose value is true, not just the first (the
+			// old loop broke after the first entry and silently dropped the
+			// rest). Resolve and dedupe names: two ids may map to one name.
+			var targetNames []string
+			seenNames := make(map[string]bool)
+			for id, v := range mailboxIDs {
+				if b, ok := v.(bool); ok && b {
+					name := getMailboxNameFromID(id)
+					if !seenNames[name] {
+						seenNames[name] = true
+						targetNames = append(targetNames, name)
+					}
 				}
 			}
-		}
-		if len(targetNames) == 0 {
-			targetNames = append(targetNames, "INBOX")
-		}
-
-		// RFC 8620 §2.3: mailboxIds reference existing Mailbox objects, and
-		// RFC 8621 §4.4 requires the import to fail with "mailboxNotFound"
-		// otherwise. getMailboxNameFromID passes unknown ids through
-		// verbatim, so without this check the storage layer would silently
-		// materialize a phantom mailbox (CreateBucketIfNotExists). The gate
-		// covers every target: one missing mailbox rejects the whole entry.
-		var missingMbox string
-		for _, targetName := range targetNames {
-			if !s.mailboxExists(user, targetName) {
-				missingMbox = targetName
-				break
+			if len(targetNames) == 0 {
+				targetNames = append(targetNames, "INBOX")
 			}
-		}
-		if missingMbox != "" {
-			notCreated[key] = map[string]interface{}{
-				"type":        "mailboxNotFound",
-				"description": fmt.Sprintf("Mailbox %s not found", missingMbox),
-			}
-			continue
-		}
 
-		// Retrieve blob data from message store
-		// In this implementation, blobID is the message ID
-		data, err := s.msgStore.ReadMessage(user, blobID)
-		if err != nil {
-			notCreated[key] = map[string]interface{}{
-				"type":        "blobNotFound",
-				"description": fmt.Sprintf("Blob %s not found", blobID),
-			}
-			continue
-		}
-
-		// Parse email headers to extract metadata
-		meta := parseEmailMetadata(data, blobID)
-
-		// F5741: reserve the account quota for this Email (RFC 8621 §4.6
-		// overQuota). Released again if storing fails below.
-		if err := s.adjustQuota(user, meta.Size); err != nil {
-			notCreated[key] = map[string]interface{}{
-				"type":        "overQuota",
-				"description": "Account quota exceeded",
-			}
-			continue
-		}
-
-		// Set received time if provided
-		if receivedAt != "" {
-			if t, err := time.Parse(time.RFC3339, receivedAt); err == nil {
-				meta.InternalDate = t
-			}
-		}
-
-		// Convert keywords to flags
-		for kw, val := range keywords {
-			if b, ok := val.(bool); ok && b {
-				switch kw {
-				case "$seen":
-					meta.Flags = append(meta.Flags, "\\Seen")
-				case "$answered":
-					meta.Flags = append(meta.Flags, "\\Answered")
-				case "$flagged":
-					meta.Flags = append(meta.Flags, "\\Flagged")
-				case "$draft":
-					meta.Flags = append(meta.Flags, "\\Draft")
+			// RFC 8620 §2.3: mailboxIds reference existing Mailbox objects, and
+			// RFC 8621 §4.4 requires the import to fail with "mailboxNotFound"
+			// otherwise. getMailboxNameFromID passes unknown ids through
+			// verbatim, so without this check the storage layer would silently
+			// materialize a phantom mailbox (CreateBucketIfNotExists). The gate
+			// covers every target: one missing mailbox rejects the whole entry.
+			var missingMbox string
+			for _, targetName := range targetNames {
+				if !s.mailboxExists(user, targetName) {
+					missingMbox = targetName
+					break
 				}
 			}
-		}
+			if missingMbox != "" {
+				notCreated[key] = map[string]interface{}{
+					"type":        "mailboxNotFound",
+					"description": fmt.Sprintf("Mailbox %s not found", missingMbox),
+				}
+				return
+			}
 
-		// Store the message in EVERY target mailbox, each with its own UID.
-		stored := true
-		for _, targetName := range targetNames {
-			uid, err := s.db.GetNextUID(user, targetName)
+			// Retrieve blob data from message store
+			// In this implementation, blobID is the message ID
+			data, err := s.msgStore.ReadMessage(user, blobID)
 			if err != nil {
 				notCreated[key] = map[string]interface{}{
-					"type":        "serverFail",
-					"description": s.safeError("GetNextUID", err),
+					"type":        "blobNotFound",
+					"description": fmt.Sprintf("Blob %s not found", blobID),
 				}
-				stored = false
-				break
+				return
 			}
-			meta.UID = uid
 
-			// Store metadata in database
-			if err := s.db.StoreMessageMetadata(user, targetName, uid, meta); err != nil {
+			// Parse email headers to extract metadata
+			meta := parseEmailMetadata(data, blobID)
+
+			// F5741: reserve the account quota for this Email (RFC 8621 §4.6
+			// overQuota). Released again if storing fails below.
+			// The blob is content-addressed: every copy of this Email (other
+			// mailboxes, a repeated import of the same blob) shares one blob
+			// and destroy releases it once, so only the first reference is
+			// charged (no double charge, no leak on destroy).
+			charged := len(s.findEmailCopies(user, blobID)) == 0
+			if charged {
+				err = s.adjustQuota(user, meta.Size)
+			} else {
+				err = nil
+			}
+			if err != nil {
 				notCreated[key] = map[string]interface{}{
-					"type":        "serverFail",
-					"description": s.safeError("StoreMessageMetadata", err),
+					"type":        "overQuota",
+					"description": "Account quota exceeded",
 				}
-				stored = false
-				break
+				return
 			}
-		}
-		if !stored {
-			_ = s.adjustQuota(user, -meta.Size)
-			continue
-		}
 
-		// Convert to JMAP Email; the created object reports every mailbox
-		// the message was imported into, not just the first.
-		email := storageToJMAPEmail(meta, nil, targetNames[0])
-		for _, targetName := range targetNames[1:] {
-			email.MailboxIDs[getMailboxIDFromName(targetName)] = true
-		}
-		created[key] = email
+			// Set received time if provided
+			if receivedAt != "" {
+				if t, err := time.Parse(time.RFC3339, receivedAt); err == nil {
+					meta.InternalDate = t
+				}
+			}
+
+			// Convert keywords to flags
+			for kw, val := range keywords {
+				if b, ok := val.(bool); ok && b {
+					switch kw {
+					case "$seen":
+						meta.Flags = append(meta.Flags, "\\Seen")
+					case "$answered":
+						meta.Flags = append(meta.Flags, "\\Answered")
+					case "$flagged":
+						meta.Flags = append(meta.Flags, "\\Flagged")
+					case "$draft":
+						meta.Flags = append(meta.Flags, "\\Draft")
+					}
+				}
+			}
+
+			// Store the message in EVERY target mailbox, each with its own UID.
+			stored := true
+			var written []emailCopy
+			for _, targetName := range targetNames {
+				uid, err := s.db.GetNextUID(user, targetName)
+				if err != nil {
+					notCreated[key] = map[string]interface{}{
+						"type":        "serverFail",
+						"description": s.safeError("GetNextUID", err),
+					}
+					stored = false
+					break
+				}
+				meta.UID = uid
+
+				// Store metadata in database
+				if err := s.db.StoreMessageMetadata(user, targetName, uid, meta); err != nil {
+					notCreated[key] = map[string]interface{}{
+						"type":        "serverFail",
+						"description": s.safeError("StoreMessageMetadata", err),
+					}
+					stored = false
+					break
+				}
+				written = append(written, emailCopy{mailbox: targetName, uid: uid})
+			}
+			if !stored {
+				if charged {
+					_ = s.adjustQuota(user, -meta.Size)
+				}
+				// Undo the copies already written for this entry so a failed
+				// import leaves no listed Email behind.
+				for _, w := range written {
+					_ = s.db.DeleteMessage(user, w.mailbox, w.uid)
+				}
+				return
+			}
+			s.untrackUpload(user, blobID)
+
+			// Convert to JMAP Email; the created object reports every mailbox
+			// the message was imported into, not just the first.
+			email := storageToJMAPEmail(meta, nil, targetNames[0])
+			for _, targetName := range targetNames[1:] {
+				email.MailboxIDs[getMailboxIDFromName(targetName)] = true
+			}
+			created[key] = email
+		}()
 	}
 
 	// RFC 8620 §4.3: newState is the state after the request — the journal
@@ -1800,7 +1932,7 @@ func (s *Server) handleIdentityGet(user string, call MethodCall) Response {
 		return resp
 	}
 
-	ids, _ := args["ids"].([]interface{})
+	ids, idsPresent := args["ids"].([]interface{})
 
 	// Get user info from database
 	// For now, return a default identity
@@ -1818,9 +1950,9 @@ func (s *Server) handleIdentityGet(user string, call MethodCall) Response {
 	}
 
 	// Filter by IDs if specified
-	var result []Identity
+	result := []Identity{}
 	var notFound []string
-	if len(ids) > 0 {
+	if idsPresent { // an empty ids array selects nothing (RFC 8620 §5.1)
 		idSet := make(map[string]bool)
 		for _, id := range ids {
 			if str, ok := id.(string); ok {

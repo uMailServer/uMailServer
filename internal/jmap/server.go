@@ -51,6 +51,7 @@ type Server struct {
 	sessionMu       sync.RWMutex
 	tracingProvider *tracing.Provider
 	tokenValidator  TokenValidator
+	claimsValidator ClaimsValidator
 	// keyFunc, when set, resolves bearer-token keys exactly as the HTTP API
 	// does (kid rotation, DisableLegacyJWT) — F5440. Stored atomically because
 	// it is installed after the listener has started.
@@ -58,6 +59,12 @@ type Server struct {
 	// quotaLimit / quotaAdjust are the optional quota seams (F5740-F5742).
 	quotaLimit  atomic.Pointer[func(user string) int64]
 	quotaAdjust atomic.Pointer[func(user string, delta int64) error]
+
+	// Unreferenced-upload GC (uploads.go).
+	uploadLocks   sync.Map // user -> *sync.Mutex
+	gc            uploadGC
+	uploadTTL     time.Duration // zero = defaultUploadTTL
+	uploadGCEvery time.Duration // zero = defaultUploadGCEvery
 }
 
 // SetQuotaLimitFunc installs the per-user byte limit (<= 0 = unlimited)
@@ -94,6 +101,16 @@ func (s *Server) adjustQuota(user string, delta int64) error {
 // HTTP API's logout/refresh revocation list uses) and subject is its "sub".
 // A non-nil error rejects the request (F5330, F5331).
 type TokenValidator func(tokenHash, subject string) error
+
+// ClaimsValidator is consulted with the verified JWT claims after the
+// TokenValidator. It lets the owner enforce session cut-offs that depend on
+// claim values such as the issue time (password change, account deletion).
+type ClaimsValidator func(claims map[string]interface{}) error
+
+// SetClaimsValidator installs the claims check (F6250-F6252).
+func (s *Server) SetClaimsValidator(v ClaimsValidator) {
+	s.claimsValidator = v
+}
 
 // SetTokenValidator installs the token-state check shared with the HTTP API
 // (revocation, disabled account). Call before serving requests.
@@ -438,6 +455,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// blobId. Without a store (test wiring) the id is only computed.
 	blobID := generateBlobID(data)
 	if s.msgStore != nil {
+		s.StartUploadGC()
+		mu := s.userUploadLock(user)
+		mu.Lock()
+		defer mu.Unlock()
+		existed := s.msgStore.MessageExists(user, sha256Hex(data))
 		var limit int64
 		if f := s.quotaLimit.Load(); f != nil {
 			limit = (*f)(user)
@@ -452,6 +474,12 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		blobID = id
+		// Track the blob as unreferenced so it is expired if never imported.
+		// Content that already backs an Email (or is already tracked) is left
+		// alone; an existing blob with no Email is an orphan and is tracked.
+		if !existed || s.isPendingUpload(user, id) || len(s.findEmailCopies(user, id)) == 0 {
+			s.trackUpload(user, id, int64(len(data)), time.Now())
+		}
 	}
 
 	s.logger.Debug("Upload received",
@@ -875,6 +903,11 @@ func (s *Server) authenticate(r *http.Request) (string, bool) {
 	if s.tokenValidator != nil {
 		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(parts[1])))
 		if err := s.tokenValidator(tokenHash, user); err != nil {
+			return "", false
+		}
+	}
+	if s.claimsValidator != nil {
+		if err := s.claimsValidator(claims); err != nil {
 			return "", false
 		}
 	}
