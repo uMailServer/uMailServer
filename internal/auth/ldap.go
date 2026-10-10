@@ -61,9 +61,15 @@ func (c *LDAPClient) checkLoginRateLimit(username string) bool {
 		c.loginAttempts = make(map[string]*ldapLoginAttempt)
 	}
 
+	// F5270: only recorded failures consume the budget. Counting every
+	// allowed attempt here (plus recordLoginFailure) locked out users after
+	// five successful logins and allowed only three real failures.
 	attempt, exists := c.loginAttempts[username]
-	if !exists || now.Sub(attempt.lastSeen) > 15*time.Minute {
-		c.loginAttempts[username] = &ldapLoginAttempt{count: 1, lastSeen: now}
+	if !exists {
+		return true
+	}
+	if now.Sub(attempt.lastSeen) > 15*time.Minute {
+		delete(c.loginAttempts, username)
 		return true
 	}
 
@@ -84,9 +90,14 @@ func (c *LDAPClient) checkLoginRateLimit(username string) bool {
 		return false
 	}
 
-	attempt.count++
-	attempt.lastSeen = now
 	return true
+}
+
+// recordLoginSuccess clears the failure history for username (F5270).
+func (c *LDAPClient) recordLoginSuccess(username string) {
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
+	delete(c.loginAttempts, username)
 }
 
 // recordLoginFailure records a failed login attempt for rate limiting
@@ -409,6 +420,7 @@ func (c *LDAPClient) Authenticate(username, password string) (*LDAPUser, error) 
 		c.recordLoginFailure(username)
 		return nil, fmt.Errorf("authentication failed")
 	}
+	c.recordLoginSuccess(username)
 
 	// Re-bind as service account for group lookup and to leave conn reusable.
 	if c.config.BindDN != "" {

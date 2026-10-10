@@ -223,13 +223,18 @@ func BuildServerFinalMessage(serverSignature []byte) string {
 	return fmt.Sprintf("v=%s", vB64)
 }
 
+// scramAuthMessage joins the AuthMessage parts with "," as RFC 5802 §3
+// requires (F5271): client-first-message-bare "," server-first-message ","
+// client-final-message-without-proof.
+func scramAuthMessage(clientFirstBare, serverFirst, clientFinalWithoutProof string) string {
+	return clientFirstBare + "," + serverFirst + "," + clientFinalWithoutProof
+}
+
 // ServerSignature computes the server signature (RFC 7677)
 func ServerSignature(serverKey []byte, clientFirstMessageBare string, serverFirstMessage string, clientFinalMessage string) []byte {
-	// ServerSignature = HMAC(ServerKey, ClientMessage || ServerMessage || ClientFinalMessage)
+	// ServerSignature = HMAC(ServerKey, AuthMessage)
 	h := hmac.New(sha256.New, serverKey)
-	h.Write([]byte(clientFirstMessageBare))
-	h.Write([]byte(serverFirstMessage))
-	h.Write([]byte(clientFinalMessage))
+	h.Write([]byte(scramAuthMessage(clientFirstMessageBare, serverFirstMessage, clientFinalMessage)))
 	return h.Sum(nil)
 }
 
@@ -237,9 +242,7 @@ func ServerSignature(serverKey []byte, clientFirstMessageBare string, serverFirs
 func ClientProof(storedKey []byte, clientFirstMessageBare string, serverFirstMessage string, clientFinalMessage string) []byte {
 	// ClientProof = ClientSignature = HMAC(StoredKey, AuthMessage)
 	h := hmac.New(sha256.New, storedKey)
-	h.Write([]byte(clientFirstMessageBare))
-	h.Write([]byte(serverFirstMessage))
-	h.Write([]byte(clientFinalMessage))
+	h.Write([]byte(scramAuthMessage(clientFirstMessageBare, serverFirstMessage, clientFinalMessage)))
 	return h.Sum(nil)
 }
 
@@ -318,7 +321,7 @@ func ComputeSignatureKey(saltedPassword []byte, clientMessage, serverMessage, cl
 	serverKey := hmac.New(sha256.New, saltedPassword)
 	serverKey.Write([]byte("Server Key"))
 
-	authMessage := clientMessage + serverMessage + clientFinalMessage
+	authMessage := scramAuthMessage(clientMessage, serverMessage, clientFinalMessage)
 	h := hmac.New(sha256.New, serverKey.Sum(nil))
 	h.Write([]byte(authMessage))
 	return h.Sum(nil)

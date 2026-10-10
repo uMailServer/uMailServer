@@ -348,16 +348,13 @@ func TestLDAPCheckLoginRateLimit(t *testing.T) {
 
 	username := "testuser"
 
-	// First 4 attempts should be allowed
-	for i := 0; i < 4; i++ {
+	// F5270: only recorded failures count. Five failed attempts are allowed
+	// through to the bind; the sixth is locked out.
+	for i := 0; i < 5; i++ {
 		if !client.checkLoginRateLimit(username) {
 			t.Fatalf("attempt %d should be allowed", i+1)
 		}
-	}
-
-	// 5th attempt should be allowed
-	if !client.checkLoginRateLimit(username) {
-		t.Fatal("5th attempt should be allowed")
+		client.recordLoginFailure(username)
 	}
 
 	// 6th attempt should trigger lockout

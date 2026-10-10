@@ -188,11 +188,18 @@ func (v *DANEValidator) lookupTLSARecords(query string) ([]*TLSARecord, error) {
 	var records []*TLSARecord
 	for _, rr := range reply.Answer {
 		if tlsaRR, ok := rr.(*dns.TLSA); ok {
+			// F5272: miekg/dns carries the association data as a hex
+			// string; decode it to raw bytes. Undecodable data is an
+			// unusable record and is skipped.
+			data, err := hex.DecodeString(tlsaRR.Certificate)
+			if err != nil {
+				continue
+			}
 			records = append(records, &TLSARecord{
 				Usage:        TLSAUsage(tlsaRR.Usage),
 				Selector:     TLSASelector(tlsaRR.Selector),
 				MatchingType: TLSAMatchingType(tlsaRR.MatchingType),
-				Certificate:  []byte(tlsaRR.Certificate),
+				Certificate:  data,
 			})
 		}
 	}
