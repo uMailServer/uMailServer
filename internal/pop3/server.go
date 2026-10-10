@@ -422,7 +422,7 @@ func (s *Session) Handle() {
 			continue
 		}
 
-		s.server.logger.Debug("POP3 command", "session", s.id, "line", truncateCommand(line, 80))
+		s.server.logger.Debug("POP3 command", "session", s.id, "line", truncateCommand(redactCommand(line), 80))
 
 		if err := s.handleCommand(line); err != nil {
 			return
@@ -548,6 +548,13 @@ func (s *Session) handleCommand(line string) error {
 
 	command := strings.ToUpper(parts[0])
 	args := parts[1:]
+	if command == "PASS" {
+		// PASS has exactly one argument; spaces inside it belong to the
+		// password (RFC 1939 §7), so do not split it into fields (F5232).
+		if pw, ok := passArgument(line); ok {
+			args = []string{pw}
+		}
+	}
 
 	host := clientIP(s.conn)
 	_, span := s.server.startCommandSpan(context.Background(), command, s.id, host)
@@ -581,6 +588,32 @@ func clientIP(conn net.Conn) string {
 		return conn.RemoteAddr().String()
 	}
 	return host
+}
+
+// passArgument returns the raw PASS argument: everything after the single
+// separator following the keyword, interior and trailing spaces preserved.
+// ok is false when the argument is empty or whitespace-only.
+func passArgument(line string) (string, bool) {
+	trimmed := strings.TrimLeft(line, " \t")
+	i := strings.IndexAny(trimmed, " \t")
+	if i < 0 {
+		return "", false
+	}
+	pw := trimmed[i+1:]
+	if strings.TrimSpace(pw) == "" {
+		return "", false
+	}
+	return pw, true
+}
+
+// redactCommand hides the PASS argument so credentials never reach the log
+// (F5233).
+func redactCommand(line string) string {
+	parts := strings.Fields(line)
+	if len(parts) > 0 && strings.EqualFold(parts[0], "PASS") {
+		return parts[0] + " ****"
+	}
+	return line
 }
 
 // truncateCommand truncates a command for safe logging.
@@ -693,12 +726,14 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 			s.WriteResponse("-ERR Already using TLS")
 			return nil
 		}
-		s.WriteResponse("+OK Begin TLS negotiation")
+		// Load the certificate before acknowledging: after "+OK" the client
+		// starts the TLS handshake, so a later plaintext -ERR desyncs it (F5231).
 		config, err := s.server.getTLSConfig()
 		if err != nil {
 			s.WriteResponse("-ERR TLS configuration error")
 			return nil
 		}
+		s.WriteResponse("+OK Begin TLS negotiation")
 		_ = s.conn.SetDeadline(time.Now().Add(30 * time.Second))
 		tlsConn := tls.Server(s.conn, config)
 		if err := tlsConn.Handshake(); err != nil {
@@ -946,8 +981,12 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 	// snapshot's indexes go stale as the maildrop changes.
 	current, err := s.server.mailstore.ListMessages(s.user)
 	if err != nil {
+		// QUIT always ends the session (RFC 1939 §6); marked messages stay in
+		// the maildrop. Returning nil kept the session alive in UPDATE state,
+		// so the next command of any kind silently committed the deletions
+		// the client was just told failed (F5230).
 		s.WriteResponse("-ERR Unable to update maildrop")
-		return nil
+		return fmt.Errorf("quit")
 	}
 	// Delete highest indexes first so each removal preserves lower indexes.
 	failed := false
