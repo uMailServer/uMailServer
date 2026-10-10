@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 	"sync"
@@ -204,6 +205,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// supportedCapabilities are the capability URNs this server accepts in a
+// request's "using" array.
+var supportedCapabilities = map[string]bool{
+	"urn:ietf:params:jmap:core": true,
+	"urn:ietf:params:jmap:mail": true,
+}
+
 // handleWellKnown handles /.well-known/jmap requests
 func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -274,9 +282,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		},
 		Accounts: map[string]Account{
 			user: {
-				Name:      user,
-				IsPrimary: true,
+				Name:       user,
+				IsPrimary:  true,
+				IsPersonal: true,
+				IsReadOnly: false,
 				AccountCapabilities: map[string]interface{}{
+					"urn:ietf:params:jmap:core": struct{}{},
 					"urn:ietf:params:jmap:mail": struct{}{},
 				},
 			},
@@ -325,10 +336,29 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	// RFC 8620 §3.6.1: non-JSON bodies are notJSON, JSON that is not a
+	// Request object is notRequest (F5981).
+	if !json.Valid(body) {
+		s.sendError(w, http.StatusBadRequest, "urn:ietf:params:jmap:error:notJSON", nil)
+		return
+	}
 	var request Request
 	if err := json.Unmarshal(body, &request); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalidArguments", nil)
+		s.sendError(w, http.StatusBadRequest, "urn:ietf:params:jmap:error:notRequest", nil)
 		return
+	}
+
+	// RFC 8620 §3.6.1: an unsupported capability in "using" rejects the
+	// whole request with unknownCapability (F5982).
+	for _, capURN := range request.Using {
+		if !supportedCapabilities[capURN] {
+			s.sendJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"type":        "urn:ietf:params:jmap:error:unknownCapability",
+				"status":      http.StatusBadRequest,
+				"description": "unsupported capability " + capURN,
+			})
+			return
+		}
 	}
 
 	// RFC 8620 §3.6.1: a request exceeding maxCallsInRequest is rejected
@@ -486,6 +516,17 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Set content type based on data
 	contentType := http.DetectContentType(data)
+	// RFC 8620 §6.2: honour the ?accept= type and name the download via
+	// Content-Disposition (F5983). Only a syntactically valid media type is
+	// echoed; anything else falls back to the sniffed type.
+	if accept := r.URL.Query().Get("accept"); accept != "" {
+		if _, _, err := mime.ParseMediaType(accept); err == nil && !strings.ContainsAny(accept, "\r\n") {
+			contentType = accept
+		}
+	}
+	if name := parts[5]; name != "" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -508,6 +549,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.sendError(w, http.StatusInternalServerError, "serverFail", nil)
+		return
+	}
+
 	// Set up EventSource
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -515,8 +562,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial state
 	fmt.Fprintf(w, "event: state\n")
-	fmt.Fprintf(w, "data: %s\n\n", s.getOrCreateSession(user).ID)
-	w.(http.Flusher).Flush()
+	// RFC 8620 §7.3: the data of a state event is a StateChange object (F5984).
+	stateData, _ := json.Marshal(map[string]interface{}{
+		"@type":   "StateChange",
+		"changed": map[string]interface{}{user: map[string]string{}},
+	})
+	fmt.Fprintf(w, "data: %s\n\n", stateData)
+	flusher.Flush()
 
 	// Keep connection open for push notifications
 	// In production, use a proper event bus
@@ -530,7 +582,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 			fmt.Fprintf(w, "event: ping\n")
 			fmt.Fprintf(w, "data: {}\n\n")
-			w.(http.Flusher).Flush()
+			flusher.Flush()
 		}
 	}
 }
