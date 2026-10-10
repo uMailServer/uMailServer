@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1436,18 +1437,11 @@ func (s *Session) handleIdle() error {
 
 // ENABLE command (RFC 5161)
 func (s *Session) handleEnable(args []string) error {
-	enabled := []string{}
-	for _, arg := range args {
-		cap := strings.ToUpper(arg)
-		if cap == "CONDSTORE" || cap == "QRESYNC" {
-			s.enabledCaps[cap] = true
-			enabled = append(enabled, cap)
-		}
-	}
-
-	if len(enabled) > 0 {
-		s.WriteData("ENABLED " + strings.Join(enabled, " "))
-	}
+	// F5565: CONDSTORE and QRESYNC are no longer advertised (their STORE /
+	// FETCH / SEARCH / SELECT modifiers are not implemented), so ENABLE
+	// ignores them like any unknown extension (RFC 5161 §3.1) and answers
+	// an empty ENABLED.
+	s.WriteData("ENABLED")
 
 	s.WriteResponse(s.tag, "OK ENABLE completed")
 	return nil
@@ -1605,7 +1599,7 @@ func (s *Session) handleSearchWithUIDs(args []string, line string, uidResults bo
 	// Parse search criteria (NOT / OR / parenthesised keys: F5493)
 	program, err := parseSearchProgram(commandArgTokens(args, line, "SEARCH"))
 	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("BAD %s", err))
+		s.writeSearchParseError(err)
 		return nil
 	}
 
@@ -1684,8 +1678,8 @@ func (s *Session) sortCmd(args []string, line string, uidResults bool) error {
 		s.WriteResponse(s.tag, "BAD SORT requires a criteria list, a charset and search keys")
 		return nil
 	}
-	if cs := strings.ToUpper(toks[i+1].val); cs != "UTF-8" && cs != "US-ASCII" {
-		s.WriteResponse(s.tag, "NO [BADCHARSET (US-ASCII UTF-8)] unsupported charset")
+	if !searchCharsetSupported(toks[i+1].val) {
+		s.WriteResponse(s.tag, badCharsetResponse)
 		return nil
 	}
 
@@ -1697,7 +1691,7 @@ func (s *Session) sortCmd(args []string, line string, uidResults bool) error {
 	}
 	program, err := parseSearchProgram(toks[i+2:])
 	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("BAD %s", err))
+		s.writeSearchParseError(err)
 		return nil
 	}
 	matched, err := s.evalSearch(program)
@@ -1706,6 +1700,14 @@ func (s *Session) sortCmd(args []string, line string, uidResults bool) error {
 		return nil
 	}
 	want := seqSetOf(matched)
+	// F5561: the Cc field is not in the metadata; read it from the header.
+	var ccs []string
+	hr, _ := s.server.mailstore.(messageHeaderReader)
+	for _, c := range criteria {
+		if c.Field == "CC" {
+			ccs = []string{}
+		}
+	}
 
 	// Get all messages in mailbox with metadata
 	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
@@ -1732,18 +1734,29 @@ func (s *Session) sortCmd(args []string, line string, uidResults bool) error {
 			UID:          msg.UID,
 			Subject:      msg.Subject,
 			From:         msg.From,
+			To:           msg.To,
 			Date:         msg.Date,
 			InternalDate: msg.InternalDate,
 			Size:         msg.Size,
 		}
+		cc := ""
 		if env := msg.Envelope; env != nil {
 			meta.Subject, meta.From, meta.Date = env.Subject, addressToString(env.From), env.Date
+			meta.To, cc = addressToString(env.To), addressToString(env.Cc)
+		}
+		if ccs != nil {
+			if hr != nil {
+				if hdr, err := hr.MessageHeader(s.user, s.selected.Name, msg.UID); err == nil {
+					cc = readHeaderFields(hdr).Get("Cc")
+				}
+			}
+			ccs = append(ccs, cc)
 		}
 		metas = append(metas, meta)
 	}
 
 	result := "SORT"
-	for _, seq := range sortMessagesByCriteria(metas, criteria, seqNums) {
+	for _, seq := range sortMessagesByKeys(metas, ccs, criteria, seqNums) {
 		if uidResults {
 			seq = uidOf[seq]
 		}
@@ -1768,87 +1781,104 @@ func addressToString(addrs []*Address) string {
 
 // THREAD command (RFC 5256)
 func (s *Session) handleThread(args []string, line string) error {
+	return s.threadCmd(args, line, false)
+}
+
+// messageHeaderReader is implemented by mailstores that can return a
+// message's header section without the side effects of FETCH; THREAD needs
+// Message-ID / References and SORT CC the Cc field, which the flat Message
+// fields lack.
+type messageHeaderReader interface {
+	MessageHeader(user, mailbox string, uid uint32) ([]byte, error)
+}
+
+// threadCmd implements THREAD and UID THREAD: "THREAD algorithm charset
+// search-keys" answered by "* THREAD (1 2)(3)" (RFC 5256 §3, §4). F5560:
+// the handlers dereferenced msg.Envelope, which the bbolt mailstore never
+// fills, so every THREAD panicked and dropped the connection; the charset
+// and search keys were ignored and each thread was written as its own
+// "* (..)" line.
+func (s *Session) threadCmd(args []string, line string, uidResults bool) error {
 	if s.server.mailstore == nil || s.selected == nil {
 		s.WriteResponse(s.tag, "NO No mailbox selected")
 		return nil
 	}
 
-	// Parse thread algorithm
-	algo := ThreadReferences
-	if len(args) > 0 {
-		switch strings.ToUpper(args[0]) {
-		case "ORDEREDSUBJECT":
-			algo = ThreadOrderedSubject
-		case "REFERENCES":
-			algo = ThreadReferences
-		}
+	toks := commandArgTokens(args, line, "THREAD")
+	if len(toks) < 3 {
+		s.WriteResponse(s.tag, "BAD THREAD requires an algorithm, a charset and search keys")
+		return nil
 	}
-
-	// Get all messages in mailbox
-	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
+	algo := ThreadAlgorithm(strings.ToUpper(toks[0].val))
+	if toks[0].quoted || (algo != ThreadReferences && algo != ThreadOrderedSubject) {
+		s.WriteResponse(s.tag, "BAD unsupported THREAD algorithm")
+		return nil
+	}
+	if !searchCharsetSupported(toks[1].val) {
+		s.WriteResponse(s.tag, badCharsetResponse)
+		return nil
+	}
+	program, err := parseSearchProgram(toks[2:])
+	if err != nil {
+		s.writeSearchParseError(err)
+		return nil
+	}
+	matched, err := s.evalSearch(program)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		return nil
 	}
+	want := seqSetOf(matched)
 
-	// Build metadata list with sequence numbers
-	var metas []*storage.MessageMetadata
-	var seqNums []uint32
-	seqNum := uint32(0)
-	for _, msg := range messages {
-		seqNum++
-		seqNums = append(seqNums, seqNum)
-		meta := &storage.MessageMetadata{
-			MessageID:    msg.Envelope.MessageID,
-			UID:          msg.UID,
-			Subject:      msg.Envelope.Subject,
-			From:         addressToString(msg.Envelope.From),
-			Date:         msg.Envelope.Date,
-			InternalDate: msg.InternalDate,
+	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return nil
+	}
+	hr, _ := s.server.mailstore.(messageHeaderReader)
+	var msgs []*threadMsg
+	for n, msg := range messages {
+		seq := msg.SeqNum
+		if seq == 0 {
+			seq = uint32(n + 1)
 		}
-		meta.InReplyTo = msg.Envelope.InReplyTo
-		metas = append(metas, meta)
-	}
-
-	var children map[uint32][]uint32
-	if algo == ThreadReferences {
-		children = threadMessagesByReferences(metas, seqNums)
-	} else {
-		children = threadMessagesByOrderedSubject(metas, seqNums)
-	}
-
-	// Find all root messages (those that are not children)
-	allChildren := make(map[uint32]bool)
-	for _, kids := range children {
-		for _, child := range kids {
-			allChildren[child] = true
+		if !want[seq] {
+			continue
 		}
-	}
-
-	var roots []uint32
-	for _, seq := range seqNums {
-		if !allChildren[seq] {
-			roots = append(roots, seq)
+		tm := &threadMsg{num: seq, seq: seq, subject: msg.Subject}
+		if uidResults {
+			tm.num = msg.UID
 		}
-	}
-
-	// Output threads
-	visited := make(map[uint32]bool)
-	for _, root := range roots {
-		threadSeqNums := flattenThread(root, children, visited)
-		// Output as space-separated sequence numbers in parentheses
-		threadStr := "("
-		for i, seq := range threadSeqNums {
-			if i > 0 {
-				threadStr += " "
+		date := msg.Date
+		if env := msg.Envelope; env != nil {
+			tm.msgID, tm.refs = threadIDs(env.MessageID, env.InReplyTo, "")
+			tm.subject, date = env.Subject, env.Date
+		}
+		if hr != nil {
+			if hdr, err := hr.MessageHeader(s.user, s.selected.Name, msg.UID); err == nil {
+				tm.msgID, tm.refs, tm.subject, date = parseThreadHeader(hdr)
 			}
-			threadStr += fmt.Sprintf("%d", seq)
 		}
-		threadStr += ")"
-		s.WriteData(threadStr)
+		tm.date = sentDate(date, msg.InternalDate)
+		msgs = append(msgs, tm)
 	}
 
-	s.WriteResponse(s.tag, "OK THREAD completed")
+	var roots []*threadNode
+	if algo == ThreadReferences {
+		roots = threadReferences(msgs)
+	} else {
+		roots = threadOrderedSubject(msgs)
+	}
+	result := "THREAD"
+	if len(roots) > 0 {
+		result += " " + formatThreads(roots)
+	}
+	s.WriteData(result)
+	if uidResults {
+		s.WriteResponse(s.tag, "OK UID THREAD completed")
+	} else {
+		s.WriteResponse(s.tag, "OK THREAD completed")
+	}
 	return nil
 }
 
@@ -1859,93 +1889,7 @@ func (s *Session) handleUIDSort(args []string, line string) error {
 
 // UID THREAD command
 func (s *Session) handleUIDThread(args []string, line string) error {
-	if s.server.mailstore == nil || s.selected == nil {
-		s.WriteResponse(s.tag, "NO No mailbox selected")
-		return nil
-	}
-
-	// Parse thread algorithm
-	algo := ThreadReferences
-	if len(args) > 0 {
-		switch strings.ToUpper(args[0]) {
-		case "ORDEREDSUBJECT":
-			algo = ThreadOrderedSubject
-		case "REFERENCES":
-			algo = ThreadReferences
-		}
-	}
-
-	// Get all messages
-	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", []string{"ENVELOPE"})
-	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
-		return nil
-	}
-
-	var metas []*storage.MessageMetadata
-	var seqNums []uint32
-	var uids []uint32
-	seqNum := uint32(0)
-	for _, msg := range messages {
-		seqNum++
-		seqNums = append(seqNums, seqNum)
-		uids = append(uids, msg.UID)
-		meta := &storage.MessageMetadata{
-			MessageID:    msg.Envelope.MessageID,
-			UID:          msg.UID,
-			Subject:      msg.Envelope.Subject,
-			From:         addressToString(msg.Envelope.From),
-			Date:         msg.Envelope.Date,
-			InternalDate: msg.InternalDate,
-		}
-		meta.InReplyTo = msg.Envelope.InReplyTo
-		metas = append(metas, meta)
-	}
-
-	var children map[uint32][]uint32
-	if algo == ThreadReferences {
-		children = threadMessagesByReferences(metas, seqNums)
-	} else {
-		children = threadMessagesByOrderedSubject(metas, seqNums)
-	}
-
-	// Find roots and build seq->uid mapping
-	allChildren := make(map[uint32]bool)
-	for _, kids := range children {
-		for _, child := range kids {
-			allChildren[child] = true
-		}
-	}
-
-	var roots []uint32
-	for _, seq := range seqNums {
-		if !allChildren[seq] {
-			roots = append(roots, seq)
-		}
-	}
-
-	// seq to uid mapping
-	seqToUID := make(map[uint32]uint32)
-	for i, seq := range seqNums {
-		seqToUID[seq] = uids[i]
-	}
-
-	visited := make(map[uint32]bool)
-	for _, root := range roots {
-		threadSeqNums := flattenThread(root, children, visited)
-		threadStr := "("
-		for i, seq := range threadSeqNums {
-			if i > 0 {
-				threadStr += " "
-			}
-			threadStr += fmt.Sprintf("%d", seqToUID[seq])
-		}
-		threadStr += ")"
-		s.WriteData(threadStr)
-	}
-
-	s.WriteResponse(s.tag, "OK UID THREAD completed")
-	return nil
+	return s.threadCmd(args, line, true)
 }
 
 // FETCH command
@@ -2174,7 +2118,24 @@ func (s *Session) handleCopy(args []string) error {
 	}
 
 	seqSet := args[0]
-	destMailbox := strings.Trim(args[1], "\"'")
+	destMailbox, ok := s.copyDestination(args[1])
+	if !ok {
+		return nil
+	}
+
+	if uc, ok := s.server.mailstore.(uidCopier); ok {
+		validity, src, dst, err := uc.CopyMessagesUIDs(s.user, s.selected.Name, destMailbox, seqSet)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
+		}
+		if validity != 0 && len(src) > 0 && len(src) == len(dst) {
+			s.WriteResponse(s.tag, fmt.Sprintf("OK [COPYUID %d %s %s] COPY completed", validity, uidSetString(src), uidSetString(dst)))
+			return nil
+		}
+		s.WriteResponse(s.tag, "OK COPY completed")
+		return nil
+	}
 
 	err := s.server.mailstore.CopyMessages(s.user, s.selected.Name, destMailbox, seqSet)
 	if err != nil {
@@ -2184,6 +2145,57 @@ func (s *Session) handleCopy(args []string) error {
 
 	s.WriteResponse(s.tag, "OK COPY completed")
 	return nil
+}
+
+// uidCopier is implemented by mailstores that report the UIDs a copy
+// assigned, for the UIDPLUS COPYUID response code (RFC 4315 §3) (F5564).
+type uidCopier interface {
+	CopyMessagesUIDs(user, sourceMailbox, destMailbox string, seqSet string) (uidValidity uint32, srcUIDs, dstUIDs []uint32, err error)
+}
+
+// uidSetString renders ascending UIDs as a compact uid-set ("1:3,7").
+func uidSetString(uids []uint32) string {
+	var b strings.Builder
+	for i := 0; i < len(uids); {
+		j := i
+		for j+1 < len(uids) && uids[j+1] == uids[j]+1 {
+			j++
+		}
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		if j > i {
+			fmt.Fprintf(&b, "%d:%d", uids[i], uids[j])
+		} else {
+			fmt.Fprintf(&b, "%d", uids[i])
+		}
+		i = j + 1
+	}
+	return b.String()
+}
+
+// copyDestination resolves the COPY / MOVE target and answers
+// NO [TRYCREATE] when it does not exist: RFC 3501 §6.4.7 says the server
+// SHOULD NOT create it. F5567: the copy silently created the mailbox, so a
+// mistyped name made a new folder instead of failing. INBOX is matched
+// case-insensitively.
+func (s *Session) copyDestination(arg string) (string, bool) {
+	dest := strings.Trim(arg, "\"'")
+	if strings.EqualFold(dest, "INBOX") {
+		return "INBOX", true
+	}
+	names, err := s.server.mailstore.ListMailboxes(s.user, dest)
+	if err != nil {
+		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		return "", false
+	}
+	for _, n := range names {
+		if n == dest {
+			return dest, true
+		}
+	}
+	s.WriteResponse(s.tag, "NO [TRYCREATE] Mailbox does not exist")
+	return "", false
 }
 
 // MOVE command
@@ -2203,7 +2215,10 @@ func (s *Session) handleMove(args []string) error {
 	}
 
 	seqSet := args[0]
-	destMailbox := strings.Trim(args[1], "\"'")
+	destMailbox, ok := s.copyDestination(args[1])
+	if !ok {
+		return nil
+	}
 
 	// RFC 6851 §3.3: MOVE behaves as COPY + STORE \Deleted + UID EXPUNGE of
 	// the moved messages, so record their UIDs before they are flagged.
@@ -2968,9 +2983,51 @@ type searchTerm struct {
 	sub *searchExpr
 }
 
+// errBadCharset reports a SEARCH CHARSET other than US-ASCII / UTF-8.
+var errBadCharset = errors.New("unsupported charset")
+
+const badCharsetResponse = "NO [BADCHARSET (US-ASCII UTF-8)] unsupported charset"
+
+// searchCharsetSupported reports whether cs is a charset SEARCH, SORT and
+// THREAD accept; the search strings are compared as UTF-8.
+func searchCharsetSupported(cs string) bool {
+	cs = strings.ToUpper(cs)
+	return cs == "UTF-8" || cs == "US-ASCII"
+}
+
+// writeSearchParseError answers a search program parse error: NO
+// [BADCHARSET] for an unsupported charset (RFC 3501 §6.4.4), else BAD.
+func (s *Session) writeSearchParseError(err error) {
+	if errors.Is(err, errBadCharset) {
+		s.WriteResponse(s.tag, badCharsetResponse)
+		return
+	}
+	s.WriteResponse(s.tag, fmt.Sprintf("BAD %s", err))
+}
+
+// checkSearchDateArg rejects a date search key whose argument is missing
+// or not an RFC 3501 date. F5566: such a key was dropped, so it matched
+// every message ("BEFORE 1-Feb-2000" selected the whole mailbox).
+func checkSearchDateArg(vals []string) error {
+	switch strings.ToUpper(vals[0]) {
+	case "BEFORE", "ON", "SINCE", "SENTBEFORE", "SENTON", "SENTSINCE":
+		if len(vals) < 2 {
+			return fmt.Errorf("missing date for %s", vals[0])
+		}
+		if _, err := parseIMAPDate(vals[1]); err != nil {
+			return fmt.Errorf("invalid date %q", vals[1])
+		}
+	}
+	return nil
+}
+
 // parseSearchProgram parses search keys (after an optional CHARSET).
+// F5563: an unsupported CHARSET was skipped and the search answered OK.
 func parseSearchProgram(toks []imapToken) (*searchExpr, error) {
 	if len(toks) >= 2 && !toks[0].quoted && strings.EqualFold(toks[0].val, "CHARSET") {
+		if !searchCharsetSupported(toks[1].val) {
+			return nil, errBadCharset
+		}
 		toks = toks[2:]
 	}
 	e, next, err := parseSearchSeq(toks, 0, false)
@@ -3000,7 +3057,11 @@ func parseSearchSeq(toks []imapToken, i int, inGroup bool) (*searchExpr, int, er
 			i = next
 			continue
 		}
-		i += parseSearchKey(&e.flat, plainKeyArgs(toks, i), 0) + 1
+		vals := plainKeyArgs(toks, i)
+		if err := checkSearchDateArg(vals); err != nil {
+			return nil, i, err
+		}
+		i += parseSearchKey(&e.flat, vals, 0) + 1
 	}
 	if inGroup {
 		return nil, i, fmt.Errorf("unbalanced parenthesis")
@@ -3036,8 +3097,12 @@ func parseSearchOne(toks []imapToken, i int) (*searchExpr, int, error) {
 	case !t.quoted && t.val == ")":
 		return nil, i, fmt.Errorf("missing search key")
 	default:
+		vals := plainKeyArgs(toks, i)
+		if err := checkSearchDateArg(vals); err != nil {
+			return nil, i, err
+		}
 		e := &searchExpr{flat: SearchCriteria{All: true}}
-		return e, i + parseSearchKey(&e.flat, plainKeyArgs(toks, i), 0) + 1, nil
+		return e, i + parseSearchKey(&e.flat, vals, 0) + 1, nil
 	}
 }
 
@@ -3126,10 +3191,10 @@ func isSequenceSetToken(tok string) bool {
 	return err == nil
 }
 
-// parseIMAPDate parses an IMAP date in format "DD-Mon-YYYY" (e.g., "01-Jan-2024")
+// parseIMAPDate parses an RFC 3501 date: date-day is 1*2DIGIT, so both
+// "01-Jan-2024" and "1-Jan-2024" are valid (F5566).
 func parseIMAPDate(dateStr string) (time.Time, error) {
-	// IMAP date format: 01-Jan-2024
-	return time.Parse("02-Jan-2006", dateStr)
+	return time.Parse("2-Jan-2006", dateStr)
 }
 
 func parseFetchItems(args []string) []string {

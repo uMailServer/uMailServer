@@ -610,8 +610,6 @@ func defaultCapabilities() []string {
 		"CHILDREN",
 		"UIDPLUS",
 		"MOVE",
-		"CONDSTORE",
-		"QRESYNC",
 		"ENABLE",
 		"LITERAL+",
 		"SASL-IR",
