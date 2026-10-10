@@ -20,6 +20,7 @@ import (
 	"net/textproto"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -608,7 +609,14 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 
 	// Look up MX records
 	mxRecords, err := m.resolver.LookupMX(domain)
-	if err != nil || len(mxRecords) == 0 {
+	if err != nil && !isMXNotFound(err) {
+		// RFC 5321 §5.1: only a domain with no MX records (NXDOMAIN/NODATA)
+		// falls back to its address record. A temporary DNS failure
+		// (SERVFAIL, timeout) defers the message (F5390).
+		m.handleDeliveryFailure(entry, fmt.Sprintf("451 4.4.3 MX lookup for %s failed: %v", domain, err))
+		return
+	}
+	if len(mxRecords) == 0 {
 		// Fall back to A record
 		mxRecords = []string{domain}
 	}
@@ -670,6 +678,27 @@ func classifySMTPReply(err error) error {
 		return &permanentSMTPError{err: err}
 	}
 	return err
+}
+
+// isMXNotFound reports whether an MX lookup error means the domain has no MX
+// records (NXDOMAIN or NODATA) rather than a temporary resolution failure.
+func isMXNotFound(err error) bool {
+	var dnsErr *net.DNSError
+	return errors.As(err, &dnsErr) && dnsErr.IsNotFound
+}
+
+// enhancedStatusRe matches a 5yz reply carrying an RFC 3463 enhanced status
+// code, e.g. `550 5.1.1 user unknown` or, as textproto.Error renders it,
+// `550 "5.1.1 user unknown"`.
+var enhancedStatusRe = regexp.MustCompile(`^5\d\d[ -]"?(5\.\d{1,3}\.\d{1,3})(?:[\s"]|$)`)
+
+// bounceStatus returns the RFC 3464 Status for a failure DSN: the enhanced
+// status code of the remote 5yz reply when present, else 5.0.0 (F5392).
+func bounceStatus(lastError string) string {
+	if m := enhancedStatusRe.FindStringSubmatch(lastError); m != nil {
+		return m[1]
+	}
+	return "5.0.0"
 }
 
 // startDeliverSpan starts a queue.deliver span carrying envelope attributes.
@@ -1067,7 +1096,9 @@ func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
 	}
 
 	// Enqueue DSN back to sender
-	if _, err := m.Enqueue("MAILER-DAEMON@umailserver", []string{entry.From}, dsnMsg); err != nil {
+	// RFC 3461 §6.2: a DSN is sent with a null reverse-path so that a failing
+	// DSN is never bounced to our own MAILER-DAEMON address (F5391).
+	if _, err := m.Enqueue("", []string{entry.From}, dsnMsg); err != nil {
 		m.logger.Error("failed to enqueue DSN", "error", err)
 	}
 }
@@ -1169,7 +1200,7 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 			Ret:      ret,
 		},
 		Action:         "failed",
-		Status:         "5.0.0",
+		Status:         bounceStatus(entry.LastError),
 		DiagnosticCode: entry.LastError,
 		RemoteMTA:      "unknown",
 		FinalMTA:       "umailserver",
