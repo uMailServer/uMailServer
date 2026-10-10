@@ -142,9 +142,12 @@ func TestRRuleByDayAndByMonthDay_F6074(t *testing.T) {
 	if compFilterMatches(r125TimeRangeFilter("20260310T000000Z", "20260311T000000Z"), m) {
 		t.Error("10th of month must not match")
 	}
-	// Unsupported parts (ordinal BYDAY) stay nil, not mis-expanded.
-	if parseRRULEValue("FREQ=MONTHLY;BYDAY=1MO") != nil {
-		t.Error("ordinal BYDAY must stay unsupported")
+	// Ordinal BYDAY is supported since round 134; unsupported parts stay nil.
+	if parseRRULEValue("FREQ=MONTHLY;BYDAY=1MO") == nil {
+		t.Error("ordinal BYDAY must parse")
+	}
+	if parseRRULEValue("FREQ=DAILY;BYHOUR=9") != nil {
+		t.Error("BYHOUR must stay unsupported")
 	}
 }
 

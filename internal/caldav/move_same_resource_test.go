@@ -64,7 +64,7 @@ func TestMoveSameResourceRepeatedAndMissing(t *testing.T) {
 	}
 	w := selfMoveRegressionMove(s, "/dav/calendars/target/renamed")
 	v, e := s.storage.GetEvent("fixture", "target", "renamed")
-	if w.Code != http.StatusCreated || e != nil || !strings.Contains(v, "UID:renamed") {
+	if w.Code != http.StatusCreated || e != nil || !strings.Contains(v, "UID:meeting") {
 		t.Fatal(w.Code, v, e)
 	}
 	w = selfMoveRegressionMove(s, "/dav/calendars/source/meeting")

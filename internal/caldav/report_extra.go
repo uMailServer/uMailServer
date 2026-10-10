@@ -122,14 +122,14 @@ func (s *Server) reportSyncCollection(w http.ResponseWriter, r *http.Request, us
 	ms := &Multistatus{SyncToken: syncTokenPrefix + ctag}
 	switch {
 	case token == "":
-		events, err := s.storage.GetEvents(username, calendarID)
+		events, err := s.storage.GetEventEntries(username, calendarID)
 		if err != nil {
 			s.sendError(w, http.StatusInternalServerError, "failed to query calendar events")
 			return
 		}
-		for _, data := range events {
-			if uid := extractUIDFromICS(data); uid != "" {
-				ms.Responses = append(ms.Responses, s.buildEventResponse(username, calendarID, uid, data))
+		for _, ev := range events {
+			if extractUIDFromICS(ev.Data) != "" {
+				ms.Responses = append(ms.Responses, s.buildEventResponseTag(calendarID, ev.Name, ev.Data, ev.ETag))
 			}
 		}
 		sort.Slice(ms.Responses, func(i, j int) bool { return ms.Responses[i].Href < ms.Responses[j].Href })

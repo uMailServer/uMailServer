@@ -1363,8 +1363,9 @@ END:VCALENDAR`
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusMultiStatus {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
+	// Round 134 (F6168): Depth: infinity is refused with propfind-finite-depth.
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "propfind-finite-depth") {
+		t.Errorf("Status = %d body=%s, want 403 propfind-finite-depth", w.Code, w.Body.String())
 	}
 }
 

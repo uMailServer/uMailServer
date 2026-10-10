@@ -19,6 +19,8 @@ import (
 type Storage struct {
 	dataDir string
 	mu      sync.RWMutex
+	// migrated records usernames whose legacy directory was already examined.
+	migrated sync.Map
 }
 
 // NewStorage creates a new CalDAV storage
@@ -28,11 +30,61 @@ func NewStorage(dataDir string) *Storage {
 	}
 }
 
+// legacyUserKey is the pre-round-134 directory name of a user: "@" became
+// "_at_". It is not injective ("a@b" and "a_at_b" collided, sharing one
+// calendar namespace).
+func legacyUserKey(username string) string {
+	return strings.ReplaceAll(username, "@", "_at_")
+}
+
+// userKey maps a username to its directory name injectively (F6160). Names
+// whose legacy mapping is unambiguous keep it, so existing data directories
+// stay in place; any other name (a literal "_at_", a "%", or ".") is
+// percent-encoded byte-wise, which always contains a "%" and so can never
+// equal a legacy name.
+func userKey(username string) string {
+	legacy := legacyUserKey(username)
+	if username != "." && !strings.Contains(username, "%") && strings.ReplaceAll(legacy, "_at_", "@") == username {
+		return legacy
+	}
+	return escapeUserKey(username)
+}
+
+func escapeUserKey(username string) string {
+	const hexd = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(username); i++ {
+		c := username[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hexd[c>>4])
+			b.WriteByte(hexd[c&15])
+		}
+	}
+	return b.String()
+}
+
 // userDir returns the directory for a user's calendars
 func (s *Storage) userDir(username string) string {
-	// Sanitize username for filesystem
-	safeUsername := strings.ReplaceAll(username, "@", "_at_")
-	return filepath.Join(s.dataDir, safeUsername)
+	key := userKey(username)
+	dir := filepath.Join(s.dataDir, key)
+	// Migrate a legacy directory only when its owner is unambiguous: a name
+	// that contains "%" and whose legacy mapping round-trips. Ambiguous
+	// legacy directories ("a_at_b") stay with the "@" interpretation.
+	if legacy := legacyUserKey(username); legacy != key && strings.ReplaceAll(legacy, "_at_", "@") == username && username != "." {
+		if _, loaded := s.migrated.LoadOrStore(username, true); !loaded {
+			old := filepath.Join(s.dataDir, legacy)
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				if _, err := os.Stat(old); err == nil {
+					_ = os.Rename(old, dir)
+				}
+			}
+		}
+	}
+	return dir
 }
 
 // errInvalidID marks an identifier that would resolve outside its parent
@@ -43,7 +95,7 @@ var errInvalidID = errors.New("invalid identifier")
 // directory: no separators, no ".." sequence, and not the "." self-reference
 // (F5087: unvalidated IDs let MKCALENDAR/GET escape the user's namespace).
 func validateID(id string) error {
-	if id == "." || strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
+	if id == "" || len(id) > 200 || strings.ContainsRune(id, 0) || id == "." || strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) || strings.Contains(id, "/") {
 		return fmt.Errorf("%w: %s", errInvalidID, id)
 	}
 	return nil
@@ -303,6 +355,78 @@ func (s *Storage) GetEvents(username, calendarID string) ([]string, error) {
 	}
 
 	return events, nil
+}
+
+// EventEntry is one stored event resource: Name is the resource name used in
+// its URL (the file name without ".ics"), which need not equal the UID inside
+// the iCalendar data (RFC 4791 §4.1 / §5.3.2: clients choose the name).
+type EventEntry struct {
+	Name string
+	Data string
+	ETag string
+}
+
+// GetEventEntries returns every event resource with its name and ETag from a
+// single directory pass (no per-event stat), sorted by name.
+func (s *Storage) GetEventEntries(username, calendarID string) ([]EventEntry, error) {
+	if err := validateID(calendarID); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.entriesUnsafe(username, calendarID)
+}
+
+func (s *Storage) entriesUnsafe(username, calendarID string) ([]EventEntry, error) {
+	dir := s.calendarDir(username, calendarID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read calendar directory: %w", err)
+	}
+	var out []EventEntry
+	for _, entry := range entries {
+		n := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(n, ".ics") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Clean(filepath.Join(dir, n)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to read event %s: %w", n, err)
+		}
+		e := EventEntry{Name: strings.TrimSuffix(n, ".ics"), Data: string(data)}
+		if info, err := entry.Info(); err == nil {
+			e.ETag = fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// FindUIDConflict returns the name of another resource in the calendar whose
+// iCalendar UID equals uid (RFC 4791 §5.3.2.1 no-uid-conflict), or "".
+// Resources named exceptName are ignored.
+func (s *Storage) FindUIDConflict(username, calendarID, uid, exceptName string) (string, error) {
+	if err := validateID(calendarID); err != nil {
+		return "", err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entries, err := s.entriesUnsafe(username, calendarID)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if e.Name == exceptName || (len(uid) < 60 && !strings.Contains(e.Data, uid)) {
+			continue
+		}
+		if extractUIDFromICS(e.Data) == uid {
+			return e.Name, nil
+		}
+	}
+	return "", nil
 }
 
 // DeleteEvent deletes a calendar event

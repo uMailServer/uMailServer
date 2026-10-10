@@ -2,7 +2,6 @@ package caldav
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -276,8 +275,6 @@ func recurrenceStarts(b string, start, end time.Time, overridden map[int64]bool,
 	return out
 }
 
-const maxRRULEPeriods = 100000
-
 var weekdayCodes = map[string]time.Weekday{
 	"SU": time.Sunday, "MO": time.Monday, "TU": time.Tuesday, "WE": time.Wednesday,
 	"TH": time.Thursday, "FR": time.Friday, "SA": time.Saturday,
@@ -285,120 +282,4 @@ var weekdayCodes = map[string]time.Weekday{
 
 func daysInMonth(y int, m time.Month) int {
 	return time.Date(y, m+1, 0, 0, 0, 0, 0, time.UTC).Day()
-}
-
-// periodCandidates returns the ascending instance starts of recurrence period p.
-func (r *rruleSpec) periodCandidates(base time.Time, p int) []time.Time {
-	loc := base.Location()
-	h, mi, sec := base.Clock()
-	ns := base.Nanosecond()
-	step := p * r.interval
-	switch r.freq {
-	case "DAILY":
-		c := base.AddDate(0, 0, step)
-		if len(r.byDay) > 0 && !r.hasWeekday(c.Weekday()) {
-			return nil
-		}
-		return []time.Time{c}
-	case "WEEKLY":
-		anchor := base.AddDate(0, 0, 7*step)
-		if len(r.byDay) == 0 {
-			return []time.Time{anchor}
-		}
-		monday := anchor.AddDate(0, 0, -((int(anchor.Weekday()) + 6) % 7))
-		var out []time.Time
-		for off := 0; off < 7; off++ {
-			c := monday.AddDate(0, 0, off)
-			if r.hasWeekday(c.Weekday()) && !c.Before(base) {
-				out = append(out, c)
-			}
-		}
-		return out
-	case "MONTHLY":
-		total := int(base.Month()) - 1 + step
-		y := base.Year() + total/12
-		m := time.Month(total%12 + 1)
-		days := r.byMonthDay
-		if len(days) == 0 {
-			days = []int{base.Day()}
-		}
-		var out []time.Time
-		for _, d := range days {
-			dim := daysInMonth(y, m)
-			if d < 0 {
-				d = dim + d + 1
-			}
-			if d < 1 || d > dim {
-				continue // nonexistent dates are omitted
-			}
-			out = append(out, time.Date(y, m, d, h, mi, sec, ns, loc))
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
-		return out
-	case "YEARLY":
-		y := base.Year() + step
-		if base.Month() == time.February && base.Day() == 29 && daysInMonth(y, time.February) < 29 {
-			return nil
-		}
-		return []time.Time{time.Date(y, base.Month(), base.Day(), h, mi, sec, ns, loc)}
-	}
-	return nil
-}
-
-func (r *rruleSpec) hasWeekday(d time.Weekday) bool {
-	for _, w := range r.byDay {
-		if w == d {
-			return true
-		}
-	}
-	return false
-}
-
-// firstPeriod returns a safe period index to start from for an unbounded
-// (COUNT-less) rule, so events that started long before the window are still
-// expanded instead of exhausting the safety limit (F6077).
-func (r *rruleSpec) firstPeriod(base, from time.Time) int {
-	if r.count > 0 || !from.After(base) {
-		return 0
-	}
-	var n int
-	switch r.freq {
-	case "DAILY":
-		n = int(from.Sub(base).Hours() / 24)
-	case "WEEKLY":
-		n = int(from.Sub(base).Hours() / (24 * 7))
-	case "MONTHLY":
-		n = (from.Year()-base.Year())*12 + int(from.Month()) - int(base.Month())
-	case "YEARLY":
-		n = from.Year() - base.Year()
-	}
-	p := n/r.interval - 2
-	if p < 0 {
-		return 0
-	}
-	return p
-}
-
-func parseByDay(v string) ([]time.Weekday, bool) {
-	var out []time.Weekday
-	for _, d := range strings.Split(v, ",") {
-		w, ok := weekdayCodes[strings.ToUpper(strings.TrimSpace(d))]
-		if !ok { // ordinals (1MO, -1FR) are not supported
-			return nil, false
-		}
-		out = append(out, w)
-	}
-	return out, len(out) > 0
-}
-
-func parseByMonthDay(v string) ([]int, bool) {
-	var out []int
-	for _, d := range strings.Split(v, ",") {
-		n, err := strconv.Atoi(strings.TrimSpace(d))
-		if err != nil || n == 0 || n < -31 || n > 31 {
-			return nil, false
-		}
-		out = append(out, n)
-	}
-	return out, len(out) > 0
 }
