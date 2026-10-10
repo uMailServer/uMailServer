@@ -31,49 +31,68 @@ export interface SendMailRequest {
 export interface AuthLoginRequest {
   email: string
   password: string
+  totp_code?: string
 }
 
 export interface AuthLoginResponse {
   expiresIn?: number
 }
 
+// Filter shapes mirror internal/api/filters.go (operators and action types are
+// camelCase there; the server rejects nothing but never matches unknown values).
 export interface Filter {
   id: string
   name: string
+  enabled: boolean
+  matchAll: boolean
   conditions: FilterCondition[]
   actions: FilterAction[]
-  enabled: boolean
   priority: number
 }
 
 export interface FilterCondition {
   field: 'from' | 'to' | 'subject' | 'body' | 'header'
-  operator: 'contains' | 'equals' | 'starts_with' | 'ends_with' | 'exists' | 'not_exists'
+  operator: 'contains' | 'equals' | 'startsWith' | 'endsWith' | 'matches'
   value: string
   headerName?: string
 }
 
 export interface FilterAction {
-  type: 'move' | 'copy' | 'label' | 'star' | 'mark_read' | 'forward' | 'reject' | 'discard'
-  destination?: string
-  label?: string
+  type: 'move' | 'copy' | 'delete' | 'markRead' | 'markSpam' | 'forward' | 'flag'
+  target?: string
+  forwardTo?: string
 }
 
+// Mirrors internal/api/vacation.go: snake_case keys, `message` (not body), and
+// a send_interval in hours that the server requires to be > 0.
 export interface VacationAutoReply {
   enabled: boolean
   subject: string
-  body: string
-  startDate?: string
-  endDate?: string
-  contactsOnly: boolean
+  message: string
+  start_date?: string
+  end_date?: string
+  html_message?: string
+  send_interval: number
+  exclude_addresses?: string[]
+  ignore_lists?: boolean
+  ignore_bulk?: boolean
 }
 
+// Shape produced by the browser's PushSubscription.toJSON().
 export interface PushSubscription {
   endpoint: string
   keys: {
     p256dh: string
     auth: string
   }
+}
+
+// What GET /push/subscriptions returns (keys are deliberately not exposed).
+export interface PushSubscriptionInfo {
+  id: string
+  createdAt: string
+  updatedAt: string
+  deviceInfo?: unknown
 }
 
 export interface SearchResponse {
@@ -84,15 +103,32 @@ export interface SearchResponse {
 
 export interface ThreadsResponse {
   threads: Thread[]
+  total: number
+  limit: number
+  offset: number
 }
 
+// internal/api/threads.go: list items use snake_case.
 export interface Thread {
-  id: string
+  thread_id: string
   subject: string
-  emails: Mail[]
   participants: string[]
-  lastDate: string
-  unread: boolean
+  message_count: number
+  unread_count: number
+  last_activity: string
+  created_at: string
+}
+
+export interface ThreadMessage {
+  message_id: string
+  uid: number
+  mailbox: string
+  from: string
+  to: string
+  subject: string
+  date: string
+  is_read: boolean
+  flags: string[]
 }
 
 // ============================================================================
@@ -106,6 +142,34 @@ interface RequestOptions extends RequestInit {
 interface ApiResponse<T = unknown> {
   data?: T
   [key: string]: unknown
+}
+
+// Carries the HTTP status and the server's {"error": "..."} message so callers
+// can distinguish e.g. "TOTP code required" from "invalid credentials" instead
+// of seeing an opaque "HTTP 401" for every failure.
+export class ApiError extends Error {
+  status: number
+  serverMessage?: string
+
+  constructor(status: number, serverMessage?: string) {
+    super(`HTTP ${status}`)
+    this.name = 'ApiError'
+    this.status = status
+    this.serverMessage = serverMessage
+  }
+}
+
+async function readServerError(response: Response): Promise<string | undefined> {
+  try {
+    const contentType = response.headers?.get?.('content-type')
+    if (contentType && contentType.includes('application/json')) {
+      const body = (await response.json()) as { error?: unknown }
+      return typeof body?.error === 'string' ? body.error : undefined
+    }
+  } catch {
+    // Non-JSON or unreadable error body: fall back to the status only.
+  }
+  return undefined
 }
 
 class API {
@@ -148,12 +212,12 @@ class API {
           // Token is managed by HttpOnly cookie, server will clear it on logout
           // Already on the login page: surface the error instead of reloading.
           if (window.location.pathname === '/login') {
-            throw new Error('HTTP 401')
+            throw new ApiError(401, await readServerError(response))
           }
           window.location.href = '/login'
           return null as T
         }
-        throw new Error(`HTTP ${response.status}`)
+        throw new ApiError(response.status, await readServerError(response))
       }
 
       const contentType = response.headers.get('content-type')
@@ -190,12 +254,13 @@ class API {
     return this.get<{ filters?: Filter[] }>('/filters')
   }
 
-  async createFilter(filter: Omit<Filter, 'id'>): Promise<{ filter?: Filter }> {
-    return this.post<{ filter?: Filter }>('/filters', filter)
+  // The server answers create/update with the bare filter object, not {filter}.
+  async createFilter(filter: Omit<Filter, 'id' | 'priority'>): Promise<Filter> {
+    return this.post<Filter>('/filters', filter)
   }
 
-  async updateFilter(id: string, filter: Partial<Filter>): Promise<{ filter?: Filter }> {
-    return this.put<{ filter?: Filter }>(`/filters/${encodeURIComponent(id)}`, filter)
+  async updateFilter(id: string, filter: Partial<Filter>): Promise<Filter> {
+    return this.put<Filter>(`/filters/${encodeURIComponent(id)}`, filter)
   }
 
   async deleteFilter(id: string): Promise<void> {
@@ -207,8 +272,9 @@ class API {
     return this.get<VacationAutoReply>('/vacation')
   }
 
+  // handleVacation routes GET/PUT/DELETE; POST is rejected with 405.
   async setVacation(vacation: VacationAutoReply): Promise<void> {
-    await this.post('/vacation', vacation)
+    await this.put('/vacation', vacation)
   }
 
   async deleteVacation(): Promise<void> {
@@ -225,25 +291,32 @@ class API {
     return this.get<ThreadsResponse>('/threads')
   }
 
-  async getThread(id: string): Promise<{ thread?: Thread }> {
-    return this.get<{ thread?: Thread }>(`/threads/${encodeURIComponent(id)}`)
+  // The server answers with the bare message array of the thread.
+  async getThread(id: string): Promise<ThreadMessage[]> {
+    return this.get<ThreadMessage[]>(`/threads/${encodeURIComponent(id)}`)
   }
 
   // Push notifications
-  async getVapidPublicKey(): Promise<{ key?: string }> {
-    return this.get<{ key?: string }>('/push/vapid-public-key')
+  async getVapidPublicKey(): Promise<{ publicKey?: string }> {
+    return this.get<{ publicKey?: string }>('/push/vapid-public-key')
   }
 
+  // The server expects flat p256dh/auth fields, not the browser's nested keys.
   async subscribePush(subscription: PushSubscription): Promise<void> {
-    await this.post('/push/subscribe', subscription)
+    await this.post('/push/subscribe', {
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+    })
   }
 
+  // DELETE /push/unsubscribe reads the endpoint from the JSON body (or ?id=).
   async unsubscribePush(endpoint: string): Promise<void> {
-    await this.delete(`/push/unsubscribe?endpoint=${encodeURIComponent(endpoint)}`)
+    await this.delete('/push/unsubscribe', { endpoint })
   }
 
-  async getPushSubscriptions(): Promise<{ subscriptions?: PushSubscription[] }> {
-    return this.get<{ subscriptions?: PushSubscription[] }>('/push/subscriptions')
+  async getPushSubscriptions(): Promise<{ subscriptions?: PushSubscriptionInfo[] }> {
+    return this.get<{ subscriptions?: PushSubscriptionInfo[] }>('/push/subscriptions')
   }
 
   // Generic methods
@@ -265,8 +338,11 @@ class API {
     })
   }
 
-  delete<T = ApiResponse>(endpoint: string): Promise<T> {
-    return this.request<T>(endpoint, { method: 'DELETE' })
+  delete<T = ApiResponse>(endpoint: string, data?: unknown): Promise<T> {
+    return this.request<T>(endpoint, {
+      method: 'DELETE',
+      body: data !== undefined ? JSON.stringify(data) : undefined
+    })
   }
 }
 

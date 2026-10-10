@@ -15,6 +15,26 @@ interface VacationConfig {
   ignore_bulk: boolean
 }
 
+// The server stores and parses RFC 3339 timestamps; <input type="datetime-local">
+// works with zone-less local values ("2026-10-11T10:00"). Without conversion the
+// server's time.Parse(RFC3339) rejected every picked date and silently dropped
+// it, and stored dates were displayed in the server's zone slice instead of the
+// viewer's local time.
+export function toDatetimeLocal(value?: string): string {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+export function fromDatetimeLocal(value: string): string | undefined {
+  if (!value) return undefined
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return undefined
+  return d.toISOString()
+}
+
 function VacationPage() {
   const { t, loading: i18nLoading } = useI18n()
   const [config, setConfig] = useState<VacationConfig>({
@@ -83,8 +103,8 @@ function VacationPage() {
       })
 
       if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || 'Failed to save vacation settings')
+        const data = (await response.json().catch(() => null)) as { error?: string } | null
+        throw new Error(data?.error || 'Failed to save vacation settings')
       }
 
       setSuccess(t('vacation.saveSuccess'))
@@ -170,26 +190,28 @@ function VacationPage() {
             {/* Date Range */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="flex items-center text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="vac-start" className="flex items-center text-sm font-medium text-gray-700 mb-1">
                   <Calendar className="h-4 w-4 mr-1" />
                   {t('vacation.startDate')}
                 </label>
                 <input
+                  id="vac-start"
                   type="datetime-local"
-                  value={config.start_date ? config.start_date.slice(0, 16) : ''}
-                  onChange={(e) => setConfig({ ...config, start_date: e.target.value })}
+                  value={toDatetimeLocal(config.start_date)}
+                  onChange={(e) => setConfig({ ...config, start_date: fromDatetimeLocal(e.target.value) })}
                   className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                 />
               </div>
               <div>
-                <label className="flex items-center text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="vac-end" className="flex items-center text-sm font-medium text-gray-700 mb-1">
                   <Calendar className="h-4 w-4 mr-1" />
                   {t('vacation.endDate')}
                 </label>
                 <input
+                  id="vac-end"
                   type="datetime-local"
-                  value={config.end_date ? config.end_date.slice(0, 16) : ''}
-                  onChange={(e) => setConfig({ ...config, end_date: e.target.value })}
+                  value={toDatetimeLocal(config.end_date)}
+                  onChange={(e) => setConfig({ ...config, end_date: fromDatetimeLocal(e.target.value) })}
                   className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
                 />
               </div>
@@ -197,11 +219,12 @@ function VacationPage() {
 
             {/* Subject */}
             <div>
-              <label className="flex items-center text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="vac-subject" className="flex items-center text-sm font-medium text-gray-700 mb-1">
                 <Mail className="h-4 w-4 mr-1" />
                 {t('vacation.subject')}
               </label>
               <input
+                id="vac-subject"
                 type="text"
                 value={config.subject}
                 onChange={(e) => setConfig({ ...config, subject: e.target.value })}
@@ -213,10 +236,11 @@ function VacationPage() {
 
             {/* Message */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="vac-message" className="block text-sm font-medium text-gray-700 mb-1">
                 {t('vacation.message')}
               </label>
               <textarea
+                id="vac-message"
                 value={config.message}
                 onChange={(e) => setConfig({ ...config, message: e.target.value })}
                 placeholder={t('vacation.messagePlaceholder')}
@@ -231,11 +255,12 @@ function VacationPage() {
 
             {/* Send Interval */}
             <div>
-              <label className="flex items-center text-sm font-medium text-gray-700 mb-1">
+              <label htmlFor="vac-interval" className="flex items-center text-sm font-medium text-gray-700 mb-1">
                 <Clock className="h-4 w-4 mr-1" />
                 {t('vacation.sendInterval')}
               </label>
               <select
+                id="vac-interval"
                 value={config.send_interval}
                 onChange={(e) => setConfig({ ...config, send_interval: parseInt(e.target.value) })}
                 className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
@@ -252,11 +277,12 @@ function VacationPage() {
 
             {/* Exclude Addresses */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label htmlFor="vac-exclude" className="block text-sm font-medium text-gray-700 mb-2">
                 {t('vacation.excludeAddresses')}
               </label>
               <div className="flex gap-2 mb-2">
                 <input
+                  id="vac-exclude"
                   type="email"
                   value={excludeInput}
                   onChange={(e) => setExcludeInput(e.target.value)}
@@ -281,6 +307,7 @@ function VacationPage() {
                       {email}
                       <button
                         type="button"
+                        aria-label={`${t('common.delete')} ${email}`}
                         onClick={() => handleRemoveExclude(email)}
                         className="ml-1 text-gray-400 hover:text-red-500"
                       >

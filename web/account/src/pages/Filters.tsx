@@ -50,6 +50,14 @@ function parseFilterAction(value: string): FilterAction['type'] {
   return 'move'
 }
 
+// The API reports failures as {"error": "..."}; surface that message instead
+// of silently ignoring a rejected request (validation errors such as an empty
+// condition value used to leave the editor open with no feedback at all).
+async function responseError(response: Response, fallback: string): Promise<string> {
+  const body = (await response.json().catch(() => null)) as { error?: string } | null
+  return body?.error || fallback
+}
+
 function FiltersPage() {
   const { t } = useI18n()
   const [filters, setFilters] = useState<EmailFilter[]>([])
@@ -71,9 +79,12 @@ function FiltersPage() {
       if (response.ok) {
         const data = await response.json()
         setFilters(data.filters || [])
+      } else {
+        setActionError(await responseError(response, 'Failed to load filters.'))
       }
     } catch (err) {
       console.error('Failed to load filters:', err)
+      setActionError('Failed to load filters.')
     } finally {
       setLoading(false)
     }
@@ -81,6 +92,7 @@ function FiltersPage() {
 
   const handleSave = async (filter: EmailFilter) => {
     setSaving(true)
+    setActionError('')
     try {
       const method = filter.id ? 'PUT' : 'POST'
       const url = filter.id ? `/api/v1/filters/${filter.id}` : '/api/v1/filters'
@@ -98,9 +110,12 @@ function FiltersPage() {
         await loadFilters()
         setEditingFilter(null)
         setShowAddForm(false)
+      } else {
+        setActionError(await responseError(response, 'Failed to save filter.'))
       }
     } catch (err) {
       console.error('Failed to save filter:', err)
+      setActionError('Failed to save filter.')
     } finally {
       setSaving(false)
     }
@@ -117,9 +132,12 @@ function FiltersPage() {
 
       if (response.ok) {
         await loadFilters()
+      } else {
+        setActionError(await responseError(response, 'Failed to delete filter.'))
       }
     } catch (err) {
       console.error('Failed to delete filter:', err)
+      setActionError('Failed to delete filter.')
     }
   }
 
@@ -132,9 +150,12 @@ function FiltersPage() {
 
       if (response.ok) {
         await loadFilters()
+      } else {
+        setActionError(await responseError(response, 'Failed to update filter.'))
       }
     } catch (err) {
       console.error('Failed to toggle filter:', err)
+      setActionError('Failed to update filter.')
     }
   }
 
@@ -198,6 +219,7 @@ function FiltersPage() {
           {t('filters.title')}
         </h2>
         <button
+          type="button"
           onClick={() => setShowAddForm(true)}
           className="flex items-center px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
         >
@@ -247,6 +269,7 @@ function FiltersPage() {
                     <input
                       type="checkbox"
                       checked={filter.enabled}
+                      aria-label={filter.name}
                       onChange={() => handleToggle(filter)}
                       className="sr-only peer"
                     />
@@ -265,6 +288,8 @@ function FiltersPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
+                    aria-label="Move filter up"
                     onClick={() => handleMove(index, 'up')}
                     disabled={index === 0}
                     className="p-2 text-gray-400 hover:text-gray-600 disabled:opacity-30"
@@ -272,6 +297,8 @@ function FiltersPage() {
                     <MoveUp className="h-4 w-4" />
                   </button>
                   <button
+                    type="button"
+                    aria-label="Move filter down"
                     onClick={() => handleMove(index, 'down')}
                     disabled={index === filters.length - 1}
                     className="p-2 text-gray-400 hover:text-gray-600 disabled:opacity-30"
@@ -279,12 +306,16 @@ function FiltersPage() {
                     <MoveDown className="h-4 w-4" />
                   </button>
                   <button
+                    type="button"
+                    aria-label={`${t('filters.edit')} ${filter.name}`}
                     onClick={() => setEditingFilter(filter)}
                     className="p-2 text-gray-400 hover:text-blue-600"
                   >
                     <Edit2 className="h-4 w-4" />
                   </button>
                   <button
+                    type="button"
+                    aria-label={`${t('filters.delete')} ${filter.name}`}
                     onClick={() => handleDelete(filter.id)}
                     className="p-2 text-gray-400 hover:text-red-600"
                   >
@@ -362,10 +393,11 @@ function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
       </h3>
 
       <div className="mb-6">
-        <label className="block text-sm font-medium text-gray-700 mb-1">
+        <label htmlFor="filter-name" className="block text-sm font-medium text-gray-700 mb-1">
           {t('filters.filterName')}
         </label>
         <input
+          id="filter-name"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -437,6 +469,7 @@ function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
 
               <button
                 type="button"
+                aria-label={t('common.delete')}
                 onClick={() => removeCondition(index)}
                 disabled={conditions.length === 1}
                 className="p-2 text-gray-400 hover:text-red-600 disabled:opacity-30"
@@ -468,7 +501,7 @@ function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
               >
                 <option value="move">{t('filters.moveTo')}</option>
                 <option value="copy">{t('filters.copyTo')}</option>
-                <option value="delete">{t('filters.delete')}</option>
+                <option value="delete">{t('filters.deleteAction')}</option>
                 <option value="markRead">{t('filters.markRead')}</option>
                 <option value="markSpam">{t('filters.markSpam')}</option>
                 <option value="forward">{t('filters.forward')}</option>
@@ -503,6 +536,7 @@ function FilterEditor({ filter, onSave, onCancel, saving }: FilterEditorProps) {
 
               <button
                 type="button"
+                aria-label={t('common.delete')}
                 onClick={() => removeAction(index)}
                 disabled={actions.length === 1}
                 className="p-2 text-gray-400 hover:text-red-600 disabled:opacity-30"

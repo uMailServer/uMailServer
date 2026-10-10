@@ -39,7 +39,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useAccounts } from "@/hooks/useApi";
-import { cn } from "@/lib/utils";
+import { cn, hasLoggedIn } from "@/lib/utils";
 import type { Account } from "@/types";
 
 export function Accounts() {
@@ -482,9 +482,9 @@ function AccountCard({ account, onEdit, onDelete, formatBytes }: AccountCardProp
           </div>
 
           {/* Last Login */}
-          {account.last_login && (
+          {hasLoggedIn(account.last_login) && (
             <div className="text-xs text-muted-foreground pt-2 border-t">
-              Last login: {new Date(account.last_login).toLocaleDateString()}
+              Last login: {new Date(account.last_login!).toLocaleDateString()}
             </div>
           )}
         </div>

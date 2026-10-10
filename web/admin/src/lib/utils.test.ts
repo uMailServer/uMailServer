@@ -24,3 +24,18 @@ describe('cn (class name merger)', () => {
     expect(result).toContain('active')
   })
 })
+
+describe('F6223/F6224 API shape helpers', () => {
+  it('formatRecipients joins the array the Go API returns', async () => {
+    const { formatRecipients } = await import('./utils')
+    expect(formatRecipients(['a@x.com', 'b@y.com'])).toBe('a@x.com, b@y.com')
+    expect(formatRecipients('a@x.com')).toBe('a@x.com')
+    expect(formatRecipients(undefined)).toBe('')
+  })
+  it('hasLoggedIn treats Go zero time as never', async () => {
+    const { hasLoggedIn } = await import('./utils')
+    expect(hasLoggedIn('0001-01-01T00:00:00Z')).toBe(false)
+    expect(hasLoggedIn(undefined)).toBe(false)
+    expect(hasLoggedIn('2026-10-01T12:00:00Z')).toBe(true)
+  })
+})

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Mail,
   RefreshCw,
@@ -33,11 +33,22 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useQueue } from "@/hooks/useApi";
-import { cn } from "@/lib/utils";
+import { cn, formatRecipients } from "@/lib/utils";
 import type { QueueEntry } from "@/types";
 
 export function Queue() {
-  const { entries, loading, fetchQueue, retryEntry, dropEntry } = useQueue();
+  const { entries, loading, error, fetchQueue: rawFetchQueue, retryEntry, dropEntry } = useQueue();
+  const [actionError, setActionError] = useState<string | null>(null);
+  // Failures are surfaced through the hook's error state; swallowing the
+  // rejection here avoids unhandled promise rejections from the 10s poll and
+  // from the Refresh button.
+  const fetchQueue = useCallback(async () => {
+    try {
+      await rawFetchQueue();
+    } catch {
+      // reported via `error`
+    }
+  }, [rawFetchQueue]);
   const [filter, setFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedEntry, setSelectedEntry] = useState<QueueEntry | null>(null);
@@ -69,14 +80,26 @@ export function Queue() {
 
   const handleRetry = async () => {
     if (!selectedEntry) return;
-    await retryEntry(selectedEntry.id);
+    setActionError(null);
+    try {
+      await retryEntry(selectedEntry.id);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to retry email");
+      return;
+    }
     setIsRetryDialogOpen(false);
     setSelectedEntry(null);
   };
 
   const handleDrop = async () => {
     if (!selectedEntry) return;
-    await dropEntry(selectedEntry.id);
+    setActionError(null);
+    try {
+      await dropEntry(selectedEntry.id);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to remove email");
+      return;
+    }
     setIsDropDialogOpen(false);
     setSelectedEntry(null);
   };
@@ -160,6 +183,7 @@ export function Queue() {
                 <SelectItem value="sending">Sending</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
                 <SelectItem value="delivered">Delivered</SelectItem>
+                <SelectItem value="bounced">Bounced</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -170,6 +194,12 @@ export function Queue() {
               {[1, 2, 3, 4, 5].map((i) => (
                 <Skeleton key={i} className="h-16 w-full" />
               ))}
+            </div>
+          ) : !entries ? (
+            <div className="text-center py-12" role="alert">
+              <AlertCircle className="h-12 w-12 mx-auto text-red-500 mb-4" />
+              <h3 className="text-lg font-medium">Unable to load the queue</h3>
+              <p className="text-muted-foreground mt-1">{error?.message ?? "No data received"}</p>
             </div>
           ) : paginatedEntries?.length === 0 ? (
             <div className="text-center py-12">
@@ -188,10 +218,12 @@ export function Queue() {
                     entry={entry}
                     onRetry={() => {
                       setSelectedEntry(entry);
+                      setActionError(null);
                       setIsRetryDialogOpen(true);
                     }}
                     onDrop={() => {
                       setSelectedEntry(entry);
+                      setActionError(null);
                       setIsDropDialogOpen(true);
                     }}
                     getStatusIcon={getStatusIcon}
@@ -242,11 +274,12 @@ export function Queue() {
           </DialogHeader>
           {selectedEntry && (
             <div className="bg-muted p-4 rounded-lg text-sm">
-              <p><strong>To:</strong> {selectedEntry.to}</p>
+              <p><strong>To:</strong> {formatRecipients(selectedEntry.to)}</p>
               <p><strong>From:</strong> {selectedEntry.from}</p>
               <p><strong>Status:</strong> {selectedEntry.status}</p>
             </div>
           )}
+          {actionError && <p className="text-sm text-red-500" role="alert">{actionError}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsRetryDialogOpen(false)}>
               Cancel
@@ -270,11 +303,12 @@ export function Queue() {
           </DialogHeader>
           {selectedEntry && (
             <div className="bg-muted p-4 rounded-lg text-sm">
-              <p><strong>To:</strong> {selectedEntry.to}</p>
+              <p><strong>To:</strong> {formatRecipients(selectedEntry.to)}</p>
               <p><strong>From:</strong> {selectedEntry.from}</p>
               <p><strong>Status:</strong> {selectedEntry.status}</p>
             </div>
           )}
+          {actionError && <p className="text-sm text-red-500" role="alert">{actionError}</p>}
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsDropDialogOpen(false)}>
               Cancel
@@ -330,7 +364,7 @@ function QueueItem({ entry, onRetry, onDrop, getStatusIcon, getStatusBadge }: Qu
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="font-medium truncate">{entry.to}</span>
+          <span className="font-medium truncate">{formatRecipients(entry.to)}</span>
           <Badge variant="secondary" className={cn("text-xs", getStatusBadge(entry.status))}>
             {entry.status}
           </Badge>
