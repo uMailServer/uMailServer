@@ -174,7 +174,12 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Check authentication if token is configured
 	if s.authToken != "" || s.adminAuthToken != "" {
 		authHeader := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(authHeader, "Bearer ")
+		// F5382: the auth scheme is case-insensitive (RFC 7235 §2.1) and is
+		// required; a bare token without "Bearer " is not accepted.
+		token := ""
+		if len(authHeader) > len("Bearer ") && strings.EqualFold(authHeader[:len("Bearer ")], "Bearer ") {
+			token = authHeader[len("Bearer "):]
+		}
 		valid := false
 		if s.authToken != "" && token == s.authToken {
 			valid = true
@@ -214,9 +219,13 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, rpcInvalidRequest, req.ID, "Invalid Request")
 		return
 	}
-	// F5019: JSON-RPC notifications get no response; MCP over HTTP
-	// acknowledges them with 202 Accepted and an empty body.
-	if strings.HasPrefix(req.Method, "notifications/") {
+	// F5019/F5380: a message without "id" is a notification (JSON-RPC 2.0
+	// §4.1) and gets no response; MCP over HTTP acknowledges it with 202
+	// Accepted and an empty body. The server handles no client
+	// notifications, so none is dispatched (an id-less tools/call is not
+	// executed). A "notifications/*" method that carries an id is a request
+	// and falls through to "Method not found".
+	if len(req.ID) == 0 {
 		w.Header().Del("Content-Type")
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -322,6 +331,8 @@ type rpcError struct {
 
 func (e *rpcError) Error() string { return e.msg }
 
+// invalidParams builds a -32602 error; missing or malformed tool arguments
+// are protocol errors, not internal errors (F5381).
 func invalidParams(format string, args ...any) error {
 	return &rpcError{code: rpcInvalidParams, msg: fmt.Sprintf(format, args...)}
 }
@@ -388,9 +399,10 @@ type ToolCallRequest struct {
 
 // Initialize response
 type InitializeResult struct {
-	ProtocolVersion string       `json:"protocolVersion"`
-	Server          ServerInfo   `json:"server"`
-	Capabilities    Capabilities `json:"capabilities"`
+	ProtocolVersion string `json:"protocolVersion"`
+	// F5383: the MCP schema names this member "serverInfo" (required).
+	Server       ServerInfo   `json:"serverInfo"`
+	Capabilities Capabilities `json:"capabilities"`
 }
 
 type ServerInfo struct {
@@ -398,8 +410,12 @@ type ServerInfo struct {
 	Version string `json:"version"`
 }
 
+// Capabilities advertises every feature the server serves; MCP clients
+// only call methods of advertised capabilities (F5383).
 type Capabilities struct {
-	Tools struct{} `json:"tools"`
+	Tools     struct{} `json:"tools"`
+	Resources struct{} `json:"resources"`
+	Prompts   struct{} `json:"prompts"`
 }
 
 // Handle initialize
@@ -696,10 +712,10 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 // or key prefixes (F5017); mirrors the REST API boundary checks.
 func validateDomainName(name string) error {
 	if strings.Contains(name, "..") || strings.ContainsAny(name, "/\\\r\n\x00@") {
-		return fmt.Errorf("invalid domain name")
+		return invalidParams("invalid domain name")
 	}
 	if len(name) > 253 {
-		return fmt.Errorf("domain name exceeds maximum length")
+		return invalidParams("domain name exceeds maximum length")
 	}
 	return nil
 }
@@ -708,10 +724,10 @@ func validateDomainName(name string) error {
 func validateEmailAddress(localPart, domain string) error {
 	if localPart == "" || len(localPart) > 64 || strings.Contains(localPart, "..") ||
 		strings.ContainsAny(localPart, "/\\\r\n\x00") {
-		return fmt.Errorf("invalid email address")
+		return invalidParams("invalid email address")
 	}
 	if domain == "" || validateDomainName(domain) != nil {
-		return fmt.Errorf("invalid email address")
+		return invalidParams("invalid email address")
 	}
 	return nil
 }
@@ -806,11 +822,14 @@ func (s *Server) toolListDomains() (map[string]interface{}, error) {
 
 func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (map[string]interface{}, error) {
 	if name == "" {
-		return nil, fmt.Errorf("domain name is required")
+		return nil, invalidParams("domain name is required")
 	}
 	if err := validateDomainName(name); err != nil {
 		return nil, err
 	}
+	// F5384: domain names are case-insensitive and the delivery path looks
+	// them up lowercased (isLocalDomain), so store the canonical form.
+	name = strings.ToLower(name)
 	if maxAccounts <= 0 {
 		maxAccounts = 100
 	}
@@ -838,7 +857,7 @@ func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (ma
 
 func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 	if name == "" {
-		return nil, fmt.Errorf("domain name is required")
+		return nil, invalidParams("domain name is required")
 	}
 
 	// F5251: a missing domain is an error, not a successful deletion.
@@ -863,13 +882,13 @@ func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 
 func (s *Server) toolAddAccount(email, password string) (map[string]interface{}, error) {
 	if email == "" || password == "" {
-		return nil, fmt.Errorf("email and password are required")
+		return nil, invalidParams("email and password are required")
 	}
 
 	// Parse domain from email
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid email address")
+		return nil, invalidParams("invalid email address")
 	}
 	localPart := parts[0]
 	domain := parts[1]
@@ -925,13 +944,13 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 
 func (s *Server) toolDeleteAccount(email string) (map[string]interface{}, error) {
 	if email == "" {
-		return nil, fmt.Errorf("email is required")
+		return nil, invalidParams("email is required")
 	}
 
 	// Parse domain and local part
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid email address")
+		return nil, invalidParams("invalid email address")
 	}
 
 	// F5251: a missing account (including a case variant of a stored
@@ -971,13 +990,13 @@ func (s *Server) keyExists(bucket, key string) (bool, error) {
 
 func (s *Server) toolGetAccountInfo(email string) (map[string]interface{}, error) {
 	if email == "" {
-		return nil, fmt.Errorf("email is required")
+		return nil, invalidParams("email is required")
 	}
 
 	// Parse domain and local part
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid email address")
+		return nil, invalidParams("invalid email address")
 	}
 
 	account, err := s.db.GetAccount(parts[1], parts[0])
@@ -1016,7 +1035,7 @@ func (s *Server) toolGetQueueStatus(limit int) (map[string]interface{}, error) {
 
 func (s *Server) toolRetryQueueItem(id string) (map[string]interface{}, error) {
 	if id == "" {
-		return nil, fmt.Errorf("queue item ID is required")
+		return nil, invalidParams("queue item ID is required")
 	}
 	text := fmt.Sprintf("Queue item '%s' retry requested\n", id)
 	text += "- Note: Full queue management requires queue manager integration\n"
@@ -1043,7 +1062,7 @@ func (s *Server) toolFlushQueue() (map[string]interface{}, error) {
 
 func (s *Server) toolCheckDNS(domain string) (map[string]interface{}, error) {
 	if domain == "" {
-		return nil, fmt.Errorf("domain is required")
+		return nil, invalidParams("domain is required")
 	}
 	text := fmt.Sprintf("DNS Check for %s:\n", domain)
 	text += "- Note: Full DNS check requires DNS resolver integration\n"
@@ -1058,7 +1077,7 @@ func (s *Server) toolCheckDNS(domain string) (map[string]interface{}, error) {
 
 func (s *Server) toolCheckTLS(domain string) (map[string]interface{}, error) {
 	if domain == "" {
-		return nil, fmt.Errorf("domain is required")
+		return nil, invalidParams("domain is required")
 	}
 	text := fmt.Sprintf("TLS Check for %s:\n", domain)
 	text += "- Note: Full TLS check requires TLS connection\n"

@@ -215,3 +215,48 @@ func TestDeleteMissingAccountOrDomainFails(t *testing.T) {
 		t.Fatalf("existing delete: code=%d err=%v", code, err)
 	}
 }
+
+// F5380: an id-less message is a notification — no response body and no
+// side effect; a "notifications/*" method carrying an id is a request and
+// gets a JSON-RPC reply.
+func TestNotificationsAreNotAnsweredRequestsAre(t *testing.T) {
+	s, database := newSecurityTestServer(t)
+	code, body := securityTestCall(s, "admin-tok", `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"add_domain","arguments":{"name":"notif.test"}}}`)
+	if code != http.StatusAccepted || body != "" {
+		t.Fatalf("id-less tools/call: got %d %q, want 202 with empty body", code, body)
+	}
+	if _, err := database.GetDomain("notif.test"); err == nil {
+		t.Fatal("id-less tools/call must not be executed")
+	}
+	code, body = securityTestCall(s, "user-tok", `{"jsonrpc":"2.0","id":5,"method":"notifications/initialized"}`)
+	if !strings.Contains(body, `"id":5`) || !strings.Contains(body, "-32601") {
+		t.Fatalf("notifications/* with id: got %d %q, want a -32601 reply with id 5", code, body)
+	}
+}
+
+// F5383: initialize must return "serverInfo" and advertise the resources
+// and prompts capabilities the server serves (MCP 2024-11-05 schema).
+func TestInitializeResultConformsToMCPSchema(t *testing.T) {
+	s, _ := newSecurityTestServer(t)
+	code, body := securityTestCall(s, "user-tok", `{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
+	if code != http.StatusOK {
+		t.Fatalf("initialize: %d %s", code, body)
+	}
+	var resp struct {
+		Result struct {
+			ServerInfo   *ServerInfo                `json:"serverInfo"`
+			Capabilities map[string]json.RawMessage `json:"capabilities"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Result.ServerInfo == nil || resp.Result.ServerInfo.Name == "" {
+		t.Fatalf("serverInfo missing: %s", body)
+	}
+	for _, c := range []string{"tools", "resources", "prompts"} {
+		if _, ok := resp.Result.Capabilities[c]; !ok {
+			t.Errorf("capability %q not advertised: %s", c, body)
+		}
+	}
+}
