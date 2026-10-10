@@ -1022,18 +1022,20 @@ func TestDurationUnmarshalYAML(t *testing.T) {
 }
 
 func TestSetFieldFromStringUnrecognizedType(t *testing.T) {
-	// uint is not handled by setFieldFromString, should return nil without error
+	// F6013: unsupported kinds must error instead of being silently dropped.
 	field := reflect.ValueOf(&struct{ U uint }{}).Elem().Field(0)
-	err := setFieldFromString(field, "42")
-	if err != nil {
-		t.Errorf("expected nil error for unrecognized type, got: %v", err)
+	if err := setFieldFromString(field, "42"); err == nil {
+		t.Error("expected error for unsupported uint type")
 	}
 
-	// []string is not handled either
-	sliceField := reflect.ValueOf(&struct{ S []string }{}).Elem().Field(0)
-	err = setFieldFromString(sliceField, "a,b")
-	if err != nil {
+	// []string is comma-separated (F6012).
+	var st struct{ S []string }
+	sliceField := reflect.ValueOf(&st).Elem().Field(0)
+	if err := setFieldFromString(sliceField, "a,b"); err != nil {
 		t.Errorf("expected nil error for []string type, got: %v", err)
+	}
+	if len(st.S) != 2 || st.S[0] != "a" || st.S[1] != "b" {
+		t.Errorf("S = %v", st.S)
 	}
 }
 

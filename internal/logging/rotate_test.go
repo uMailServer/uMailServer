@@ -225,7 +225,7 @@ func TestGetLogWriter_Stdout(t *testing.T) {
 		t.Fatalf("GetLogWriter failed: %v", err)
 	}
 
-	if w != os.Stdout {
+	if nc, ok := w.(nopCloser); !ok || nc.Writer != os.Stdout {
 		t.Error("expected os.Stdout for 'stdout' output")
 	}
 }
@@ -236,7 +236,7 @@ func TestGetLogWriter_Stderr(t *testing.T) {
 		t.Fatalf("GetLogWriter failed: %v", err)
 	}
 
-	if w != os.Stderr {
+	if nc, ok := w.(nopCloser); !ok || nc.Writer != os.Stderr {
 		t.Error("expected os.Stderr for 'stderr' output")
 	}
 }
@@ -247,7 +247,7 @@ func TestGetLogWriter_Empty(t *testing.T) {
 		t.Fatalf("GetLogWriter failed: %v", err)
 	}
 
-	if w != os.Stdout {
+	if nc, ok := w.(nopCloser); !ok || nc.Writer != os.Stdout {
 		t.Error("expected os.Stdout for empty output")
 	}
 }

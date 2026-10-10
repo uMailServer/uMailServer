@@ -46,7 +46,7 @@ func (w *SetupWizard) Run() (*Config, error) {
 	w.Config.Server.DataDir = dataDir
 
 	// Ensure data directory exists
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 

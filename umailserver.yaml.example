@@ -5,7 +5,8 @@
 server:
   hostname: mail.example.com
   data_dir: /var/lib/umailserver
-  max_message_size: 50MB
+  graceful_timeout: 30        # Seconds to wait for connections to drain on shutdown
+  force_close_after: 60       # Seconds after which remaining connections are force-closed
 
 # TLS Configuration
 tls:
@@ -15,8 +16,14 @@ tls:
   acme:
     enabled: true
     email: admin@example.com
-    directory: https://acme-v02.api.letsencrypt.org/directory
-    accept_tos: true
+    provider: letsencrypt     # letsencrypt or letsencrypt-staging
+    challenge: http-01        # http-01 or dns-01
+    # dns_provider: cloudflare  # Only for dns-01
+  client_auth:                # Client certificate (mTLS) authentication
+    enabled: false
+    require_cert: false
+    ca_file: ""               # CA bundle used to verify client certificates
+    verify_mode: ""           # verify_if_given or require_and_verify
 
 # SMTP Server Configuration
 smtp:
@@ -26,6 +33,9 @@ smtp:
     port: 25
     max_connections: 100
     max_recipients: 100
+    max_message_size: 50MB    # Applies to every SMTP listener
+    read_timeout: 5m
+    write_timeout: 5m
   submission:
     enabled: true
     bind: "0.0.0.0"
@@ -54,7 +64,9 @@ http:
   enabled: true
   bind: "0.0.0.0"
   port: 443
-  tls: true
+  http_port: 80
+  cors_origins: []
+  trusted_proxies: []         # IPs allowed to set X-Forwarded-For
 
 # Admin Panel (currently serves same server as http)
 admin:
@@ -65,17 +77,17 @@ admin:
 # Spam Filter
 spam:
   enabled: true
-  threshold: 5.0
+  reject_threshold: 9.0       # Score at/above which mail is rejected
+  junk_threshold: 3.0         # Score at/above which mail goes to Junk
+  quarantine_threshold: 6.0   # Must lie between junk_threshold and reject_threshold
   bayesian:
     enabled: true
-    auto_learn: true
+    auto_train: true
   greylisting:
     enabled: true
     delay: 5m
-  rbl:
-    enabled: true
-    servers:
-      - zen.spamhaus.org
+  rbl_servers:
+    - zen.spamhaus.org
 
 # Security
 security:
@@ -83,16 +95,58 @@ security:
   max_login_attempts: 5
   lockout_duration: 15m
   spf_cache_ttl: 5m           # TTL for cached SPF lookups (default 5m)
+  # totp_key: ""              # >= 32 chars; encrypts TOTP secrets (defaults to jwt_secret)
+  disable_legacy_jwt: false   # Disable fallback to jwt_secret after kid rotation
+  audit_log:
+    path: ./data/logs/audit.log   # Empty = audit log disabled
+    max_size_mb: 10
+    max_backups: 5
+    max_age_days: 30
   rate_limit:
+    ip_per_minute: 30         # Inbound messages per minute per IP
+    ip_per_hour: 500
+    ip_per_day: 5000
+    ip_connections: 10        # Concurrent connections per IP
+    user_per_minute: 60       # Authenticated outbound messages per user
+    user_per_hour: 1000
+    user_per_day: 5000
+    user_max_recipients: 100  # Recipients per message
+    global_per_minute: 10000
+    global_per_hour: 100000
     smtp_per_minute: 30       # SMTP auth attempts per minute per IP
     smtp_per_hour: 500        # SMTP connections per hour per IP
     imap_connections: 50      # Max concurrent IMAP connections per IP
     http_requests_per_minute: 120  # API requests per minute per IP
 
-# Queue
-queue:
-  max_retries: 10
-  retry_delay: 5m
+# Antivirus (ClamAV)
+av:
+  enabled: false
+  addr: "127.0.0.1:3310"      # ClamAV address
+  timeout: 30s
+  action: reject              # reject, quarantine or tag
+
+# Database
+database:
+  path: /var/lib/umailserver/db
+
+# Storage
+storage:
+  sync: true                  # fsync message files
+  shared_folders: false
+
+# DMARC aggregate reporting
+dmarc:
+  enabled: false
+  org_name: uMailServer
+  from_email: dmarc-reports@example.com
+  report_email: ""
+  interval: 24h
+
+# ManageSieve Server
+managesieve:
+  enabled: true
+  bind: "0.0.0.0"
+  port: 4190                  # Implicit-TLS listener uses port+1
 
 # Logging
 logging:
@@ -182,6 +236,7 @@ mcp:
   enabled: true
   bind: "127.0.0.1"
   port: 3000
+  admin_auth_token: ""        # Optional separate token for admin-scope MCP tools
   auth_token: ""              # Empty: a token is generated once and stored in <data_dir>/mcp_auth_token
 
 # CalDAV Server (Calendar synchronization)
@@ -218,4 +273,4 @@ ldap:
   start_tls: false                        # Use StartTLS on port 389
   skip_verify: false                      # Skip TLS verification (dev only)
   timeout: 30s
-  max_connections: 10                     # Pooled LDAP connections (default 10)
+  root_ca: ""                             # Optional CA bundle for the LDAP server
