@@ -54,6 +54,38 @@ type Server struct {
 	// does (kid rotation, DisableLegacyJWT) — F5440. Stored atomically because
 	// it is installed after the listener has started.
 	keyFunc atomic.Pointer[jwt.Keyfunc]
+	// quotaLimit / quotaAdjust are the optional quota seams (F5740-F5742).
+	quotaLimit  atomic.Pointer[func(user string) int64]
+	quotaAdjust atomic.Pointer[func(user string, delta int64) error]
+}
+
+// SetQuotaLimitFunc installs the per-user byte limit (<= 0 = unlimited)
+// enforced on blob uploads against the message store's usage (F5740).
+func (s *Server) SetQuotaLimitFunc(f func(user string) int64) {
+	if f == nil {
+		s.quotaLimit.Store(nil)
+		return
+	}
+	s.quotaLimit.Store(&f)
+}
+
+// SetQuotaAdjustFunc installs the account quota counter hook: delta > 0
+// reserves bytes (an error refuses the Email/import with overQuota, F5741),
+// delta < 0 releases bytes when an Email is destroyed (F5742). The wiring
+// should map it to db.IncrementQuota(domain, localPart, delta).
+func (s *Server) SetQuotaAdjustFunc(f func(user string, delta int64) error) {
+	if f == nil {
+		s.quotaAdjust.Store(nil)
+		return
+	}
+	s.quotaAdjust.Store(&f)
+}
+
+func (s *Server) adjustQuota(user string, delta int64) error {
+	if f := s.quotaAdjust.Load(); f != nil && delta != 0 {
+		return (*f)(user, delta)
+	}
+	return nil
 }
 
 // TokenValidator is consulted after a bearer JWT's signature and expiry have
@@ -359,6 +391,12 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	limitedReader := http.MaxBytesReader(w, r.Body, 50<<20)
 	data, err := io.ReadAll(limitedReader)
 	if err != nil {
+		// RFC 8620 §6.1: an oversized upload is 413 (F5746).
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			s.sendError(w, http.StatusRequestEntityTooLarge, "tooLarge", nil)
+			return
+		}
 		s.sendError(w, http.StatusBadRequest, "invalidArguments", nil)
 		return
 	}
@@ -370,8 +408,16 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// blobId. Without a store (test wiring) the id is only computed.
 	blobID := generateBlobID(data)
 	if s.msgStore != nil {
-		id, err := s.msgStore.StoreMessage(user, data)
+		var limit int64
+		if f := s.quotaLimit.Load(); f != nil {
+			limit = (*f)(user)
+		}
+		id, err := s.msgStore.StoreMessageWithQuota(user, data, limit)
 		if err != nil {
+			if errors.Is(err, storage.ErrQuotaExceeded) {
+				s.sendError(w, http.StatusRequestEntityTooLarge, "overQuota", nil)
+				return
+			}
 			s.sendError(w, http.StatusInternalServerError, "serverFail", nil)
 			return
 		}

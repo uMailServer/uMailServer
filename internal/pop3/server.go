@@ -38,6 +38,9 @@ type Server struct {
 	authFunc  func(username, password string) (bool, error)
 	mailstore Mailstore
 
+	// quotaRelease, when set, is told the size of each message removed by UPDATE (F5744).
+	quotaRelease func(user string, bytes int64)
+
 	// Auth brute-force protection
 	maxLoginAttempts int
 	lockoutDuration  time.Duration
@@ -75,6 +78,14 @@ func (s *Server) SetRequireTLS(require bool) {
 type TLSConfig struct {
 	CertFile string
 	KeyFile  string
+}
+
+// SetQuotaReleaseFunc installs a callback invoked once per message that the
+// UPDATE state (QUIT) actually removed from the maildrop, with the message's
+// size in bytes, so the account's quota counter can be decremented (F5744).
+// Call before Start.
+func (s *Server) SetQuotaReleaseFunc(fn func(user string, bytes int64)) {
+	s.quotaRelease = fn
 }
 
 // Mailstore interface for POP3 operations
@@ -886,6 +897,10 @@ func (s *Session) handleTransactionCommand(command string, args []string) error 
 		}
 
 		msg := s.messages[index-1]
+		if msg == nil { // F5745: a nil snapshot entry must not panic the session
+			s.WriteResponse("-ERR No such message")
+			return nil
+		}
 		if s.deletedUIDs[msg.UID] {
 			s.WriteResponse("-ERR Message already deleted")
 			return nil
@@ -1014,6 +1029,8 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 		if msg != nil && s.deletedUIDs[msg.UID] {
 			if err := s.server.mailstore.DeleteMessage(s.user, i+1); err != nil { // 1-based
 				failed = true
+			} else if s.server.quotaRelease != nil && msg.Size > 0 {
+				s.server.quotaRelease(s.user, msg.Size)
 			}
 		}
 	}

@@ -923,6 +923,7 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 				// Best-effort blob removal once every metadata copy is gone; a
 				// leftover blob is unreachable, not a correctness issue.
 				_ = s.msgStore.DeleteMessage(user, emailID)
+				_ = s.adjustQuota(user, -copies[0].meta.Size) // F5742
 				destroyed = append(destroyed, emailID)
 			} else {
 				notDestroyed[emailID] = map[string]interface{}{
@@ -1254,6 +1255,16 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 		// Parse email headers to extract metadata
 		meta := parseEmailMetadata(data, blobID)
 
+		// F5741: reserve the account quota for this Email (RFC 8621 §4.6
+		// overQuota). Released again if storing fails below.
+		if err := s.adjustQuota(user, meta.Size); err != nil {
+			notCreated[key] = map[string]interface{}{
+				"type":        "overQuota",
+				"description": "Account quota exceeded",
+			}
+			continue
+		}
+
 		// Set received time if provided
 		if receivedAt != "" {
 			if t, err := time.Parse(time.RFC3339, receivedAt); err == nil {
@@ -1302,6 +1313,7 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			}
 		}
 		if !stored {
+			_ = s.adjustQuota(user, -meta.Size)
 			continue
 		}
 
