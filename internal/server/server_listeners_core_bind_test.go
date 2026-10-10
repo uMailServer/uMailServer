@@ -42,6 +42,7 @@ func coreBindConfig(t *testing.T, svc string, port int) *config.Config {
 		cfg.SMTP.Submission = config.SubmissionSMTPConfig{Enabled: true, Bind: "127.0.0.1", Port: port}
 	case "submissiontls":
 		cfg.SMTP.SubmissionTLS = config.SubmissionTLSConfig{Enabled: true, Bind: "127.0.0.1", Port: port}
+		cfg.TLS.CertFile, cfg.TLS.KeyFile = pop3TLSCert(t, t.TempDir())
 	default:
 		t.Fatalf("unknown service %q", svc)
 	}

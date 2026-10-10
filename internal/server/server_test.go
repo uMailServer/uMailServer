@@ -1754,8 +1754,8 @@ func TestDeliverLocal_SuccessWithQuotaHeadroom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAccount failed: %v", err)
 	}
-	if account.QuotaUsed != int64(len(msgData)) {
-		t.Errorf("expected QuotaUsed=%d, got %d", len(msgData), account.QuotaUsed)
+	if want := int64(len(addReturnPath(msgData, "sender@external.com"))); account.QuotaUsed != want {
+		t.Errorf("expected QuotaUsed=%d, got %d", want, account.QuotaUsed)
 	}
 }
 
@@ -2806,7 +2806,7 @@ func TestDeliverLocal_QuotaZeroUnlimited(t *testing.T) {
 	if accErr != nil {
 		t.Fatalf("GetAccount failed: %v", accErr)
 	}
-	expectedUsed := int64(999999999) + int64(len(msgData))
+	expectedUsed := int64(999999999) + int64(len(addReturnPath(msgData, "sender@external.com")))
 	if account.QuotaUsed != expectedUsed {
 		t.Errorf("expected QuotaUsed=%d, got %d", expectedUsed, account.QuotaUsed)
 	}
@@ -2877,8 +2877,8 @@ func TestDeliverLocal_SuccessfulDelivery(t *testing.T) {
 	if accErr != nil {
 		t.Fatalf("GetAccount failed: %v", accErr)
 	}
-	if account.QuotaUsed != int64(len(msgData)) {
-		t.Errorf("expected QuotaUsed=%d, got %d", len(msgData), account.QuotaUsed)
+	if want := int64(len(addReturnPath(msgData, "sender@external.com"))); account.QuotaUsed != want {
+		t.Errorf("expected QuotaUsed=%d, got %d", want, account.QuotaUsed)
 	}
 }
 

@@ -106,6 +106,7 @@ func TestCoverStart_AllServicesEnabled(t *testing.T) {
 		Action:  "reject",
 	}
 
+	cfg.TLS.CertFile, cfg.TLS.KeyFile = pop3TLSCert(t, t.TempDir())
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
@@ -251,6 +252,7 @@ func TestCoverStart_SubmissionTLSOnly(t *testing.T) {
 	cfg.POP3.Enabled = false
 	cfg.MCP.Enabled = false
 
+	cfg.TLS.CertFile, cfg.TLS.KeyFile = pop3TLSCert(t, t.TempDir())
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
@@ -738,6 +740,7 @@ func TestCoverStop_SubmissionServersInStop(t *testing.T) {
 		JunkThreshold:   5.0,
 	}
 
+	cfg.TLS.CertFile, cfg.TLS.KeyFile = pop3TLSCert(t, t.TempDir())
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
