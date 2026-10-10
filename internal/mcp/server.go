@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/tracing"
 	"go.etcd.io/bbolt"
@@ -615,9 +617,9 @@ func (s *Server) handleToolsList() map[string]interface{} {
 			InputSchema: ToolSchema{
 				Type: "object",
 				Properties: map[string]SchemaProperty{
-					"domain": {Type: "string", Description: "Domain to check (optional, uses hostname if empty)"},
+					"domain": {Type: "string", Description: "Domain to check"},
 				},
-				Required: []string{},
+				Required: []string{"domain"},
 			},
 		},
 		// System Operations
@@ -684,6 +686,7 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 		return nil, errAdminRequired
 	}
 
+	args := req.Arguments
 	switch req.Name {
 	// Server Stats
 	case "get_server_stats":
@@ -695,50 +698,84 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 	case "list_domains":
 		return s.toolListDomains()
 	case "add_domain":
-		name, _ := req.Arguments["name"].(string)
-		maxAccounts, _ := req.Arguments["max_accounts"].(float64)
-		maxSize, _ := req.Arguments["max_mailbox_size"].(string)
-		return s.toolAddDomain(name, int(maxAccounts), maxSize)
+		name, err := argString(args, "name")
+		if err != nil {
+			return nil, err
+		}
+		maxAccounts, err := argInt(args, "max_accounts", 0, 1_000_000)
+		if err != nil {
+			return nil, err
+		}
+		maxSize, err := argString(args, "max_mailbox_size")
+		if err != nil {
+			return nil, err
+		}
+		return s.toolAddDomain(name, maxAccounts, maxSize)
 	case "delete_domain":
-		name, _ := req.Arguments["name"].(string)
+		name, err := argString(args, "name")
+		if err != nil {
+			return nil, err
+		}
 		return s.toolDeleteDomain(name)
 
 	// Account Management
 	case "list_accounts":
-		domain := ""
-		if d, ok := req.Arguments["domain"]; ok {
-			if ds, ok := d.(string); ok {
-				domain = ds
-			}
+		domain, err := argString(args, "domain")
+		if err != nil {
+			return nil, err
 		}
 		return s.toolListAccounts(domain)
 	case "add_account":
-		email, _ := req.Arguments["email"].(string)
-		password, _ := req.Arguments["password"].(string)
+		email, err := argString(args, "email")
+		if err != nil {
+			return nil, err
+		}
+		password, err := argString(args, "password")
+		if err != nil {
+			return nil, err
+		}
 		return s.toolAddAccount(email, password)
 	case "delete_account":
-		email, _ := req.Arguments["email"].(string)
+		email, err := argString(args, "email")
+		if err != nil {
+			return nil, err
+		}
 		return s.toolDeleteAccount(email)
 	case "get_account_info":
-		email, _ := req.Arguments["email"].(string)
+		email, err := argString(args, "email")
+		if err != nil {
+			return nil, err
+		}
 		return s.toolGetAccountInfo(email)
 
 	// Queue Management
 	case "get_queue_status":
-		limit, _ := req.Arguments["limit"].(float64)
-		return s.toolGetQueueStatus(int(limit))
+		limit, err := argInt(args, "limit", 0, 10000)
+		if err != nil {
+			return nil, err
+		}
+		return s.toolGetQueueStatus(limit)
 	case "retry_queue_item":
-		id, _ := req.Arguments["id"].(string)
+		id, err := argString(args, "id")
+		if err != nil {
+			return nil, err
+		}
 		return s.toolRetryQueueItem(id)
 	case "flush_queue":
 		return s.toolFlushQueue()
 
 	// Diagnostics
 	case "check_dns":
-		domain, _ := req.Arguments["domain"].(string)
+		domain, err := argString(args, "domain")
+		if err != nil {
+			return nil, err
+		}
 		return s.toolCheckDNS(domain)
 	case "check_tls":
-		domain, _ := req.Arguments["domain"].(string)
+		domain, err := argString(args, "domain")
+		if err != nil {
+			return nil, err
+		}
 		return s.toolCheckTLS(domain)
 
 	// System Operations
@@ -750,11 +787,58 @@ func (s *Server) handleToolCall(ctx context.Context, params json.RawMessage) (ma
 	}
 }
 
+// argString returns the string argument key; absent or null yields "" and
+// a value of any other JSON type is an invalid-params error (F5782).
+func argString(args map[string]interface{}, key string) (string, error) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return "", nil
+	}
+	str, ok := v.(string)
+	if !ok {
+		return "", invalidParams("argument %q must be a string", key)
+	}
+	return str, nil
+}
+
+// argInt returns the integer argument key within [min,max]; absent or null
+// yields 0. Non-numbers, fractions and out-of-range values are
+// invalid-params errors instead of being silently defaulted or overflowing
+// the int conversion (F5782).
+func argInt(args map[string]interface{}, key string, min, max int) (int, error) {
+	v, ok := args[key]
+	if !ok || v == nil {
+		return 0, nil
+	}
+	f, ok := v.(float64)
+	if !ok || f != math.Trunc(f) {
+		return 0, invalidParams("argument %q must be an integer", key)
+	}
+	if f < float64(min) || f > float64(max) {
+		return 0, invalidParams("argument %q must be between %d and %d", key, min, max)
+	}
+	return int(f), nil
+}
+
+// internalError is the client-safe error for unexpected storage failures; the
+// cause is logged, never returned (F5780).
+func internalError(op string, err error) error {
+	slog.Error("mcp internal error", "op", op, "error", err)
+	return fmt.Errorf("internal server error")
+}
+
 // validateDomainName rejects domain names that could escape storage paths
 // or key prefixes (F5017); mirrors the REST API boundary checks.
 func validateDomainName(name string) error {
 	if strings.Contains(name, "..") || strings.ContainsAny(name, "/\\\r\n\x00@") {
 		return invalidParams("invalid domain name")
+	}
+	// F5783: no whitespace or control characters; names are echoed into
+	// tool/prompt text.
+	for _, r := range name {
+		if r <= ' ' || r == 0x7f {
+			return invalidParams("invalid domain name")
+		}
 	}
 	if len(name) > 253 {
 		return invalidParams("domain name exceeds maximum length")
@@ -803,7 +887,10 @@ func (s *Server) toolListAccounts(domain string) (map[string]interface{}, error)
 	var err error
 
 	if domain != "" {
-		accounts, err = s.db.ListAccountsByDomain(domain)
+		if err := validateDomainName(domain); err != nil {
+			return nil, err
+		}
+		accounts, err = s.db.ListAccountsByDomain(strings.ToLower(domain))
 	} else {
 		domains, err := s.db.ListDomains()
 		if err != nil {
@@ -820,7 +907,7 @@ func (s *Server) toolListAccounts(domain string) (map[string]interface{}, error)
 		}
 	}
 	if err != nil {
-		return nil, err
+		return nil, internalError("list_accounts", err)
 	}
 
 	var text string
@@ -843,7 +930,7 @@ func (s *Server) toolListAccounts(domain string) (map[string]interface{}, error)
 func (s *Server) toolListDomains() (map[string]interface{}, error) {
 	domains, err := s.db.ListDomains()
 	if err != nil {
-		return nil, err
+		return nil, internalError("list_domains", err)
 	}
 
 	var text string
@@ -875,11 +962,22 @@ func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (ma
 	if maxAccounts <= 0 {
 		maxAccounts = 100
 	}
+	// F5782: max_mailbox_size is advertised in the tool schema, so honour
+	// it and reject unparsable values instead of dropping them.
+	var mailboxSize int64
+	if maxSize != "" {
+		sz, err := config.ParseSize(maxSize)
+		if err != nil || sz < 0 {
+			return nil, invalidParams("invalid max_mailbox_size")
+		}
+		mailboxSize = int64(sz)
+	}
 
 	domain := &db.DomainData{
-		Name:        name,
-		MaxAccounts: maxAccounts,
-		IsActive:    true, // F5250: inactive domains are not local
+		Name:           name,
+		MaxAccounts:    maxAccounts,
+		MaxMailboxSize: mailboxSize,
+		IsActive:       true, // F5250: inactive domains are not local
 	}
 	if err := s.db.CreateDomain(domain); err != nil {
 		if errors.Is(err, db.ErrDomainExists) {
@@ -927,6 +1025,13 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 		return nil, invalidParams("email and password are required")
 	}
 
+	// F5781: addresses are case-insensitive and lookups use the lowercased
+	// form, so store the canonical form. bcrypt rejects >72 bytes; that is
+	// a client error, not an internal one.
+	email = strings.ToLower(email)
+	if len(password) > 72 {
+		return nil, invalidParams("password must be at most 72 bytes")
+	}
 	// Parse domain from email
 	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
@@ -941,7 +1046,7 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 	// Verify domain exists
 	domains, err := s.db.ListDomains()
 	if err != nil {
-		return nil, err
+		return nil, internalError("add_account", err)
 	}
 	domainExists := false
 	for _, d := range domains {
@@ -1113,6 +1218,9 @@ func (s *Server) toolCheckDNS(domain string) (map[string]interface{}, error) {
 	if domain == "" {
 		return nil, invalidParams("domain is required")
 	}
+	if err := validateDomainName(domain); err != nil {
+		return nil, err
+	}
 	text := fmt.Sprintf("DNS Check for %s:\n", domain)
 	text += "- Note: Full DNS check requires DNS resolver integration\n"
 	text += fmt.Sprintf("- Use CLI 'umailserver check dns %s' for full check\n", domain)
@@ -1127,6 +1235,9 @@ func (s *Server) toolCheckDNS(domain string) (map[string]interface{}, error) {
 func (s *Server) toolCheckTLS(domain string) (map[string]interface{}, error) {
 	if domain == "" {
 		return nil, invalidParams("domain is required")
+	}
+	if err := validateDomainName(domain); err != nil {
+		return nil, err
 	}
 	text := fmt.Sprintf("TLS Check for %s:\n", domain)
 	text += "- Note: Full TLS check requires TLS connection\n"
@@ -1286,7 +1397,7 @@ func (s *Server) handleResourceRead(ctx context.Context, params json.RawMessage)
 	case "umailserver://domains":
 		domains, err := s.db.ListDomains()
 		if err != nil {
-			return nil, err
+			return nil, internalError("resources/read domains", err)
 		}
 		// F5015: never expose DKIM private keys through resources.
 		redacted := make([]db.DomainData, 0, len(domains))
@@ -1303,7 +1414,7 @@ func (s *Server) handleResourceRead(ctx context.Context, params json.RawMessage)
 	case "umailserver://accounts":
 		domains, err := s.db.ListDomains()
 		if err != nil {
-			return nil, err
+			return nil, internalError("resources/read accounts", err)
 		}
 		var allAccounts []*db.AccountData
 		for _, d := range domains {
@@ -1393,6 +1504,10 @@ func (s *Server) handlePromptGet(params json.RawMessage) (map[string]interface{}
 		if domain == "" {
 			domain = "example.com"
 		}
+		// F5783: arguments are interpolated into assistant-role text.
+		if err := validateDomainName(domain); err != nil {
+			return nil, err
+		}
 		return map[string]interface{}{"description": fmt.Sprintf("Setup guide for %s", domain), "messages": []PromptMessage{
 			{
 				Role: "assistant",
@@ -1419,6 +1534,12 @@ func (s *Server) handlePromptGet(params json.RawMessage) (map[string]interface{}
 
 	case "troubleshoot_delivery":
 		email := req.Arguments["email"]
+		if email != "" {
+			local, dom, ok := strings.Cut(email, "@")
+			if !ok || validateEmailAddress(local, dom) != nil {
+				return nil, invalidParams("invalid email address")
+			}
+		}
 		msg := "Email Delivery Troubleshooting:\n\n"
 		msg += "1. Check queue status: umailserver queue list\n"
 		msg += "2. Check logs: /var/log/umailserver/\n"
