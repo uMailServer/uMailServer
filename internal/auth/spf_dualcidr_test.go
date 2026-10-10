@@ -36,7 +36,9 @@ func TestSPF_DualCIDRLength_F5312(t *testing.T) {
 		{"v=spf1 a//129 -all", "192.0.2.10", SPFPermError},
 		{"v=spf1 a -all", "192.0.2.10", SPFPass}, // no cidr unchanged
 		{"v=spf1 a -all", "192.0.2.11", SPFFail},
-		{"v=spf1 -all/24 +all", "192.0.2.10", SPFPass}, // only a/mx take a cidr
+		// Only a/mx take a cidr; "all/24" is an unknown mechanism, which is
+		// a permerror since F5414 (RFC 7208 §5).
+		{"v=spf1 -all/24 +all", "192.0.2.10", SPFPermError},
 	}
 	for _, c := range cases {
 		if got := spfDualCIDRCheck(c.rec, c.ip); got != c.want {

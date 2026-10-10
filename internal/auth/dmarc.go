@@ -178,6 +178,9 @@ func (e *DMARCEvaluator) Evaluate(ctx context.Context, fromDomain string, spfRes
 			Explanation: "DNS lookup failed",
 		}, nil
 	}
+	if record == dmarcMultipleRecords {
+		return dmarcMultipleRecordsEvaluation(fromDomain), nil
+	}
 	fromOrg := false
 
 	// F4893: RFC 7489 §6.6.3 — with no record at the From domain, use the
@@ -193,11 +196,32 @@ func (e *DMARCEvaluator) Evaluate(ctx context.Context, fromDomain string, spfRes
 					Explanation: "DNS lookup failed",
 				}, nil
 			}
+			if record == dmarcMultipleRecords {
+				return dmarcMultipleRecordsEvaluation(fromDomain), nil
+			}
 			fromOrg = record != nil
 		}
 	}
 
 	return e.evaluateWithRecord(fromDomain, spfResult, spfDomain, dkimResult, dkimDomain, record, fromOrg)
+}
+
+// errDMARCMultipleRecords and dmarcMultipleRecords mark a _dmarc TXT set
+// holding more than one "v=DMARC1" record. F5411: RFC 7489 §6.6.3 step 4 —
+// policy discovery then terminates and DMARC is not applied (no
+// organizational-domain fallback). The sentinel is what policyRecord caches.
+var (
+	errDMARCMultipleRecords = errors.New("multiple DMARC records")
+	dmarcMultipleRecords    = &DMARCRecord{}
+)
+
+func dmarcMultipleRecordsEvaluation(fromDomain string) *DMARCEvaluation {
+	return &DMARCEvaluation{
+		Result:      DMARCNone,
+		Policy:      DMARCPolicyNone,
+		Domain:      fromDomain,
+		Explanation: "Multiple DMARC records found",
+	}
 }
 
 // policyRecord returns the DMARC record published at _dmarc.<domain>
@@ -217,6 +241,10 @@ func (e *DMARCEvaluator) policyRecord(ctx context.Context, domain string) (*DMAR
 	if err != nil {
 		if isTemporaryError(err) {
 			return nil, err
+		}
+		if errors.Is(err, errDMARCMultipleRecords) {
+			e.cache.set(domain, dmarcMultipleRecords)
+			return dmarcMultipleRecords, nil
 		}
 		// No DMARC record found - cache negative result
 		e.cache.set(domain, nil)
@@ -331,10 +359,19 @@ func (e *DMARCEvaluator) lookupDMARC(ctx context.Context, domain string) (*DMARC
 		return nil, err
 	}
 
+	var found string
+	count := 0
 	for _, record := range txtRecords {
 		if strings.HasPrefix(record, "v=DMARC1") {
-			return parseDMARCRecord(record)
+			found = record
+			count++
 		}
+	}
+	if count > 1 {
+		return nil, errDMARCMultipleRecords
+	}
+	if count == 1 {
+		return parseDMARCRecord(found)
 	}
 
 	return nil, errors.New("no DMARC record found")
@@ -398,6 +435,12 @@ func parseDMARCRecord(record string) (*DMARCRecord, error) {
 	// Validate policy values
 	if rec.Policy != DMARCPolicyNone && rec.Policy != DMARCPolicyQuarantine && rec.Policy != DMARCPolicyReject {
 		return nil, errors.New("invalid policy value")
+	}
+
+	// F5410: RFC 7489 §6.3 — an invalid sp= is discarded in favour of its
+	// default (p=); it must not become the applied policy.
+	if sp := rec.SubdomainPolicy; sp != DMARCPolicyNone && sp != DMARCPolicyQuarantine && sp != DMARCPolicyReject {
+		rec.SubdomainPolicy = ""
 	}
 
 	// Validate alignment modes

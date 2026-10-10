@@ -120,6 +120,9 @@ func (c *SPFChecker) CheckSPF(ctx context.Context, ip net.IP, domain string, sen
 		if isTemporaryError(err) {
 			return SPFTempError, "DNS lookup failed"
 		}
+		if errors.Is(err, errSPFMultipleRecords) {
+			return SPFPermError, err.Error()
+		}
 		return SPFNone, "No SPF record found"
 	}
 
@@ -135,6 +138,10 @@ func (c *SPFChecker) CheckSPF(ctx context.Context, ip net.IP, domain string, sen
 	return c.evaluate(ctx, ip, domain, sender, record, &spfLimits{})
 }
 
+// errSPFMultipleRecords is returned by lookupSPF when the TXT set holds
+// more than one SPF record (F5413: RFC 7208 §4.5 — permerror).
+var errSPFMultipleRecords = errors.New("multiple SPF records")
+
 // lookupSPF looks up the SPF record for a domain
 func (c *SPFChecker) lookupSPF(ctx context.Context, domain string) (string, error) {
 	txtRecords, err := c.resolver.LookupTXT(ctx, domain)
@@ -142,10 +149,21 @@ func (c *SPFChecker) lookupSPF(ctx context.Context, domain string) (string, erro
 		return "", err
 	}
 
+	// F5413: RFC 7208 §4.5 — the version section is exactly "v=spf1",
+	// terminated by SP or the end of the record ("v=spf10" is not SPF).
+	var found string
+	count := 0
 	for _, record := range txtRecords {
-		if strings.HasPrefix(record, "v=spf1") {
-			return record, nil
+		if record == "v=spf1" || strings.HasPrefix(record, "v=spf1 ") {
+			found = record
+			count++
 		}
+	}
+	if count > 1 {
+		return "", errSPFMultipleRecords
+	}
+	if count == 1 {
+		return found, nil
 	}
 
 	return "", fmt.Errorf("no SPF record found")
@@ -155,6 +173,7 @@ func (c *SPFChecker) lookupSPF(ctx context.Context, domain string) (string, erro
 const (
 	spfMaxDNSTerms    = 10
 	spfMaxVoidLookups = 2
+	spfMaxMXHosts     = 10 // address lookups per mx term (F5415)
 )
 
 // spfLimits carries the DNS-term and void-lookup counters across the whole
@@ -175,6 +194,15 @@ func spfIsDNSTerm(typ string) bool {
 	return false
 }
 
+// spfIsMechanism reports whether typ is an RFC 7208 §5 mechanism name.
+func spfIsMechanism(typ string) bool {
+	switch typ {
+	case "all", "include", "a", "mx", "ptr", "ip4", "ip6", "exists":
+		return true
+	}
+	return false
+}
+
 // evaluate evaluates an SPF record
 func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, record string, lim *spfLimits) (SPFResult, string) {
 	// Parse mechanisms
@@ -190,6 +218,15 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 				redirect = m.value
 			}
 			continue
+		}
+		if m.typ == "exp" {
+			// exp= is a modifier, not a mechanism (F5414).
+			continue
+		}
+		if !spfIsMechanism(m.typ) {
+			// F5414: RFC 7208 §4.6/§5 — an unknown mechanism is a syntax
+			// error: permerror before any term is interpreted.
+			return SPFPermError, "unknown SPF mechanism"
 		}
 		mechanisms = append(mechanisms, m)
 	}
@@ -282,7 +319,8 @@ func (c *SPFChecker) evaluateMechanism(ctx context.Context, ip net.IP, domain, s
 		return c.evaluateInclude(ctx, ip, m.value, sender, lim)
 
 	default:
-		return false, false, nil
+		// F5414: RFC 7208 §5 — an unrecognised mechanism is a permerror.
+		return false, false, errors.New("unknown SPF mechanism")
 	}
 }
 
@@ -416,7 +454,12 @@ func (c *SPFChecker) evaluateMX(ctx context.Context, ip net.IP, value, domain st
 	}
 
 	// Check IP of each MX host
-	for _, mx := range mxRecords {
+	for i, mx := range mxRecords {
+		// F5415: RFC 7208 §4.6.4 — one mx term MUST NOT query more than 10
+		// address records; exceeding the limit is a permerror.
+		if i >= spfMaxMXHosts {
+			return false, false, errors.New("too many MX hosts for mx mechanism")
+		}
 		mxIPs, err := c.resolver.LookupIP(ctx, mx.Host)
 		if err != nil {
 			if isTemporaryError(err) {
@@ -543,34 +586,35 @@ func parseMechanism(part string) spfMechanism {
 		}
 	}
 
-	// Parse mechanism type and value
-	// Handle redirect=domain (uses = separator)
-	if strings.HasPrefix(part, "redirect=") {
-		m.typ = "redirect"
-		m.value = part[9:] // After "redirect="
-		return m
-	}
-
-	// Handle exp=domain (explanation modifier)
-	if strings.HasPrefix(part, "exp=") {
-		m.typ = "exp"
-		m.value = part[4:] // After "exp="
+	// Parse mechanism type and value. F5412: term names are
+	// case-insensitive (RFC 7208 §4.6.1, RFC 5234 literals); values keep
+	// their case (macro letters are case-significant).
+	// Modifiers: name=value with "=" before any ":" or "/" (RFC 7208 §4.6.1).
+	if idx := strings.IndexAny(part, ":/="); idx > 0 && part[idx] == '=' {
+		switch name := strings.ToLower(part[:idx]); name {
+		case "redirect", "exp":
+			m.typ = name
+			m.value = part[idx+1:]
+		default:
+			// F5414: unknown modifiers are ignored (RFC 7208 §6).
+			m.typ = ""
+		}
 		return m
 	}
 
 	if idx := strings.Index(part, ":"); idx > 0 {
-		m.typ = part[:idx]
+		m.typ = strings.ToLower(part[:idx])
 		m.value = part[idx+1:]
 	} else if strings.HasPrefix(part, "ip4:") || strings.HasPrefix(part, "ip6:") {
 		// Handle ip4: and ip6: without explicit split
 		m.typ = part[:3]
 		m.value = part[4:]
-	} else if idx := strings.Index(part, "/"); idx > 0 && (part[:idx] == "a" || part[:idx] == "mx") {
+	} else if idx := strings.Index(part, "/"); idx > 0 && (strings.EqualFold(part[:idx], "a") || strings.EqualFold(part[:idx], "mx")) {
 		// F5312: "a/24", "mx//64" — dual-cidr-length without a domain-spec.
-		m.typ = part[:idx]
+		m.typ = strings.ToLower(part[:idx])
 		m.value = part[idx:]
 	} else {
-		m.typ = part
+		m.typ = strings.ToLower(part)
 	}
 
 	return m
