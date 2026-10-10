@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -154,14 +155,29 @@ func NewManager(config Config, logger Logger) *Manager {
 		logger = &noopLogger{}
 	}
 
-	return &Manager{
+	m := &Manager{
 		config:         config,
 		logger:         logger,
 		lastAlert:      make(map[string]time.Time),
 		hourStart:      time.Now(),
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
 		allowPrivateIP: false, // Default: block private IPs for security
 	}
+	// Every redirect hop is re-checked with the SSRF guard (F6295): the guard
+	// otherwise only saw the configured URL, so a public endpoint could
+	// redirect the alert payload to an internal host.
+	m.httpClient = &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if !m.isValidWebhookURL(req.URL.String()) {
+				return fmt.Errorf("redirect target rejected by SSRF check: %s", req.URL.Redacted())
+			}
+			return nil
+		},
+	}
+	return m
 }
 
 // SetAllowPrivateIP allows private IP addresses for webhooks (use with caution, mainly for testing)
@@ -268,7 +284,7 @@ func (m *Manager) recordAlert(name string) {
 func (m *Manager) sendWebhook(alert Alert) error {
 	// Validate webhook URL to prevent SSRF attacks
 	if !m.isValidWebhookURL(m.config.WebhookURL) {
-		return fmt.Errorf("webhook URL is not allowed: %s", m.config.WebhookURL)
+		return fmt.Errorf("webhook URL is not allowed")
 	}
 
 	payload, err := json.Marshal(alert)
@@ -293,6 +309,11 @@ func (m *Manager) sendWebhook(alert Alert) error {
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
+		// url.Error embeds the full URL, which may carry credentials/tokens (F6296).
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		return fmt.Errorf("webhook request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -341,7 +362,8 @@ func (m *Manager) isValidWebhookURL(rawURL string) bool {
 	// Block private IP ranges
 	ip := net.ParseIP(hostname)
 	if ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		// Unspecified (0.0.0.0, ::) reaches the local host (F6297).
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 			return false
 		}
 	}

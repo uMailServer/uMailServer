@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -38,6 +39,8 @@ type Provider struct {
 	propagator     propagation.TextMapPropagator
 	enabled        bool
 	stopFunc       func(context.Context) error
+	stopOnce       sync.Once
+	stopErr        error
 }
 
 // NewProvider creates a new tracing provider with OpenTelemetry
@@ -175,7 +178,10 @@ func (p *Provider) Stop(ctx context.Context) error {
 	if p == nil || !p.enabled || p.stopFunc == nil {
 		return nil
 	}
-	return p.stopFunc(ctx)
+	// Idempotent (F6298): a second Stop re-ran the SDK shutdown and returned
+	// its "already shutdown" error.
+	p.stopOnce.Do(func() { p.stopErr = p.stopFunc(ctx) })
+	return p.stopErr
 }
 
 // StartSpan starts a new span with the given name and options
