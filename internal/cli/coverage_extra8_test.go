@@ -15,9 +15,10 @@ Subject: Test
 
 Body`
 
+	// F5500: the From: header names the author; it must not pick the mailbox.
 	result := mm.extractTargetUser(data, "INBOX")
-	if result != "sender@example.com" {
-		t.Errorf("Expected 'sender@example.com', got %q", result)
+	if result != "INBOX" {
+		t.Errorf("Expected 'INBOX' (folder, not the sender), got %q", result)
 	}
 }
 
@@ -57,9 +58,10 @@ Subject: Test
 
 Body`
 
+	// F5500: the From: header names the author; it must not pick the mailbox.
 	result := mm.extractTargetUser(data, "INBOX")
-	if result != "john.doe@example.com" {
-		t.Errorf("Expected 'john.doe@example.com', got %q", result)
+	if result != "INBOX" {
+		t.Errorf("Expected 'INBOX' (folder, not the sender), got %q", result)
 	}
 }
 

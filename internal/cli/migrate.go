@@ -2,12 +2,15 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	extimap "github.com/emersion/go-imap"
@@ -21,6 +24,10 @@ type MigrationManager struct {
 	logger   *slog.Logger
 	db       *db.DB
 	msgStore *storage.MessageStore
+	// dialIMAP is an optional override for the source IMAP connection (used
+	// by tests to route to a loopback server). nil means client.DialTLS /
+	// client.Dial.
+	dialIMAP func(addr string, useTLS bool) (*client.Client, error)
 }
 
 // NewMigrationManager creates a new migration manager
@@ -49,38 +56,45 @@ type MigrateOptions struct {
 
 // MigrateFromIMAP migrates data from an IMAP server
 func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
+	// Parse IMAP URL
+	u, err := url.Parse(opts.SourceURL)
+	if err != nil {
+		// F5505: url.Error repeats the raw URL, including any password.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return fmt.Errorf("invalid IMAP URL: %w", err)
+	}
+	// F5505: never print or log a password embedded in the source URL.
+	source := u.Redacted()
+
 	mm.logger.Info("Starting IMAP migration",
-		"source", opts.SourceURL,
+		"source", source,
 		"target_user", opts.TargetUser,
 	)
 
-	fmt.Printf("Migrating from IMAP: %s\n", opts.SourceURL)
+	fmt.Printf("Migrating from IMAP: %s\n", source)
 	fmt.Printf("Target user: %s\n", opts.TargetUser)
 
 	if opts.DryRun {
 		fmt.Println("DRY RUN MODE - No changes will be made")
 	}
 
-	// Parse IMAP URL
-	u, err := url.Parse(opts.SourceURL)
-	if err != nil {
-		return fmt.Errorf("invalid IMAP URL: %w", err)
-	}
-
-	host := u.Host
+	// F5503: the scheme alone selects the transport (imap:// plain,
+	// imaps:// implicit TLS); an explicit port only overrides the default.
+	// u.Hostname/u.Port also keep bracketed IPv6 literals intact.
+	host := u.Hostname()
+	useTLS := u.Scheme != "imap"
 	port := 993
-	useTLS := true
-
-	// Handle non-standard ports
-	if strings.Contains(host, ":") {
-		parts := strings.Split(host, ":")
-		host = parts[0]
-		if len(parts) > 1 {
-			_, _ = fmt.Sscanf(parts[1], "%d", &port)
-		}
-	} else if u.Scheme == "imap" {
+	if !useTLS {
 		port = 143
-		useTLS = false
+	}
+	if p := u.Port(); p != "" {
+		port, err = strconv.Atoi(p)
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("invalid IMAP URL: bad port %q", p)
+		}
 	}
 
 	fmt.Printf("Host: %s\n", host)
@@ -89,10 +103,14 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 
 	// Connect to IMAP server
 	var imapClient *client.Client
-	if useTLS {
-		imapClient, err = client.DialTLS(fmt.Sprintf("%s:%d", host, port), nil)
-	} else {
-		imapClient, err = client.Dial(fmt.Sprintf("%s:%d", host, port))
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	switch {
+	case mm.dialIMAP != nil:
+		imapClient, err = mm.dialIMAP(addr, useTLS)
+	case useTLS:
+		imapClient, err = client.DialTLS(addr, nil)
+	default:
+		imapClient, err = client.Dial(addr)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to connect to IMAP server: %w", err)
@@ -166,11 +184,14 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 		seqSet := new(extimap.SeqSet)
 		seqSet.AddRange(1, mbox.Messages)
 
+		// F5502: FetchBody ("BODY") returns only the body structure; the
+		// message content is BODY[]. PEEK leaves the source \Seen flags alone.
+		bodySection := &extimap.BodySectionName{Peek: true}
 		items := []extimap.FetchItem{
 			extimap.FetchEnvelope,
 			extimap.FetchFlags,
 			extimap.FetchInternalDate,
-			extimap.FetchBody,
+			bodySection.FetchItem(),
 		}
 
 		messages := make(chan *extimap.Message, 100)
@@ -317,6 +338,13 @@ func (mm *MigrationManager) importDovecotUsers(passwdFile string) error {
 		// Parse email
 		user, domain := parseEmail(email)
 
+		// F5504: same rules as account creation in the admin API: the
+		// domain must be hosted here and its max_accounts limit holds.
+		if err := mm.checkImportDomain(domain); err != nil {
+			mm.logger.Error("Failed to import user", "email", email, "error", err)
+			continue
+		}
+
 		// Create account
 		account := &db.AccountData{
 			Email:        email,
@@ -336,6 +364,28 @@ func (mm *MigrationManager) importDovecotUsers(passwdFile string) error {
 
 	fmt.Printf("Imported %d users\n", imported)
 	return scanner.Err()
+}
+
+// checkImportDomain reports why an account cannot be imported into domain:
+// the domain is not hosted, or it already holds MaxAccounts (0 = unlimited).
+func (mm *MigrationManager) checkImportDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("address has no domain")
+	}
+	domainData, err := mm.db.GetDomain(domain)
+	if err != nil {
+		return fmt.Errorf("domain %q is not hosted: %w", domain, err)
+	}
+	if domainData.MaxAccounts > 0 {
+		existing, err := mm.db.ListAccountsByDomain(domain)
+		if err != nil {
+			return fmt.Errorf("failed to check domain accounts: %w", err)
+		}
+		if len(existing) >= domainData.MaxAccounts {
+			return fmt.Errorf("domain %q account limit (%d) reached", domain, domainData.MaxAccounts)
+		}
+	}
+	return nil
 }
 
 // importMaildir imports messages from a maildir
@@ -452,22 +502,14 @@ func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
 
 	for {
 		line, err := reader.ReadString('\n')
-		if err == io.EOF {
-			if len(currentMessage) > 0 {
-				// Process last message
-				if err := mm.processMBOXMessage(currentMessage, folder); err != nil {
-					mm.logger.Error("Failed to process message", "error", err)
-				} else {
-					messageCount++
-				}
-			}
-			break
-		}
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return err
 		}
+		atEOF := err == io.EOF
 
-		// Check for message separator
+		// F5501: at EOF ReadString still returns the final line when the
+		// file does not end in a newline; it belongs to the last message.
+		// (An empty line at EOF appends nothing.)
 		if strings.HasPrefix(line, "From ") && !inMessage {
 			// Start of first message
 			inMessage = true
@@ -484,6 +526,18 @@ func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
 			currentMessage = []byte(line)
 		} else {
 			currentMessage = append(currentMessage, line...)
+		}
+
+		if atEOF {
+			if len(currentMessage) > 0 {
+				// Process last message
+				if err := mm.processMBOXMessage(currentMessage, folder); err != nil {
+					mm.logger.Error("Failed to process message", "error", err)
+				} else {
+					messageCount++
+				}
+			}
+			break
 		}
 	}
 
@@ -522,24 +576,11 @@ func (mm *MigrationManager) processMBOXMessage(data []byte, folder string) error
 	return nil
 }
 
-// extractTargetUser extracts the target user from MBOX message headers
-func (mm *MigrationManager) extractTargetUser(data, folder string) string {
-	// Try to extract From header
-	lines := strings.Split(data, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "From:") {
-			// Extract email from "From: User Name <user@domain.com>"
-			if idx := strings.Index(line, "<"); idx != -1 {
-				emailPart := line[idx+1:]
-				if idx := strings.Index(emailPart, ">"); idx != -1 {
-					email := emailPart[:idx]
-					return email
-				}
-			}
-		}
-	}
-
-	// Fall back to folder name if no From header
+// extractTargetUser returns the mailbox an MBOX message is imported into.
+// F5500: that is the operator-chosen MBOX file name (folder), never a header
+// of the message itself: From: names the author, so routing by it filed
+// every message under its sender and let any sender pick a local mailbox.
+func (mm *MigrationManager) extractTargetUser(_, folder string) string {
 	if folder != "" {
 		return folder
 	}
