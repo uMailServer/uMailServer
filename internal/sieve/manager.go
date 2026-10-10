@@ -54,6 +54,53 @@ func (m *Manager) CompileScript(source string) (*Script, error) {
 
 // StoreScript stores a script for a user without activating it
 func (m *Manager) StoreScript(userID string, scriptName string, source string) error {
+	return m.storeScript(userID, scriptName, source, false)
+}
+
+// Per-user ManageSieve quota. Scripts live in memory, so without a bound one
+// authenticated user could hold an unlimited number of 1 MiB scripts. F5610.
+const (
+	maxScriptsPerUser       = 100
+	maxScriptStoragePerUser = 10 * 1024 * 1024
+)
+
+// Quota errors; the server maps them to QUOTA/MAXSCRIPTS and QUOTA (RFC 5804
+// §1.3). F5610.
+var (
+	errQuotaMaxScripts = errors.New("too many scripts")
+	errQuotaStorage    = errors.New("script storage quota exceeded")
+)
+
+// checkScriptQuotaLocked reports whether storing size octets under scriptName
+// (replacing any script of that name) keeps userID within the quota. The
+// caller holds scriptsMu. F5610.
+func (m *Manager) checkScriptQuotaLocked(userID, scriptName string, size int) error {
+	userScripts := m.scripts[userID]
+	if _, exists := userScripts[scriptName]; !exists && len(userScripts) >= maxScriptsPerUser {
+		return errQuotaMaxScripts
+	}
+	total := size
+	for name, stored := range userScripts {
+		if name != scriptName {
+			total += len(stored.Source)
+		}
+	}
+	if total > maxScriptStoragePerUser {
+		return errQuotaStorage
+	}
+	return nil
+}
+
+// haveSpace is the quota check of HAVESPACE (RFC 5804 §2.5). F5610.
+func (m *Manager) haveSpace(userID, scriptName string, size int) error {
+	m.scriptsMu.RLock()
+	defer m.scriptsMu.RUnlock()
+	return m.checkScriptQuotaLocked(userID, scriptName, size)
+}
+
+// storeScript compiles and stores a script; with enforceQuota (ManageSieve
+// PUTSCRIPT) the quota check and the store happen under one lock. F5610.
+func (m *Manager) storeScript(userID, scriptName, source string, enforceQuota bool) error {
 	script, err := m.CompileScript(source)
 	if err != nil {
 		return err
@@ -62,6 +109,11 @@ func (m *Manager) StoreScript(userID string, scriptName string, source string) e
 	m.scriptsMu.Lock()
 	defer m.scriptsMu.Unlock()
 
+	if enforceQuota {
+		if err := m.checkScriptQuotaLocked(userID, scriptName, len(source)); err != nil {
+			return err
+		}
+	}
 	if m.scripts[userID] == nil {
 		m.scripts[userID] = make(map[string]*StoredScript)
 	}
