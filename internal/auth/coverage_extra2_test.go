@@ -180,8 +180,8 @@ func TestARCSigner_SignWithExistingARC_Cov2(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if !strings.Contains(set.AS, "cv=pass") {
-		t.Errorf("expected cv=pass in AS for instance 2, got: %s", set.AS)
+	if !strings.Contains(set.AS, "cv=fail") {
+		t.Errorf("expected cv=fail (unverifiable existing chain) in AS for instance 2, got: %s", set.AS)
 	}
 }
 
