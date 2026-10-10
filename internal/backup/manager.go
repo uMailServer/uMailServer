@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -69,11 +70,11 @@ func (m *Manager) BackupUser(user string, destPath string, opts BackupOptions) e
 func (m *Manager) backupUserToPath(user, destPath string, opts BackupOptions) (retErr error) {
 	userPath := filepath.Join(m.dataDir, "messages", user)
 
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	f, err := os.Create(destPath)
+	f, err := createPrivate(destPath)
 	if err != nil {
 		return fmt.Errorf("failed to create backup file: %w", err)
 	}
@@ -145,11 +146,11 @@ func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptio
 		return fmt.Errorf("mailbox %s for user %s does not exist", mailbox, user)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	f, err := os.Create(destPath)
+	f, err := createPrivate(destPath)
 	if err != nil {
 		return fmt.Errorf("failed to create backup file: %w", err)
 	}
@@ -168,11 +169,11 @@ func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptio
 func (m *Manager) BackupFull(destPath string, opts BackupOptions) (retErr error) {
 	messagesDir := filepath.Join(m.dataDir, "messages")
 
-	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	f, err := os.Create(destPath)
+	f, err := createPrivate(destPath)
 	if err != nil {
 		return fmt.Errorf("failed to create backup file: %w", err)
 	}
@@ -184,7 +185,26 @@ func (m *Manager) BackupFull(destPath string, opts BackupOptions) (retErr error)
 	tw := tar.NewWriter(gz)
 	defer func() { retErr = errors.Join(retErr, tw.Close()) }()
 
-	return m.addDirToTar(messagesDir, "messages", tw)
+	// Entries are rooted at messages/ ("alice/...") like BackupUser archives,
+	// because Restore extracts under <dataDir>/messages. A "messages" prefix
+	// restored everything into messages/messages/<user> (F5351).
+	return m.addDirToTar(messagesDir, "", tw)
+}
+
+// createPrivate creates or truncates path with owner-only permissions. Backup
+// archives and decrypted output hold users' mail, so they get the 0600 mode
+// the maildir and the CLI backup writer use; os.Create left them 0666 minus
+// umask, readable by other local users (F5352). Chmod covers a pre-existing
+// file, whose mode OpenFile does not change.
+func createPrivate(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
+	return f, nil
 }
 
 // ListUserBackups returns available backups for a specific user
@@ -392,6 +412,7 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
 
+	var sourceUser string
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -401,7 +422,14 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 			return err
 		}
 
-		targetPath := filepath.Join(targetDir, header.Name)
+		name := header.Name
+		if opts.Mode == RestoreModeDifferent {
+			name, err = relocateEntry(header.Name, &sourceUser)
+			if err != nil {
+				return err
+			}
+		}
+		targetPath := filepath.Join(targetDir, name)
 
 		// A tar entry must never resolve outside the target directory. Without
 		// this check an entry named "../escape.txt" is written outside it, which
@@ -454,6 +482,21 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 	}
 
 	return nil
+}
+
+// relocateEntry strips the source user from a per-user archive entry
+// ("alice/cur/msg1" -> "cur/msg1") so RestoreModeDifferent extracts under
+// messages/<TargetUser>/ instead of messages/<TargetUser>/alice/ (F5350).
+// Every entry must name the same source user; archives holding several users
+// or no user directory (full or mailbox backups) are rejected rather than
+// merged into the target user.
+func relocateEntry(name string, sourceUser *string) (string, error) {
+	user, rest, _ := strings.Cut(path.Clean(name), "/")
+	if user == "." || validatePathPart(user) != nil || (*sourceUser != "" && user != *sourceUser) {
+		return "", fmt.Errorf("invalid entry for different-user restore: %s - archive is not a single-user backup", name)
+	}
+	*sourceUser = user
+	return rest, nil
 }
 
 // restoreRegularFile writes one archive member to targetPath atomically: the
@@ -538,7 +581,7 @@ func (m *Manager) Encrypt(srcPath, destPath, password string) error {
 		return err
 	}
 
-	f, err := os.Create(destPath)
+	f, err := createPrivate(destPath)
 	if err != nil {
 		return err
 	}
@@ -663,7 +706,7 @@ func (m *Manager) Decrypt(srcPath, destPath, password string) error {
 		return fmt.Errorf("decryption failed (wrong password?): %w", err)
 	}
 
-	out, err := os.Create(destPath)
+	out, err := createPrivate(destPath)
 	if err != nil {
 		return err
 	}
