@@ -103,7 +103,7 @@ func (s *Session) handleAuthenticated(command string, args []string, line string
 	case "UNSUBSCRIBE":
 		return s.handleUnsubscribe(args)
 	case "LIST":
-		return s.handleList(args)
+		return s.handleListLine(args, line)
 	case "LSUB":
 		return s.handleLsub(args)
 	case "STATUS":
@@ -160,7 +160,7 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 	case "UNSUBSCRIBE":
 		return s.handleUnsubscribe(args)
 	case "LIST":
-		return s.handleList(args)
+		return s.handleListLine(args, line)
 	case "LSUB":
 		return s.handleLsub(args)
 	case "STATUS":
@@ -173,6 +173,8 @@ func (s *Session) handleSelected(command string, args []string, line string) err
 		return s.handleCheck()
 	case "CLOSE":
 		return s.handleClose()
+	case "UNSELECT":
+		return s.handleUnselect()
 	case "EXPUNGE":
 		return s.handleExpunge()
 	case "SEARCH":
@@ -246,8 +248,17 @@ func (s *Session) handleStartTLS() error {
 		return nil
 	}
 
-	if s.server.tlsConfig == nil {
+	if !tlsConfigUsable(s.server.tlsConfig) {
 		s.WriteResponse(s.tag, "NO TLS not available")
+		return nil
+	}
+
+	// F5840: bytes already buffered behind STARTTLS were sent in cleartext
+	// and would be processed as if they were protected (command injection,
+	// CVE-2011-0411 class). Refuse and drop the connection.
+	if s.reader.Buffered() > 0 {
+		s.WriteResponse(s.tag, "BAD STARTTLS must not be pipelined")
+		s.Close()
 		return nil
 	}
 
@@ -269,6 +280,14 @@ func (s *Session) handleStartTLS() error {
 	s.tlsActive = true
 
 	return nil
+}
+
+// tlsConfigUsable reports whether cfg can complete a server handshake: it
+// must supply a certificate (static, GetCertificate or GetConfigForClient).
+// An empty tls.Config would answer STARTTLS OK and then fail the handshake
+// (F5840).
+func tlsConfigUsable(cfg *tls.Config) bool {
+	return cfg != nil && (len(cfg.Certificates) > 0 || cfg.GetCertificate != nil || cfg.GetConfigForClient != nil)
 }
 
 // handleCompress enables compression using DEFLATE algorithm (RFC 4978)
@@ -861,21 +880,139 @@ func (s *Session) handleUnsubscribe(args []string) error {
 
 // LIST command
 func (s *Session) handleList(args []string) error {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		if a == "" {
+			a = `""`
+		}
+		quoted[i] = a
+	}
+	return s.handleListLine(args, "x LIST "+strings.Join(quoted, " "))
+}
+
+// specialUseAttr maps a mailbox name to its RFC 6154 special-use attribute
+// ("" when it has none).
+func specialUseAttr(name string) string {
+	switch strings.ToLower(name) {
+	case "drafts":
+		return "\\Drafts"
+	case "sent", "sent items", "sent messages":
+		return "\\Sent"
+	case "trash", "deleted items", "deleted messages":
+		return "\\Trash"
+	case "junk", "spam":
+		return "\\Junk"
+	case "archive", "archives":
+		return "\\Archive"
+	}
+	return ""
+}
+
+// listRequest is a parsed LIST / LIST-EXTENDED (RFC 5258) command.
+type listRequest struct {
+	selSubscribed, selSpecialUse, recursive bool
+	retSubscribed, retChildren, retSpecial  bool
+	patterns                                []string
+}
+
+// parseListRequest parses "[(sel...)] ref (pattern | (pattern...)) [RETURN (opt...)]".
+func parseListRequest(toks []imapToken) (*listRequest, error) {
+	r := &listRequest{}
+	i := 0
+	if i < len(toks) && toks[i].val == "(" && !toks[i].quoted {
+		i++
+		for ; i < len(toks) && toks[i].val != ")"; i++ {
+			switch strings.ToUpper(toks[i].val) {
+			case "SUBSCRIBED":
+				r.selSubscribed = true
+			case "SPECIAL-USE":
+				r.selSpecialUse = true
+			case "RECURSIVEMATCH":
+				r.recursive = true
+			case "REMOTE":
+			default:
+				return nil, fmt.Errorf("unknown selection option %s", toks[i].val)
+			}
+		}
+		if i >= len(toks) {
+			return nil, errors.New("unterminated selection options")
+		}
+		i++
+		if r.recursive && !r.selSubscribed && !r.selSpecialUse {
+			return nil, errors.New("RECURSIVEMATCH requires another selection option")
+		}
+	}
+	if i >= len(toks) {
+		return nil, errors.New("Missing reference or pattern")
+	}
+	ref := toks[i].val
+	i++
+	if i >= len(toks) {
+		return nil, errors.New("Missing reference or pattern")
+	}
+	var pats []string
+	if toks[i].val == "(" && !toks[i].quoted {
+		i++
+		for ; i < len(toks) && toks[i].val != ")"; i++ {
+			pats = append(pats, toks[i].val)
+		}
+		if i >= len(toks) || len(pats) == 0 {
+			return nil, errors.New("invalid pattern list")
+		}
+		i++
+	} else {
+		pats = []string{toks[i].val}
+		i++
+	}
+	for _, pat := range pats {
+		full := ref
+		if pat != "" {
+			if full != "" && !strings.HasSuffix(full, "/") {
+				full += "/"
+			}
+			full += pat
+		}
+		r.patterns = append(r.patterns, full)
+		if pat == "" && ref == "" {
+			r.patterns[len(r.patterns)-1] = ""
+		}
+	}
+	if i < len(toks) {
+		if !strings.EqualFold(toks[i].val, "RETURN") || i+1 >= len(toks) || toks[i+1].val != "(" {
+			return nil, errors.New("syntax error after pattern")
+		}
+		i += 2
+		for ; i < len(toks) && toks[i].val != ")"; i++ {
+			switch strings.ToUpper(toks[i].val) {
+			case "SUBSCRIBED":
+				r.retSubscribed = true
+			case "CHILDREN":
+				r.retChildren = true
+			case "SPECIAL-USE":
+				r.retSpecial = true
+			default:
+				return nil, fmt.Errorf("unsupported return option %s", toks[i].val)
+			}
+		}
+		if i >= len(toks) {
+			return nil, errors.New("unterminated return options")
+		}
+	}
+	return r, nil
+}
+
+// handleListLine implements LIST including the RFC 5258 LIST-EXTENDED
+// selection (SUBSCRIBED, SPECIAL-USE, RECURSIVEMATCH, REMOTE) and return
+// (SUBSCRIBED, CHILDREN, SPECIAL-USE) options (F5843).
+func (s *Session) handleListLine(args []string, line string) error {
 	if len(args) < 2 {
 		s.WriteResponse(s.tag, "BAD Missing reference or pattern")
 		return nil
 	}
-
-	reference := strings.Trim(args[0], "\"'")
-	pattern := strings.Trim(args[1], "\"'")
-
-	// Combine reference and pattern
-	fullPattern := reference
-	if pattern != "" {
-		if fullPattern != "" && !strings.HasSuffix(fullPattern, "/") {
-			fullPattern += "/"
-		}
-		fullPattern += pattern
+	req, err := parseListRequest(commandArgTokens(args, line, "LIST"))
+	if err != nil {
+		s.WriteResponse(s.tag, "BAD "+err.Error())
+		return nil
 	}
 
 	if s.server.mailstore == nil {
@@ -883,21 +1020,70 @@ func (s *Session) handleList(args []string) error {
 		return nil
 	}
 
-	mailboxes, err := s.server.mailstore.ListMailboxes(s.user, fullPattern)
-	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+	// RFC 3501 §6.3.8: an empty pattern asks for the hierarchy delimiter.
+	if len(req.patterns) == 1 && req.patterns[0] == "" {
+		s.WriteData("LIST (\\Noselect) \"/\" \"\"")
+		s.WriteResponse(s.tag, "OK LIST completed")
 		return nil
+	}
+
+	seen := map[string]bool{}
+	var mailboxes []string
+	for _, p := range req.patterns {
+		list, err := s.server.mailstore.ListMailboxes(s.user, p)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
+		}
+		for _, m := range list {
+			if !seen[m] {
+				seen[m] = true
+				mailboxes = append(mailboxes, m)
+			}
+		}
 	}
 
 	// Get all mailboxes to check for children hierarchy (RFC 3348)
 	allMailboxes, _ := s.server.mailstore.ListMailboxes(s.user, "*")
 
-	for _, mbox := range mailboxes {
-		// Determine hierarchy indicators (RFC 3348)
-		hasChildren := false
-		hasNoSelect := false
+	var subscribed []string
+	subSet := map[string]bool{}
+	if req.selSubscribed || req.retSubscribed {
+		subscribed, err = s.server.mailstore.ListSubscribed(s.user)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			return nil
+		}
+		for _, m := range subscribed {
+			subSet[m] = true
+		}
+	}
+	// Subscribed names that no longer exist are listed as \NonExistent (RFC 5258 §3).
+	if req.selSubscribed {
+		for _, m := range subscribed {
+			if seen[m] {
+				continue
+			}
+			for _, p := range req.patterns {
+				if imapWildcardMatch(m, p) {
+					seen[m] = true
+					mailboxes = append(mailboxes, m)
+					break
+				}
+			}
+		}
+		sort.Strings(mailboxes)
+	}
+	exists := map[string]bool{}
+	for _, m := range allMailboxes {
+		exists[m] = true
+	}
 
-		// Check if this mailbox has children by looking for sub-mailboxes
+	for _, mbox := range mailboxes {
+		isSub := subSet[mbox]
+		special := specialUseAttr(mbox)
+		hasChildren := false
+		hasSubChild := false
 		mboxPrefix := mbox + "/"
 		for _, other := range allMailboxes {
 			if other != mbox && strings.HasPrefix(other, mboxPrefix) {
@@ -905,17 +1091,51 @@ func (s *Session) handleList(args []string) error {
 				break
 			}
 		}
+		for _, other := range subscribed {
+			if strings.HasPrefix(other, mboxPrefix) {
+				hasSubChild = true
+				break
+			}
+		}
 
-		// Build flags based on hierarchy
-		flags := "\\HasNoChildren"
+		// Selection (RFC 5258 §3): the criteria are ORed; RECURSIVEMATCH
+		// also keeps parents of matching children.
+		selected := !req.selSubscribed && !req.selSpecialUse
+		childInfo := false
+		if req.selSubscribed && isSub {
+			selected = true
+		}
+		if req.selSpecialUse && special != "" {
+			selected = true
+		}
+		if !selected && req.recursive && req.selSubscribed && hasSubChild {
+			selected = true
+			childInfo = true
+		}
+		if !selected {
+			continue
+		}
+
+		var attrs []string
+		if !exists[mbox] {
+			attrs = append(attrs, "\\NonExistent")
+		}
 		if hasChildren {
-			flags = "\\HasChildren"
+			attrs = append(attrs, "\\HasChildren")
+		} else if exists[mbox] {
+			attrs = append(attrs, "\\HasNoChildren")
 		}
-		if hasNoSelect {
-			flags += " \\NoSelect"
+		if (req.selSubscribed || req.retSubscribed) && isSub {
+			attrs = append(attrs, "\\Subscribed")
 		}
-
-		s.WriteData(fmt.Sprintf("LIST (%s) \"/\" \"%s\"", flags, mbox))
+		if (req.selSpecialUse || req.retSpecial) && special != "" {
+			attrs = append(attrs, special)
+		}
+		out := fmt.Sprintf("LIST (%s) \"/\" \"%s\"", strings.Join(attrs, " "), mbox)
+		if childInfo {
+			out += " (\"CHILDINFO\" (\"SUBSCRIBED\"))"
+		}
+		s.WriteData(out)
 	}
 
 	s.WriteResponse(s.tag, "OK LIST completed")
@@ -1101,106 +1321,88 @@ func (s *Session) handleAppend(args []string, line string) error {
 		return err
 	}
 
-	// Append to mailbox
-	var appendValidity uint32
-	var appendedUIDs []uint32
-	if s.server.mailstore != nil {
-		// F5643: a missing destination is NO [TRYCREATE], not created (RFC 3501
-		// §6.3.11). The literal has been read, so the stream stays in sync.
-		dest, ok := s.copyDestination(args[0])
-		if !ok {
-			return nil
-		}
-		mailboxName = dest
-		validity, uid, err := s.appendOne(mailboxName, flags, date, data)
-		if err != nil {
-			s.WriteResponse(s.tag, noText(err))
-			if span != nil {
-				tracing.RecordError(span, err)
-				tracing.SetStatus(span, tracing.StatusError, "append failed")
-			}
-			return nil
-		}
-		appendValidity = validity
-		if uid != 0 {
-			appendedUIDs = append(appendedUIDs, uid)
-		}
+	// F5841: RFC 3502 makes MULTIAPPEND atomic. Read every message first,
+	// check the quota for the sum, then store; any failure rolls back.
+	type appendMsg struct {
+		flags []string
+		date  time.Time
+		data  []byte
 	}
+	msgs := []appendMsg{{flags, date, data}}
+	totalSize := int64(len(data))
+	const maxMultiAppendTotal = 256 * 1024 * 1024
 
-	// RFC 7889 MULTIAPPEND: Check for additional messages in the stream
-	// After reading one literal, there might be more synchronizing literals waiting
 	for {
-		// Look ahead for another literal marker using only bytes already buffered.
-		// A blocking Peek here would deadlock: after the literal octets the client
-		// sends the terminating CRLF and waits for the tagged response, so no
-		// further bytes may arrive until we reply.
-		buffered := s.reader.Buffered()
-		if buffered == 0 {
-			break
-		}
-		if buffered > 256 {
-			buffered = 256
-		}
-		rest, err := s.reader.Peek(buffered)
-		if err != nil || len(rest) == 0 {
-			break
-		}
-		restStr := string(rest)
-		litIdx := strings.Index(restStr, "{")
-		if litIdx < 0 {
-			break
-		}
-
-		// Found another literal - parse its size
-		litEnd := strings.Index(restStr[litIdx:], "}")
-		if litEnd < 0 {
-			break
-		}
-
-		sizeStr := restStr[litIdx+1 : litIdx+litEnd]
-		nextSize, hasPlus, err := parseLiteralSize(sizeStr)
+		// After a literal the client sends either CRLF (end) or
+		// " [flags] [date] {n}" CRLF for the next message. This read blocks
+		// until the rest of the line arrives, so a message split across TCP
+		// segments is not mistaken for the end of the command.
+		rest, err := s.readLine()
 		if err != nil {
+			s.WriteResponse(s.tag, "NO Failed to read message data")
+			return err
+		}
+		if strings.TrimSpace(rest) == "" {
 			break
 		}
-
-		// Consume what we peeked (including the {size} part)
-		discard := make([]byte, litIdx+litEnd+1)
-		s.reader.Read(discard)
-		// RFC 3501 literal syntax: "{n}" CRLF precedes the octets; the CRLF is
-		// not part of the message.
-		if s.reader.Buffered() >= 2 {
-			if crlf, _ := s.reader.Peek(2); string(crlf) == "\r\n" {
-				_, _ = s.reader.Discard(2)
-			}
+		nflags, ndate, nextSize, perr := s.parseAppendParams(strings.Fields(rest), rest)
+		if perr != nil || nextSize == 0 {
+			s.WriteResponse(s.tag, "BAD Invalid MULTIAPPEND message")
+			return nil
 		}
-
-		if nextSize > maxAppendSize {
+		if nextSize > maxAppendSize || totalSize+int64(nextSize) > maxMultiAppendTotal {
 			s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
 			if span != nil {
 				tracing.SetStatus(span, tracing.StatusError, "message too large")
 			}
 			return nil
 		}
-
-		if !hasPlus {
+		if !strings.Contains(rest, "+}") {
 			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", nextSize))
 		}
-
-		// Read this message
-		data := make([]byte, nextSize)
-		_, err = io.ReadFull(s.reader, data)
-		if err != nil {
+		ndata := make([]byte, nextSize)
+		if _, err = io.ReadFull(s.reader, ndata); err != nil {
 			s.WriteResponse(s.tag, "NO Failed to read message data")
 			return err
 		}
+		totalSize += int64(nextSize)
+		msgs = append(msgs, appendMsg{nflags, ndate, ndata})
+	}
 
-		// Append message with default flags
-		if s.server.mailstore != nil {
-			_, uid, err := s.appendOne(mailboxName, nil, time.Now(), data)
+	var appendValidity uint32
+	var appendedUIDs []uint32
+	if s.server.mailstore != nil {
+		// F5643: a missing destination is NO [TRYCREATE], not created (RFC 3501
+		// §6.3.11). The literals have been read, so the stream stays in sync.
+		dest, ok := s.copyDestination(args[0])
+		if !ok {
+			return nil
+		}
+		mailboxName = dest
+		if len(msgs) > 1 {
+			if qc, ok := s.server.mailstore.(quotaChecker); ok {
+				if err := qc.CheckQuota(s.user, totalSize); err != nil {
+					s.WriteResponse(s.tag, noText(err))
+					return nil
+				}
+			}
+		}
+		for _, m := range msgs {
+			validity, uid, err := s.appendOne(mailboxName, m.flags, m.date, m.data)
 			if err != nil {
+				if len(appendedUIDs) > 0 {
+					if rb, ok := s.server.mailstore.(appendRollbacker); ok {
+						rb.RollbackAppended(s.user, mailboxName, appendedUIDs)
+					}
+				}
 				s.WriteResponse(s.tag, noText(err))
+				if span != nil {
+					tracing.RecordError(span, err)
+					tracing.SetStatus(span, tracing.StatusError, "append failed")
+				}
 				return nil
 			}
+			appendValidity = validity
 			if uid != 0 {
 				appendedUIDs = append(appendedUIDs, uid)
 			}
@@ -1218,6 +1420,18 @@ func (s *Session) handleAppend(args []string, line string) error {
 	}
 	s.WriteResponse(s.tag, "OK APPEND completed")
 	return nil
+}
+
+// quotaChecker is implemented by mailstores that can test a prospective
+// total against the account quota before anything is stored (F5841).
+type quotaChecker interface {
+	CheckQuota(user string, need int64) error
+}
+
+// appendRollbacker is implemented by mailstores that can undo the messages a
+// failed MULTIAPPEND already stored (F5841).
+type appendRollbacker interface {
+	RollbackAppended(user, mailbox string, uids []uint32)
 }
 
 // uidAppender is implemented by mailstores that report the UID an append
@@ -1523,6 +1737,16 @@ func (s *Session) handleClose() error {
 	s.state = StateAuthenticated
 	s.stateMu.Unlock()
 	s.WriteResponse(s.tag, "OK CLOSE completed")
+	return nil
+}
+
+// UNSELECT command (RFC 3691): like CLOSE but never expunges (F5842).
+func (s *Session) handleUnselect() error {
+	s.selected = nil
+	s.stateMu.Lock()
+	s.state = StateAuthenticated
+	s.stateMu.Unlock()
+	s.WriteResponse(s.tag, "OK UNSELECT completed")
 	return nil
 }
 

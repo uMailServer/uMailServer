@@ -607,7 +607,7 @@ func TestCoverageServerSetAuthLimits(t *testing.T) {
 
 func TestCoverageServerIsAuthLockedOut_Disabled(t *testing.T) {
 	srv := &Server{}
-	srv.authFailures = make(map[string][]time.Time)
+	srv.auth = NewAuthTracker()
 	srv.SetAuthLimits(0, 0)
 
 	// When maxLoginAttempts is 0, should never be locked out
@@ -618,7 +618,7 @@ func TestCoverageServerIsAuthLockedOut_Disabled(t *testing.T) {
 
 func TestCoverageServerIsAuthLockedOut_WithFailures(t *testing.T) {
 	srv := &Server{}
-	srv.authFailures = make(map[string][]time.Time)
+	srv.auth = NewAuthTracker()
 	srv.SetAuthLimits(3, time.Hour)
 
 	// Should not be locked initially
@@ -644,7 +644,7 @@ func TestCoverageServerIsAuthLockedOut_WithFailures(t *testing.T) {
 
 func TestCoverageServerClearAuthFailures(t *testing.T) {
 	srv := &Server{}
-	srv.authFailures = make(map[string][]time.Time)
+	srv.auth = NewAuthTracker()
 	srv.SetAuthLimits(3, time.Hour)
 
 	srv.recordAuthFailure("192.168.1.1")
@@ -663,7 +663,7 @@ func TestCoverageServerClearAuthFailures(t *testing.T) {
 
 func TestCoverageServerRecordAuthFailure_Disabled(t *testing.T) {
 	srv := &Server{}
-	srv.authFailures = make(map[string][]time.Time)
+	srv.auth = NewAuthTracker()
 	srv.SetAuthLimits(0, 0)
 
 	// Should not panic

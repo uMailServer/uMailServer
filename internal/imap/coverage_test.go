@@ -958,7 +958,7 @@ func TestCoverageHandleAppendMultiappend_TwoLiteralsSingleWrite(t *testing.T) {
 	}
 
 	// 5 octets + next literal spec + 5 octets, all in a single write
-	client.Write([]byte("hello{5}world"))
+	client.Write([]byte("hello {5}\r\nworld\r\n"))
 
 	if _, ok := waitForLine(lines, "+", 500*time.Millisecond); !ok {
 		t.Fatal("expected second continuation for MULTIAPPEND literal {5}")
