@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -67,6 +68,21 @@ func NewAdminServer(server *Server, cfg AdminConfig) *AdminServer {
 
 // Start starts the admin HTTP server
 func (s *AdminServer) Start() error {
+	ln, err := s.Listen()
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+// Listen binds the admin address and prepares the HTTP server without
+// serving, so a caller sees a bind failure synchronously (F5530). Pass the
+// listener to Serve; Stop before Serve makes Serve close it and return.
+func (s *AdminServer) Listen() (net.Listener, error) {
+	ln, err := net.Listen("tcp", s.config.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %s: %w", s.config.Addr, err)
+	}
 	s.mu.Lock()
 	s.httpServer = &http.Server{
 		Addr:         s.config.Addr,
@@ -75,11 +91,18 @@ func (s *AdminServer) Start() error {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	s.mu.Unlock()
+	return ln, nil
+}
+
+// Serve serves the listener returned by Listen until Stop.
+func (s *AdminServer) Serve(ln net.Listener) error {
+	s.mu.Lock()
 	srv := s.httpServer
 	s.mu.Unlock()
 
-	s.logger.Info("Admin API server starting", "addr", s.config.Addr)
-	return srv.ListenAndServe()
+	s.logger.Info("Admin API server starting", "addr", ln.Addr().String())
+	return srv.Serve(ln)
 }
 
 // Stop gracefully stops the admin server

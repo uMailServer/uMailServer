@@ -1,14 +1,18 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/backup"
 )
 
-// startAPI creates and starts the HTTP API server (webmail + admin).
-func (s *Server) startAPI() {
+// startAPI creates and starts the HTTP API server (webmail + admin). The API
+// and admin listeners bind synchronously, so a bind failure fails Start
+// (F5530) instead of only being logged.
+func (s *Server) startAPI() error {
 	apiCfg := api.Config{
 		Addr:             fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
 		JWTSecret:        s.config.Security.JWTSecret,
@@ -56,8 +60,13 @@ func (s *Server) startAPI() {
 	// Configure API rate limiting
 	s.apiServer.SetAPIRateLimit(s.config.Security.RateLimit.HTTPRequestsPerMinute)
 
+	apiLn, err := s.apiServer.Listen(apiCfg.Addr)
+	if err != nil {
+		return fmt.Errorf("failed to start API server: %w", err)
+	}
+	apiServer := s.apiServer
 	go func() {
-		if err := s.apiServer.Start(apiCfg.Addr); err != nil {
+		if err := apiServer.Serve(apiLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.logger.Error("API server error", "error", err)
 		}
 	}()
@@ -76,13 +85,18 @@ func (s *Server) startAPI() {
 				MaxAgeDays: s.config.Security.AuditLog.MaxAgeDays,
 			},
 		}
-		s.adminServer = api.NewAdminServer(s.apiServer, adminCfg)
-
+		adminServer := api.NewAdminServer(s.apiServer, adminCfg)
+		adminLn, err := adminServer.Listen()
+		if err != nil {
+			return fmt.Errorf("failed to start admin server: %w", err)
+		}
+		s.adminServer = adminServer
 		go func() {
-			if err := s.adminServer.Start(); err != nil {
+			if err := adminServer.Serve(adminLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				s.logger.Error("Admin API server error", "error", err)
 			}
 		}()
 		s.logger.Info("Admin API server started", "addr", adminCfg.Addr)
 	}
+	return nil
 }

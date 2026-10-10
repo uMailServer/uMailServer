@@ -57,7 +57,11 @@ func (s *Server) Start() (err error) {
 	// Set MDN handler for read receipts
 	s.mailstore.SetMDNHandler(s.sendMDN)
 
-	s.startSMTP()
+	// F5530: SMTP (25/587/465), JMAP and the HTTP API/admin listeners bind
+	// synchronously too; a bind failure fails Start and is rolled back.
+	if err := s.startSMTP(); err != nil {
+		return err
+	}
 
 	// Start search indexing worker pool
 	if s.searchSvc != nil {
@@ -95,8 +99,14 @@ func (s *Server) Start() (err error) {
 	if err := s.startCardDAV(); err != nil {
 		return err
 	}
-	s.startJMAP()
-	s.startAPI()
+	// startJMAP runs before startAPI: startAPI installs the API's JWT key
+	// resolver on the JMAP server (F5440).
+	if err := s.startJMAP(); err != nil {
+		return err
+	}
+	if err := s.startAPI(); err != nil {
+		return err
+	}
 	if err := s.startMetrics(); err != nil {
 		return err
 	}
