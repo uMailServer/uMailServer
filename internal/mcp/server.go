@@ -927,9 +927,16 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 		IsAdmin:      false,
 		IsActive:     true, // F5250: inactive accounts cannot authenticate
 	}
-	if err := s.db.CreateAccount(account); err != nil {
-		if errors.Is(err, db.ErrAccountExists) {
+	// F5510/F5511: domain existence and MaxAccounts are enforced in the same
+	// transaction as the insert.
+	if err := s.db.CreateAccountInDomain(account); err != nil {
+		switch {
+		case errors.Is(err, db.ErrAccountExists):
 			return nil, fmt.Errorf("account already exists")
+		case errors.Is(err, db.ErrDomainNotFound):
+			return nil, fmt.Errorf("domain '%s' does not exist", domain)
+		case errors.Is(err, db.ErrDomainAccountLimit):
+			return nil, fmt.Errorf("domain account limit reached")
 		}
 		slog.Error("mcp tool error", "tool", "add_account", "error", err)
 		return nil, fmt.Errorf("internal server error")

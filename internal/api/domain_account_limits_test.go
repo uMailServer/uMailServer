@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -213,5 +214,43 @@ func TestForwardingStoresBareAddress(t *testing.T) {
 	}
 	if c, _ := put(`{"forward_to":""}`); c != 200 || stored().ForwardTo != "" {
 		t.Fatalf("disable: status=%d stored=%q", c, stored().ForwardTo)
+	}
+}
+
+// F5510: parallel creates through the API must not exceed max_accounts. The
+// pre-checks in createAccount read the count in one transaction and insert in
+// another; only CreateAccountInDomain closes that window.
+func TestCreateAccountMaxAccountsUnderConcurrency(t *testing.T) {
+	s, d := newDomainLimitsServer(t, &db.DomainData{Name: "race.test", MaxAccounts: 3, IsActive: true})
+	const n = 16
+	start := make(chan struct{})
+	codes := make(chan int, n)
+	for i := 0; i < n; i++ {
+		body := fmt.Sprintf(`{"email":"u%d@race.test","password":%q}`, i, strings.Repeat("Rr9!", 3))
+		go func() {
+			<-start
+			rec := httptest.NewRecorder()
+			s.handleAccounts(rec, domainLimitsAdmin(httptest.NewRequest(http.MethodPost, "/api/v1/accounts", strings.NewReader(body))))
+			codes <- rec.Code
+		}()
+	}
+	close(start)
+	created, limited := 0, 0
+	for i := 0; i < n; i++ {
+		switch c := <-codes; c {
+		case http.StatusCreated, http.StatusOK:
+			created++
+		case http.StatusConflict:
+			limited++
+		default:
+			t.Errorf("unexpected status %d", c)
+		}
+	}
+	accounts, err := d.ListAccountsByDomain("race.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 3 || limited != n-3 || len(accounts) != 3 {
+		t.Fatalf("created=%d limited=%d stored=%d, want 3/%d/3", created, limited, len(accounts), n-3)
 	}
 }
