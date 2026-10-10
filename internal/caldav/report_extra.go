@@ -175,25 +175,10 @@ func (s *Server) reportFreeBusy(w http.ResponseWriter, r *http.Request, username
 	type period struct{ s, e time.Time }
 	var busy []period
 	for _, data := range events {
-		for _, blk := range extractComponentBlocks(data, "VEVENT") {
-			if v, _ := extractPropertyValue(blk, "TRANSP"); strings.EqualFold(v, "TRANSPARENT") {
-				continue
-			}
-			if v, _ := extractPropertyValue(blk, "STATUS"); strings.EqualFold(v, "CANCELLED") {
-				continue
-			}
-			start, end, ok := componentTimeRange(blk)
-			if !ok {
-				continue
-			}
-			if rr := parseRRULEBlock(blk); rr != nil {
-				d := end.Sub(start)
-				for _, inst := range rruleInstances(start, end, rr, ws, we) {
-					busy = append(busy, period{inst, inst.Add(d)})
-				}
-			} else if end.After(ws) && start.Before(we) {
-				busy = append(busy, period{start, end})
-			}
+		// Components sharing a UID are evaluated together so RECURRENCE-ID
+		// overrides and EXDATEs adjust the master's instances (F6074, F6075).
+		for _, occ := range eventOccurrences(extractComponentBlocks(data, "VEVENT"), ws, we, true) {
+			busy = append(busy, period{occ.start, occ.end})
 		}
 	}
 	sort.Slice(busy, func(i, j int) bool { return busy[i].s.Before(busy[j].s) })
