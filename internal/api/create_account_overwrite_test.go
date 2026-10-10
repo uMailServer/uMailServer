@@ -31,6 +31,10 @@ func startAccountCreateServer(t *testing.T) (*Server, *db.DB) {
 	}
 	t.Cleanup(func() { _ = accountsDB.Close() })
 	server := NewServer(accountsDB, nil, Config{})
+	// F5372: createAccount requires a hosted domain.
+	if err := accountsDB.CreateDomain(&db.DomainData{Name: "test.com", IsActive: true}); err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
 
 	const (
 		email       = "alice@test.com"

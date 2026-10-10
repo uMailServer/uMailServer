@@ -80,10 +80,15 @@ func (s *Server) handleSetForwarding(w http.ResponseWriter, r *http.Request) {
 
 	forwardTo := strings.TrimSpace(req.ForwardTo)
 	if forwardTo != "" {
-		if _, err := mail.ParseAddress(forwardTo); err != nil {
+		addr, err := mail.ParseAddress(forwardTo)
+		if err != nil {
 			s.sendError(w, http.StatusBadRequest, "forward_to must be a valid email address")
 			return
 		}
+		// F5371: store the bare addr-spec. ParseAddress also accepts
+		// "Name <a@b>" and "<a@b>", which delivery enqueues verbatim as
+		// the RCPT (MX domain "b>"), losing every forwarded message.
+		forwardTo = addr.Address
 	}
 
 	user, domain := parseEmail(email)

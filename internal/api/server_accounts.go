@@ -258,6 +258,38 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 
 	user, domain := parseEmail(req.Email)
 
+	// F5372: the domain must be hosted here; an account on an unknown domain
+	// can log in but never appears in the admin account list. ListDomains
+	// separates "not hosted" (400) from a storage failure (500).
+	domains, err := s.db.ListDomains()
+	if err != nil {
+		s.sendError(w, http.StatusInternalServerError, "failed to check domain")
+		return
+	}
+	var domainData *db.DomainData
+	for _, d := range domains {
+		if d.Name == domain {
+			domainData = d
+			break
+		}
+	}
+	if domainData == nil {
+		s.sendError(w, http.StatusBadRequest, "domain not found")
+		return
+	}
+	// F5373: enforce the domain's account limit (0 = unlimited).
+	if domainData.MaxAccounts > 0 {
+		existing, err := s.db.ListAccountsByDomain(domain)
+		if err != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to check domain accounts")
+			return
+		}
+		if len(existing) >= domainData.MaxAccounts {
+			s.sendError(w, http.StatusConflict, "domain account limit reached")
+			return
+		}
+	}
+
 	// Hash password with configured hasher
 	hashedPassword, err := s.hashPassword(req.Password)
 	if err != nil {

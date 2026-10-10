@@ -153,9 +153,12 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
+	// F5370: fields are pointers so an omitted field keeps its stored value;
+	// the admin panel's Domains toggle sends only is_active, and zero-filling
+	// wiped max_accounts (a max_accounts-only update deactivated the domain).
 	var req struct {
-		MaxAccounts int  `json:"max_accounts"`
-		IsActive    bool `json:"is_active"`
+		MaxAccounts *int  `json:"max_accounts"`
+		IsActive    *bool `json:"is_active"`
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
@@ -163,17 +166,25 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
-	if req.MaxAccounts < 0 {
-		s.sendError(w, http.StatusBadRequest, "max_accounts must be non-negative")
-		return
+	maxAccounts := domain.MaxAccounts
+	if req.MaxAccounts != nil {
+		maxAccounts = *req.MaxAccounts
+		if maxAccounts < 0 {
+			s.sendError(w, http.StatusBadRequest, "max_accounts must be non-negative")
+			return
+		}
+		if maxAccounts > 1000000 {
+			s.sendError(w, http.StatusBadRequest, "max_accounts exceeds maximum allowed")
+			return
+		}
 	}
-	if req.MaxAccounts > 1000000 {
-		s.sendError(w, http.StatusBadRequest, "max_accounts exceeds maximum allowed")
-		return
+	isActive := domain.IsActive
+	if req.IsActive != nil {
+		isActive = *req.IsActive
 	}
 
 	// Prevent deactivation if active accounts exist
-	if domain.IsActive && !req.IsActive {
+	if domain.IsActive && !isActive {
 		accounts, err := s.db.ListAccountsByDomain(name)
 		if err != nil {
 			s.sendError(w, http.StatusInternalServerError, "failed to check domain accounts")
@@ -185,8 +196,8 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 		}
 	}
 
-	domain.MaxAccounts = req.MaxAccounts
-	domain.IsActive = req.IsActive
+	domain.MaxAccounts = maxAccounts
+	domain.IsActive = isActive
 	domain.UpdatedAt = time.Now()
 
 	if err := s.db.UpdateDomain(domain); err != nil {
