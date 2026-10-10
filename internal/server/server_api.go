@@ -26,6 +26,11 @@ func (s *Server) startAPI() {
 		DataDir: s.config.Server.DataDir,
 	}
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
+	// F5440/F5442: JMAP (started earlier) verifies API tokens with the API's
+	// key set, so rotated keys and DisableLegacyJWT apply there too.
+	if s.jmapServer != nil {
+		s.jmapServer.SetKeyFunc(s.apiServer.JWTKeyFunc)
+	}
 	s.apiServer.SetSearchService(s.searchSvc)
 	s.apiServer.SetTracingProvider(s.tracingProvider)
 	if s.queue != nil {

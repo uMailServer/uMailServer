@@ -50,6 +50,10 @@ type Server struct {
 	sessionMu       sync.RWMutex
 	tracingProvider *tracing.Provider
 	tokenValidator  TokenValidator
+	// keyFunc, when set, resolves bearer-token keys exactly as the HTTP API
+	// does (kid rotation, DisableLegacyJWT) — F5440. Stored atomically because
+	// it is installed after the listener has started.
+	keyFunc atomic.Pointer[jwt.Keyfunc]
 }
 
 // TokenValidator is consulted after a bearer JWT's signature and expiry have
@@ -62,6 +66,17 @@ type TokenValidator func(tokenHash, subject string) error
 // (revocation, disabled account). Call before serving requests.
 func (s *Server) SetTokenValidator(v TokenValidator) {
 	s.tokenValidator = v
+}
+
+// SetKeyFunc installs the HTTP API's JWT key resolver so tokens signed with a
+// rotated key verify here too and retired keys are refused (F5440, F5442).
+// Safe to call while requests are being served.
+func (s *Server) SetKeyFunc(f jwt.Keyfunc) {
+	if f == nil {
+		s.keyFunc.Store(nil)
+		return
+	}
+	s.keyFunc.Store(&f)
 }
 
 // SetTracingProvider attaches an OpenTelemetry tracing provider so each
@@ -737,12 +752,11 @@ func (s *Server) authenticate(r *http.Request) (string, bool) {
 		return "", false
 	}
 
-	token, err := jwt.Parse(parts[1], func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(s.config.JWTSecret), nil
-	})
+	keyFunc := s.configKey
+	if f := s.keyFunc.Load(); f != nil {
+		keyFunc = *f
+	}
+	token, err := jwt.Parse(parts[1], keyFunc, jwt.WithValidMethods([]string{"HS256"}))
 
 	if err != nil || !token.Valid {
 		return "", false
@@ -768,6 +782,19 @@ func (s *Server) authenticate(r *http.Request) (string, bool) {
 	}
 
 	return user, true
+}
+
+// configKey is the fallback key resolver when no API resolver is installed:
+// the configured JWTSecret. An empty secret verifies an HMAC made with an
+// empty key, i.e. anyone could mint tokens, so it rejects instead (F5441).
+func (s *Server) configKey(token *jwt.Token) (interface{}, error) {
+	if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+	}
+	if s.config.JWTSecret == "" {
+		return nil, errors.New("no JWT secret configured")
+	}
+	return []byte(s.config.JWTSecret), nil
 }
 
 // getOrCreateSession gets or creates a session for a user
