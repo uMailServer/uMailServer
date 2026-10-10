@@ -108,7 +108,20 @@ func safeRegexMatch(pattern, value string, timeout time.Duration) (bool, error) 
 	if isSuspiciousPattern(pattern) {
 		return false, fmt.Errorf("regex pattern too complex (potential ReDoS)")
 	}
+	return matchRegexp(pattern, value, timeout)
+}
 
+// globMatch matches a Sieve :matches key against value. F5241: the regexp
+// built by globToRegexp only holds literals, "." and ".*", which Go's linear
+// time RE2 engine evaluates without backtracking, so it must not go through
+// isSuspiciousPattern (which rejected keys with four or more "*" wildcards).
+func globMatch(glob, value string, timeout time.Duration) (bool, error) {
+	return matchRegexp(globToRegexp(glob), value, timeout)
+}
+
+// matchRegexp compiles pattern through the LRU cache and matches it against
+// value with a timeout.
+func matchRegexp(pattern, value string, timeout time.Duration) (bool, error) {
 	// Try to get from cache first with proper locking
 	regexCache.Lock()
 	re, ok := regexCache.patterns[pattern]
@@ -420,6 +433,13 @@ func (i *Interpreter) executeConditional(cmd *Command) (bool, []Action, error) {
 // constTest is the RFC 5228 "true" / "false" test.
 type constTest bool
 
+// notTest is the RFC 5228 §5.8 "not" test. F5240.
+type notTest struct{ Test }
+
+// existsTest is the RFC 5228 §5.5 "exists" test: true when every named
+// header is present. F5240.
+type existsTest []string
+
 // parseTestCommand builds the test of an if/elsif. F5006: a test that cannot
 // be parsed is an error, never an implicit "true".
 func (i *Interpreter) parseTestCommand(args []Value) (Test, error) {
@@ -431,6 +451,29 @@ func (i *Interpreter) parseTestCommand(args []Value) (Test, error) {
 					return nil, fmt.Errorf("%s test takes no arguments", sv.Value)
 				}
 				return constTest(strings.EqualFold(sv.Value, "true")), nil
+			case "not":
+				// F5240: RFC 5228 §5.8.
+				inner, err := i.parseTestCommand(args[1:])
+				if err != nil {
+					return nil, err
+				}
+				return notTest{inner}, nil
+			case "exists":
+				// F5240: RFC 5228 §5.5.
+				if len(args) == 2 {
+					switch v := args[1].(type) {
+					case *StringValue:
+						return existsTest{v.Value}, nil
+					case *ListValue:
+						return existsTest(v.Values), nil
+					}
+				}
+				return nil, fmt.Errorf("malformed exists test")
+			case "header":
+			default:
+				// F5240: an unimplemented test (address, envelope, ...) must not
+				// be evaluated as a header test on a header named after it.
+				return nil, fmt.Errorf("unsupported test %q", sv.Value)
 			case "size":
 				if len(args) == 3 {
 					tag, okTag := args[1].(*TagValue)
@@ -520,6 +563,11 @@ func (i *Interpreter) parseHeaderTest(args []Value) (Test, error) {
 		return nil, nil
 	}
 
+	// F5243: RFC 5228 §2.7.1 default match type is :is.
+	if matchType == "" {
+		matchType = "is"
+	}
+
 	return &HeaderTest{
 		Headers:    headers,
 		KeyList:    keys,
@@ -551,6 +599,23 @@ func (i *Interpreter) evaluateTest(test Test) (bool, error) {
 		return i.evaluateBooleanTest(t)
 	case constTest:
 		return bool(t), nil
+	case notTest:
+		result, err := i.evaluateTest(t.Test)
+		return !result, err
+	case existsTest:
+		for _, name := range t {
+			found := false
+			for key := range i.ctx.Headers {
+				if strings.EqualFold(key, name) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false, nil
+			}
+		}
+		return true, nil
 	default:
 		return true, nil
 	}
@@ -635,7 +700,7 @@ func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 					}
 				case ":matches", "matches":
 					for _, key := range t.KeyList {
-						matched, err := safeRegexMatch(globToRegexp(cmp(key)), value, i.timeout)
+						matched, err := globMatch(cmp(key), value, i.timeout)
 						if err != nil {
 							// Log the error but don't fail the entire filter
 							// Just return false for this test
@@ -683,13 +748,12 @@ func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {
 			}
 		}
 	case ":matches", "matches":
-		pattern := globToRegexp(value)
 		for name, values := range i.ctx.Headers {
 			if !strings.EqualFold(name, target) {
 				continue
 			}
 			for _, v := range values {
-				matched, err := safeRegexMatch("(?i)"+pattern, v, i.timeout)
+				matched, err := matchRegexp("(?i)"+globToRegexp(value), v, i.timeout)
 				if err != nil {
 					return false, nil
 				}
@@ -795,131 +859,84 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 		Days: 7, // Default interval
 	}
 
-	// Track whether :subject was seen — determines positional string semantics.
-	// The parser stores the first tag in cmd.Tag; subsequent tags appear in
-	// cmd.Arguments as *TagValue nodes. We need both.
-	subjectTagSeen := cmd.Tag == "subject"
-
-	// Handle the first tag (parser stores it in cmd.Tag, not cmd.Arguments)
-	switch cmd.Tag {
-	case "subject":
-		// Next arg is the subject string
-		if len(cmd.Arguments) > 0 {
-			if sv, ok := cmd.Arguments[0].(*StringValue); ok {
-				vacation.Subject = sv.Value
+	// F5242: RFC 5230 §4: vacation [":days" number] [":subject" string]
+	// [":from" string] [":addresses" string-list] [":mime"] [":handle" string]
+	// <reason: string>. Tags may come in any order; the positional string is
+	// the reason, i.e. the reply body. The parser stores the first tag in
+	// cmd.Tag, so it is put back in front of the arguments.
+	args := cmd.Arguments
+	if cmd.Tag != "" {
+		args = append([]Value{&TagValue{Value: cmd.Tag}}, cmd.Arguments...)
+	}
+	nextString := func(idx int) (string, bool) {
+		if idx < len(args) {
+			if sv, ok := args[idx].(*StringValue); ok {
+				return sv.Value, true
 			}
 		}
-	case "days":
-		// Next arg is the days number
-		if len(cmd.Arguments) > 0 {
-			if nv, ok := cmd.Arguments[0].(*NumberValue); ok {
-				vacation.Days = int(nv.Value)
+		return "", false
+	}
+	nextNumber := func(idx int) (int, bool) {
+		if idx < len(args) {
+			if nv, ok := args[idx].(*NumberValue); ok {
+				return int(nv.Value), true
 			}
 		}
-	case "seconds":
-		// Next arg is the seconds number (RFC 5230 §4.1).
-		vacation.SecondsSet = true
-		if len(cmd.Arguments) > 0 {
-			if nv, ok := cmd.Arguments[0].(*NumberValue); ok {
-				vacation.Seconds = int(nv.Value)
-			}
-		}
-	case "mime":
-		vacation.Mime = true
+		return 0, false
 	}
 
-	// Process remaining arguments.
-	// cmd.Tag consumes: nothing for non-string tags (:days, :seconds, :mime),
-	// 1 positional slot for :subject (its value).
-	// When cmd.Tag is :subject, first positional = subject; else all positional = body.
-	argsStart := 0
-	if cmd.Tag == "subject" {
-		argsStart = 1
-	}
-
-	argIdx := argsStart
-	for argIdx < len(cmd.Arguments) {
-		arg := cmd.Arguments[argIdx]
-		switch a := arg.(type) {
+	for argIdx := 0; argIdx < len(args); argIdx++ {
+		switch a := args[argIdx].(type) {
 		case *TagValue:
-			switch a.Value {
+			switch strings.ToLower(a.Value) {
 			case "subject":
-				subjectTagSeen = true
-				// Next arg is the subject string
-				if argIdx+1 < len(cmd.Arguments) {
+				if v, ok := nextString(argIdx + 1); ok {
+					vacation.Subject = v
 					argIdx++
-					if sv, ok := cmd.Arguments[argIdx].(*StringValue); ok {
-						vacation.Subject = sv.Value
+				}
+			case "from":
+				if v, ok := nextString(argIdx + 1); ok {
+					vacation.From = v
+					argIdx++
+				}
+			case "handle":
+				if v, ok := nextString(argIdx + 1); ok {
+					vacation.Handle = v
+					argIdx++
+				}
+			case "addresses":
+				if argIdx+1 < len(args) {
+					switch v := args[argIdx+1].(type) {
+					case *ListValue:
+						vacation.Addresses = v.Values
+						argIdx++
+					case *StringValue:
+						vacation.Addresses = []string{v.Value}
+						argIdx++
 					}
 				}
 			case "days":
-				// Next arg is the days number.
-				// Set subjectTagSeen so positional strings go to Body, not Subject
-				// (no :subject tag is present, so positional strings are body).
-				subjectTagSeen = true
-				if argIdx+1 < len(cmd.Arguments) {
+				if v, ok := nextNumber(argIdx + 1); ok {
+					vacation.Days = v
 					argIdx++
-					if nv, ok := cmd.Arguments[argIdx].(*NumberValue); ok {
-						vacation.Days = int(nv.Value)
-					}
 				}
-			case "addresses":
-				// Next arg is the addresses list
-				if argIdx+1 < len(cmd.Arguments) {
+			case "seconds":
+				vacation.SecondsSet = true
+				if v, ok := nextNumber(argIdx + 1); ok {
+					vacation.Seconds = v
 					argIdx++
-					if lv, ok := cmd.Arguments[argIdx].(*ListValue); ok {
-						vacation.Addresses = lv.Values
-					}
 				}
 			case "mime":
 				vacation.Mime = true
-			case "handle":
-				// Next arg is the handle string
-				if argIdx+1 < len(cmd.Arguments) {
-					argIdx++
-					if sv, ok := cmd.Arguments[argIdx].(*StringValue); ok {
-						vacation.Handle = sv.Value
-					}
-				}
-			case "seconds":
-				// Next arg is the seconds number.
-				vacation.SecondsSet = true
-				if argIdx+1 < len(cmd.Arguments) {
-					argIdx++
-					if nv, ok := cmd.Arguments[argIdx].(*NumberValue); ok {
-						vacation.Seconds = int(nv.Value)
-					}
-				}
 			}
 		case *StringValue:
-			// Per RFC 5230 §4.1: when :subject is absent, the first positional
-			// string is the body. Only an explicit :subject tag or ":subject"
-			// TagValue routes a positional string to Subject.
-			// :days and :mime are non-string tags — they consume no positional
-			// slot, so positional strings (including the first) go to Body.
-			if subjectTagSeen {
-				// :subject tag was provided; first positional string = subject,
-				// second = body
-				if vacation.Body == "" {
-					vacation.Body = a.Value
-				}
-			} else if cmd.Tag == "mime" || cmd.Tag == "days" || cmd.Tag == "seconds" || cmd.Tag == "addresses" || cmd.Tag == "handle" {
-				// Non-string tags consume no positional slot; all strings = body
-				if vacation.Body == "" {
-					vacation.Body = a.Value
-				}
-			} else {
-				// No tag at all; first positional = subject, second = body
-				if vacation.Subject == "" {
-					vacation.Subject = a.Value
-				} else if vacation.Body == "" {
-					vacation.Body = a.Value
-				}
+			// The reason is the reply body.
+			if vacation.Body == "" {
+				vacation.Body = a.Value
 			}
 		case *NumberValue:
 			vacation.Days = int(a.Value)
 		}
-		argIdx++
 	}
 
 	// Only send vacation if enabled

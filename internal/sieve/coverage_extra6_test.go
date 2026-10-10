@@ -2,6 +2,7 @@ package sieve
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 )
@@ -491,14 +492,10 @@ func TestInterpreter_EnvelopeTest(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// Should match and keep
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action, got %d", len(actions))
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
 }
 
@@ -558,13 +555,11 @@ func TestInterpreter_HasFlagsTest(t *testing.T) {
 	}
 
 	// Empty flags - should not match
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
-
-	// No match since no flags set
-	_ = actions
 }
 
 // --- CurrentDate test ---
@@ -590,13 +585,11 @@ func TestInterpreter_CurrentDateTest(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
-
-	// May or may not match depending on current date - just verify no error
-	_ = actions
 }
 
 // --- MessageContext with headers ---
@@ -658,14 +651,10 @@ func TestInterpreter_AddressTest_All(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-
-	// Should match and discard
-	if len(actions) != 1 {
-		t.Errorf("Expected 1 action, got %d", len(actions))
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
 }
 
@@ -692,13 +681,11 @@ func TestInterpreter_StringTest_Count(t *testing.T) {
 		Body:    []byte("Hello"),
 	}
 
-	actions, err := interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
+	// F5240: this test is not implemented; it must be rejected instead of
+	// being evaluated as a header test on a header named after the test.
+	if _, err := interp.Execute(msg); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Fatalf("expected unsupported test error, got %v", err)
 	}
-
-	// No variable set, should not match
-	_ = actions
 }
 
 // --- Execute with nil message context ---
