@@ -49,6 +49,7 @@ type Server struct {
 	adminServer       *api.AdminServer
 	tlsManager        *umailTLS.Manager
 	webhookMgr        *webhook.Manager
+	deliveryLocks     sync.Map // lowercase mailbox -> *sync.Mutex (see lockDeliveryUser)
 	alertMgr          *alert.Manager
 	pushSvc           *push.Service
 	imapAuth          *imap.AuthTracker // shared failed-login counters across IMAP listeners (F5844)
