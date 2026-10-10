@@ -439,20 +439,52 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 				}
 			}
 
-			outFile, err := os.Create(targetPath)
-			if err != nil {
+			if err := restoreRegularFile(targetPath, tr, os.FileMode(header.Mode)); err != nil {
 				return err
 			}
-			if _, err := io.Copy(outFile, tr); err != nil {
-				outFile.Close()
-				return err
-			}
-			outFile.Close()
-			os.Chmod(targetPath, os.FileMode(header.Mode))
 		}
 	}
 
+	// Tar EOF can precede gzip EOF; the gzip CRC-32/size footer is only
+	// checked when the stream is read to its end, so drain it. Without this a
+	// payload corrupted in a way that keeps the deflate framing valid restores
+	// silently, even though Verify rejects the same archive.
+	if _, err := io.Copy(io.Discard, gz); err != nil {
+		return fmt.Errorf("corrupt gzip stream: %w", err)
+	}
+
 	return nil
+}
+
+// restoreRegularFile writes one archive member to targetPath atomically: the
+// payload goes to a temporary file in the same directory and is renamed over
+// targetPath only after it was copied completely. Creating targetPath directly
+// truncated an existing message before the payload was read, so a truncated or
+// corrupt archive destroyed the live copy it was meant to restore.
+func restoreRegularFile(targetPath string, r io.Reader, mode os.FileMode) (retErr error) {
+	tmp, err := os.CreateTemp(filepath.Dir(targetPath), ".restore-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if retErr != nil {
+			// Best-effort cleanup of our own temp file; the restore error is
+			// what the caller needs to see.
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := io.Copy(tmp, r); err != nil {
+		return errors.Join(err, tmp.Close())
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode.Perm()); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, targetPath)
 }
 
 // backupKDFIterations is the PBKDF2-HMAC-SHA256 iteration count for backup
