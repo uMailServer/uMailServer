@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/umailserver/umailserver/internal/audit"
 	"github.com/umailserver/umailserver/internal/auth"
+	"github.com/umailserver/umailserver/internal/db"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -136,23 +138,145 @@ func newJTI() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// sessionAccountState applies the account's current state to a validated
-// token for subject sub (F5029). JWT claims are a snapshot from issue time,
-// so without this a deactivated account kept working and a demoted admin
-// kept admin access until the token expired. When the account exists its
-// record is authoritative: active=false rejects the session and isAdmin is
-// the stored role. Unknown subjects keep the claim value (no account to
+// beforeCredentialWrite is a test seam invoked between the slow password
+// hash and the credential write (F6255/F6256) so tests can interleave a
+// concurrent change deterministically. Nil in production.
+var beforeCredentialWrite func()
+
+// ceilMicros returns t as unix microseconds rounded up. JWT claims are
+// decoded as float64, which holds microsecond timestamps exactly but not
+// nanosecond ones, so the session cut-off works in microseconds; rounding up
+// keeps a token issued right after a cut-off at or after it.
+func ceilMicros(t time.Time) int64 { return (t.UnixNano() + 999) / 1000 }
+
+// sessionState applies the account's current state to a validated token
+// (F5029, F6250-F6252, F6258). JWT claims are a snapshot from issue time, so
+// without this a deactivated account kept working, a demoted admin kept admin
+// access and a deleted account (or one whose password was just changed) kept
+// every session until the token expired. The stored account is authoritative:
+//   - missing/unreadable account, or active=false: rejected (fail closed);
+//   - TokensValidAfter (set on password change/reset, disable, demotion,
+//     TOTP disable) and the account's creation time reject tokens issued
+//     before them, so a deleted-and-recreated address does not inherit
+//     old sessions;
+//   - isAdmin is the stored role.
+//
+// With no database or no subject the claim value is kept (nothing to
 // consult).
-func (s *Server) sessionAccountState(sub string, claimAdmin bool) (isAdmin, active bool) {
+func (s *Server) sessionState(claims jwt.MapClaims) (isAdmin, active bool) {
+	sub, _ := claims["sub"].(string)
+	claimAdmin, _ := claims["admin"].(bool)
 	if s.db == nil || sub == "" {
 		return claimAdmin, true
 	}
 	localPart, domain := parseEmail(sub)
 	account, err := s.db.GetAccount(domain, localPart)
 	if err != nil || account == nil {
-		return claimAdmin, true
+		return false, false
 	}
-	return account.IsAdmin, account.IsActive
+	if !account.IsActive {
+		return account.IsAdmin, false
+	}
+	if !tokenIssuedAfterCutoff(claims, account) {
+		return account.IsAdmin, false
+	}
+	return account.IsAdmin, true
+}
+
+// tokenIssuedAfterCutoff reports whether the token was issued at or after the
+// account's revocation cut-off and creation time.
+func tokenIssuedAfterCutoff(claims jwt.MapClaims, account *db.AccountData) bool {
+	cutoff := account.TokensValidAfter
+	var created int64
+	if !account.CreatedAt.IsZero() {
+		created = account.CreatedAt.UnixNano()
+	}
+	if cutoff == 0 && created == 0 {
+		return true
+	}
+	if iatu, ok := claims["iatu"].(float64); ok {
+		n := int64(iatu) * 1000
+		return n >= cutoff && n >= created
+	}
+	iat, ok := claims["iat"].(float64)
+	if !ok {
+		return cutoff == 0
+	}
+	// Legacy token (second precision): it was issued somewhere in
+	// [iat, iat+1). Reject whenever that interval can precede the cut-off;
+	// the creation time is only compared whole-second so a token minted in
+	// the creation second is accepted.
+	start := int64(iat) * int64(time.Second)
+	if cutoff != 0 && start <= cutoff {
+		return false
+	}
+	return created == 0 || start+int64(time.Second) > created
+}
+
+// revokeSessions sets the account's session cut-off to now: every token
+// issued before this instant stops working (F6250).
+func revokeSessions(a *db.AccountData) {
+	a.TokensValidAfter = ceilMicros(time.Now()) * 1000
+}
+
+// isWebBrowserUA reports whether the User-Agent looks like a browser; those
+// clients get their token only via the HttpOnly cookie.
+func isWebBrowserUA(r *http.Request) bool {
+	ua := r.Header.Get("User-Agent")
+	return strings.Contains(ua, "Mozilla/") || strings.Contains(ua, "Chrome/") ||
+		strings.Contains(ua, "Firefox/") || strings.Contains(ua, "Safari/") ||
+		strings.Contains(ua, "Edge/")
+}
+
+// attachReplacementSession is used after the caller revoked all sessions of
+// their own account (password change, 2FA removal): it issues a fresh token so
+// the acting session survives. A cookie session gets the replacement cookie;
+// non-browser clients also receive it in resp["token"].
+func (s *Server) attachReplacementSession(w http.ResponseWriter, r *http.Request, account *db.AccountData, resp map[string]interface{}) {
+	tokenString, err := s.newSessionToken(account.Email, account.IsAdmin)
+	if err != nil {
+		// The old tokens are already dead; the client must log in again.
+		return
+	}
+	if cookie, cerr := r.Cookie("jwt"); cerr == nil && cookie.Value != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "jwt",
+			Value:    tokenString,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   r.TLS != nil,
+			SameSite: http.SameSiteStrictMode,
+			MaxAge:   int(s.config.TokenExpiry.Seconds()),
+		})
+	}
+	if !isWebBrowserUA(r) || r.Header.Get("Authorization") != "" {
+		resp["token"] = tokenString
+		resp["expiresIn"] = int(s.config.TokenExpiry.Seconds())
+	}
+}
+
+// newSessionToken signs a session JWT for sub. The iatu claim carries
+// microsecond issue time for the revocation cut-off (see sessionState).
+func (s *Server) newSessionToken(sub string, admin bool) (string, error) {
+	// F5025/F4939: a random jti keeps two tokens issued in the same second
+	// from being byte-identical.
+	jti, err := newJTI()
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":   sub,
+		"admin": admin,
+		"exp":   now.Add(s.config.TokenExpiry).Unix(),
+		"iat":   now.Unix(),
+		"iatu":  ceilMicros(now),
+		"jti":   jti,
+	})
+	// Set key ID header for secret rotation support
+	kid, secret := s.signingKey()
+	token.Header["kid"] = kid
+	return token.SignedString(secret)
 }
 
 // getTOTPKey returns the encryption key for TOTP secrets.
@@ -487,8 +611,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if needsRehash {
 		newHash, err := s.hashPassword(req.Password)
 		if err == nil {
-			account.PasswordHash = newHash
-			_ = s.db.UpdateAccount(account)
+			// F6255: compare-and-swap on the hash that was verified. The
+			// hash above is slow; writing back the whole snapshot let a
+			// login racing a password change put the OLD password's rehash
+			// over the new password (and revert concurrent disables).
+			oldHash := account.PasswordHash
+			if beforeCredentialWrite != nil {
+				beforeCredentialWrite()
+			}
+			errStale := errors.New("password changed concurrently")
+			_, _ = s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+				if a.PasswordHash != oldHash {
+					return errStale
+				}
+				a.PasswordHash = newHash
+				return nil
+			})
 		}
 	}
 
@@ -546,26 +684,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.clearTOTPFailures(req.Email)
 	}
 
-	// Generate JWT. F5025: a random jti keeps two logins by the same user in
-	// the same second from signing byte-identical tokens (logging out one
-	// session would otherwise revoke the other).
-	jti, err := newJTI()
-	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
-		return
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":   account.Email,
-		"admin": account.IsAdmin,
-		"exp":   time.Now().Add(s.config.TokenExpiry).Unix(),
-		"iat":   time.Now().Unix(),
-		"jti":   jti,
-	})
-	// Set key ID header for secret rotation support
-	kid, secret := s.signingKey()
-	token.Header["kid"] = kid
-
-	tokenString, err := token.SignedString(secret)
+	tokenString, err := s.newSessionToken(account.Email, account.IsAdmin)
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -713,25 +832,11 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value("user")
 	isAdmin := r.Context().Value("isAdmin")
 
-	// Generate new token. F4939: a random jti keeps it distinct from the
-	// token revoked above even when both are issued in the same second
-	// (identical claims would otherwise sign to the identical, revoked token).
-	jti, err := newJTI()
-	if err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
-		return
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":   user,
-		"admin": isAdmin,
-		"exp":   time.Now().Add(s.config.TokenExpiry).Unix(),
-		"iat":   time.Now().Unix(),
-		"jti":   jti,
-	})
-	kid, secret := s.signingKey()
-	token.Header["kid"] = kid
-
-	tokenString, err := token.SignedString(secret)
+	// F4939: newSessionToken's random jti keeps it distinct from the token
+	// revoked above even when both are issued in the same second.
+	adminClaim, _ := isAdmin.(bool)
+	subject, _ := user.(string)
+	tokenString, err := s.newSessionToken(subject, adminClaim)
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -797,4 +902,11 @@ func pruneLoginMap(m map[string]*loginAttempt, now time.Time) {
 			delete(m, k)
 		}
 	}
+}
+
+// TokenIssuedAfterCutoff reports whether the token claims were issued at or
+// after the account's session cut-off and creation time. It is exported so
+// other listeners (JMAP) apply the same session revocation as the API.
+func TokenIssuedAfterCutoff(claims map[string]interface{}, account *db.AccountData) bool {
+	return tokenIssuedAfterCutoff(jwt.MapClaims(claims), account)
 }

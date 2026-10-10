@@ -50,16 +50,10 @@ func NewManager() *Manager {
 
 // CompileScript compiles a Sieve script string and returns the Script
 func (m *Manager) CompileScript(source string) (*Script, error) {
-	p := NewParser(source)
-	script, err := p.Parse()
-	if err != nil {
-		return nil, err
-	}
-	// F5036: a script requiring an unsupported extension is invalid.
-	if err := CheckRequires(script); err != nil {
-		return nil, err
-	}
-	return script, nil
+	// RFC 5228 §2.10 / F5036: every syntax and semantic error (unknown
+	// command, test or tag, bad arguments, unsupported or missing require,
+	// excessive nesting) rejects the script, so it is never stored or run.
+	return Compile(source)
 }
 
 // StoreScript stores a script for a user without activating it
@@ -330,10 +324,13 @@ func (m *Manager) ProcessMessage(userID string, msg *MessageContext) ([]Action, 
 		return []Action{KeepAction{}}, nil
 	}
 
+	// Execute logs a run-time error and returns the implicit keep with it
+	// (RFC 5228 §2.10.6); the mail is never lost.
 	interp := NewInterpreter(script)
 	actions, err := interp.Execute(msg)
 	if err != nil {
-		return nil, err
+		m.warnf("Sieve script failed, applying implicit keep", "user", userID, "error", err)
+		return []Action{KeepAction{}}, nil
 	}
 
 	return actions, nil

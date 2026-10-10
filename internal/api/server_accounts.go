@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -157,18 +158,30 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusInternalServerError, "failed to hash password")
 		return
 	}
-	account.PasswordHash = hashedPassword
-	account.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.NewPassword)))
-	account.UpdatedAt = time.Now()
-
-	if err := s.db.UpdateAccount(account); err != nil {
+	// F6256: change only the credential fields of the stored row; writing
+	// back the snapshot read before the slow hashes re-enabled an account an
+	// admin disabled meanwhile and reverted concurrent role/TOTP changes.
+	// F6250: every existing session of the account is revoked; the caller
+	// receives a replacement token below.
+	if beforeCredentialWrite != nil {
+		beforeCredentialWrite()
+	}
+	updated, err := s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+		a.PasswordHash = hashedPassword
+		a.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.NewPassword)))
+		revokeSessions(a)
+		return nil
+	})
+	if err != nil {
 		status, msg := dbErrStatus(err, "failed to update password")
 		s.sendError(w, status, msg)
 		return
 	}
 
 	s.auditLogger.LogAccountUpdate(authUser, authUser, audit.ExtractIP(r), []string{"password_changed"})
-	s.sendJSON(w, http.StatusOK, map[string]string{"message": "password changed"})
+	resp := map[string]interface{}{"message": "password changed"}
+	s.attachReplacementSession(w, r, updated, resp)
+	s.sendJSON(w, http.StatusOK, resp)
 }
 
 // Account handlers
@@ -185,10 +198,15 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusNotFound, "account not found")
 			return
 		}
+		setTotalCount(w, 1)
 		s.sendJSON(w, http.StatusOK, []map[string]interface{}{accountToJSON(account)})
 		return
 	}
 
+	limit, offset, ok := s.parsePage(w, r)
+	if !ok {
+		return
+	}
 	domain := r.URL.Query().Get("domain")
 
 	var accounts []*db.AccountData
@@ -217,6 +235,12 @@ func (s *Server) listAccounts(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusInternalServerError, "failed to list accounts")
 		return
 	}
+
+	// F6254: stable order (by address), then the requested window.
+	sort.Slice(accounts, func(i, j int) bool { return accounts[i].Email < accounts[j].Email })
+	setTotalCount(w, len(accounts))
+	lo, hi := pageBounds(len(accounts), limit, offset)
+	accounts = accounts[lo:hi]
 
 	result := make([]map[string]interface{}, 0, len(accounts)) // F6137: [] not null
 	for _, a := range accounts {
@@ -470,6 +494,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		s.auditLogger.LogAccountUpdate(authUser, email, ip, []string{"admin_status_" + action})
 	}
 
+	var newHash, newAPOP string
 	if req.Password != "" {
 		// F6139: PUT must not be a way around the current-password check
 		// and throttle of /api/v1/account/password for one's own account.
@@ -487,34 +512,59 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 			s.sendError(w, http.StatusInternalServerError, "failed to hash password")
 			return
 		}
-		account.PasswordHash = hashedPassword
-		account.APOPHash = fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
+		newHash = hashedPassword
+		newAPOP = fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
 	}
-	account.IsAdmin = wantAdmin
-	if req.IsActive != nil {
-		account.IsActive = *req.IsActive
-	}
-	if req.ForwardTo != nil {
-		account.ForwardTo = *req.ForwardTo
-	}
-	if req.ForwardKeepCopy != nil {
-		account.ForwardKeepCopy = *req.ForwardKeepCopy
-	}
-	if req.QuotaLimit != nil {
-		account.QuotaLimit = *req.QuotaLimit
-	}
-	if req.VacationSettings != nil {
-		account.VacationSettings = *req.VacationSettings
-	}
-	account.UpdatedAt = time.Now()
 
-	if err := s.db.UpdateAccount(account); err != nil {
+	// F6256: apply only the requested fields to the stored row inside one
+	// transaction. The snapshot above was read before the slow password
+	// hash; writing it back (UpdateAccount) erased a concurrent disable,
+	// role change or password change. F6250/F6252: a password reset, a
+	// disable or an admin demotion also revokes the account's sessions, so
+	// re-enabling or re-promoting cannot revive old tokens.
+	updated, err := s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+		revoke := false
+		if newHash != "" {
+			a.PasswordHash = newHash
+			a.APOPHash = newAPOP
+			revoke = true
+		}
+		if req.IsAdmin != nil {
+			if a.IsAdmin && !*req.IsAdmin {
+				revoke = true
+			}
+			a.IsAdmin = *req.IsAdmin
+		}
+		if req.IsActive != nil {
+			if a.IsActive && !*req.IsActive {
+				revoke = true
+			}
+			a.IsActive = *req.IsActive
+		}
+		if req.ForwardTo != nil {
+			a.ForwardTo = *req.ForwardTo
+		}
+		if req.ForwardKeepCopy != nil {
+			a.ForwardKeepCopy = *req.ForwardKeepCopy
+		}
+		if req.QuotaLimit != nil {
+			a.QuotaLimit = *req.QuotaLimit
+		}
+		if req.VacationSettings != nil {
+			a.VacationSettings = *req.VacationSettings
+		}
+		if revoke {
+			revokeSessions(a)
+		}
+		return nil
+	})
+	if err != nil {
 		status, msg := dbErrStatus(err, "failed to update account")
 		s.sendError(w, status, msg)
 		return
 	}
 
-	s.sendJSON(w, http.StatusOK, accountToJSON(account))
+	s.sendJSON(w, http.StatusOK, accountToJSON(updated))
 }
 
 func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email string) {

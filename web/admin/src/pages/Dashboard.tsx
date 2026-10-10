@@ -1,4 +1,5 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
+import { deriveServiceStatuses, probeHealth } from "@/lib/serviceStatus";
 import {
   Mail,
   Users,
@@ -28,17 +29,21 @@ interface DashboardProps {
   activities: ActivityType[];
 }
 
-const serviceStatuses: ServiceStatus[] = [
-  { name: "SMTP Server", status: "operational", port: 25 },
-  { name: "IMAP Server", status: "operational", port: 993 },
-  { name: "HTTP API", status: "operational", port: 8443 },
-];
-
 export function Dashboard({ isConnected, metrics, activities }: DashboardProps) {
   const { stats, loading, error, fetchStats: rawFetchStats } = useStats();
   // The failure is surfaced via `error`; swallowing the rejection prevents
   // unhandled promise rejections from the poll and the Refresh button.
   const fetchStats = useCallback(() => rawFetchStats().catch(() => undefined), [rawFetchStats]);
+
+  const [health, setHealth] = useState<{ ok: boolean; reachable: boolean } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const run = () => probeHealth().then((h) => { if (!cancelled) setHealth(h); });
+    run();
+    const t = setInterval(run, 30000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, []);
+  const serviceStatuses = deriveServiceStatuses(health);
 
   useEffect(() => {
     fetchStats();
@@ -266,6 +271,7 @@ function ServiceCard({ name, status, port }: ServiceStatus) {
     operational: { icon: CheckCircle, color: "text-emerald-500", bg: "bg-emerald-500/10" },
     degraded: { icon: AlertTriangle, color: "text-amber-500", bg: "bg-amber-500/10" },
     down: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10" },
+    unknown: { icon: AlertTriangle, color: "text-muted-foreground", bg: "bg-muted" },
   };
 
   const config = statusConfig[status];

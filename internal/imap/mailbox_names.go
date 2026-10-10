@@ -3,7 +3,60 @@ package imap
 import (
 	"fmt"
 	"strings"
+
+	"golang.org/x/text/unicode/norm"
 )
+
+// normMailbox returns name in Unicode NFC. F6320: canonically equivalent
+// names (U+015E vs S + U+0327) were distinct mailboxes.
+func normMailbox(name string) string {
+	return norm.NFC.String(name)
+}
+
+// resolveStoredName maps an NFC mailbox name to the name actually stored:
+// the NFC name itself when that mailbox exists, otherwise a stored name whose
+// NFC form equals it (data created before names were normalised). With no
+// match the NFC name is returned unchanged.
+func (s *Session) resolveStoredName(nfc string) string {
+	ascii := true
+	for i := 0; i < len(nfc); i++ {
+		if nfc[i] >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii || s.server == nil || s.server.mailstore == nil || s.user == "" {
+		return nfc
+	}
+	names, err := s.server.mailstore.ListMailboxes(s.user, "*")
+	if err != nil {
+		return nfc
+	}
+	legacy := ""
+	for _, n := range names {
+		if n == nfc {
+			return nfc
+		}
+		if legacy == "" && normMailbox(n) == nfc {
+			legacy = n
+		}
+	}
+	if legacy != "" {
+		return legacy
+	}
+	return nfc
+}
+
+// patternForms returns the forms of a decoded LIST pattern to query: NFC and,
+// when different, NFD (so legacy decomposed names still match).
+func patternForms(p string) []string {
+	c := normMailbox(p)
+	d := norm.NFD.String(c)
+	if d != c {
+		return []string{c, d}
+	}
+	return []string{c}
+}
 
 // skipWords returns line with its first n whitespace-delimited words removed.
 func skipWords(line string, n int) string {

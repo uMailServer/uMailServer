@@ -11,6 +11,7 @@ import { Accounts } from "@/pages/Accounts";
 import { Queue } from "@/pages/Queue";
 import { SettingsPage } from "@/pages/Settings";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { recalledEmail, rememberEmail } from "@/lib/serviceStatus";
 import type { User, Activity, RealtimeMetrics } from "@/types";
 
 function App() {
@@ -29,7 +30,7 @@ function App() {
     }).then(res => {
       if (res.ok) {
         setIsAuthenticated(true);
-        setUser({ email: "admin@example.com", isAdmin: true });
+        setUser({ email: recalledEmail(), isAdmin: true });
       }
     }).catch(() => {
       // Not authenticated
@@ -50,6 +51,7 @@ function App() {
     // Token is stored in HttpOnly cookie by the server
     // No need to store in localStorage (more secure against XSS)
     setIsAuthenticated(true);
+    rememberEmail(userData.email);
     setUser({ email: userData.email, isAdmin: true });
   };
 
@@ -63,6 +65,7 @@ function App() {
     }).catch(() => {
       // Local logout already applied; server revocation is best-effort.
     });
+    rememberEmail(null);
     setIsAuthenticated(false);
     setUser(null);
     setActivities([]);

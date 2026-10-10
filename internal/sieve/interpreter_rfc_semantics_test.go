@@ -26,22 +26,22 @@ func regF5240Folder(t *testing.T, script string) string {
 // §5.8) were parsed as header tests on headers named "not"/"exists", and
 // unimplemented tests were evaluated the same way.
 func TestNotAndExistsTests(t *testing.T) {
-	if got := regF5240Folder(t, `if not header :contains "subject" "zz" { fileinto "N"; }`); got != "N" {
+	if got := regF5240Folder(t, `require ["fileinto"]; if not header :contains "subject" "zz" { fileinto "N"; }`); got != "N" {
 		t.Errorf("not: got %s, want N", got)
 	}
-	if got := regF5240Folder(t, `if exists "subject" { fileinto "E"; }`); got != "E" {
+	if got := regF5240Folder(t, `require ["fileinto"]; if exists "subject" { fileinto "E"; }`); got != "E" {
 		t.Errorf("exists: got %s, want E", got)
 	}
-	_, err := ExecuteScript(`if address :is "from" "a@x" { keep; }`, &MessageContext{})
-	if err == nil || !strings.Contains(err.Error(), "unsupported test") {
-		t.Errorf("address: want unsupported test error, got %v", err)
+	// r142: address is implemented; an unknown test is still a script error.
+	if _, err := ExecuteScript(`if bogus :is "from" "a@x" { keep; }`, &MessageContext{}); err == nil || !strings.Contains(err.Error(), "unsupported test") {
+		t.Errorf("bogus: want unsupported test error, got %v", err)
 	}
 }
 
 // TestMatchesManyWildcards covers F5241: keys with four or more "*" were
 // rejected as ReDoS candidates and silently evaluated false.
 func TestMatchesManyWildcards(t *testing.T) {
-	if got := regF5240Folder(t, `if header :matches "subject" "*a*b*c*d*" { fileinto "M"; }`); got != "M" {
+	if got := regF5240Folder(t, `require ["fileinto"]; if header :matches "subject" "*a*b*c*d*" { fileinto "M"; }`); got != "M" {
 		t.Errorf("got %s, want M", got)
 	}
 }
@@ -49,7 +49,7 @@ func TestMatchesManyWildcards(t *testing.T) {
 // TestHeaderDefaultMatchTypeIs covers F5243: without a match-type tag the
 // test must use :is (RFC 5228 §2.7.1), not never match.
 func TestHeaderDefaultMatchTypeIs(t *testing.T) {
-	if got := regF5240Folder(t, `if header "subject" "A1 B2 C3 D4 E5" { fileinto "D"; }`); got != "D" {
+	if got := regF5240Folder(t, `require ["fileinto"]; if header "subject" "A1 B2 C3 D4 E5" { fileinto "D"; }`); got != "D" {
 		t.Errorf("got %s, want D", got)
 	}
 }

@@ -55,11 +55,12 @@ func (s *Server) runUserSieve(scriptUser, rcpt, from string, data []byte) (out s
 		env = "<>"
 	}
 	actions, err := s.sieveManager.ProcessMessage(scriptUser, &sieve.MessageContext{
-		From:    env,
-		To:      []string{rcpt},
-		Headers: headers,
-		Body:    data,
-		Size:    int64(len(data)),
+		From:              env,
+		To:                []string{rcpt},
+		Headers:           headers,
+		Body:              data,
+		Size:              int64(len(data)),
+		BodyIsFullMessage: true,
 	})
 	if err != nil {
 		s.logger.Warn("Sieve script failed, keeping message", "user", scriptUser, "error", err)

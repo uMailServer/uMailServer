@@ -1146,8 +1146,13 @@ func (s *Session) handleListLine(args []string, line string) error {
 			s.WriteResponse(s.tag, "BAD "+derr.Error())
 			return nil
 		}
-		req.patterns[i] = d
+		req.patterns[i] = normMailbox(d)
 	}
+	var forms []string
+	for _, p := range req.patterns {
+		forms = append(forms, patternForms(p)...)
+	}
+	listPatterns := forms
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
@@ -1163,7 +1168,7 @@ func (s *Session) handleListLine(args []string, line string) error {
 
 	seen := map[string]bool{}
 	var mailboxes []string
-	for _, p := range req.patterns {
+	for _, p := range listPatterns {
 		list, err := s.server.mailstore.ListMailboxes(s.user, p)
 		if err != nil {
 			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
@@ -1291,7 +1296,8 @@ func (s *Session) handleLsub(args []string) error {
 	}
 
 	// Combine reference and pattern
-	fullPattern := reference
+	fullPattern := normMailbox(reference)
+	pattern = normMailbox(pattern)
 	if pattern != "" {
 		if fullPattern != "" && !strings.HasSuffix(fullPattern, "/") {
 			fullPattern += "/"
@@ -1341,7 +1347,7 @@ func (s *Session) handleLsub(args []string) error {
 	var entries []lsubEntry
 	emitted := map[string]bool{}
 	for _, mbox := range subscribed {
-		if matchMailboxPattern(mbox, fullPattern) {
+		if matchMailboxPattern(normMailbox(mbox), fullPattern) {
 			attrs := "\\HasNoChildren"
 			if hasChild(mbox) {
 				attrs = "\\HasChildren"
@@ -1358,7 +1364,7 @@ func (s *Session) handleLsub(args []string) error {
 				continue
 			}
 			parent := mbox[:i]
-			if !subSet[parent] && !emitted[parent] && matchMailboxPattern(parent, fullPattern) {
+			if !subSet[parent] && !emitted[parent] && matchMailboxPattern(normMailbox(parent), fullPattern) {
 				emitted[parent] = true
 				entries = append(entries, lsubEntry{parent, "\\Noselect \\HasChildren"})
 			}
@@ -1451,6 +1457,51 @@ func (s *Session) handleStatus(args []string) error {
 
 // APPEND command (RFC 3501) with MULTIAPPEND extension (RFC 7889)
 func (s *Session) handleAppend(args []string, line string) error {
+	// F6321: a rejected APPEND must not leave its literal on the wire to be
+	// parsed as commands. Synchronising literals are simply never granted a
+	// continuation; a non-synchronising {n+} literal is already in flight and
+	// is discarded (BYE when n is beyond the APPEND limit).
+	consumed := false
+	err := s.handleAppendInner(args, line, &consumed)
+	if !consumed {
+		if _, n, nonSync, ok := trailingLiteral(line); ok && nonSync {
+			if derr := s.discardLiteral(n); derr != nil {
+				return derr
+			}
+		}
+	}
+	return err
+}
+
+// maxAppendSize bounds one APPEND message literal.
+const maxAppendSize = 50 * 1024 * 1024
+
+// discardLiteral drops n bytes of an unwanted non-synchronising literal. When
+// n exceeds the APPEND limit it sends BYE and ends the session instead of
+// reading an unbounded amount.
+func (s *Session) discardLiteral(n int) error {
+	if n > maxAppendSize {
+		s.WriteData("BYE Literal too large")
+		s.stateMu.Lock()
+		s.state = StateLoggedOut
+		s.stateMu.Unlock()
+		return errLiteralFatal
+	}
+	_, err := io.CopyN(io.Discard, s.reader, int64(n))
+	if err != nil {
+		return err
+	}
+	return s.skipLineRest()
+}
+
+// skipLineRest discards the rest of the current line (the CRLF that follows
+// a literal).
+func (s *Session) skipLineRest() error {
+	_, err := s.readLine()
+	return err
+}
+
+func (s *Session) handleAppendInner(args []string, line string, consumed *bool) error {
 	ctx := context.Background()
 
 	// Create tracing span
@@ -1479,9 +1530,6 @@ func (s *Session) handleAppend(args []string, line string) error {
 	if span != nil {
 		tracing.SetStringAttribute(span, "append.mailbox", mailboxName)
 	}
-
-	// Limit APPEND message size to 50MB
-	const maxAppendSize = 50 * 1024 * 1024
 
 	// Process first message (has literal in command or needs continuation)
 	flags, date, size, err := s.parseAppendParams(args[1:], line)
@@ -1520,6 +1568,7 @@ func (s *Session) handleAppend(args []string, line string) error {
 	}
 
 	// Read the message data
+	*consumed = true
 	data := make([]byte, size)
 	_, err = io.ReadFull(s.reader, data)
 	if err != nil {
@@ -1556,16 +1605,23 @@ func (s *Session) handleAppend(args []string, line string) error {
 			break
 		}
 		nflags, ndate, nextSize, perr := s.parseAppendParams(strings.Fields(rest), rest)
+		_, restN, restNonSync, restLit := trailingLiteral(rest)
+		skipRest := func() error {
+			if restLit && restNonSync {
+				return s.discardLiteral(restN)
+			}
+			return nil
+		}
 		if perr != nil || nextSize == 0 {
 			s.WriteResponse(s.tag, "BAD Invalid MULTIAPPEND message")
-			return nil
+			return skipRest()
 		}
 		if nextSize > maxAppendSize || totalSize+int64(nextSize) > maxMultiAppendTotal {
 			s.WriteResponse(s.tag, "NO Message too large (limit 50MB)")
 			if span != nil {
 				tracing.SetStatus(span, tracing.StatusError, "message too large")
 			}
-			return nil
+			return skipRest()
 		}
 		if !strings.Contains(rest, "+}") {
 			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", nextSize))
@@ -2126,7 +2182,13 @@ func (s *Session) handleSearchWithUIDs(args []string, line string, uidResults bo
 	}
 
 	// Parse search criteria (NOT / OR / parenthesised keys: F5493)
-	program, err := parseSearchProgram(commandArgTokens(args, line, "SEARCH"))
+	toks := commandArgTokens(args, line, "SEARCH")
+	retOpts, toks, rerr := parseSearchReturn(toks)
+	if rerr != nil {
+		s.WriteResponse(s.tag, "BAD "+rerr.Error())
+		return nil
+	}
+	program, err := parseSearchProgram(toks)
 	if err != nil {
 		s.writeSearchParseError(err)
 		return nil
@@ -2165,6 +2227,13 @@ func (s *Session) handleSearchWithUIDs(args []string, line string, uidResults bo
 		for _, msg := range messages {
 			uids = append(uids, msg.UID)
 		}
+	}
+
+	if retOpts != nil {
+		sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
+		s.WriteData(esearchResponse(s.tag, uidResults, retOpts, uids))
+		s.WriteResponse(s.tag, "OK SEARCH completed")
+		return nil
 	}
 
 	// SearchMessages returns positions; UID SEARCH resolves them to stable UIDs.
@@ -3366,7 +3435,7 @@ func (s *Session) parseOwnerMailbox(mailbox string) (owner, name string, isShare
 	// Wire names are modified UTF-7; an undecodable name is kept raw and so
 	// matches no mailbox.
 	if d, err := decodeMUTF7(name); err == nil {
-		name = canonMailbox(d)
+		name = normMailbox(canonMailbox(d))
 	}
 	return owner, name, isShared
 }
@@ -3972,4 +4041,64 @@ func noText(err error) string {
 		return "NO [OVERQUOTA] " + err.Error()
 	}
 	return fmt.Sprintf("NO %s", err)
+}
+
+// parseSearchReturn parses the optional RFC 4731 "RETURN (MIN MAX ALL COUNT)"
+// prefix of a SEARCH command (F6325: ESEARCH was advertised but RETURN was
+// treated as a search key). The returned option slice is nil when no RETURN
+// was given; "RETURN ()" means ALL. SAVE (SEARCHRES) is not supported.
+func parseSearchReturn(toks []imapToken) ([]string, []imapToken, error) {
+	if len(toks) == 0 || toks[0].quoted || !strings.EqualFold(toks[0].val, "RETURN") {
+		return nil, toks, nil
+	}
+	if len(toks) < 2 || toks[1].quoted || toks[1].val != "(" {
+		return nil, toks, fmt.Errorf("RETURN requires a parenthesized option list")
+	}
+	opts := []string{}
+	i := 2
+	for ; i < len(toks) && (toks[i].quoted || toks[i].val != ")"); i++ {
+		o := strings.ToUpper(toks[i].val)
+		switch o {
+		case "MIN", "MAX", "ALL", "COUNT":
+			opts = append(opts, o)
+		default:
+			return nil, toks, fmt.Errorf("Unsupported SEARCH RETURN option %s", toks[i].val)
+		}
+	}
+	if i >= len(toks) {
+		return nil, toks, fmt.Errorf("unterminated RETURN option list")
+	}
+	if len(opts) == 0 {
+		opts = []string{"ALL"}
+	}
+	return opts, toks[i+1:], nil
+}
+
+// esearchResponse renders the untagged ESEARCH result (RFC 4731 §3.1).
+// uids must be ascending.
+func esearchResponse(tag string, uid bool, opts []string, nums []uint32) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "ESEARCH (TAG %s)", quoteMailbox(tag))
+	if uid {
+		b.WriteString(" UID")
+	}
+	want := map[string]bool{}
+	for _, o := range opts {
+		want[o] = true
+	}
+	if len(nums) > 0 {
+		if want["MIN"] {
+			fmt.Fprintf(&b, " MIN %d", nums[0])
+		}
+		if want["MAX"] {
+			fmt.Fprintf(&b, " MAX %d", nums[len(nums)-1])
+		}
+		if want["ALL"] {
+			fmt.Fprintf(&b, " ALL %s", uidSetString(nums))
+		}
+	}
+	if want["COUNT"] {
+		fmt.Fprintf(&b, " COUNT %d", len(nums))
+	}
+	return b.String()
 }

@@ -21,6 +21,8 @@ func adminRevokedSetup(t *testing.T) (*Server, http.Handler) {
 	}
 	t.Cleanup(func() { database.Close() })
 	s := NewServer(database, nil, Config{JWTSecret: adminRevokedSecret, TokenExpiry: time.Hour})
+	seedSessionAccount(t, database, "root@ex.com", true)
+	seedSessionAccount(t, database, "ops@ex.com", true)
 	as := NewAdminServer(s, AdminConfig{Addr: "127.0.0.1:0", JWTSecret: adminRevokedSecret})
 	return s, as.router()
 }

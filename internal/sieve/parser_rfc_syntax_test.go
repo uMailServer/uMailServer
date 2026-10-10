@@ -4,7 +4,7 @@ import "testing"
 
 // TestMissingSemicolonRejected covers F5340: RFC 5228 §8.2 command =
 // identifier arguments (";" / block). A missing ';' made the next command an
-// argument of the previous one (`fileinto "A" keep;` lost the keep).
+// argument of the previous one (`require ["fileinto"]; fileinto "A" keep;` lost the keep).
 func TestMissingSemicolonRejected(t *testing.T) {
 	for _, script := range []string{
 		`require "fileinto"; fileinto "A" keep;`,

@@ -55,6 +55,14 @@ func (s *Server) Stop() error {
 		}
 	}
 
+	// Stop JMAP background work (upload GC) and webhook retries (F6280, F6294).
+	if s.jmapServer != nil {
+		s.jmapServer.Stop()
+	}
+	if s.webhookMgr != nil {
+		s.webhookMgr.Stop()
+	}
+
 	// Stop IMAP server
 	if s.imapServer != nil {
 		if err := s.imapServer.Stop(); err != nil {

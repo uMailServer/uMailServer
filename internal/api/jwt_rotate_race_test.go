@@ -29,6 +29,7 @@ func jwtRotateRaceSetup(t *testing.T) (*Server, string) {
 	if err := database.CreateAccount(&db.AccountData{Email: "u@ex.com", LocalPart: "u", Domain: "ex.com", PasswordHash: string(hash), IsActive: true}); err != nil {
 		t.Fatalf("INVALID create account: %v", err)
 	}
+	seedSessionAccount(t, database, "root@ex.com", true)
 	s := NewServer(database, nil, Config{JWTSecret: jwtRotateRaceSecret, TokenExpiry: time.Hour})
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "root@ex.com", "admin": true, "exp": time.Now().Add(time.Hour).Unix(),

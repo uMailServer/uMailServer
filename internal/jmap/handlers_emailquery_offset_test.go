@@ -84,8 +84,9 @@ func emailQueryPost(t *testing.T, ts *httptest.Server, position float64) (int, m
 		"using": []string{"urn:ietf:params:jmap:core"},
 		"methodCalls": []map[string]interface{}{
 			{"name": "Email/query", "args": map[string]interface{}{
-				"accountId": "alice@example.com",
-				"position":  position,
+				"accountId":      "alice@example.com",
+				"position":       position,
+				"calculateTotal": true,
 			}, "id": "c0"},
 		},
 	}

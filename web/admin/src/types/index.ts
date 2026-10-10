@@ -56,7 +56,7 @@ export interface HealthStatus {
 
 export interface ServiceStatus {
   name: string;
-  status: 'operational' | 'degraded' | 'down';
+  status: 'operational' | 'degraded' | 'down' | 'unknown';
   port?: number;
   latency?: number;
 }

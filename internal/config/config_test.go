@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -328,11 +329,15 @@ func TestLoadNonExistentConfig(t *testing.T) {
 
 func TestDatabasePath(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Database.Path = "/var/lib/umailserver/db"
+	cfg.Server.DataDir = "/srv/mail"
 
-	path := cfg.DatabasePath()
-	if !strings.HasSuffix(path, ".db") {
-		t.Errorf("expected database path to end with .db, got %s", path)
+	// F6303: unset database.path resolves to <data_dir>/umailserver.db.
+	if path := cfg.DatabasePath(); path != "/srv/mail/umailserver.db" {
+		t.Errorf("DatabasePath() = %s", path)
+	}
+	cfg.Database.Path = "/elsewhere/accounts.db"
+	if path := cfg.DatabasePath(); path != "/elsewhere/accounts.db" {
+		t.Errorf("explicit DatabasePath() = %s", path)
 	}
 }
 
@@ -609,9 +614,9 @@ func TestSetFieldFromString(t *testing.T) {
 		{
 			name:     "Duration field",
 			field:    reflect.ValueOf(&struct{ D Duration }{}).Elem().Field(0),
-			val:      "300000000000", // 5m in nanoseconds
-			expected: int64(300000000000),
-			wantErr:  false,
+			val:      "300000000000", // bare numbers are rejected (F6305)
+			expected: int64(0),
+			wantErr:  true,
 		},
 		{
 			name:     "invalid int",
@@ -1289,6 +1294,7 @@ func TestSizeUnmarshalYAMLInt64(t *testing.T) {
 }
 
 func TestDurationUnmarshalYAMLInt64(t *testing.T) {
+	// F6305: a bare integer is ambiguous and must be rejected with a clear message.
 	var d Duration
 	err := d.UnmarshalYAML(func(v interface{}) error {
 		switch tv := v.(type) {
@@ -1302,11 +1308,8 @@ func TestDurationUnmarshalYAMLInt64(t *testing.T) {
 		}
 	})
 
-	if err != nil {
-		t.Fatalf("UnmarshalYAML with int64 failed: %v", err)
-	}
-	if time.Duration(d) != 5*time.Minute {
-		t.Errorf("expected 5m, got %v", time.Duration(d))
+	if err == nil || !strings.Contains(err.Error(), "5m") {
+		t.Fatalf("expected clear rejection of bare integer, got %v", err)
 	}
 }
 
@@ -1436,9 +1439,12 @@ func TestLoadNonExistentFilePath(t *testing.T) {
 	os.Setenv("UMAILSERVER_SERVER_DATADIR", tmpDir)
 	defer os.Unsetenv("UMAILSERVER_SERVER_DATADIR")
 
-	cfg, err := Load("/nonexistent/path/config.yaml")
+	if _, err := Load("/nonexistent/path/config.yaml"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Load of an explicit missing path must wrap os.ErrNotExist, got %v", err)
+	}
+	cfg, err := LoadOptional("/nonexistent/path/config.yaml")
 	if err != nil {
-		t.Fatalf("Load with non-existent path should not error: %v", err)
+		t.Fatalf("LoadOptional with non-existent path should not error: %v", err)
 	}
 	if cfg == nil {
 		t.Fatal("expected non-nil config")

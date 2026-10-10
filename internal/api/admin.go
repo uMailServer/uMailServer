@@ -216,11 +216,19 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 		}
 
 		user, _ := claims["sub"].(string)
-		isAdmin, _ := claims["admin"].(bool)
 
 		// Validate that we got valid values
 		if user == "" {
 			writeError(w, "unauthorized", "Invalid token: missing subject", http.StatusUnauthorized)
+			return
+		}
+
+		// F6258: authMiddleware consults the stored account (deleted,
+		// disabled, demoted, sessions revoked); this listener trusted the
+		// claims alone, so a demoted/deleted admin kept admin access here.
+		isAdmin, active := s.sessionState(claims)
+		if !active {
+			writeError(w, "unauthorized", "Account is disabled", http.StatusUnauthorized)
 			return
 		}
 

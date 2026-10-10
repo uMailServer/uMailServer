@@ -2264,8 +2264,8 @@ func TestHandleEXPN(t *testing.T) {
 
 	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "550") {
-		t.Errorf("Expected 550 for EXPN, got: %q", resp)
+	if !strings.HasPrefix(resp, "502") {
+		t.Errorf("Expected 502 for EXPN, got: %q", resp)
 	}
 }
 

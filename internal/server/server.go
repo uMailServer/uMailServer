@@ -230,6 +230,10 @@ func New(cfg *config.Config) (*Server, error) {
 	// tokens (F5600).
 	webhookMgr := webhook.NewManager(database, webhook.DeriveSigningKey(cfg.Security.JWTSecret))
 	webhookMgr.SetTracingProvider(s.tracingProvider)
+	// Persist the webhook registry so registered hooks survive a restart (F6290).
+	if err := webhookMgr.SetDataDir(cfg.Server.DataDir); err != nil {
+		s.logger.Error("Failed to load webhook registry", "error", err)
+	}
 	s.webhookMgr = webhookMgr
 
 	// Initialize alert manager from config (disabled by default unless cfg.Alert.Enabled)

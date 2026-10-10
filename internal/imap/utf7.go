@@ -128,7 +128,7 @@ func (s *Session) mboxArg(arg string) (string, bool) {
 		s.WriteResponse(s.tag, "BAD "+err.Error())
 		return "", false
 	}
-	return canonMailbox(name), true
+	return s.resolveStoredName(normMailbox(canonMailbox(name))), true
 }
 
 var systemFlags = map[string]string{

@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/umailserver/umailserver/internal/db"
@@ -54,11 +55,26 @@ func (s *Server) handleAliasDetail(w http.ResponseWriter, r *http.Request) {
 // Alias handlers
 
 func (s *Server) listAliases(w http.ResponseWriter, r *http.Request) {
+	limit, offset, ok := s.parsePage(w, r)
+	if !ok {
+		return
+	}
 	aliases, err := s.db.ListAliases()
 	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to list aliases")
 		return
 	}
+
+	// F6254: stable order, then the requested window.
+	sort.Slice(aliases, func(i, j int) bool {
+		if aliases[i].Domain != aliases[j].Domain {
+			return aliases[i].Domain < aliases[j].Domain
+		}
+		return aliases[i].Alias < aliases[j].Alias
+	})
+	setTotalCount(w, len(aliases))
+	lo, hi := pageBounds(len(aliases), limit, offset)
+	aliases = aliases[lo:hi]
 
 	result := make([]map[string]interface{}, 0, len(aliases)) // F6137: [] not null
 	for _, a := range aliases {

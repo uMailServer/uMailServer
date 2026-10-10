@@ -23,6 +23,7 @@ func a4939Setup(t *testing.T) *Server {
 		t.Fatalf("INVALID open db: %v", err)
 	}
 	t.Cleanup(func() { database.Close() })
+	seedSessionAccount(t, database, "bob@ex.com", false)
 	return NewServer(database, nil, Config{JWTSecret: a4939Secret, TokenExpiry: time.Hour})
 }
 

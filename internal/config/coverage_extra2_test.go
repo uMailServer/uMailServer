@@ -424,7 +424,7 @@ func TestParseSizeJustNumber(t *testing.T) {
 }
 
 func TestDurationParseViaEnv(t *testing.T) {
-	os.Setenv("UMAILSERVER_SPAM_GREYLISTING_DELAY", "300000000000") // 5m in ns
+	os.Setenv("UMAILSERVER_SPAM_GREYLISTING_DELAY", "5m")
 	defer os.Unsetenv("UMAILSERVER_SPAM_GREYLISTING_DELAY")
 
 	cfg := DefaultConfig()

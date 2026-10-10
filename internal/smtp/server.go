@@ -151,7 +151,22 @@ const (
 	defaultMaxErrors      = 20
 	defaultMaxCommands    = 10000
 	minDataTimeout        = 10 * time.Minute
+	// sessionBytesFactor: with MaxSessionBytes unset a session may read this
+	// many maximum-size messages before it is closed with 421.
+	sessionBytesFactor = 10
+	minSessionBytes    = 1 << 20 // floor so tiny MaxMessageSize values stay usable
 )
+
+// maxSessionBytes returns the cap on total octets one session may send.
+func (c *Config) maxSessionBytes() int64 {
+	if c.MaxSessionBytes > 0 {
+		return c.MaxSessionBytes
+	}
+	if n := sessionBytesFactor * c.maxMessageSize(); n > minSessionBytes {
+		return n
+	}
+	return minSessionBytes
+}
 
 // maxMessageSize returns the effective message size limit (0 = default).
 func (c *Config) maxMessageSize() int64 {
@@ -197,7 +212,13 @@ type Config struct {
 	// the connection is dropped with 421; 0 selects 20.
 	MaxErrors int
 	// MaxCommands bounds the commands per session; 0 selects 10000.
-	MaxCommands   int
+	MaxCommands int
+	// MaxSessionBytes caps the total octets read from one connection
+	// (commands and message data); 0 selects 10*MaxMessageSize (at least 1 MiB).
+	MaxSessionBytes int64
+	// StageTimeout bounds each pipeline stage; 0 selects DefaultStageTimeout
+	// (30s), negative disables it.
+	StageTimeout  time.Duration
 	AllowInsecure bool
 	TLSConfig     *tls.Config
 
@@ -488,7 +509,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	_ = session.WriteResponse(220, fmt.Sprintf("%s ESMTP uMailServer", s.config.Hostname))
 
 	// Handle commands
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReader(&countingReader{r: conn, n: &session.bytesIn})
 	session.reader = reader
 	for {
 		if s.config.ReadTimeout > 0 {
@@ -511,6 +532,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 				return
 			}
 			continue
+		}
+
+		if session.bytesIn.Load() > s.config.maxSessionBytes() {
+			_ = session.WriteResponse(421, "4.7.0 Session data limit exceeded, closing connection")
+			return
 		}
 
 		line := strings.TrimSpace(string(raw))
@@ -550,6 +576,18 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 	}
+}
+
+// countingReader counts the octets read through it.
+type countingReader struct {
+	r io.Reader
+	n *atomic.Int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 // Stop gracefully shuts down the server

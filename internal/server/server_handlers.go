@@ -16,6 +16,7 @@ import (
 
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/queue"
+	"github.com/umailserver/umailserver/internal/smtp"
 	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/tracing"
 	"github.com/umailserver/umailserver/internal/webhook"
@@ -26,6 +27,9 @@ import (
 
 // authenticate validates user credentials
 func (s *Server) authenticate(username, password string) (bool, error) {
+	// Addresses are case-insensitive system-wide and accounts are stored
+	// lowercase (F6260): normalise before any LDAP/DB lookup.
+	username = normalizeLogin(username)
 	// Create tracing span if tracing is enabled
 	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
 		ctx, span := s.tracingProvider.StartSpanWithKind(context.Background(), "authenticate", tracing.SpanKindServer,
@@ -72,7 +76,7 @@ func (s *Server) authenticate(username, password string) (bool, error) {
 
 // getUserSecret returns the password hash for a user, used by CRAM-MD5 authentication
 func (s *Server) getUserSecret(username string) (string, error) {
-	user, domain := parseEmail(username)
+	user, domain := parseEmail(normalizeLogin(username))
 	account, err := s.database.GetAccount(domain, user)
 	if err != nil {
 		return "", err
@@ -322,7 +326,7 @@ func (s *Server) bounceFailedRecipients(from string, data []byte, failed []rcptF
 		diag := "smtp; 550 5.0.0 local delivery failed"
 		if f.diag != "" {
 			diag = f.diag
-		} else if f.local != nil && strings.HasPrefix(f.local.Error(), "quota exceeded") {
+		} else if f.local != nil && errors.Is(f.local, smtp.ErrMailboxFull) {
 			diag = "smtp; 552 5.2.2 mailbox full"
 		}
 		dsn := &queue.DSN{
@@ -552,6 +556,7 @@ func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFold
 // once: the catch-all target itself is delivered with allowCatchAll=false, so
 // a target that is missing or inactive fails instead of recursing (F4877).
 func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCatchAll bool, targetFolders ...string) error {
+	user, domain = strings.ToLower(user), strings.TrimRight(strings.ToLower(domain), ".")
 	email := user + "@" + domain
 
 	// Determine target folder - default to INBOX if not specified
@@ -567,7 +572,7 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 		// inactive ones (F4876).
 		if allowCatchAll {
 			if domainData, derr := s.database.GetDomain(domain); derr == nil && domainData != nil && domainData.CatchAllTarget != "" {
-				tUser, tDomain := parseEmail(domainData.CatchAllTarget)
+				tUser, tDomain := normalizeRcpt(domainData.CatchAllTarget)
 				if tUser != "" && tDomain != "" {
 					return s.deliverLocalHop(tUser, tDomain, from, data, false, targetFolders...)
 				}
@@ -647,7 +652,8 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 	if reserved > 0 {
 		if err := s.database.IncrementQuota(domain, user, reserved); err != nil {
 			unlock()
-			return fmt.Errorf("quota exceeded for user: %s", email)
+			// Wraps smtp.ErrMailboxFull so the session answers 452 4.2.2 (F6261).
+			return fmt.Errorf("quota exceeded for user: %s: %w", email, smtp.ErrMailboxFull)
 		}
 	}
 
@@ -809,6 +815,17 @@ func autoReplyAllowed(from string, data []byte) bool {
 	return allowed
 }
 
+// normalizeLogin trims and lowercases a login name so that "Alice@Example.com"
+// and "alice@example.com" are one identity (F6260). A trailing root dot on the
+// domain is dropped; a login without "@" (LDAP uid) is only trimmed/lowercased.
+func normalizeLogin(login string) string {
+	u, d := normalizeRcpt(login)
+	if !strings.Contains(login, "@") {
+		return u
+	}
+	return u + "@" + d
+}
+
 // parseEmail splits an email address into user and domain
 func parseEmail(email string) (user, domain string) {
 	at := -1
@@ -932,6 +949,7 @@ func (s *Server) authenticateClientCert(cert *x509.Certificate) (string, bool) {
 	}
 
 	// Verify the account exists
+	email = normalizeLogin(email)
 	user, domain := parseEmail(email)
 	account, err := s.database.GetAccount(domain, user)
 	if err != nil {

@@ -249,6 +249,14 @@ class API {
     await this.delete(`/mail/delete?id=${encodeURIComponent(id)}`)
   }
 
+  // Moves one or more messages between folders (POST /mail/move).
+  async moveMail(ids: string | string[], from: string, to: string): Promise<void> {
+    const list = Array.isArray(ids) ? ids : [ids]
+    if (list.length === 0) return
+    const body = list.length === 1 ? { id: list[0], from, to } : { ids: list, from, to }
+    await this.post('/mail/move', body)
+  }
+
   // Filters
   async getFilters(): Promise<{ filters?: Filter[] }> {
     return this.get<{ filters?: Filter[] }>('/filters')

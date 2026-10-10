@@ -13,6 +13,7 @@ import (
 func TestInterpreter_Elsif_RunsWhenPreviousFalse(t *testing.T) {
 	// Script where first if fails, so the elsif is evaluated and taken
 	script := `
+require ["fileinto"];
 	if header :contains "subject" "nomatch" {
 		discard;
 	} elsif header :contains "from" "test@example.com" {
@@ -133,7 +134,7 @@ func TestInterpreter_ExecuteFileinto_NoCreateFlag(t *testing.T) {
 
 func TestInterpreter_ExecuteFileinto_CreateFalse(t *testing.T) {
 	script := `
-	require "fileinto";
+	require ["fileinto", "mailbox"];
 	fileinto :create "TestFolder";
 	`
 
@@ -201,6 +202,7 @@ func TestInterpreter_ExecuteIf_EmptyBlock(t *testing.T) {
 
 func TestInterpreter_EvaluateHeaderTest_CountMatch(t *testing.T) {
 	script := `
+require ["relational"];
 	if header :count "eq" "from" "1" {
 		keep;
 	}
@@ -229,35 +231,6 @@ func TestInterpreter_EvaluateHeaderTest_CountMatch(t *testing.T) {
 }
 
 // --- evaluateHeaderTest with index match type ---
-
-func TestInterpreter_EvaluateHeaderTest_IndexMatch(t *testing.T) {
-	script := `
-	if header :index 1 "from" "test@example.com" {
-		keep;
-	}
-	`
-
-	p := NewParser(script)
-	s, err := p.Parse()
-	if err != nil {
-		t.Fatalf("Parse error: %v", err)
-	}
-
-	interp := NewInterpreter(s)
-	msg := &MessageContext{
-		From: "sender@example.com",
-		To:   []string{"recipient@example.com"},
-		Headers: map[string][]string{
-			"from": {"test@example.com"},
-		},
-		Body: []byte("Hello"),
-	}
-
-	_, err = interp.Execute(msg)
-	if err != nil {
-		t.Fatalf("Execute error: %v", err)
-	}
-}
 
 // --- executeSet with various types ---
 
@@ -606,24 +579,6 @@ func TestInterpreter_ExecuteKeep_Explicit(t *testing.T) {
 }
 
 // --- executeCommand with unknown command ---
-
-func TestInterpreter_ExecuteCommand_UnknownCommand(t *testing.T) {
-	interp := NewInterpreter(&Script{})
-
-	cmd := &Command{
-		Name:      "unknown_command",
-		Arguments: []Value{},
-	}
-
-	actions, err := interp.executeCommand(cmd)
-	if err != nil {
-		t.Fatalf("executeCommand error: %v", err)
-	}
-	// Unknown command returns nil actions
-	if actions != nil {
-		t.Errorf("Expected nil actions for unknown command, got %v", actions)
-	}
-}
 
 // --- executeIf with string test ---
 

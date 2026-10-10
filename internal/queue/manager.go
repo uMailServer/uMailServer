@@ -98,6 +98,19 @@ type Manager struct {
 	// DANE validator for TLS certificate validation
 	daneValidator *auth.DANEValidator
 
+	// daneSecure reports whether TLSA answers for an MX host were DNSSEC
+	// authenticated (resolver AD bit or a configured validating resolver).
+	// nil means no validating resolver: DANE stays advisory (RFC 7672 8.1).
+	daneSecure func(mx string) bool
+
+	// tlsRootCAs overrides the system roots for peer verification (tests,
+	// private CAs); nil uses the system pool.
+	tlsRootCAs *x509.CertPool
+
+	// TLS-RPT style failure counters (RFC 8460), keyed "domain|result-type".
+	tlsrptMu       sync.Mutex
+	tlsrptFailures map[string]int
+
 	// Per-MX-host circuit breakers (keyed like mxPools, guarded by mu). One
 	// breaker per host: a shared breaker let one dead destination block
 	// delivery to every other domain (F5155). mxBreaker is the configuration
@@ -180,8 +193,6 @@ func (r *realDNSResolver) LookupMX(domain string) ([]string, error) {
 }
 
 // realMTASTSDNSResolver implements MTASTSDNSResolver with real network calls.
-// Note: LookupIP and LookupMX are stubs since MTA-STS and DANE validators
-// only use LookupTXT. These exist only to satisfy the auth.DNSResolver interface.
 type realMTASTSDNSResolver struct{}
 
 func (r *realMTASTSDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
@@ -189,17 +200,22 @@ func (r *realMTASTSDNSResolver) LookupTXT(ctx context.Context, name string) ([]s
 }
 
 func (r *realMTASTSDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
-	// MTA-STS and DANE validators do not use LookupIP.
-	// This exists only to satisfy the auth.DNSResolver interface.
-	// Returning an error prevents silent failure if callers mistakeny invoke this.
-	return nil, errors.New("LookupIP is not implemented: MTA-STS/DANE validators do not use this method")
+	// The MTA-STS validator resolves mta-sts.<domain> to refuse private
+	// addresses before fetching the policy over HTTPS. A stub returning an
+	// error here made every policy fetch fail, so MTA-STS never applied.
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ips := make([]net.IP, 0, len(addrs))
+	for _, a := range addrs {
+		ips = append(ips, a.IP)
+	}
+	return ips, nil
 }
 
 func (r *realMTASTSDNSResolver) LookupMX(ctx context.Context, domain string) ([]*net.MX, error) {
-	// MTA-STS and DANE validators do not use LookupMX.
-	// This exists only to satisfy the auth.DNSResolver interface.
-	// Returning an error prevents silent failure if callers mistakeny invoke this.
-	return nil, errors.New("LookupMX is not implemented: MTA-STS/DANE validators do not use this method")
+	return net.DefaultResolver.LookupMX(ctx, domain)
 }
 
 // NewManager creates a new queue manager
@@ -1096,7 +1112,8 @@ func (m *Manager) deliverToMX(ctx context.Context, from, to string, message []by
 	err := cb.Execute(func() error {
 		err := m.doDeliverToMX(ctx, from, to, message, mx)
 		var perm *permanentSMTPError
-		if errors.As(err, &perm) {
+		var pol *tlsPolicyError
+		if errors.As(err, &perm) || errors.As(err, &pol) {
 			// The host answered: a 5yz rejection of one recipient is not
 			// a host failure and must not open the breaker.
 			rejected = err
@@ -1109,6 +1126,15 @@ func (m *Manager) deliverToMX(ctx context.Context, from, to string, message []by
 	}
 	return err
 }
+
+// tlsPolicyError is a delivery refusal caused by the recipient domain's TLS
+// policy (MTA-STS enforce, required TLS) rather than a failing host: it is
+// retried on the next MX but must not open that host's circuit breaker for
+// other domains.
+type tlsPolicyError struct{ err error }
+
+func (e *tlsPolicyError) Error() string { return e.err.Error() }
+func (e *tlsPolicyError) Unwrap() error { return e.err }
 
 // withMXConn acquires an MX connection, calls fn, and guarantees release.
 // It recovers from panics inside fn and returns them as errors.
@@ -1179,17 +1205,29 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 	m.mu.RLock()
 	requireTLS := m.requireTLS
 	m.mu.RUnlock()
+	testingMode := false
 	if m.mtastsValidator != nil && domain != "" {
 		allowed, policy, err := m.mtastsValidator.CheckPolicy(ctx, domain, mx)
 		if err != nil {
-			m.logger.Debug("MTA-STS check failed", "domain", domain, "mx", mx, "error", err)
-		}
-		if policy != nil && policy.Mode == auth.MTASTSModeEnforce && !allowed {
-			return fmt.Errorf("MTA-STS policy violation: MX %s not allowed for domain %s", mx, domain)
+			// RFC 8461 3.3: with no usable policy delivery is opportunistic, but
+			// the operator must be able to see that a policy could not be
+			// obtained (a cached policy is kept by the validator, so reaching
+			// here means none is known).
+			m.logger.Warn("MTA-STS policy unavailable, delivering without policy", "domain", domain, "mx", mx, "error", err)
 		}
 		if policy != nil && policy.Mode == auth.MTASTSModeEnforce {
+			if !allowed {
+				m.recordTLSFailure(domain, mx, "sts-policy-invalid")
+				return &tlsPolicyError{fmt.Errorf("MTA-STS policy violation: MX %s not allowed for domain %s", mx, domain)}
+			}
 			enforceTLS = true
 			m.logger.Debug("MTA-STS policy enforced", "domain", domain, "mx", mx)
+		}
+		if policy != nil && policy.Mode == auth.MTASTSModeTesting {
+			testingMode = true
+			if !allowed {
+				m.recordTLSFailure(domain, mx, "sts-policy-invalid")
+			}
 		}
 	}
 
@@ -1220,6 +1258,7 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 		tlsConfig := &tls.Config{
 			ServerName:         mx,
 			MinVersion:         tls.VersionTLS12,
+			RootCAs:            m.tlsRootCAs,
 			InsecureSkipVerify: !requireTLS && !enforceTLS, //nolint:gosec // opportunistic TLS, RFC 7435
 		}
 		// A reused pooled connection may already be TLS; STARTTLS again is a
@@ -1229,8 +1268,17 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			tlsErr = client.StartTLS(tlsConfig)
 		}
 		if err := tlsErr; err != nil {
-			if requireTLS {
-				return fmt.Errorf("STARTTLS required but failed: %w", err)
+			// requireTLS and an MTA-STS enforce policy (RFC 8461 4.2) must never
+			// fall back to plaintext: STARTTLS refused, stripped (502/454/4xx),
+			// or failed means this MX is not usable.
+			if requireTLS || enforceTLS {
+				if enforceTLS {
+					m.recordTLSFailure(domain, mx, "starttls-not-supported")
+				}
+				return &tlsPolicyError{fmt.Errorf("STARTTLS required but failed: %w", err)}
+			}
+			if testingMode {
+				m.recordTLSFailure(domain, mx, "starttls-not-supported")
 			}
 			// A non-reply error is a failed handshake: the connection is
 			// unusable and cannot fall back to plaintext (F5682).
@@ -1240,32 +1288,17 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			}
 			// STARTTLS refused by the server — continue with plaintext
 		} else {
-			// STARTTLS succeeded — validate with DANE if available
-			if m.daneValidator != nil {
-				if _, ok := client.TLSConnectionState(); ok {
-					// RFC 7672 §8.1: DANE requires DNSSEC for security.
-					// We have no DNSSEC validation status from the resolver, so we
-					// must check TLSA record presence before trusting them. If TLSA
-					// records exist but DNSSEC cannot be verified, we skip DANE and
-					// fall through to regular TLS verification — accepting the reduced
-					// security rather than blindly trusting potentially DNS-poisoned
-					// TLSA records.
-					tlsaRecords, tlsaErr := m.daneValidator.LookupTLSA(mx, 25)
-					if tlsaErr != nil {
-						m.logger.Debug("TLSA lookup failed", "mx", mx, "error", tlsaErr)
-						// DNS error — fall through to regular TLS verification
-					} else if len(tlsaRecords) == 0 {
-						m.logger.Debug("No TLSA records found", "mx", mx)
-						// No TLSA records — DANE not configured for this MX
-					} else {
-						// TLSA records exist but we cannot verify DNSSEC.
-						// RFC 7672 §8.1: "If DNSSEC validation is not available,
-						// DANE cannot provide security." Skip DANE but proceed with
-						// TLS — the connection is still encrypted, just not DANE-validated.
-						m.logger.Warn("DANE TLSA records present but DNSSEC unavailable — skipping DANE validation (RFC 7672 §8.1)",
-							"mx", mx, "records", len(tlsaRecords))
-						// Fall through: STARTTLS already succeeded, continue with delivery
+			if st, ok := client.TLSConnectionState(); ok {
+				if testingMode && len(st.VerifiedChains) == 0 {
+					// Opportunistic session in testing mode: still check the
+					// certificate so TLS-RPT style failures are recorded.
+					if verr := verifyPeerForHost(st, mx, m.tlsRootCAs); verr != nil {
+						m.recordTLSFailure(domain, mx, "certificate-not-trusted")
+						m.logger.Warn("MTA-STS testing mode: certificate validation failed", "domain", domain, "mx", mx, "error", verr)
 					}
+				}
+				if derr := m.checkDANE(mx, st); derr != nil {
+					return derr
 				}
 			}
 		}
@@ -1303,6 +1336,87 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 		// QUIT is skipped since we're keeping the connection alive
 		return classifySMTPReply(w.Close())
 	})
+}
+
+// recordTLSFailure counts a TLS-RPT (RFC 8460) style failure for a policy
+// domain and logs it.
+func (m *Manager) recordTLSFailure(domain, mx, resultType string) {
+	m.tlsrptMu.Lock()
+	if m.tlsrptFailures == nil {
+		m.tlsrptFailures = make(map[string]int)
+	}
+	m.tlsrptFailures[domain+"|"+resultType]++
+	m.tlsrptMu.Unlock()
+	if m.logger != nil {
+		m.logger.Warn("TLS-RPT failure", "domain", domain, "mx", mx, "result-type", resultType)
+	}
+}
+
+// TLSFailureCounts returns a copy of the TLS-RPT style failure counters keyed
+// "domain|result-type".
+func (m *Manager) TLSFailureCounts() map[string]int {
+	m.tlsrptMu.Lock()
+	defer m.tlsrptMu.Unlock()
+	out := make(map[string]int, len(m.tlsrptFailures))
+	for k, v := range m.tlsrptFailures {
+		out[k] = v
+	}
+	return out
+}
+
+// verifyPeerForHost verifies the presented certificate chain for host against
+// the system roots.
+func verifyPeerForHost(st tls.ConnectionState, host string, roots *x509.CertPool) error {
+	if len(st.PeerCertificates) == 0 {
+		return errors.New("no peer certificate")
+	}
+	inter := x509.NewCertPool()
+	for _, c := range st.PeerCertificates[1:] {
+		inter.AddCert(c)
+	}
+	_, err := st.PeerCertificates[0].Verify(x509.VerifyOptions{DNSName: host, Roots: roots, Intermediates: inter})
+	return err
+}
+
+// SetDANESecureHook installs a callback reporting whether TLSA answers for an
+// MX host are DNSSEC authenticated (resolver AD bit, or a configured
+// validating resolver). Without it DANE is advisory only: the stock resolver
+// cannot validate DNSSEC, so TLSA data is never trusted (RFC 7672 8.1).
+func (m *Manager) SetDANESecureHook(fn func(mx string) bool) {
+	m.mu.Lock()
+	m.daneSecure = fn
+	m.mu.Unlock()
+}
+
+// checkDANE validates the negotiated TLS session against TLSA records when
+// they exist and are DNSSEC authenticated; otherwise DANE stays opportunistic.
+func (m *Manager) checkDANE(mx string, st tls.ConnectionState) error {
+	if m.daneValidator == nil {
+		return nil
+	}
+	tlsa, err := m.daneValidator.LookupTLSA(mx, 25)
+	if err != nil {
+		m.logger.Debug("TLSA lookup failed", "mx", mx, "error", err)
+		return nil
+	}
+	if len(tlsa) == 0 {
+		return nil
+	}
+	m.mu.RLock()
+	secure := m.daneSecure
+	m.mu.RUnlock()
+	if secure == nil || !secure(mx) {
+		// RFC 7672 8.1: without DNSSEC, DANE cannot provide security.
+		m.logger.Warn("DANE TLSA records present but DNSSEC unavailable, skipping DANE validation (RFC 7672 8.1)",
+			"mx", mx, "records", len(tlsa))
+		return nil
+	}
+	res, verr := m.daneValidator.ValidateWithDNSSEC(mx, 25, &st, auth.DNSSECSecured)
+	if res == auth.DANEFailed {
+		m.recordTLSFailure(mx, mx, "tlsa-invalid")
+		return fmt.Errorf("DANE validation failed for %s: %v", mx, verr)
+	}
+	return nil
 }
 
 // handleDeliverySuccess handles successful delivery. Returns error if the queue

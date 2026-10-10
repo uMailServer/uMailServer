@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -40,7 +41,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Config loading logs its source at Info; only the daemon and the config
+	// checker should print that, not every one-shot CLI command.
+	if os.Args[1] != "serve" && os.Args[1] != "config" {
+		slog.SetLogLoggerLevel(slog.LevelWarn)
+	}
+
 	switch os.Args[1] {
+	case "config":
+		os.Exit(cmdConfig(os.Args[2:], os.Stdout, os.Stderr))
 	case "serve":
 		cmdServe(os.Args[2:])
 	case "quickstart":
@@ -94,6 +103,7 @@ Commands:
   domain       Domain management (add, list, dns, delete)
   account      Account management (add, password, list, delete)
   queue        Queue management (list, retry, flush, drop)
+  config       Validate a config file (config check)
   check        Diagnostics (dns, tls, deliverability)
   backup       Create backup
   restore      Restore from backup
@@ -386,11 +396,13 @@ domains:
 
 	// Create domain
 	if err := database.CreateDomain(&db.DomainData{
-		Name:        domain,
-		MaxAccounts: 100,
-		IsActive:    true,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		Name:          domain,
+		MaxAccounts:   100,
+		IsActive:      true,
+		DKIMSelector:  "default",
+		DKIMPublicKey: publicKey,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create domain: %v\n", err)
 		os.Exit(1)
@@ -530,27 +542,37 @@ func readNewPassword() string {
 	return pw
 }
 
-// getDataDir returns the data directory from config file, or default
-func getDataDir() string {
-	// Try to load config to get data_dir
-	configPaths := configSearchPaths()
-	var cfg *config.Config
-	for _, p := range configPaths {
+// discoverConfig loads the first usable config from the implicit search
+// locations (see configSearchPaths), or returns nil.
+func discoverConfig() *config.Config {
+	for _, p := range configSearchPaths() {
 		// Check if config file actually exists before trying to load
-		if _, err := os.Stat(p); os.IsNotExist(err) {
+		if _, err := os.Stat(p); err != nil {
 			continue
 		}
-		var err error
-		cfg, err = config.Load(p)
-		if err == nil {
-			break
+		if cfg, err := config.Load(p); err == nil {
+			return cfg
 		}
 	}
-	if cfg != nil && cfg.Server.DataDir != "" {
+	return nil
+}
+
+// getDataDir returns the data directory from config file, or default
+func getDataDir() string {
+	if cfg := discoverConfig(); cfg != nil && cfg.Server.DataDir != "" {
 		return cfg.Server.DataDir
 	}
 	// Fallback to default
 	return config.GetDefaultDataDir()
+}
+
+// getDatabasePath returns the accounts database the server uses: the
+// configured database.path, else <data_dir>/umailserver.db (F6303).
+func getDatabasePath() string {
+	if cfg := discoverConfig(); cfg != nil && cfg.Server.DataDir != "" {
+		return cfg.DatabasePath()
+	}
+	return filepath.Join(config.GetDefaultDataDir(), "umailserver.db")
 }
 
 func cmdDomain(args []string) {
@@ -563,8 +585,7 @@ func cmdDomain(args []string) {
 	subcmd := args[0]
 
 	// Load database using config's data_dir
-	dataDir := getDataDir()
-	dbPath := filepath.Join(dataDir, "umailserver.db")
+	dbPath := getDatabasePath()
 	database, err := db.Open(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
@@ -646,28 +667,7 @@ func cmdDomain(args []string) {
 
 		fmt.Printf("\n=== DNS Records for %s ===\n\n", domain.Name)
 
-		fmt.Println("# MX Record:")
-		fmt.Printf("%s.    IN    MX    10    mail.%s.\n\n", domain.Name, domain.Name)
-
-		fmt.Println("# A Record:")
-		fmt.Printf("mail.%s.    IN    A    <YOUR_SERVER_IP>\n\n", domain.Name)
-
-		fmt.Println("# SPF Record:")
-		fmt.Printf("%s.    IN    TXT    \"v=spf1 mx ~all\"\n\n", domain.Name)
-
-		fmt.Println("# DKIM Record (default._domainkey):")
-		dkimKey := domain.DKIMPublicKey
-		if dkimKey == "" {
-			dkimKey = "<GENERATE_WITH: umailserver domain add>"
-		}
-		if domain.DKIMPublicKey == "" {
-			fmt.Printf("default._domainkey.%s.    IN    TXT    \"v=DKIM1; k=rsa; p=%s\"\n\n", domain.Name, dkimKey)
-		} else {
-			fmt.Printf("default._domainkey.%s.    IN    TXT    %s\n\n", domain.Name, dkimTXT(dkimKey))
-		}
-
-		fmt.Println("# DMARC Record:")
-		fmt.Printf("_dmarc.%s.    IN    TXT    \"v=DMARC1; p=quarantine; rua=mailto:dmarc@%s\"\n\n", domain.Name, domain.Name)
+		fmt.Print(dnsRecordLines(domain.Name, domain.DKIMSelector, domain.DKIMPublicKey))
 
 		fmt.Println("Replace <YOUR_SERVER_IP> with your actual server IP.")
 
@@ -709,8 +709,7 @@ func cmdAccount(args []string) {
 	subcmd := args[0]
 
 	// Load database using config's data_dir
-	dataDir := getDataDir()
-	dbPath := filepath.Join(dataDir, "umailserver.db")
+	dbPath := getDatabasePath()
 	database, err := db.Open(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
@@ -919,8 +918,7 @@ func cmdQueue(args []string) {
 	subcmd := args[0]
 
 	// Open database using config's data_dir
-	dataDir := getDataDir()
-	dbPath := filepath.Join(dataDir, "umailserver.db")
+	dbPath := getDatabasePath()
 	database, err := db.Open(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
@@ -1226,8 +1224,7 @@ func cmdMigrate(args []string) {
 		os.Exit(1)
 	}
 
-	dataDir := cfg.Server.DataDir
-	dbPath := filepath.Join(dataDir, "umailserver.db")
+	dbPath := cfg.DatabasePath()
 	database, err := db.Open(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)

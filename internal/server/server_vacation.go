@@ -42,8 +42,8 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 
 	// Deduplicate: don't spam the same sender with multiple replies.
 	// Use the same key format and pipe-delimiter safety as sendVacationReply.
-	safeRecipient := strings.ReplaceAll(recipient, "|", "__")
-	safeSender := strings.ReplaceAll(sender, "|", "__")
+	safeRecipient := strings.ToLower(strings.ReplaceAll(recipient, "|", "__"))
+	safeSender := strings.ToLower(strings.ReplaceAll(sender, "|", "__"))
 	key := safeRecipient + "|" + safeSender
 
 	// Use the :seconds interval from the Sieve vacation action, with a 24h floor
@@ -146,8 +146,8 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 
 	// sanitizeForDedup replaces the pipe delimiter with a double-underscore
 	// to prevent key collisions when email addresses contain '|'.
-	safeRecipient := strings.ReplaceAll(recipientEmail, "|", "__")
-	safeSender := strings.ReplaceAll(senderEmail, "|", "__")
+	safeRecipient := strings.ToLower(strings.ReplaceAll(recipientEmail, "|", "__"))
+	safeSender := strings.ToLower(strings.ReplaceAll(senderEmail, "|", "__"))
 	key := safeRecipient + "|" + safeSender
 	s.vacationRepliesMu.Lock()
 	if s.vacationReplies == nil {

@@ -10,11 +10,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,6 +38,161 @@ type Manager struct {
 	mu              sync.RWMutex
 	sem             chan struct{} // Semaphore to limit concurrent webhook deliveries
 	tracingProvider *tracing.Provider
+
+	dataDir     string // optional; when set the registry is persisted to dataDir/webhooks.json
+	persistMu   sync.Mutex
+	stopCh      chan struct{}
+	stopOnce    sync.Once
+	dropped     atomic.Uint64 // deliveries dropped because the concurrency bound was full
+	failed      atomic.Uint64 // deliveries that failed after all retries
+	delivered   atomic.Uint64
+	backoffBase time.Duration
+	backoffMax  time.Duration
+}
+
+const (
+	// MaxWebhooks bounds the size of the webhook registry (and its file).
+	MaxWebhooks = 1000
+	// registryFile is the persisted registry name inside the data directory.
+	registryFile = "webhooks.json"
+	maxAttempts  = 3
+)
+
+// Stop aborts pending retry backoffs and refuses new deliveries. It is
+// idempotent.
+func (m *Manager) Stop() {
+	m.stopOnce.Do(func() { close(m.stopCh) })
+}
+
+// DroppedDeliveries returns how many deliveries were dropped because the
+// bounded delivery pool was full or the manager was stopped.
+func (m *Manager) DroppedDeliveries() uint64 { return m.dropped.Load() }
+
+// DeliveryStats returns counters (delivered, failed, dropped).
+func (m *Manager) DeliveryStats() (delivered, failed, dropped uint64) {
+	return m.delivered.Load(), m.failed.Load(), m.dropped.Load()
+}
+
+// SetDataDir enables persistence of the webhook registry to
+// <dir>/webhooks.json and loads any existing registry. A missing file is not
+// an error; a corrupt one is logged and ignored (it is overwritten on the next
+// change, after being preserved as webhooks.json.corrupt). Call before the
+// manager serves requests.
+func (m *Manager) SetDataDir(dir string) error {
+	m.mu.Lock()
+	m.dataDir = dir
+	m.mu.Unlock()
+	if dir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("webhook: create data dir: %w", err)
+	}
+	path := filepath.Join(dir, registryFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		log.Printf("webhook: cannot read registry %s: %v", path, err)
+		return err
+	}
+	var hooks []*Webhook
+	if err := json.Unmarshal(data, &hooks); err != nil {
+		log.Printf("webhook: registry %s is corrupt, starting empty: %v", path, err)
+		_ = os.Rename(path, path+".corrupt")
+		return fmt.Errorf("webhook: corrupt registry: %w", err)
+	}
+	valid := make([]*Webhook, 0, len(hooks))
+	for _, h := range hooks {
+		if h == nil || h.ID == "" || !validHookURL(h.URL) {
+			continue
+		}
+		if len(valid) >= MaxWebhooks {
+			log.Printf("webhook: registry truncated to %d entries", MaxWebhooks)
+			break
+		}
+		valid = append(valid, h)
+	}
+	m.mu.Lock()
+	m.hooks = valid
+	m.mu.Unlock()
+	return nil
+}
+
+// persist writes the registry atomically (temp file + rename, mode 0600).
+func (m *Manager) persist(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+	// Snapshot inside persistMu so concurrent writers can never leave an
+	// older snapshot on disk after a newer one.
+	m.mu.RLock()
+	hooks := make([]*Webhook, len(m.hooks))
+	copy(hooks, m.hooks)
+	m.mu.RUnlock()
+	data, err := json.MarshalIndent(hooks, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, registryFile+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpName, filepath.Join(dir, registryFile)); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}
+
+func validHookURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Hostname() != ""
+}
+
+// backoffDelay returns the sleep before retry number `retry` (1-based):
+// base*2^(retry-1) capped at max, with full jitter in [d/2, d].
+func (m *Manager) backoffDelay(retry int) time.Duration {
+	d := m.backoffBase
+	for i := 1; i < retry && d < m.backoffMax; i++ {
+		d *= 2
+	}
+	if d > m.backoffMax {
+		d = m.backoffMax
+	}
+	half := int64(d / 2)
+	if half <= 0 {
+		return d
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(half+1))
+	if err != nil {
+		return d
+	}
+	return time.Duration(half + n.Int64())
 }
 
 // SetTracingProvider attaches an OpenTelemetry tracing provider so each
@@ -115,6 +274,9 @@ func NewManager(database *db.DB, secret string) *Manager {
 		allowPrivateIP: false, // Default: block private IPs for security
 		cbManager:      circuitbreaker.NewManager(),
 		sem:            make(chan struct{}, 50), // Limit concurrent webhook deliveries
+		stopCh:         make(chan struct{}),
+		backoffBase:    time.Second,
+		backoffMax:     30 * time.Second,
 	}
 	// The SSRF guard is enforced again on the address actually dialed
 	// (F5175/F5176): isValidWebhookURL resolves the host once, but the
@@ -162,6 +324,13 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 		Data:      data,
 	}
 
+	select {
+	case <-m.stopCh:
+		m.dropped.Add(1)
+		return
+	default:
+	}
+
 	m.mu.RLock()
 	hooks := make([]*Webhook, len(m.hooks))
 	copy(hooks, m.hooks)
@@ -184,7 +353,8 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 			}(hook, event)
 		default:
 			// Semaphore full, skip this webhook to prevent resource exhaustion
-			fmt.Printf("webhook: delivery skipped for %s (max concurrent deliveries reached)\n", redactURL(hook.URL))
+			n := m.dropped.Add(1)
+			log.Printf("webhook: delivery dropped for %s (max concurrent deliveries reached; %d dropped total)", redactURL(hook.URL), n)
 		}
 	}
 }
@@ -257,15 +427,22 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		return
 	}
 
-	// Retry logic: 3 attempts with exponential backoff
+	// Retry logic: maxAttempts attempts with exponential backoff + jitter.
 	var lastErr error
 	delivered := false
 
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		*attempts = attempt + 1
 		if attempt > 0 {
-			// Exponential backoff: 1s, 2s
-			time.Sleep(time.Duration(attempt) * time.Second)
+			t := time.NewTimer(m.backoffDelay(attempt))
+			select {
+			case <-t.C:
+			case <-m.stopCh:
+				t.Stop()
+				lastErr = fmt.Errorf("webhook manager stopped")
+				attempt = maxAttempts
+				continue
+			}
 		}
 
 		req, err := http.NewRequest("POST", hook.URL, bytes.NewReader(payload))
@@ -284,7 +461,13 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		// Sign payload if secret configured
 		if m.secret != "" {
 			sig := m.sign(payload)
+			// Legacy header: bare hex HMAC of the body only (unchanged).
 			req.Header.Set("X-Webhook-Signature", sig)
+			// Replay-protected: HMAC over "<ts>.<body>" where ts is the send
+			// time of this attempt, so retries carry a fresh timestamp.
+			ts := fmt.Sprintf("%d", time.Now().Unix())
+			req.Header.Set("X-Webhook-Signature-Timestamp", ts)
+			req.Header.Set("X-Webhook-Signature-256", "sha256="+m.signTimestamped(ts, payload))
 		}
 
 		resp, err := m.client.Do(req)
@@ -314,9 +497,11 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 	// Record success or failure for circuit breaker
 	if delivered {
 		cb.RecordSuccess()
+		m.delivered.Add(1)
 		*success = true
 	} else {
 		cb.RecordFailure()
+		m.failed.Add(1)
 		fmt.Printf("webhook: delivery failed after %d attempts: %s, error: %v\n", *attempts, redactURL(hook.URL), redactErr(lastErr, hook.URL))
 		*finalErr = redactErr(lastErr, hook.URL)
 	}
@@ -453,6 +638,17 @@ func (m *Manager) sign(payload []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// signTimestamped signs "<timestamp>.<body>". Receivers should recompute it
+// with the key from DeriveSigningKey, compare in constant time, and reject
+// timestamps older than their tolerance (e.g. 5 minutes).
+func (m *Manager) signTimestamped(ts string, payload []byte) string {
+	h := hmac.New(sha256.New, []byte(m.secret))
+	h.Write([]byte(ts))
+	h.Write([]byte("."))
+	h.Write(payload)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // eventMatches checks if event type matches patterns
 func (m *Manager) eventMatches(patterns []string, eventType string) bool {
 	for _, pattern := range patterns {
@@ -525,8 +721,29 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m.mu.Lock()
+	if len(m.hooks) >= MaxWebhooks {
+		m.mu.Unlock()
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
 	m.hooks = append(m.hooks, hook)
+	dir := m.dataDir
 	m.mu.Unlock()
+
+	if err := m.persist(dir); err != nil {
+		log.Printf("webhook: failed to persist registry: %v", err)
+		// Roll back so memory and disk agree.
+		m.mu.Lock()
+		for i, h := range m.hooks {
+			if h == hook {
+				m.hooks = append(append([]*Webhook(nil), m.hooks[:i]...), m.hooks[i+1:]...)
+				break
+			}
+		}
+		m.mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

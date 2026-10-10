@@ -20,13 +20,19 @@ func adminMetricsRouter(t *testing.T) http.Handler {
 	}
 	t.Cleanup(func() { database.Close() })
 	s := NewServer(database, nil, Config{JWTSecret: adminMetricsSecret, TokenExpiry: time.Hour})
+	seedSessionAccount(t, database, "x@ex.com", true)
+	seedSessionAccount(t, database, "y@ex.com", false)
 	return NewAdminServer(s, AdminConfig{Addr: "127.0.0.1:0", JWTSecret: adminMetricsSecret}).router()
 }
 
 func adminMetricsToken(t *testing.T, admin bool) string {
 	t.Helper()
+	sub := "x@ex.com" // seeded as admin; y@ex.com is the seeded non-admin
+	if !admin {
+		sub = "y@ex.com"
+	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": "x@ex.com", "admin": admin, "exp": time.Now().Add(time.Hour).Unix(),
+		"sub": sub, "admin": admin, "exp": time.Now().Add(time.Hour).Unix(),
 	})
 	tok.Header["kid"] = "default"
 	str, err := tok.SignedString([]byte(adminMetricsSecret))

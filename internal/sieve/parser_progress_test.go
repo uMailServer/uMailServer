@@ -10,7 +10,6 @@ import (
 // Parse spun forever (reachable pre-auth through ManageSieve CHECKSCRIPT).
 func TestParser_UnexpectedCharacterTerminates(t *testing.T) {
 	for _, src := range []string{
-		`if anyof (header :is "subject" "a", true) { discard; }`,
 		`keep, ;`,
 		`keep )`,
 		`fileinto "A" }`,

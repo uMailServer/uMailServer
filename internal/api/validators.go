@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/umailserver/umailserver/internal/db"
@@ -150,4 +151,51 @@ func dbErrStatus(err error, fallback string) (int, string) {
 		return http.StatusBadRequest, "invalid name"
 	}
 	return http.StatusInternalServerError, fallback
+}
+
+const (
+	defaultPageLimit = 100
+	maxPageLimit     = 1000
+)
+
+// parsePage reads ?limit (default 100, max 1000) and ?offset. On a bad value
+// it answers 400 and reports ok=false (F6254).
+func (s *Server) parsePage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
+	q := r.URL.Query()
+	limit = defaultPageLimit
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxPageLimit {
+			s.sendError(w, http.StatusBadRequest, "invalid limit")
+			return 0, 0, false
+		}
+		limit = n
+	}
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			s.sendError(w, http.StatusBadRequest, "invalid offset")
+			return 0, 0, false
+		}
+		offset = n
+	}
+	return limit, offset, true
+}
+
+// pageBounds returns the [lo,hi) slice window for a list of total entries.
+func pageBounds(total, limit, offset int) (lo, hi int) {
+	if offset > total {
+		offset = total
+	}
+	hi = offset + limit
+	if hi > total || hi < offset {
+		hi = total
+	}
+	return offset, hi
+}
+
+// setTotalCount exposes the unpaginated size so clients can page while the
+// response body stays a plain array.
+func setTotalCount(w http.ResponseWriter, total int) {
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 }

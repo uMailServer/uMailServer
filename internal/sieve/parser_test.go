@@ -196,6 +196,7 @@ func TestInterpreter_StopAction(t *testing.T) {
 
 func TestInterpreter_HeaderContains(t *testing.T) {
 	script := `
+require "fileinto";
 if header :contains "subject" "invoice" {
     fileinto "Invoices";
 }
@@ -246,6 +247,7 @@ if header :contains "subject" "invoice" {
 
 func TestInterpreter_NoMatch(t *testing.T) {
 	script := `
+require "fileinto";
 if header :contains "subject" "invoice" {
     fileinto "Invoices";
 }
