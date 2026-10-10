@@ -1362,10 +1362,10 @@ func TestCanonicalizeHeaderDispatch(t *testing.T) {
 		t.Errorf("canonicalizeHeader relaxed = %q, want %q", relaxedResult, "from:test@example.com\r\n")
 	}
 
-	// Test "simple" - falls through to default return (name + ": " + value, no \r\n)
+	// Test "simple" - keeps the field with its CRLF (F5313: RFC 6376 §3.4.1)
 	simpleResult := canonicalizeHeader("From", "test@example.com", "simple")
-	if simpleResult != "From: test@example.com" {
-		t.Errorf("canonicalizeHeader simple = %q, want %q", simpleResult, "From: test@example.com")
+	if simpleResult != "From: test@example.com\r\n" {
+		t.Errorf("canonicalizeHeader simple = %q, want %q", simpleResult, "From: test@example.com\r\n")
 	}
 
 	// Test unknown - uses canonicalizeHeaderSimple

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -325,7 +326,10 @@ func (c *SPFChecker) evaluateIP6(ip net.IP, value string) bool {
 
 // evaluateA checks if IP matches an A record
 func (c *SPFChecker) evaluateA(ctx context.Context, ip net.IP, value, domain string, lookups, voidLookups int) (bool, bool, error) {
-	host := value
+	host, v4len, v6len, err := spfSplitDualCIDR(value)
+	if err != nil {
+		return false, false, err
+	}
 	if host == "" {
 		host = domain
 	}
@@ -343,7 +347,7 @@ func (c *SPFChecker) evaluateA(ctx context.Context, ip net.IP, value, domain str
 	}
 
 	for _, targetIP := range ips {
-		if ip.Equal(targetIP) {
+		if spfIPInCIDR(ip, targetIP, v4len, v6len) {
 			return true, false, nil
 		}
 	}
@@ -351,9 +355,50 @@ func (c *SPFChecker) evaluateA(ctx context.Context, ip net.IP, value, domain str
 	return false, false, nil
 }
 
+// spfSplitDualCIDR splits an a/mx domain-spec from its optional
+// dual-cidr-length ("host/24//64", "/24", "//64"; RFC 7208 §5.6). Lengths
+// default to 32 and 128 (F5312).
+func spfSplitDualCIDR(value string) (string, int, int, error) {
+	v4len, v6len := 32, 128
+	if i := strings.Index(value, "//"); i >= 0 {
+		n, err := strconv.Atoi(value[i+2:])
+		if err != nil || n < 0 || n > 128 {
+			return "", 0, 0, fmt.Errorf("invalid ip6-cidr-length in %q", value)
+		}
+		v6len = n
+		value = value[:i]
+	}
+	if i := strings.LastIndex(value, "/"); i >= 0 {
+		n, err := strconv.Atoi(value[i+1:])
+		if err != nil || n < 0 || n > 32 {
+			return "", 0, 0, fmt.Errorf("invalid ip4-cidr-length in %q", value)
+		}
+		v4len = n
+		value = value[:i]
+	}
+	return value, v4len, v6len, nil
+}
+
+// spfIPInCIDR reports whether client lies in target's network of the
+// address family's prefix length (F5312).
+func spfIPInCIDR(client, target net.IP, v4len, v6len int) bool {
+	if c4, t4 := client.To4(), target.To4(); c4 != nil || t4 != nil {
+		if c4 == nil || t4 == nil {
+			return false
+		}
+		m := net.CIDRMask(v4len, 32)
+		return c4.Mask(m).Equal(t4.Mask(m))
+	}
+	m := net.CIDRMask(v6len, 128)
+	return client.Mask(m).Equal(target.Mask(m))
+}
+
 // evaluateMX checks if IP matches an MX record
 func (c *SPFChecker) evaluateMX(ctx context.Context, ip net.IP, value, domain string, lookups, voidLookups int) (bool, bool, error) {
-	mxDomain := value
+	mxDomain, v4len, v6len, err := spfSplitDualCIDR(value)
+	if err != nil {
+		return false, false, err
+	}
 	if mxDomain == "" {
 		mxDomain = domain
 	}
@@ -381,7 +426,7 @@ func (c *SPFChecker) evaluateMX(ctx context.Context, ip net.IP, value, domain st
 		}
 
 		for _, targetIP := range mxIPs {
-			if ip.Equal(targetIP) {
+			if spfIPInCIDR(ip, targetIP, v4len, v6len) {
 				return true, false, nil
 			}
 		}
@@ -520,6 +565,10 @@ func parseMechanism(part string) spfMechanism {
 		// Handle ip4: and ip6: without explicit split
 		m.typ = part[:3]
 		m.value = part[4:]
+	} else if idx := strings.Index(part, "/"); idx > 0 && (part[:idx] == "a" || part[:idx] == "mx") {
+		// F5312: "a/24", "mx//64" — dual-cidr-length without a domain-spec.
+		m.typ = part[:idx]
+		m.value = part[idx:]
 	} else {
 		m.typ = part
 	}

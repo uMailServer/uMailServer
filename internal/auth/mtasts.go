@@ -68,6 +68,11 @@ func NewMTASTSValidator(resolver DNSResolver) *MTASTSValidator {
 		cache:    make(map[string]*MTASTSCacheEntry),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
+			// F5311: RFC 8461 §3.3 — 3xx redirects MUST NOT be followed; a
+			// redirect would also skip the SSRF check in fetchPolicyFile.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 }
@@ -162,12 +167,9 @@ func (v *MTASTSValidator) fetchPolicy(ctx context.Context, domain string) (*MTAS
 		return nil, fmt.Errorf("failed to fetch policy: %w", err)
 	}
 
-	// Step 3: Validate policy ID matches
-	policyID := computePolicyID(policy.Raw)
-	if policyID != record.ID {
-		return nil, errors.New("policy ID mismatch")
-	}
-
+	// F5310: RFC 8461 §3.1 — the TXT id is an opaque change marker chosen
+	// by the domain (e.g. "20190429T010101"), not a hash of the policy, so
+	// it must not be compared with the policy body.
 	return policy, nil
 }
 
