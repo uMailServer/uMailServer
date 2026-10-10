@@ -186,23 +186,16 @@ func TestMockMTASTSDNSResolverAllMethods(t *testing.T) {
 	}
 }
 
-// TestRealMTASTSDNSResolverMethods tests the stub methods on realMTASTSDNSResolver
-// that exist only to satisfy the auth.DNSResolver interface but are never called
-// by MTA-STS or DANE validators.
+// TestRealMTASTSDNSResolverMethods covers realMTASTSDNSResolver. LookupIP is
+// used by the MTA-STS validator (SSRF check before the policy fetch) and must
+// really resolve: a stub error made every policy fetch fail (R141).
 func TestRealMTASTSDNSResolverMethods(t *testing.T) {
 	resolver := &realMTASTSDNSResolver{}
 	ctx := context.Background()
 
-	// LookupIP is never called by validators - it returns an error to prevent misuse
-	_, err := resolver.LookupIP(ctx, "example.com")
-	if err == nil {
-		t.Errorf("LookupIP expected error, got nil")
-	}
-
-	// LookupMX is never called by validators - it returns an error to prevent misuse
-	_, err = resolver.LookupMX(ctx, "example.com")
-	if err == nil {
-		t.Errorf("LookupMX expected error, got nil")
+	ips, err := resolver.LookupIP(ctx, "localhost")
+	if err != nil || len(ips) == 0 {
+		t.Errorf("LookupIP(localhost) = %v, %v; want addresses", ips, err)
 	}
 
 	// LookupTXT is actually used by validators

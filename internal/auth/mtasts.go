@@ -50,7 +50,9 @@ type MTASTSRecord struct {
 type MTASTSCacheEntry struct {
 	Policy    *MTASTSPolicy
 	Domain    string
+	ID        string // _mta-sts TXT id the policy was fetched under
 	FetchedAt time.Time
+	RecheckAt time.Time // next TXT id revalidation
 	ExpiresAt time.Time
 }
 
@@ -60,6 +62,7 @@ type MTASTSValidator struct {
 	cache      map[string]*MTASTSCacheEntry
 	cacheMu    sync.RWMutex
 	httpClient *http.Client
+	recheck    time.Duration // TXT id revalidation interval; 0 = default
 }
 
 // NewMTASTSValidator creates a new MTA-STS validator
@@ -103,31 +106,72 @@ func (v *MTASTSValidator) CheckPolicy(ctx context.Context, domain string, mx str
 	return matched, policy, nil
 }
 
-// GetPolicy gets the MTA-STS policy for a domain
+// defaultMTASTSRecheck is how often a cached policy is revalidated against the
+// _mta-sts TXT record id (RFC 8461 section 3.3: a changed id means a new policy).
+const defaultMTASTSRecheck = time.Hour
+
+// SetHTTPClient replaces the HTTP client used to fetch policy files (tests).
+func (v *MTASTSValidator) SetHTTPClient(c *http.Client) { v.httpClient = c }
+
+// GetPolicy gets the MTA-STS policy for a domain.
+//
+// A previously fetched policy stays in force until its max_age elapses: a
+// failed refresh (DNS, HTTPS, parse error) or a vanished TXT record never
+// discards a valid cached policy, because that would let an attacker who can
+// block the policy fetch downgrade an enforce policy (RFC 8461 section 3.3).
+// A changed TXT id forces a refetch.
 func (v *MTASTSValidator) GetPolicy(ctx context.Context, domain string) (*MTASTSPolicy, error) {
-	// Check cache first
+	now := time.Now()
 	v.cacheMu.RLock()
 	entry, ok := v.cache[domain]
+	var cached MTASTSCacheEntry
+	if ok {
+		cached = *entry
+	}
 	v.cacheMu.RUnlock()
 
-	if ok && time.Now().Before(entry.ExpiresAt) {
-		return entry.Policy, nil
+	valid := ok && now.Before(cached.ExpiresAt)
+	if valid {
+		if cached.Policy == nil || cached.ID == "" || now.Before(cached.RecheckAt) {
+			return cached.Policy, nil
+		}
+		// Revalidate the policy id from DNS.
+		rec, err := v.lookupMTASTSRecord(ctx, domain)
+		if err != nil || rec == nil || rec.ID == cached.ID {
+			// Unreachable DNS, removed record or unchanged id: keep the
+			// cached policy until max_age (a "none" policy is the only
+			// way to retire one).
+			v.cacheMu.Lock()
+			if cur, still := v.cache[domain]; still && cur == entry {
+				cur.RecheckAt = now.Add(v.recheckInterval())
+			}
+			v.cacheMu.Unlock()
+			return cached.Policy, nil
+		}
+		// id changed: fall through to a fresh fetch.
 	}
 
 	// Fetch fresh policy
-	policy, err := v.fetchPolicy(ctx, domain)
+	policy, id, err := v.fetchPolicyWithID(ctx, domain)
 	if err != nil {
+		if valid && cached.Policy != nil {
+			return cached.Policy, nil
+		}
 		return nil, err
 	}
 
 	if policy == nil {
+		if valid && cached.Policy != nil {
+			// TXT record gone: keep the policy until max_age.
+			return cached.Policy, nil
+		}
 		// No policy found - cache negative result for a short time
 		v.cacheMu.Lock()
 		v.cache[domain] = &MTASTSCacheEntry{
 			Policy:    nil,
 			Domain:    domain,
-			FetchedAt: time.Now(),
-			ExpiresAt: time.Now().Add(5 * time.Minute),
+			FetchedAt: now,
+			ExpiresAt: now.Add(5 * time.Minute),
 		}
 		v.cacheMu.Unlock()
 		return nil, nil
@@ -138,40 +182,55 @@ func (v *MTASTSValidator) GetPolicy(ctx context.Context, domain string) (*MTASTS
 	v.cache[domain] = &MTASTSCacheEntry{
 		Policy:    policy,
 		Domain:    domain,
-		FetchedAt: time.Now(),
-		ExpiresAt: time.Now().Add(time.Duration(policy.MaxAge) * time.Second),
+		ID:        id,
+		FetchedAt: now,
+		RecheckAt: now.Add(v.recheckInterval()),
+		ExpiresAt: now.Add(time.Duration(policy.MaxAge) * time.Second),
 	}
 	v.cacheMu.Unlock()
 
 	return policy, nil
 }
 
+func (v *MTASTSValidator) recheckInterval() time.Duration {
+	if v.recheck > 0 {
+		return v.recheck
+	}
+	return defaultMTASTSRecheck
+}
+
 // fetchPolicy fetches the MTA-STS policy for a domain
 func (v *MTASTSValidator) fetchPolicy(ctx context.Context, domain string) (*MTASTSPolicy, error) {
+	p, _, err := v.fetchPolicyWithID(ctx, domain)
+	return p, err
+}
+
+// fetchPolicyWithID also returns the TXT record id the policy was published under.
+func (v *MTASTSValidator) fetchPolicyWithID(ctx context.Context, domain string) (*MTASTSPolicy, string, error) {
 	// Step 1: Check for MTA-STS TXT record
 	record, err := v.lookupMTASTSRecord(ctx, domain)
 	if err != nil {
-		return nil, fmt.Errorf("DNS lookup failed: %w", err)
+		return nil, "", fmt.Errorf("DNS lookup failed: %w", err)
 	}
 
 	if record == nil {
-		return nil, nil // No MTA-STS record
+		return nil, "", nil // No MTA-STS record
 	}
 
 	if record.Version != "STSv1" {
-		return nil, errors.New("unsupported MTA-STS version")
+		return nil, "", errors.New("unsupported MTA-STS version")
 	}
 
 	// Step 2: Fetch policy file via HTTPS
 	policy, err := v.fetchPolicyFile(ctx, domain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch policy: %w", err)
+		return nil, "", fmt.Errorf("failed to fetch policy: %w", err)
 	}
 
-	// F5310: RFC 8461 §3.1 — the TXT id is an opaque change marker chosen
-	// by the domain (e.g. "20190429T010101"), not a hash of the policy, so
-	// it must not be compared with the policy body.
-	return policy, nil
+	// F5310: RFC 8461 section 3.1 - the TXT id is an opaque change marker
+	// chosen by the domain, not a hash of the policy, so it is only kept to
+	// detect policy changes.
+	return policy, record.ID, nil
 }
 
 // lookupMTASTSRecord looks up the MTA-STS TXT record
