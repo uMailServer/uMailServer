@@ -165,3 +165,53 @@ func TestJSONRPCErrorIDsAndCodes(t *testing.T) {
 		t.Errorf("string id request: code=%d body=%s", code, body)
 	}
 }
+
+// F5250: add_domain / add_account must store active records; inactive
+// accounts cannot authenticate and inactive domains are not delivered locally.
+func TestAddDomainAndAccountCreateActiveRecords(t *testing.T) {
+	s, database := newSecurityTestServer(t)
+	tool := func(name, args string) int {
+		code, _ := securityTestCall(s, "admin-tok", fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, name, args))
+		return code
+	}
+	if code := tool("add_domain", `{"name":"mcp.test"}`); code != http.StatusOK {
+		t.Fatalf("add_domain: %d", code)
+	}
+	if code := tool("add_account", `{"email":"bob@mcp.test","password":"Str0ng!Passw0rd"}`); code != http.StatusOK {
+		t.Fatalf("add_account: %d", code)
+	}
+	if d, err := database.GetDomain("mcp.test"); err != nil || !d.IsActive {
+		t.Errorf("domain not active: %+v %v", d, err)
+	}
+	if a, err := database.GetAccount("mcp.test", "bob"); err != nil || !a.IsActive || a.IsAdmin {
+		t.Errorf("account not active (or admin): %+v %v", a, err)
+	}
+}
+
+// F5251: deleting a missing account/domain (including a case variant of a
+// stored address) must not report success.
+func TestDeleteMissingAccountOrDomainFails(t *testing.T) {
+	s, database := newSecurityTestServer(t)
+	if err := database.CreateDomain(&db.DomainData{Name: "example.com", IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateAccount(&db.AccountData{Email: "victim@example.com", LocalPart: "victim", Domain: "example.com", IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_account","arguments":{"email":"ghost@example.com"}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_account","arguments":{"email":"Victim@Example.com"}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_domain","arguments":{"name":"nosuch.test"}}}`,
+	} {
+		if code, body := securityTestCall(s, "admin-tok", b); code == http.StatusOK || strings.Contains(body, "deleted successfully") || !strings.Contains(body, "not found") {
+			t.Errorf("code=%d body=%s for %s", code, body, b)
+		}
+	}
+	if _, err := database.GetAccount("example.com", "victim"); err != nil {
+		t.Fatalf("victim account removed: %v", err)
+	}
+	code, _ := securityTestCall(s, "admin-tok", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_account","arguments":{"email":"victim@example.com"}}}`)
+	if _, err := database.GetAccount("example.com", "victim"); code != http.StatusOK || err == nil {
+		t.Fatalf("existing delete: code=%d err=%v", code, err)
+	}
+}
