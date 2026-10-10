@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,6 +55,10 @@ type Manager struct {
 	running      atomic.Bool
 	shutdown     chan struct{}
 	stopOnce     sync.Once
+	shutMu       sync.RWMutex   // guards the shutdown channel variable
+	lifeMu       sync.Mutex     // guards Start/Stop and the shutdown channel (F5904)
+	stopped      bool           // Stop closed shutdown; Start must make a new one
+	workers      sync.WaitGroup // delivery workers and the sweeper of the current run
 	mu           sync.RWMutex
 	claimMu      sync.Mutex // serializes the pending->sending claim in deliver (F4927)
 	metrics      *metrics.SimpleMetrics
@@ -200,7 +205,7 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		shutdown:        make(chan struct{}),
 		metrics:         metrics.Get(),
 		logger:          logger,
-		maxRetries:      len(retryDelays),
+		maxRetries:      len(retryDelays) + 1, // N delays separate N+1 attempts (F5901)
 		maxQueueSize:    10000,
 		workerCount:     10,
 		mxPoolSize:      10,
@@ -213,10 +218,32 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 	}
 }
 
-// Start starts the queue manager
+// shutdownCh returns the current shutdown channel; Start replaces it when the
+// manager is restarted after Stop.
+func (m *Manager) shutdownCh() chan struct{} {
+	m.shutMu.RLock()
+	defer m.shutMu.RUnlock()
+	return m.shutdown
+}
+
+// Start starts the queue manager. It is safe to call concurrently and again
+// after Stop (F5904).
 func (m *Manager) Start(ctx context.Context) {
+	m.lifeMu.Lock()
+	defer m.lifeMu.Unlock()
 	if m.running.Load() {
 		return
+	}
+	// Workers of the previous run may still be finishing an in-flight
+	// delivery; requeueing "sending" entries before they end would deliver
+	// those twice.
+	m.workers.Wait()
+	if m.stopped || m.shutdown == nil {
+		m.shutMu.Lock()
+		m.shutdown = make(chan struct{})
+		m.shutMu.Unlock()
+		m.stopOnce = sync.Once{}
+		m.stopped = false
 	}
 	m.running.Store(true)
 
@@ -224,14 +251,24 @@ func (m *Manager) Start(ctx context.Context) {
 	// stopped or crashed; nothing else would ever pick it up again (F4926).
 	m.requeueInterruptedEntries()
 
-	// Create delivery channel and start worker pool
-	m.deliveryChan = make(chan *db.QueueEntry, m.workerCount*2)
+	// Create delivery channel and start worker pool. An existing channel is
+	// kept on restart: Enqueue may be sending to it concurrently.
+	if m.deliveryChan == nil {
+		m.deliveryChan = make(chan *db.QueueEntry, m.workerCount*2)
+	}
+	m.workers.Add(m.workerCount + 1)
 	for i := 0; i < m.workerCount; i++ {
-		go m.deliveryWorker(ctx, i)
+		go func(i int) {
+			defer m.workers.Done()
+			m.deliveryWorker(ctx, i)
+		}(i)
 	}
 
 	// Start periodic queue sweeper for retry entries
-	go m.queueSweeper(ctx)
+	go func() {
+		defer m.workers.Done()
+		m.queueSweeper(ctx)
+	}()
 }
 
 // requeueInterruptedEntries makes entries left in "sending" by an interrupted
@@ -264,10 +301,13 @@ func (m *Manager) requeueInterruptedEntries() {
 
 // Stop stops the queue manager
 func (m *Manager) Stop() {
+	m.lifeMu.Lock()
+	defer m.lifeMu.Unlock()
 	if !m.running.Load() {
 		return
 	}
 	m.running.Store(false)
+	m.stopped = true
 	m.stopOnce.Do(func() {
 		// Signal workers to stop. deliveryChan is intentionally NOT closed:
 		// Enqueue (called by generateBounce on workers and by mail acceptance)
@@ -535,7 +575,7 @@ func (m *Manager) queueSweeper(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-m.shutdown:
+		case <-m.shutdownCh():
 			return
 		case <-ticker.C:
 			m.sweepPendingEntries()
@@ -552,7 +592,7 @@ func (m *Manager) sweepPendingEntries() {
 
 	for _, entry := range entries {
 		select {
-		case <-m.shutdown:
+		case <-m.shutdownCh():
 			return
 		case m.deliveryChan <- entry:
 			// Sent to worker
@@ -568,7 +608,7 @@ func (m *Manager) deliveryWorker(ctx context.Context, id int) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-m.shutdown:
+		case <-m.shutdownCh():
 			return
 		case entry, ok := <-m.deliveryChan:
 			if !ok {
@@ -1080,6 +1120,14 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			return classifySMTPReply(err)
 		}
 
+		// RFC 1870: do not transmit a message the server already declared too
+		// large; the 552 would be final anyway (F5903).
+		if ok, param := client.Extension("SIZE"); ok {
+			if limit, perr := strconv.ParseInt(strings.TrimSpace(param), 10, 64); perr == nil && limit > 0 && int64(len(message)) > limit {
+				return &permanentSMTPError{err: &textproto.Error{Code: 552, Msg: "5.3.4 message size exceeds remote limit of " + param + " bytes"}}
+			}
+		}
+
 		// Send data
 		w, err := client.Data()
 		if err != nil {
@@ -1134,6 +1182,11 @@ func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) error {
 
 // sendSuccessDSN sends a DSN success notification
 func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
+	// A null reverse-path has nobody to notify (RFC 5321 §4.5.5); enqueueing
+	// to an empty recipient only creates an undeliverable entry (F5900).
+	if entry.From == "" {
+		return
+	}
 	// GenerateDSN extracts the headers when RET requests headers only.
 	originalMsg, _ := readFile(entry.MessagePath)
 
