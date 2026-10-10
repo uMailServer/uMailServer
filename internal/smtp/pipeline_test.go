@@ -208,7 +208,7 @@ func TestReverseIP(t *testing.T) {
 		{"192.168.1.1", "1.1.168.192"},
 		{"10.0.0.1", "1.0.0.10"},
 		// IPv6
-		{"2001:db8::1", "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.11.13.0.1.0.0.2.ip6.arpa"},
+		{"2001:db8::1", "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa"},
 		{"::1", "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa"},
 		// Invalid/edge cases
 		{"invalid", ""},
@@ -710,9 +710,8 @@ func TestAVStage_ScanError(t *testing.T) {
 	ctx := NewMessageContext(net.ParseIP("1.2.3.4"), "sender@example.com", []string{"rcpt@example.com"}, []byte("data"))
 	result := stage.Process(ctx)
 
-	// Scan error should still accept the message
-	if result != ResultAccept {
-		t.Errorf("Expected ResultAccept on scan error, got %v", result)
+	if result != ResultReject || ctx.RejectionCode != 451 {
+		t.Errorf("Expected 451 temp-fail on scan error, got %v/%d", result, ctx.RejectionCode)
 	}
 }
 

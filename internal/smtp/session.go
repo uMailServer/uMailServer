@@ -237,7 +237,7 @@ func (s *Session) handleEHLO(arg string) error {
 		"DELIVERYSTATUS",
 	}
 
-	if s.server.config.TLSConfig != nil && !s.isTLS {
+	if s.server.tlsAvailable() && !s.isTLS {
 		capabilities = append(capabilities, "STARTTLS")
 	}
 
@@ -1537,8 +1537,8 @@ func (s *Session) handleSTARTTLS() error {
 		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
 
-	if s.server.config.TLSConfig == nil {
-		return s.WriteResponse(502, "5.5.1 Command not implemented")
+	if !s.server.tlsAvailable() {
+		return s.WriteResponse(454, "4.7.0 TLS not available")
 	}
 
 	if err := s.WriteResponse(220, "Ready to start TLS"); err != nil {

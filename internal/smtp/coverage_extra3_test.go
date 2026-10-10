@@ -194,8 +194,8 @@ func TestHandleCommand_STARTTLSDispatch(t *testing.T) {
 
 	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp, "502") && !strings.HasPrefix(resp, "503") && !strings.HasPrefix(resp, "220") {
-		t.Errorf("Expected 502/503/220 for STARTTLS, got: %q", resp)
+	if !strings.HasPrefix(resp, "454") && !strings.HasPrefix(resp, "503") && !strings.HasPrefix(resp, "220") {
+		t.Errorf("Expected 454/502/503/220 for STARTTLS, got: %q", resp)
 	}
 }
 

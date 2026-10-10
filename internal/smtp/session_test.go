@@ -963,8 +963,8 @@ func TestHandleSTARTTLS_NoTLSConfig(t *testing.T) {
 	n, _ := clientConn.Read(buf)
 	response := string(buf[:n])
 
-	if !strings.Contains(response, "502") {
-		t.Errorf("Expected 502 when TLS config is nil, got: %q", response)
+	if !strings.Contains(response, "454") {
+		t.Errorf("Expected 454 when TLS config is nil, got: %q", response)
 	}
 }
 
