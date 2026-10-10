@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 )
 
@@ -13,6 +14,11 @@ type Document struct {
 	ID      string
 	Content string
 	Fields  map[string]string // e.g., "from", "to", "subject"
+
+	// Date and HasAttachment are filter metadata (F5973/F5974). They are not
+	// tokenized. A zero Date means unknown and never matches a date filter.
+	Date          time.Time
+	HasAttachment bool
 }
 
 // Index provides full-text search capabilities
@@ -349,6 +355,17 @@ func (idx *Index) Clear() {
 	idx.docs = make(map[string]*Document)
 	idx.tokens = make(map[string]map[string]int)
 	idx.docCount = 0
+}
+
+// Get returns the stored document metadata (content omitted) or nil.
+func (idx *Index) Get(docID string) *Document {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	doc, ok := idx.docs[docID]
+	if !ok {
+		return nil
+	}
+	return &Document{ID: doc.ID, Date: doc.Date, HasAttachment: doc.HasAttachment}
 }
 
 // DocCount returns the number of indexed documents

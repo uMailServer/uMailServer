@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -73,7 +72,10 @@ func NewProvider(config Config) (*Provider, error) {
 	}
 
 	// Create sampler based on sample rate
-	sampler := sdktrace.TraceIDRatioBased(config.SampleRate)
+	// F5977: honour the upstream sampling decision (W3C traceparent extracted
+	// by HTTPMiddleware) and only ratio-sample root spans, so a sampled
+	// distributed trace is not cut into fragments.
+	sampler := sdktrace.ParentBased(sdktrace.TraceIDRatioBased(config.SampleRate))
 
 	// Create tracer provider
 	tp := sdktrace.NewTracerProvider(
@@ -108,19 +110,23 @@ func createExporter(config Config) (sdktrace.SpanExporter, error) {
 		if config.OTLPEndpoint == "" {
 			config.OTLPEndpoint = "localhost:4317"
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		// grpc.NewClient is lazy: the channel starts Idle and only dials on
+		// first use. Waiting for a state change here never fired on an idle
+		// channel, so startup failed after the timeout even with a healthy
+		// collector (F5976). The batcher exports asynchronously and retries,
+		// so an unreachable collector must not block or fail startup.
 		conn, err := grpc.NewClient(config.OTLPEndpoint,
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to OTLP endpoint: %w", err)
 		}
-		if !conn.WaitForStateChange(ctx, conn.GetState()) {
-			conn.Close()
-			return nil, fmt.Errorf("timeout connecting to OTLP endpoint")
+		exp, err := otlptracegrpc.New(context.Background(), otlptracegrpc.WithGRPCConn(conn))
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
 		}
-		return otlptracegrpc.New(context.Background(), otlptracegrpc.WithGRPCConn(conn))
+		return &connClosingExporter{SpanExporter: exp, conn: conn}, nil
 
 	case "stdout":
 		return stdouttrace.New(stdouttrace.WithWriter(os.Stdout))
@@ -131,6 +137,21 @@ func createExporter(config Config) (sdktrace.SpanExporter, error) {
 	default:
 		return nil, fmt.Errorf("unknown exporter type: %s", config.Exporter)
 	}
+}
+
+// connClosingExporter closes the gRPC connection on shutdown; WithGRPCConn
+// leaves ownership of the connection with the caller (F5976).
+type connClosingExporter struct {
+	sdktrace.SpanExporter
+	conn *grpc.ClientConn
+}
+
+func (e *connClosingExporter) Shutdown(ctx context.Context) error {
+	err := e.SpanExporter.Shutdown(ctx)
+	if cerr := e.conn.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // createResource creates a resource with service information

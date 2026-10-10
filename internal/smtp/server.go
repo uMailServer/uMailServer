@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/tracing"
@@ -43,6 +44,7 @@ type Server struct {
 	onValidate          func(from string, to []string) error
 	onDeliverWithNotify func(from string, to []string, notify []string, data []byte) error
 	onDeliver           func(from string, to []string, data []byte) error
+	onDeliverWithAuth   func(from string, to []string, notify []string, data []byte, info *DeliveryAuth) error
 	onDeliverWithSieve  func(from string, to []string, data []byte, sieveActions []string) error
 	onGetUserSecret     func(username string) (string, error) // Get user's shared secret for CRAM-MD5
 	onGetPassword       func(username string) (string, error) // Get user's password for SCRAM-SHA-256
@@ -185,6 +187,32 @@ func (s *Server) SetValidateHandler(handler func(from string, to []string) error
 // is required.
 func (s *Server) SetDeliveryHandlerWithNotify(handler func(from string, to []string, notify []string, data []byte) error) {
 	s.onDeliverWithNotify = handler
+}
+
+// DeliveryAuth carries the pipeline verdicts for an accepted message to a
+// delivery handler. It is nil-safe to ignore: the same information (except
+// the structured form) is already in the message as Authentication-Results.
+type DeliveryAuth struct {
+	// AuthResults is the resinfo of the Authentication-Results header this
+	// server added (the text after "authserv-id;"), "" if none. It includes
+	// the ARC verdict as "arc=<cv>". Pass it as authResults to
+	// auth.ARCSigner.SealWithCV.
+	AuthResults  string
+	SieveActions []string
+	SPF          SPFResult
+	DKIM         DKIMResult
+	DMARC        DMARCResult
+	// ARC is the validation of the chain as received; ARC.Result is the cv
+	// to give to auth.ARCSigner.SealWithCV when forwarding. Zero Result
+	// means no ARC stage ran.
+	ARC ARCResult
+}
+
+// SetDeliveryHandlerWithAuth sets the most capable delivery handler: it gets
+// the DSN notify preferences, sieve actions and the pipeline's authentication
+// verdicts (info is never nil). It takes precedence over the other handlers.
+func (s *Server) SetDeliveryHandlerWithAuth(handler func(from string, to []string, notify []string, data []byte, info *DeliveryAuth) error) {
+	s.onDeliverWithAuth = handler
 }
 
 // SetDeliveryHandler sets the message delivery handler
@@ -450,15 +478,35 @@ func truncate(s string, maxLen int) string {
 func ValidateEmail(email string) (string, error) {
 	addr, err := mail.ParseAddress(email)
 	if err != nil {
-		// Try to handle international addresses (SMTPUTF8)
-		// Some UTF-8 addresses may not parse with the strict parser
-		// Basic validation: check for non-ASCII and @ sign
-		if strings.Contains(email, "@") && !strings.HasPrefix(email, "@") && !strings.HasSuffix(email, "@") {
+		// net/mail is ASCII-only: accept an internationalized (RFC 6531)
+		// address, but never a malformed one (F5945).
+		if validUTF8Address(email) {
 			return email, nil
 		}
 		return "", err
 	}
 	return addr.Address, nil
+}
+
+// validUTF8Address reports whether email is a plausible RFC 6531 address that
+// net/mail could not parse because of non-ASCII characters: it contains a
+// non-ASCII rune, exactly one '@' with a non-empty local part and domain, and
+// no control character, whitespace or address-syntax delimiter.
+func validUTF8Address(email string) bool {
+	ascii := true
+	for _, r := range email {
+		if r > unicode.MaxASCII {
+			ascii = false
+		}
+		if unicode.IsControl(r) || unicode.IsSpace(r) || strings.ContainsRune("<>(),;:\\\"[]", r) {
+			return false
+		}
+	}
+	if ascii || strings.Count(email, "@") != 1 {
+		return false
+	}
+	at := strings.IndexByte(email, '@')
+	return at > 0 && at < len(email)-1
 }
 
 // tlsAvailable reports whether STARTTLS can actually be served: a TLS config

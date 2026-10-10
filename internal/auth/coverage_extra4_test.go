@@ -801,9 +801,10 @@ func TestDANEValidate_PKIXUsagesSkipped_Cov4(t *testing.T) {
 	}
 
 	result, err := validator.Validate("example.com", 25, state)
-	// All records should be skipped (PKIX usages), resulting in DANEFailed
-	if result != DANEFailed {
-		t.Errorf("Expected DANEFailed when all records are PKIX usages, got %s", result.String())
+	// All records are unusable for SMTP (PKIX usages): RFC 7672 §2.2 /
+	// F6005 treat the host as not DANE-authenticated, not as a failure.
+	if result != DANEUnusable {
+		t.Errorf("Expected DANEUnusable when all records are PKIX usages, got %s", result.String())
 	}
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)

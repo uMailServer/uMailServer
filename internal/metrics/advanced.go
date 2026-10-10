@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,9 +19,13 @@ type Histogram struct {
 
 // NewHistogram creates a histogram with specified bounds
 func NewHistogram(bounds []float64) *Histogram {
+	// Observe picks the first bound >= value, so bounds must be ascending;
+	// an unsorted slice put values in the wrong bucket (F5978).
+	sorted := append([]float64(nil), bounds...)
+	sort.Float64s(sorted)
 	return &Histogram{
-		buckets: make([]uint64, len(bounds)+1),
-		bounds:  append([]float64(nil), bounds...),
+		buckets: make([]uint64, len(sorted)+1),
+		bounds:  sorted,
 	}
 }
 
@@ -35,7 +40,11 @@ func (h *Histogram) Observe(value float64) {
 	defer h.mutex.Unlock()
 
 	atomic.AddUint64(&h.count, 1)
-	h.sum += value
+	// An infinite observation would make sum +/-Inf forever and Snapshot
+	// unencodable as JSON; it is still counted in the overflow bucket (F5978).
+	if !math.IsInf(value, 0) {
+		h.sum += value
+	}
 
 	for i, bound := range h.bounds {
 		if value <= bound {
@@ -161,6 +170,16 @@ func (am *AdvancedMetrics) RecordMessageRate() {
 func (am *AdvancedMetrics) GetMessageRate() float64 {
 	am.rateMutex.RLock()
 	defer am.rateMutex.RUnlock()
+	// F5979: the EMA only updates on a new message, so after traffic stopped
+	// it reported the old rate forever. Cap it by what the silence since the
+	// last message implies (at most 1 message per elapsed second).
+	if am.lastMessageTime > 0 {
+		if elapsed := time.Now().Unix() - am.lastMessageTime; elapsed > 0 {
+			if ceil := 1 / float64(elapsed); am.messageRate > ceil {
+				return ceil
+			}
+		}
+	}
 	return am.messageRate
 }
 

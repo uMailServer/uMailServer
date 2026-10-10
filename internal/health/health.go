@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 )
@@ -123,7 +124,14 @@ func (m *Monitor) Check(ctx context.Context) Report {
 			// report (F5189). The buffered channel lets it exit when it
 			// eventually returns.
 			result := make(chan Check, 1)
-			go func() { result <- c(checkCtx) }()
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						result <- Check{Status: StatusUnhealthy, Message: fmt.Sprintf("health check panicked: %v", r)}
+					}
+				}()
+				result <- c(checkCtx)
+			}()
 			var check Check
 			select {
 			case check = <-result:
@@ -161,7 +169,38 @@ func (m *Monitor) Check(ctx context.Context) Report {
 		}
 	}
 
+	// Concurrent collection is unordered; give consumers a stable order.
+	sort.Slice(report.Checks, func(i, j int) bool { return report.Checks[i].Name < report.Checks[j].Name })
+
 	return report
+}
+
+// diskUsagePercent returns the used percentage with df semantics: used is
+// blocks-bfree and the denominator is used+bavail, so blocks reserved for root
+// count as neither used nor available. ok is false for a zero-capacity result.
+func diskUsagePercent(blocks, bfree, bavail uint64) (float64, bool) {
+	if bfree > blocks {
+		bfree = blocks
+	}
+	used := blocks - bfree
+	denom := used + bavail
+	if denom == 0 {
+		return 0, false
+	}
+	return float64(used) / float64(denom) * 100, true
+}
+
+// diskStatus classifies a usage percentage. A threshold <= 0 is unset and
+// disables that level.
+func diskStatus(usage, warning, critical float64) (Status, string) {
+	switch {
+	case critical > 0 && usage >= critical:
+		return StatusUnhealthy, fmt.Sprintf("disk critically full: %.1f%% used", usage)
+	case warning > 0 && usage >= warning:
+		return StatusDegraded, fmt.Sprintf("disk space warning: %.1f%% used", usage)
+	default:
+		return StatusHealthy, fmt.Sprintf("disk space healthy: %.1f%% used", usage)
+	}
 }
 
 // CheckLiveness returns a simple liveness check

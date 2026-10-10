@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"math"
 	"mime"
 	"net/mail"
 	"net/textproto"
@@ -49,17 +50,19 @@ func parseBodySectionItem(item string) (bodySectionItem, bool) {
 		}
 		spec := rest[1 : len(rest)-1]
 		originStr, countStr, hasCount := strings.Cut(spec, ".")
-		origin, err := strconv.ParseUint(originStr, 10, 31)
+		// RFC 3501 number is 32-bit; larger-than-int32 values are valid
+		// and simply clamp (F5938: they made the item vanish).
+		origin, err := strconv.ParseUint(originStr, 10, 32)
 		if err != nil {
 			return it, false
 		}
-		it.partial, it.origin = true, int(origin)
+		it.partial, it.origin = true, int(min(origin, math.MaxInt32))
 		if hasCount {
-			count, err := strconv.ParseUint(countStr, 10, 31)
+			count, err := strconv.ParseUint(countStr, 10, 32)
 			if err != nil {
 				return it, false
 			}
-			it.count = int(count)
+			it.count = int(min(count, math.MaxInt32))
 		}
 	}
 	return it, true

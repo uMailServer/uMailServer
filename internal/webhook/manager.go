@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -39,6 +40,42 @@ type Manager struct {
 // outbound webhook delivery emits a webhook.deliver span. Nil disables tracing.
 func (m *Manager) SetTracingProvider(provider *tracing.Provider) {
 	m.tracingProvider = provider
+}
+
+// redactURL strips credentials, query and fragment from a webhook URL so it
+// is safe for logs and trace attributes (F5970): userinfo and tokens in the
+// query string are secrets.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "<invalid-url>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
+}
+
+// redactErr removes the raw hook URL (and any credential-bearing form of it)
+// from an error message.
+func redactErr(err error, rawURL string) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ReplaceAll(err.Error(), rawURL, redactURL(rawURL))
+	if u, perr := url.Parse(rawURL); perr == nil {
+		if u.User != nil {
+			if pw, ok := u.User.Password(); ok && pw != "" {
+				msg = strings.ReplaceAll(msg, pw, "***")
+			}
+		}
+		if u.RawQuery != "" {
+			msg = strings.ReplaceAll(msg, u.RawQuery, "REDACTED")
+		}
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 // Webhook represents a webhook configuration
@@ -147,7 +184,7 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 			}(hook, event)
 		default:
 			// Semaphore full, skip this webhook to prevent resource exhaustion
-			fmt.Printf("webhook: delivery skipped for %s (max concurrent deliveries reached)\n", hook.URL)
+			fmt.Printf("webhook: delivery skipped for %s (max concurrent deliveries reached)\n", redactURL(hook.URL))
 		}
 	}
 }
@@ -158,7 +195,7 @@ func (m *Manager) send(hook *Webhook, event Event) {
 		_, span := m.tracingProvider.StartSpanWithKind(context.Background(), "webhook.deliver", tracing.SpanKindClient)
 		defer span.End()
 		tracing.SetStringAttribute(span, "webhook.id", hook.ID)
-		tracing.SetStringAttribute(span, "webhook.url", hook.URL)
+		tracing.SetStringAttribute(span, "webhook.url", redactURL(hook.URL))
 		tracing.SetStringAttribute(span, "webhook.event", event.Type)
 		// Defer attribute capture to track final outcome.
 		var (
@@ -198,7 +235,7 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 	// hook is shared by concurrent deliveries, so it is not written here
 	// (F5177).
 	if valid, _ := m.isValidWebhookURL(hook.URL); !valid {
-		fmt.Printf("webhook: invalid URL (SSRF protection): %s\n", hook.URL)
+		fmt.Printf("webhook: invalid URL (SSRF protection): %s\n", redactURL(hook.URL))
 		*finalErr = fmt.Errorf("invalid webhook URL")
 		return
 	}
@@ -208,7 +245,7 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 
 	// Check if circuit allows the request
 	if !cb.Allow() {
-		fmt.Printf("webhook: circuit breaker open for %s\n", hook.URL)
+		fmt.Printf("webhook: circuit breaker open for %s\n", redactURL(hook.URL))
 		*finalErr = fmt.Errorf("circuit breaker open")
 		return
 	}
@@ -266,8 +303,10 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		_ = resp.Body.Close()
 		lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 
-		// Don't retry on 4xx errors (client errors)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		// Don't retry on 4xx errors (client errors), except 408/429 which
+		// signal a transient condition (F5971).
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+			resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests {
 			break
 		}
 	}
@@ -278,8 +317,8 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		*success = true
 	} else {
 		cb.RecordFailure()
-		fmt.Printf("webhook: delivery failed after %d attempts: %s, error: %v\n", *attempts, hook.URL, lastErr)
-		*finalErr = lastErr
+		fmt.Printf("webhook: delivery failed after %d attempts: %s, error: %v\n", *attempts, redactURL(hook.URL), redactErr(lastErr, hook.URL))
+		*finalErr = redactErr(lastErr, hook.URL)
 	}
 }
 
@@ -470,6 +509,13 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F5972: reject non-http(s)/hostless URLs at registration time rather
+	// than accepting them and failing every delivery silently.
+	if u, err := url.Parse(req.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	hook := &Webhook{
 		ID:        newHookID(),
 		URL:       req.URL,
@@ -501,5 +547,10 @@ func newHookID() string {
 
 // GetCircuitBreakerMetrics returns circuit breaker metrics for all webhook URLs
 func (m *Manager) GetCircuitBreakerMetrics() map[string]circuitbreaker.Metrics {
-	return m.cbManager.AllMetrics()
+	all := m.cbManager.AllMetrics()
+	out := make(map[string]circuitbreaker.Metrics, len(all))
+	for k, v := range all {
+		out[redactURL(k)] = v
+	}
+	return out
 }

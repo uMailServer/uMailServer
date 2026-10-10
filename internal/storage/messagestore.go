@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // errInvalidPath is returned when a user-provided path component contains
@@ -183,6 +184,7 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 	// it under the content-addressed name with a hard link (atomic and
 	// non-overwriting). A failed or interrupted write therefore never leaves
 	// a truncated body under msgPath that later deliveries would dedup onto.
+	removeStaleTemps(filepath.Dir(msgPath))
 	tmp, err := os.CreateTemp(filepath.Dir(msgPath), ".tmp-"+messageID+"-*")
 	if err != nil {
 		return "", err
@@ -200,11 +202,21 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 		return "", err
 	}
 
-	if err := os.Link(tmpPath, msgPath); err != nil {
+	// F5951: a concurrent DeleteMessage can remove msgPath between the
+	// EEXIST from Link and the Stat; retry the publish instead of failing.
+	for attempt := 0; attempt < 5; attempt++ {
+		err := os.Link(tmpPath, msgPath)
+		if err == nil {
+			syncDirPath(filepath.Dir(msgPath)) // F5952: persist the new dir entry
+			break
+		}
 		if !os.IsExist(err) {
 			return "", err
 		}
 		info, statErr := os.Stat(msgPath)
+		if os.IsNotExist(statErr) {
+			continue
+		}
 		if statErr != nil {
 			return "", statErr
 		}
@@ -219,9 +231,40 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 		if err := os.Rename(tmpPath, msgPath); err != nil {
 			return "", err
 		}
+		syncDirPath(filepath.Dir(msgPath))
+		break
 	}
 
 	return messageID, nil
+}
+
+// syncDirPath best-effort fsyncs a directory so a new entry survives a crash.
+func syncDirPath(dir string) {
+	if f, err := os.Open(dir); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
+	}
+}
+
+// staleTempAge is how old an in-flight ".tmp-" file must be before it is
+// considered an orphan from a crashed store.
+const staleTempAge = time.Hour
+
+// removeStaleTemps deletes orphaned ".tmp-" files (F5952: a crash between
+// CreateTemp and Link otherwise leaks them forever) from one blob directory.
+func removeStaleTemps(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".tmp-") {
+			continue
+		}
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > staleTempAge {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 // ReadMessage reads a message by ID

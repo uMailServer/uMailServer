@@ -167,6 +167,7 @@ func (s *MaildirStore) generateUniqueName() string {
 	if hostname == "" {
 		hostname = "localhost"
 	}
+	hostname = sanitizeHostname(hostname)
 	// The per-process counter guarantees uniqueness (no two deliveries in
 	// this process can share a name, so rename cannot overwrite a message),
 	// and the fixed-width zero-padded fields keep lexicographic filename
@@ -175,6 +176,14 @@ func (s *MaildirStore) generateUniqueName() string {
 	seq := maildirNameSeq.Add(1)
 	micros := time.Now().UnixMicro() % 1000000
 	return formatMaildirName(timestamp, micros, pid, seq, hostname)
+}
+
+// sanitizeHostname replaces path separators and the flag delimiter in the
+// unique-name host part with "_" so a hostname can never introduce a path
+// component or flag split (F5953). (The spec's backslash escapes would be
+// rejected by validateFilename.)
+func sanitizeHostname(h string) string {
+	return strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(h)
 }
 
 // Deliver stores a message in the specified folder

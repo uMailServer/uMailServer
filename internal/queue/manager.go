@@ -73,6 +73,17 @@ type Manager struct {
 	workerCount  int                 // number of delivery workers (default 10)
 	deliveryChan chan *db.QueueEntry // direct delivery channel
 
+	// Per-destination-domain concurrency cap (F6020): at most maxPerDomain
+	// deliveries to one recipient domain run at once so a slow domain cannot
+	// occupy every worker. 0 disables the cap.
+	maxPerDomain int
+	domMu        sync.Mutex
+	domActive    map[string]int
+
+	// ioTimeout bounds every single read or write on an outbound SMTP
+	// connection (F6021). 0 disables it.
+	ioTimeout time.Duration
+
 	// MX connection pool settings
 	mxPoolSize    int           // max connections per MX host (default 10)
 	mxIdleTimeout time.Duration // idle connection timeout (default 5 min)
@@ -191,6 +202,87 @@ func (r *realMTASTSDNSResolver) LookupMX(ctx context.Context, domain string) ([]
 }
 
 // NewManager creates a new queue manager
+const (
+	// defaultMaxPerDomain leaves at least half of the default 10 workers free
+	// for other domains.
+	defaultMaxPerDomain = 5
+	// defaultIOTimeout is the RFC 5321 §4.5.3.2 five minute command timeout.
+	defaultIOTimeout = 5 * time.Minute
+)
+
+// deadlineConn refreshes the connection deadline before every Read and Write,
+// so a peer that stops answering (tarpit) fails the delivery instead of
+// holding a worker forever (F6021).
+type deadlineConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *deadlineConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Read(p)
+}
+
+func (c *deadlineConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Write(p)
+}
+
+// SetMaxConcurrentPerDomain caps simultaneous deliveries to one recipient
+// domain; 0 disables the cap.
+func (m *Manager) SetMaxConcurrentPerDomain(n int) {
+	m.domMu.Lock()
+	defer m.domMu.Unlock()
+	m.maxPerDomain = n
+}
+
+// SetIOTimeout sets the per-operation read/write timeout of outbound SMTP
+// connections; 0 disables it.
+func (m *Manager) SetIOTimeout(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ioTimeout = d
+}
+
+// acquireDomainSlot reserves one delivery slot for domain.
+func (m *Manager) acquireDomainSlot(domain string) bool {
+	m.domMu.Lock()
+	defer m.domMu.Unlock()
+	if m.maxPerDomain <= 0 {
+		return true
+	}
+	if m.domActive == nil {
+		m.domActive = make(map[string]int)
+	}
+	if m.domActive[domain] >= m.maxPerDomain {
+		return false
+	}
+	m.domActive[domain]++
+	return true
+}
+
+func (m *Manager) releaseDomainSlot(domain string) {
+	m.domMu.Lock()
+	defer m.domMu.Unlock()
+	if n := m.domActive[domain]; n > 1 {
+		m.domActive[domain] = n - 1
+	} else {
+		delete(m.domActive, domain)
+	}
+}
+
+// requeueLater hands a skipped entry back to the workers shortly. The entry is
+// still pending, so a lost hand-off is recovered by the sweeper.
+func (m *Manager) requeueLater(entry *db.QueueEntry) {
+	time.AfterFunc(time.Second, func() {
+		select {
+		case <-m.shutdownCh():
+		case m.deliveryChan <- entry:
+		default:
+		}
+	})
+}
+
 func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
@@ -208,6 +300,9 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		maxRetries:      len(retryDelays) + 1, // N delays separate N+1 attempts (F5901)
 		maxQueueSize:    10000,
 		workerCount:     10,
+		maxPerDomain:    defaultMaxPerDomain,
+		ioTimeout:       defaultIOTimeout,
+		domActive:       make(map[string]int),
 		mxPoolSize:      10,
 		mxIdleTimeout:   5 * time.Minute,
 		mxPools:         make(map[string]*mxPool),
@@ -383,7 +478,9 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 		queueDir = "."
 	}
 	messagePath := filepath.Join(queueDir, id+".msg")
-	if err := os.WriteFile(messagePath, message, 0600); err != nil {
+	// Atomic temp+rename write: a failed write (disk full) must not leave a
+	// truncated .msg behind that a later delivery would send (F6023).
+	if err := writeFile(messagePath, message); err != nil {
 		return "", fmt.Errorf("failed to write message file: %w", err)
 	}
 	baseID := id
@@ -421,14 +518,26 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 			deleteFile(messagePath)
 			return "", fmt.Errorf("failed to enqueue: %w", err)
 		}
+	}
+	// Dispatch only once every recipient is stored: a worker that delivered
+	// recipient 0 before recipient 1 hit the queue limit would deliver to a
+	// recipient whose enqueue was reported as failed, and the caller's retry
+	// would duplicate it (F6024).
+	m.dispatchEntries(entries)
+
+	return baseID, nil
+}
+
+// dispatchEntries hands stored entries to the workers; a full channel leaves
+// them to the sweeper.
+func (m *Manager) dispatchEntries(entries []*db.QueueEntry) {
+	for _, entry := range entries {
 		select {
 		case m.deliveryChan <- entry:
 		default:
 			m.logger.Warn("delivery channel full, entry will be retried by sweeper", "id", entry.ID, "to", entry.To)
 		}
 	}
-
-	return baseID, nil
 }
 
 func (m *Manager) Enqueue(from string, to []string, message []byte) (string, error) {
@@ -454,6 +563,7 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 	now := time.Now()
 	baseID := id
 
+	entries := make([]*db.QueueEntry, 0, len(to))
 	for i, recipient := range to {
 		entryID := fmt.Sprintf("%s-%d", baseID, i)
 
@@ -467,6 +577,7 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 			RetryCount:  0,
 			Status:      "pending",
 		}
+		entries = append(entries, entry)
 
 		// EnqueueWithLimit performs an atomic check-and-set inside a single
 		// bbolt transaction, eliminating the race between getStats and Enqueue.
@@ -478,13 +589,12 @@ func (m *Manager) Enqueue(from string, to []string, message []byte) (string, err
 			deleteFile(messagePath)
 			return "", fmt.Errorf("failed to enqueue: %w", err)
 		}
-
-		select {
-		case m.deliveryChan <- entry:
-		default:
-			m.logger.Warn("delivery channel full, entry will be retried by sweeper", "id", entry.ID, "to", entry.To)
-		}
 	}
+	// Dispatch only once every recipient is stored: a worker that delivered
+	// recipient 0 before recipient 1 hit the queue limit would deliver to a
+	// recipient whose enqueue was reported as failed, and the caller's retry
+	// would duplicate it (F6024).
+	m.dispatchEntries(entries)
 
 	return baseID, nil
 }
@@ -653,6 +763,16 @@ func (m *Manager) claimEntry(id string) (*db.QueueEntry, bool) {
 
 // deliver attempts to deliver a message
 func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
+	// Per-domain cap (F6020): over the cap, leave the entry pending and try
+	// again shortly rather than parking a worker on a slow domain.
+	if len(entry.To) > 0 {
+		dom := strings.ToLower(extractDomain(entry.To[0]))
+		if !m.acquireDomainSlot(dom) {
+			m.requeueLater(entry)
+			return
+		}
+		defer m.releaseDomainSlot(dom)
+	}
 	claimed, ok := m.claimEntry(entry.ID)
 	if !ok {
 		return
@@ -896,6 +1016,12 @@ func (m *Manager) createMXConn(mx string) (*smtp.Client, error) {
 		return nil, err
 	}
 
+	m.mu.RLock()
+	ioTimeout := m.ioTimeout
+	m.mu.RUnlock()
+	if ioTimeout > 0 {
+		conn = &deadlineConn{Conn: conn, timeout: ioTimeout}
+	}
 	client, err := smtp.NewClient(conn, mx)
 	if err != nil {
 		_ = conn.Close() // Best-effort
@@ -986,9 +1112,32 @@ func (m *Manager) deliverToMX(ctx context.Context, from, to string, message []by
 // withMXConn acquires an MX connection, calls fn, and guarantees release.
 // It recovers from panics inside fn and returns them as errors.
 func (m *Manager) withMXConn(mx string, fn func(*smtp.Client) error) (err error) {
+	return m.withMXConnPolicy(mx, false, fn)
+}
+
+// tlsUnverified reports whether client runs TLS without a verified peer
+// certificate (opportunistic STARTTLS skips verification).
+func tlsUnverified(client *smtp.Client) bool {
+	st, ok := client.TLSConnectionState()
+	return ok && len(st.VerifiedChains) == 0
+}
+
+// withMXConnPolicy is withMXConn; strict (requireTLS or an MTA-STS enforce
+// policy) refuses a pooled connection whose TLS session was never certificate
+// verified. Pools are keyed by MX host, and a session that an unauthenticated
+// opportunistic delivery negotiated must not carry a delivery that demands an
+// authenticated one (F6022).
+func (m *Manager) withMXConnPolicy(mx string, strict bool, fn func(*smtp.Client) error) (err error) {
 	client, fromPool, err := m.acquireMXConn(mx)
 	if err != nil {
 		return err
+	}
+	for fromPool && strict && tlsUnverified(client) {
+		_ = client.Close()
+		client, fromPool, err = m.acquireMXConn(mx)
+		if err != nil {
+			return err
+		}
 	}
 	if !fromPool && client == nil {
 		client, err = m.createMXConn(mx)
@@ -1026,6 +1175,9 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 	// Check MTA-STS policy for recipient domain
 	domain := extractDomain(to)
 	enforceTLS := false
+	m.mu.RLock()
+	requireTLS := m.requireTLS
+	m.mu.RUnlock()
 	if m.mtastsValidator != nil && domain != "" {
 		allowed, policy, err := m.mtastsValidator.CheckPolicy(ctx, domain, mx)
 		if err != nil {
@@ -1051,7 +1203,7 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 	// it were rejected and never reached the sender (F5681).
 	envelopeSender := from
 
-	return m.withMXConn(mx, func(client *smtp.Client) error {
+	return m.withMXConnPolicy(mx, requireTLS || enforceTLS, func(client *smtp.Client) error {
 		// Attempt STARTTLS
 		// Opportunistic TLS (neither requireTLS nor an MTA-STS enforce policy)
 		// is encryption without authentication: an unverifiable certificate
@@ -1060,7 +1212,7 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 		tlsConfig := &tls.Config{
 			ServerName:         mx,
 			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: !m.requireTLS && !enforceTLS, //nolint:gosec // opportunistic TLS, RFC 7435
+			InsecureSkipVerify: !requireTLS && !enforceTLS, //nolint:gosec // opportunistic TLS, RFC 7435
 		}
 		// A reused pooled connection may already be TLS; STARTTLS again is a
 		// protocol error that remote MTAs reject.
@@ -1069,7 +1221,7 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			tlsErr = client.StartTLS(tlsConfig)
 		}
 		if err := tlsErr; err != nil {
-			if m.requireTLS {
+			if requireTLS {
 				return fmt.Errorf("STARTTLS required but failed: %w", err)
 			}
 			// A non-reply error is a failed handshake: the connection is

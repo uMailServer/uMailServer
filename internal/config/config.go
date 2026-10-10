@@ -496,7 +496,7 @@ func loadSectionFromEnvKeys(v reflect.Value, prefixes []string) error {
 		keys := envKeysFor(prefixes, fieldType)
 		for _, envKey := range keys {
 			envVal := os.Getenv(envKey)
-			if envVal == "" {
+			if envVal == "" || field.Kind() == reflect.Struct {
 				continue
 			}
 			if err := setFieldFromString(field, envVal); err != nil {
@@ -548,9 +548,38 @@ func setFieldFromString(field reflect.Value, val string) error {
 		return nil
 	}
 
+	if field.Type() == reflect.TypeOf(time.Duration(0)) {
+		dur, err := time.ParseDuration(val)
+		if err != nil {
+			n, err2 := strconv.ParseInt(val, 10, 64)
+			if err2 != nil {
+				return err
+			}
+			dur = time.Duration(n)
+		}
+		field.SetInt(int64(dur))
+		return nil
+	}
+
 	switch field.Kind() {
 	case reflect.String:
 		field.SetString(val)
+	case reflect.Slice:
+		if field.Type().Elem().Kind() != reflect.String {
+			return fmt.Errorf("unsupported type %s", field.Type())
+		}
+		// Comma-separated list; surrounding whitespace and empty items dropped.
+		items := []string{}
+		for _, part := range strings.Split(val, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				items = append(items, part)
+			}
+		}
+		out := reflect.MakeSlice(field.Type(), len(items), len(items))
+		for i, it := range items {
+			out.Index(i).SetString(it)
+		}
+		field.Set(out)
 	case reflect.Int, reflect.Int64:
 		n, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
@@ -575,6 +604,8 @@ func setFieldFromString(field reflect.Value, val string) error {
 			return err
 		}
 		field.SetFloat(f)
+	default:
+		return fmt.Errorf("unsupported type %s", field.Type())
 	}
 	return nil
 }
@@ -963,7 +994,7 @@ func checkFileReadable(path string) error {
 
 // checkDirWritable verifies that the given directory can be written to.
 func checkDirWritable(dir string) error {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	tmp := filepath.Join(dir, ".write_test_"+strconv.FormatInt(time.Now().UnixNano(), 10))
@@ -983,7 +1014,7 @@ func (c *Config) EnsureDataDir() error {
 	}
 
 	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o750); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}

@@ -331,16 +331,16 @@ func TestHandleAuthPLAIN_TwoStep_NilOnAuth(t *testing.T) {
 	clientConn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	clientConn.Write([]byte(creds + "\r\n"))
 
-	// Read the 235 success response (nil onAuth skips check)
+	// nil onAuth must fail closed (F5946)
 	clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	resp2, _ := reader.ReadString('\n')
-	if !strings.HasPrefix(resp2, "235") {
-		t.Errorf("Expected 235 auth success with nil onAuth, got: %q", resp2)
+	if !strings.HasPrefix(resp2, "535") {
+		t.Errorf("Expected 535 with nil onAuth, got: %q", resp2)
 	}
 	<-done
 
-	if !s.IsAuthenticated() {
-		t.Error("Expected session to be authenticated with nil onAuth")
+	if s.IsAuthenticated() {
+		t.Error("DEFECT F5946: session authenticated with nil onAuth")
 	}
 }
 

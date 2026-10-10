@@ -45,7 +45,11 @@ func DiskSpaceCheck(path string, warningThreshold, criticalThreshold float64) Ch
 			return check
 		}
 
-		// Calculate usage percentage
+		if totalBytes == 0 {
+			check.Status = StatusUnhealthy
+			check.Message = "filesystem reports zero capacity"
+			return check
+		}
 		used := totalBytes - totalFreeBytes
 		usagePercent := float64(used) / float64(totalBytes) * 100
 
@@ -53,16 +57,7 @@ func DiskSpaceCheck(path string, warningThreshold, criticalThreshold float64) Ch
 		check.Details["total_gb"] = float64(totalBytes) / 1024 / 1024 / 1024
 		check.Details["free_gb"] = float64(totalFreeBytes) / 1024 / 1024 / 1024
 		check.Details["used_percent"] = usagePercent
-
-		if usagePercent >= criticalThreshold {
-			check.Status = StatusUnhealthy
-			check.Message = fmt.Sprintf("disk critically full: %.1f%% used", usagePercent)
-		} else if usagePercent >= warningThreshold {
-			check.Status = StatusDegraded
-			check.Message = fmt.Sprintf("disk space warning: %.1f%% used", usagePercent)
-		} else {
-			check.Message = fmt.Sprintf("disk space healthy: %.1f%% used", usagePercent)
-		}
+		check.Status, check.Message = diskStatus(usagePercent, warningThreshold, criticalThreshold)
 
 		return check
 	}

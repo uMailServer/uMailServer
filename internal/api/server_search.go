@@ -77,13 +77,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := s.searchSvc.Search(search.MessageSearchOptions{
-		User:   userStr,
-		Folder: searchFolder,
-		Query:  query,
-		Limit:  limit,
-		Offset: offset,
+		User:          userStr,
+		Folder:        searchFolder,
+		Query:         query,
+		Limit:         limit,
+		Offset:        offset,
+		DateFrom:      r.URL.Query().Get("date_from"),
+		DateTo:        r.URL.Query().Get("date_to"),
+		HasAttachment: r.URL.Query().Get("has_attachment") == "true",
 	})
 	if err != nil {
+		if strings.HasPrefix(err.Error(), "invalid date_") {
+			s.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		s.sendError(w, http.StatusInternalServerError, "search failed")
 		return
 	}

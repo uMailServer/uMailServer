@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -236,7 +237,7 @@ func (v *MTASTSValidator) fetchPolicyFile(ctx context.Context, domain string) (*
 
 	// Validate resolved IPs are not private/loopback/link-local
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		if isBlockedPolicyIP(ip) {
 			return nil, fmt.Errorf("SSRF blocked: resolved IP %s is private/local/link-local", ip.String())
 		}
 	}
@@ -263,6 +264,20 @@ func (v *MTASTSValidator) fetchPolicyFile(ctx context.Context, domain string) (*
 	}
 
 	return parseMTASTSPolicy(string(body))
+}
+
+// cgnatNet is the RFC 6598 shared address space (100.64.0.0/10).
+var cgnatNet = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// isBlockedPolicyIP reports whether ip must not be contacted when fetching a
+// policy: besides loopback/private/link-local this covers the unspecified
+// address (0.0.0.0 / :: reach the local host on Linux), multicast and CGNAT
+// space (F6000).
+func isBlockedPolicyIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() ||
+		ip.IsInterfaceLocalMulticast() || cgnatNet.Contains(ip) ||
+		(ip.To4() != nil && ip.To4()[0] == 0)
 }
 
 // parseMTASTSPolicy parses an MTA-STS policy file
@@ -327,8 +342,9 @@ func parseMTASTSPolicy(policyText string) (*MTASTSPolicy, error) {
 // matchMX checks if an MX hostname matches an MTA-STS MX pattern
 func matchMX(pattern, mx string) bool {
 	// Convert to lowercase for comparison
-	pattern = strings.ToLower(pattern)
-	mx = strings.ToLower(mx)
+	// F6001: DNS-derived MX names carry a trailing root dot.
+	pattern = strings.TrimSuffix(strings.ToLower(pattern), ".")
+	mx = strings.TrimSuffix(strings.ToLower(mx), ".")
 
 	// Handle exact match
 	if pattern == mx {

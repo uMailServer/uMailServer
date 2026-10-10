@@ -184,11 +184,10 @@ func TestMXPool_FailedDeliveryNotPooled(t *testing.T) {
 	}
 }
 
-// With requireTLS, delivery over a connection that is already TLS must not
+// Delivery over a connection that is already TLS must not
 // send STARTTLS again, so reused pooled connections keep working.
 func TestMXPool_RequireTLSReusesTLSConnection(t *testing.T) {
 	m, dials := newPoolTestManager(selfSignedMXCert(t))
-	m.requireTLS = true
 	for i := 0; i < 2; i++ {
 		if err := deliverPoolTest(m, "b@example.test"); err != nil {
 			t.Fatalf("delivery %d: %v", i, err)

@@ -227,7 +227,7 @@ func (s *DKIMSigner) Sign(headers map[string][]string, body []byte) (string, err
 	bodyHash := computeBodyHash(body, bodyCanon)
 
 	// Determine which headers to sign (default set)
-	signedHeaders := []string{"from", "to", "subject", "date", "message-id"}
+	signedHeaders := dkimSignedHeaderList(headers)
 
 	// Build signature
 	sig := DKIMSignature{
@@ -238,7 +238,7 @@ func (s *DKIMSigner) Sign(headers map[string][]string, body []byte) (string, err
 		HeaderCanon:   headerCanon,
 		BodyCanon:     bodyCanon,
 		QueryMethod:   "dns/txt",
-		Timestamp:     0, // Set to current time in production
+		Timestamp:     time.Now().Unix(), // F6007: t= is the signing time
 		SignedHeaders: signedHeaders,
 		BodyHash:      bodyHash,
 	}
@@ -252,6 +252,29 @@ func (s *DKIMSigner) Sign(headers map[string][]string, body []byte) (string, err
 
 	// Build DKIM-Signature header
 	return s.buildHeader(&sig), nil
+}
+
+// dkimOptionalSignedHeaders are signed when present so that MIME structure and
+// threading cannot be altered after signing (F6008).
+var dkimOptionalSignedHeaders = []string{
+	"cc", "reply-to", "in-reply-to", "references",
+	"mime-version", "content-type", "content-transfer-encoding",
+}
+
+// dkimSignedHeaderList builds the h= list: the core fields always (an absent
+// field is signed as absent), the optional ones when present, and From once
+// more (oversigning, RFC 6376 §8.15) so a second From cannot be prepended.
+func dkimSignedHeaderList(headers map[string][]string) []string {
+	list := []string{"from", "to", "subject", "date", "message-id"}
+	for _, name := range dkimOptionalSignedHeaders {
+		for k, v := range headers {
+			if len(v) > 0 && strings.EqualFold(k, name) {
+				list = append(list, name)
+				break
+			}
+		}
+	}
+	return append(list, "from")
 }
 
 // Verify verifies a DKIM signature on a message

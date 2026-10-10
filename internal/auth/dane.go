@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -123,10 +124,19 @@ func (v *DANEValidator) Validate(domain string, port int, state *tls.ConnectionS
 	peerCert := state.PeerCertificates[0]
 
 	// Try to validate against each TLSA record
+	usable := 0
 	for _, tlsa := range tlsaRecords {
-		// Skip unsupported usages
-		if tlsa.Usage == TLSAUsagePKITAAncillary || tlsa.Usage == TLSAUsagePKITEEAncillary {
-			// These are for PKIX, not pure DANE
+		// RFC 7672 §3.1.3: only usages 2 and 3 are used for SMTP; usage 0/1
+		// and unknown selector/matching types are unusable (F6005).
+		if !tlsaUsable(tlsa) {
+			continue
+		}
+		usable++
+
+		if tlsa.Usage == TLSAUsageDANETA {
+			if v.validateTA(tlsa, domain, state) {
+				return DANEValidated, nil
+			}
 			continue
 		}
 
@@ -136,8 +146,62 @@ func (v *DANEValidator) Validate(domain string, port int, state *tls.ConnectionS
 		}
 	}
 
+	// RFC 7672 §2.2: if every TLSA record is unusable the host is treated
+	// as not DANE-authenticated rather than as a validation failure (F6005).
+	if usable == 0 {
+		return DANEUnusable, nil
+	}
+
 	// No matching TLSA record found
 	return DANEFailed, nil
+}
+
+// tlsaUsable reports whether a TLSA record uses parameters this validator
+// supports for SMTP (RFC 7672 §3.1.3, RFC 7671 §5.1).
+func tlsaUsable(t *TLSARecord) bool {
+	if t.Usage != TLSAUsageDANETA && t.Usage != TLSAUsageDANEEE {
+		return false
+	}
+	if t.Selector != TLSASelectorFullCert && t.Selector != TLSASelectorSPKI {
+		return false
+	}
+	switch t.MatchingType {
+	case TLSAMatchingTypeFull, TLSAMatchingTypeSHA256, TLSAMatchingTypeSHA512:
+		return true
+	}
+	return false
+}
+
+// validateTA implements DANE-TA(2) (RFC 7671 §5.2): the record names a trust
+// anchor that may be any certificate of the presented chain, and the leaf must
+// chain to it and match the TLSA base domain (F6006).
+func (v *DANEValidator) validateTA(tlsa *TLSARecord, domain string, state *tls.ConnectionState) bool {
+	chain := state.PeerCertificates
+	for i, c := range chain {
+		if !tlsaMatchesCert(tlsa, c) {
+			continue
+		}
+		if i == 0 {
+			// The leaf itself is the named anchor.
+			return true
+		}
+		roots := x509.NewCertPool()
+		roots.AddCert(c)
+		inter := x509.NewCertPool()
+		for j := 1; j < len(chain); j++ {
+			if j != i {
+				inter.AddCert(chain[j])
+			}
+		}
+		if _, err := chain[0].Verify(x509.VerifyOptions{
+			Roots:         roots,
+			Intermediates: inter,
+			DNSName:       strings.TrimSuffix(domain, "."),
+		}); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // LookupTLSA looks up TLSA records for a domain and port
@@ -159,30 +223,36 @@ func (v *DANEValidator) lookupTLSARecords(query string) ([]*TLSARecord, error) {
 	}
 
 	// Fallback: use miekg/dns for proper TLSA (type 52) lookups
-	client := &dns.Client{
-		Net: "udp",
-	}
-
 	msg := new(dns.Msg)
 	msg.SetQuestion(dns.Fqdn(query), dns.TypeTLSA)
+	msg.SetEdns0(4096, true) // DO bit: ask for DNSSEC data
 
-	// Use configured DNS server or system default
+	// Use configured DNS server or the system resolver. miekg/dns does not
+	// read resolv.conf itself, so an empty address always failed (F6003).
 	resolverAddr := v.dnsServer
 	if resolverAddr == "" {
-		// Use system resolver - let the OS choose
-		// For miekg/dns, we need to pick a resolver; use empty string to let it use nameservers from /etc/resolv.conf
-		resolverAddr = "" // Will use system resolver
+		cfg, cerr := dns.ClientConfigFromFile("/etc/resolv.conf")
+		if cerr != nil || len(cfg.Servers) == 0 {
+			return nil, errors.New("TLSA lookup failed: no system DNS resolver configured")
+		}
+		resolverAddr = net.JoinHostPort(cfg.Servers[0], cfg.Port)
 	}
 
-	// Perform the TLSA query
-	reply, _, err := client.Exchange(msg, resolverAddr)
-	if err != nil {
-		// Try TCP fallback
-		client.Net = "tcp"
-		reply, _, err = client.Exchange(msg, resolverAddr)
+	reply, _, err := (&dns.Client{Net: "udp"}).Exchange(msg, resolverAddr)
+	// A truncated UDP reply (common for full-certificate TLSA data) or a UDP
+	// error is retried over TCP (F6004).
+	if err != nil || (reply != nil && reply.Truncated) {
+		reply, _, err = (&dns.Client{Net: "tcp"}).Exchange(msg, resolverAddr)
 		if err != nil {
 			return nil, fmt.Errorf("TLSA lookup failed: %w", err)
 		}
+	}
+
+	// Only NOERROR and NXDOMAIN are definitive answers; SERVFAIL (e.g. a
+	// DNSSEC-bogus zone) must not read as "no TLSA records", which would
+	// silently downgrade DANE (F6002).
+	if reply.Rcode != dns.RcodeSuccess && reply.Rcode != dns.RcodeNameError {
+		return nil, fmt.Errorf("TLSA lookup failed: %s", dns.RcodeToString[reply.Rcode])
 	}
 
 	var records []*TLSARecord
@@ -282,6 +352,12 @@ func parseTLSAHex(hexData string) (*TLSARecord, error) {
 
 // validateRecord validates a certificate against a single TLSA record
 func (v *DANEValidator) validateRecord(tlsa *TLSARecord, cert *x509.Certificate, state *tls.ConnectionState) bool {
+	return tlsaMatchesCert(tlsa, cert)
+}
+
+// tlsaMatchesCert applies the TLSA selector and matching type to cert and
+// compares the result with the record's association data.
+func tlsaMatchesCert(tlsa *TLSARecord, cert *x509.Certificate) bool {
 	// Get the data to match based on selector
 	var dataToMatch []byte
 

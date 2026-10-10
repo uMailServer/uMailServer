@@ -95,6 +95,10 @@ type SearchCriteria struct {
 	Draft      bool
 	Undraft    bool
 
+	// KEYWORD / UNKEYWORD flag atoms (all must be present / absent)
+	Keyword   []string
+	Unkeyword []string
+
 	// Sequence/UID sets
 	SeqSet string
 	UIDSet string

@@ -114,9 +114,21 @@ func TestSelfTOTPFullLifecycle(t *testing.T) {
 		t.Error("status reports disabled after a successful verify")
 	}
 
+	// F5991: disabling an enabled factor requires a fresh code.
 	rec = selfTOTPRequest(server, server.handleTOTPDisable, http.MethodPost, "user@example.com", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("regression F5991: codeless self-disable got %d, want 400", rec.Code)
+	}
+	if a, _ := database.GetAccount("example.com", "user"); a == nil || !a.TOTPEnabled {
+		t.Fatal("regression F5991: 2FA was stripped without a code")
+	}
+	rec = selfTOTPRequest(server, server.handleTOTPDisable, http.MethodPost, "user@example.com", map[string]string{"code": "000000"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("regression F5991: wrong-code disable got %d, want 401", rec.Code)
+	}
+	rec = selfTOTPRequest(server, server.handleTOTPDisable, http.MethodPost, "user@example.com", map[string]string{"code": totpCodeAt(t, secret, time.Now().Add(30*time.Second))})
 	if rec.Code != http.StatusOK {
-		t.Fatalf("disable: expected %d, got %d", http.StatusOK, rec.Code)
+		t.Fatalf("disable: expected %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
 	account, err = database.GetAccount("example.com", "user")
 	if err != nil || account == nil {

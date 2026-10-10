@@ -214,15 +214,21 @@ func (w *RotatingWriter) cleanup() {
 	}
 }
 
+// nopCloser keeps a Close() on the returned writer from closing the process's
+// standard streams.
+type nopCloser struct{ io.Writer }
+
+func (nopCloser) Close() error { return nil }
+
 // GetLogWriter returns an io.WriteCloser for the configured output.
 // If filename is "stdout", "stderr", or empty, it returns the respective os.File.
 // Otherwise, it returns a RotatingWriter with the specified settings.
 func GetLogWriter(output string, maxSizeMB, maxBackups, maxAgeDays int) (io.WriteCloser, error) {
 	switch strings.ToLower(output) {
 	case "stdout", "":
-		return os.Stdout, nil
+		return nopCloser{os.Stdout}, nil
 	case "stderr":
-		return os.Stderr, nil
+		return nopCloser{os.Stderr}, nil
 	default:
 		return NewRotatingWriter(output, maxSizeMB, maxBackups, maxAgeDays)
 	}

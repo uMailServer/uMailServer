@@ -111,6 +111,8 @@ type SessionResponse struct {
 type Account struct {
 	Name                string                 `json:"name"`
 	IsPrimary           bool                   `json:"isPrimary"`
+	IsPersonal          bool                   `json:"isPersonal"`
+	IsReadOnly          bool                   `json:"isReadOnly"`
 	AccountCapabilities map[string]interface{} `json:"accountCapabilities"`
 }
 

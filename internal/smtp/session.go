@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/mail"
 	"strconv"
 	"strings"
 	"sync"
@@ -558,26 +559,37 @@ func (s *Session) handleDATA() error {
 	data = s.addTraceHeaders(pctx, data)
 	s.data = data
 
-	// Deliver message
-	if s.server.onDeliverWithNotify != nil {
-		if err := s.server.onDeliverWithNotify(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data); err != nil {
-			s.resetTransaction()
-			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
-		}
-	} else if s.server.onDeliverWithSieve != nil {
-		if err := s.server.onDeliverWithSieve(s.mailFrom, s.rcptTo, s.data, s.sieveActions); err != nil {
-			s.resetTransaction()
-			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
-		}
-	} else if s.server.onDeliver != nil {
-		if err := s.server.onDeliver(s.mailFrom, s.rcptTo, s.data); err != nil {
-			s.resetTransaction()
-			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
-		}
+	// Deliver message via deliver
+	if err := s.deliver(pctx); err != nil {
+		s.resetTransaction()
+		return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 	}
 
 	s.resetTransaction()
 	return s.WriteResponse(250, "OK")
+}
+
+// deliver hands the accepted message in s.data to the most capable delivery
+// handler that is set: WithAuth, WithNotify, WithSieve, then the plain one.
+// pctx is the pipeline context, nil when no pipeline ran.
+func (s *Session) deliver(pctx *MessageContext) error {
+	srv := s.server
+	switch {
+	case srv.onDeliverWithAuth != nil:
+		info := &DeliveryAuth{SieveActions: s.sieveActions}
+		if pctx != nil {
+			info.AuthResults = s.authResultsValue(pctx)
+			info.SPF, info.DKIM, info.DMARC, info.ARC = pctx.SPFResult, pctx.DKIMResult, pctx.DMARCResult, pctx.ARCResult
+		}
+		return srv.onDeliverWithAuth(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data, info)
+	case srv.onDeliverWithNotify != nil:
+		return srv.onDeliverWithNotify(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data)
+	case srv.onDeliverWithSieve != nil:
+		return srv.onDeliverWithSieve(s.mailFrom, s.rcptTo, s.data, s.sieveActions)
+	case srv.onDeliver != nil:
+		return srv.onDeliver(s.mailFrom, s.rcptTo, s.data)
+	}
+	return nil
 }
 
 // applyJunkVerdict passes a ScoreStage "junk" verdict on to the delivery
@@ -627,27 +639,9 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 	data = removeOwnAuthResults(data, hostname)
 
 	if ctx != nil {
-		// Add Authentication-Results header with SPF/DKIM/DMARC results
-		var arParts []string
-		if ctx.SPFResult.Result != "" {
-			arParts = append(arParts, fmt.Sprintf("spf=%s smtp.mailfrom=%s", ctx.SPFResult.Result, ctx.SPFResult.Domain))
-		}
-		if ctx.DKIMResult.Domain != "" {
-			if ctx.DKIMResult.Valid {
-				arParts = append(arParts, fmt.Sprintf("dkim=pass header.d=%s", ctx.DKIMResult.Domain))
-			} else {
-				reason := ctx.DKIMResult.Error
-				if reason == "" {
-					reason = "verification failed"
-				}
-				arParts = append(arParts, fmt.Sprintf("dkim=fail reason=\"%s\" header.d=%s", reason, ctx.DKIMResult.Domain))
-			}
-		}
-		if ctx.DMARCResult.Result != "" {
-			arParts = append(arParts, fmt.Sprintf("dmarc=%s header.from=%s", ctx.DMARCResult.Result, s.mailFrom))
-		}
-		if len(arParts) > 0 {
-			arHeader := fmt.Sprintf("Authentication-Results: %s;\r\n\t%s\r\n", hostname, strings.Join(arParts, ";\r\n\t"))
+		// Add Authentication-Results header with SPF/DKIM/DMARC/ARC results
+		if ar := s.authResultsValue(ctx); ar != "" {
+			arHeader := fmt.Sprintf("Authentication-Results: %s;\r\n\t%s\r\n", hostname, ar)
 			data = append([]byte(arHeader), data...)
 		}
 
@@ -673,11 +667,11 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 		var received string
 		if len(s.rcptTo) == 1 {
 			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
-				s.helloDomain, ipLit, s.server.config.Hostname, proto, s.rcptTo[0],
+				s.helloDomain, ipLit, hostname, proto, s.rcptTo[0],
 				time.Now().Format(time.RFC1123Z))
 		} else {
 			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
-				s.helloDomain, ipLit, s.server.config.Hostname, proto,
+				s.helloDomain, ipLit, hostname, proto,
 				time.Now().Format(time.RFC1123Z))
 		}
 		data = append([]byte(received), data...)
@@ -692,10 +686,80 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 		headerScope = data[:idx]
 	}
 	if !bytes.Contains(bytes.ToLower(headerScope), []byte("message-id:")) {
-		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), s.server.config.Hostname)
+		msgID := fmt.Sprintf("Message-ID: <%s@%s>\r\n", uuid.New().String(), hostname)
 		data = append([]byte(msgID), data...)
 	}
 	return data
+}
+
+// arcSafe makes a result string safe for a quoted-string in an
+// Authentication-Results field: control characters (CR/LF would inject
+// headers) become spaces and quote/backslash are escaped.
+func arcSafe(v string) string {
+	var b strings.Builder
+	for _, r := range v {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			b.WriteByte(' ')
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// authorDomain returns the RFC 5322 From domain of the message, which DMARC
+// aligns against and which Authentication-Results header.from must name,
+// falling back to the envelope sender's domain.
+func authorDomain(ctx *MessageContext, envFrom string) string {
+	for name, values := range ctx.Headers {
+		if strings.EqualFold(name, "From") && len(values) > 0 {
+			if a, err := mail.ParseAddress(values[0]); err == nil {
+				if i := strings.LastIndex(a.Address, "@"); i > 0 {
+					return strings.ToLower(a.Address[i+1:])
+				}
+			}
+			return ""
+		}
+	}
+	return strings.ToLower(extractDomain(envFrom))
+}
+
+// authResultsValue renders the resinfo part of the Authentication-Results
+// header (everything after "authserv-id;") for the pipeline verdicts, or ""
+// when there are none. The ARC verdict is included as the RFC 8617 "arc"
+// method so that it survives in the stored message and a later forwarder can
+// recover the cv it must seal with (F5942).
+func (s *Session) authResultsValue(ctx *MessageContext) string {
+	var parts []string
+	if ctx.SPFResult.Result != "" {
+		parts = append(parts, fmt.Sprintf("spf=%s smtp.mailfrom=%s", ctx.SPFResult.Result, ctx.SPFResult.Domain))
+	}
+	if ctx.DKIMResult.Domain != "" {
+		if ctx.DKIMResult.Valid {
+			parts = append(parts, fmt.Sprintf("dkim=pass header.d=%s", ctx.DKIMResult.Domain))
+		} else {
+			reason := ctx.DKIMResult.Error
+			if reason == "" {
+				reason = "verification failed"
+			}
+			parts = append(parts, fmt.Sprintf("dkim=fail reason=\"%s\" header.d=%s", arcSafe(reason), ctx.DKIMResult.Domain))
+		}
+	}
+	if ctx.DMARCResult.Result != "" {
+		p := "dmarc=" + ctx.DMARCResult.Result
+		if d := authorDomain(ctx, s.mailFrom); d != "" {
+			p += " header.from=" + d
+		}
+		parts = append(parts, p)
+	}
+	if ctx.ARCResult.Result != "" {
+		parts = append(parts, "arc="+ctx.ARCResult.Result)
+	}
+	return strings.Join(parts, ";\r\n\t")
 }
 
 // removeOwnAuthResults returns data without the Authentication-Results header
@@ -1035,22 +1099,10 @@ func (s *Session) handleBDAT(arg string) error {
 		data = s.addTraceHeaders(pctx, data)
 		s.data = data
 
-		// Deliver message
-		if s.server.onDeliverWithNotify != nil {
-			if err := s.server.onDeliverWithNotify(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data); err != nil {
-				s.resetTransaction()
-				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
-			}
-		} else if s.server.onDeliverWithSieve != nil {
-			if err := s.server.onDeliverWithSieve(s.mailFrom, s.rcptTo, s.data, s.sieveActions); err != nil {
-				s.resetTransaction()
-				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
-			}
-		} else if s.server.onDeliver != nil {
-			if err := s.server.onDeliver(s.mailFrom, s.rcptTo, s.data); err != nil {
-				s.resetTransaction()
-				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
-			}
+		// Deliver message via deliver
+		if err := s.deliver(pctx); err != nil {
+			s.resetTransaction()
+			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 		}
 
 		s.resetTransaction()
@@ -1256,8 +1308,13 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	usernameNormalized := strings.ToLower(username)
 
 	// Authenticate
-	if s.server.onAuth != nil {
-		ok, err := s.server.onAuth(usernameNormalized, password)
+	// Fail closed: with no auth handler wired no credential is valid (F5946).
+	{
+		var ok bool
+		var err error
+		if s.server.onAuth != nil {
+			ok, err = s.server.onAuth(usernameNormalized, password)
+		}
 		if err != nil || !ok {
 			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 			if m := metrics.Get(); m != nil {
@@ -1335,8 +1392,13 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	password := string(passwordBytes)
 
 	// Authenticate using normalized username
-	if s.server.onAuth != nil {
-		ok, err := s.server.onAuth(usernameNormalized, password)
+	// Fail closed: with no auth handler wired no credential is valid (F5946).
+	{
+		var ok bool
+		var err error
+		if s.server.onAuth != nil {
+			ok, err = s.server.onAuth(usernameNormalized, password)
+		}
 		if err != nil || !ok {
 			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 			if m := metrics.Get(); m != nil {
