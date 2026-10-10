@@ -470,10 +470,6 @@ func (i *Interpreter) parseTestCommand(args []Value) (Test, error) {
 				}
 				return nil, fmt.Errorf("malformed exists test")
 			case "header":
-			default:
-				// F5240: an unimplemented test (address, envelope, ...) must not
-				// be evaluated as a header test on a header named after it.
-				return nil, fmt.Errorf("unsupported test %q", sv.Value)
 			case "size":
 				if len(args) == 3 {
 					tag, okTag := args[1].(*TagValue)
@@ -483,6 +479,10 @@ func (i *Interpreter) parseTestCommand(args []Value) (Test, error) {
 					}
 				}
 				return nil, fmt.Errorf("malformed size test")
+			default:
+				// F5240: an unimplemented test (address, envelope, ...) must not
+				// be evaluated as a header test on a header named after it.
+				return nil, fmt.Errorf("unsupported test %q", sv.Value)
 			}
 		}
 	}

@@ -87,25 +87,25 @@ func (t *mtastsRedirectRT) RoundTrip(req *http.Request) (*http.Response, error) 
 	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("version: STSv1\nmode: enforce\nmx: mx1.example.com\nmax_age: 86400\n")), Header: make(http.Header), Request: req}, nil
 }
 
-func fetchWithRedirect(status int) (*MTASTSPolicy, error, []string) {
+func fetchWithRedirect(status int) (*MTASTSPolicy, []string, error) {
 	r := newMockDNSResolver()
 	r.ipRecords["mta-sts.example.com"] = []net.IP{net.ParseIP("93.184.216.34")}
 	v := NewMTASTSValidator(r)
 	rt := &mtastsRedirectRT{status: status}
 	v.httpClient.Transport = rt
 	p, err := v.fetchPolicyFile(context.Background(), "example.com")
-	return p, err, rt.seen
+	return p, rt.seen, err
 }
 
 func TestMTASTS_RedirectNotFollowed_F5311(t *testing.T) {
 	for _, st := range []int{301, 302, 307, 308} {
-		p, err, seen := fetchWithRedirect(st)
+		p, seen, err := fetchWithRedirect(st)
 		if len(seen) != 1 || p != nil || err == nil {
 			t.Fatalf("%d: seen=%v p=%v err=%v", st, seen, p, err)
 		}
 	}
 	// Edge: plain 200 still works with the production client.
-	if p, err, seen := fetchWithRedirect(200); err != nil || p == nil || len(seen) != 1 {
+	if p, seen, err := fetchWithRedirect(200); err != nil || p == nil || len(seen) != 1 {
 		t.Fatalf("200: seen=%v p=%v err=%v", seen, p, err)
 	}
 	// Edge: repeated validators are independent (policy unchanged).
