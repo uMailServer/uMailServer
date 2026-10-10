@@ -125,18 +125,12 @@ type Duration time.Duration
 func (d *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	var raw string
 	if err := unmarshal(&raw); err != nil {
-		// Try unmarshaling as nanoseconds directly
-		var ns int64
-		if err := unmarshal(&ns); err != nil {
-			return err
-		}
-		*d = Duration(ns)
-		return nil
+		return fmt.Errorf("invalid duration: expected a string such as 30s, 5m or 1h")
 	}
 
-	dur, err := time.ParseDuration(raw)
+	dur, err := parseDurationStrict(raw)
 	if err != nil {
-		return fmt.Errorf("invalid duration: %s", raw)
+		return err
 	}
 	*d = Duration(dur)
 	return nil

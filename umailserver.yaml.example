@@ -127,7 +127,7 @@ av:
 
 # Database
 database:
-  path: /var/lib/umailserver/db
+  path: ""                    # Empty: <data_dir>/umailserver.db (relative paths resolve against the config file directory)
 
 # Storage
 storage:

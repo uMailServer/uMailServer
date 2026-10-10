@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -40,6 +41,9 @@ type Config struct {
 	DMARC       DMARCConfig       `yaml:"dmarc"`
 	Alert       AlertConfig       `yaml:"alert"`
 	Push        PushConfig        `yaml:"push"`
+
+	source      string   // file the config was read from ("" = built-in defaults)
+	unknownKeys []string // YAML keys that matched no setting
 }
 
 // ServerConfig holds general server settings
@@ -396,9 +400,19 @@ type DMARCConfig struct {
 	Interval    string `yaml:"interval"`     // Report interval (e.g., "24h")
 }
 
-// Load loads configuration from file with defaults and env overrides
+// Load loads configuration from file with defaults and env overrides.
+//
+// An empty path means "no file": built-in defaults plus environment overrides.
+// A non-empty path was asked for explicitly (--config, UMAILSERVER_CONFIG) and
+// must exist; a missing file is an error wrapping os.ErrNotExist rather than a
+// silent fallback to defaults. Use LoadOptional for "defaults if missing".
+//
+// Relative paths set in the file (server.data_dir, tls.cert_file, tls.key_file,
+// tls.client_auth.ca_file, security.audit_log.path, logging.output,
+// database.path, ldap.root_ca) are resolved against the directory containing
+// the config file. Unknown keys do not fail the load; see Config.UnknownKeys.
 func Load(path string) (*Config, error) {
-	cfg, _, err := loadWithData(path)
+	cfg, _, err := loadWithOptions(path, false)
 	return cfg, err
 }
 
@@ -406,30 +420,49 @@ func Load(path string) (*Config, error) {
 // parsed from (nil when no file was read), so callers can fingerprint the
 // loaded content without a second, racy read.
 func loadWithData(path string) (*Config, []byte, error) {
+	return loadWithOptions(path, false)
+}
+
+func loadWithOptions(path string, optional bool) (*Config, []byte, error) {
 	// Start with defaults
 	cfg := DefaultConfig()
 	var data []byte
 
-	// Load from file if provided
 	if path != "" {
-		raw, err := os.ReadFile(filepath.Clean(path))
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return nil, nil, fmt.Errorf("failed to read config file: %w", err)
-			}
-			// Config file doesn't exist, use defaults
-		} else {
+		path = filepath.Clean(path)
+		raw, err := os.ReadFile(path)
+		switch {
+		case err == nil:
 			data = raw
+			defaults := DefaultConfig()
 			if err := yaml.Unmarshal(data, cfg); err != nil {
-				return nil, nil, fmt.Errorf("failed to parse config file: %w", err)
+				return nil, nil, fmt.Errorf("failed to parse config file %s: %w", path, err)
 			}
+			var root yaml.Node
+			if err := yaml.Unmarshal(data, &root); err == nil {
+				findUnknownKeys(&root, reflect.TypeOf(*cfg), "", &cfg.unknownKeys)
+			}
+			for _, k := range cfg.unknownKeys {
+				slog.Warn("config: unknown key ignored", "key", k, "file", path)
+			}
+			resolvePaths(cfg, defaults, path)
+			cfg.source = path
+		case os.IsNotExist(err) && optional:
+			// Caller asked for "defaults if missing".
+		case os.IsNotExist(err):
+			return nil, nil, fmt.Errorf("config file %q not found: %w", path, err)
+		default:
+			return nil, nil, fmt.Errorf("failed to read config file: %w", err)
 		}
 	}
+	slog.Info("config: loaded", "source", cfg.Source())
 
 	// Apply environment variable overrides
 	if err := loadFromEnv(cfg); err != nil {
 		return nil, nil, fmt.Errorf("failed to load env vars: %w", err)
 	}
+
+	applyDatabaseDefault(cfg)
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
@@ -534,28 +567,18 @@ func setFieldFromString(field reflect.Value, val string) error {
 		return nil
 	}
 	if field.Type() == reflect.TypeOf(Duration(0)) {
-		dur, err := time.ParseDuration(val)
+		dur, err := parseDurationStrict(val)
 		if err != nil {
-			// Fallback: try parsing as plain nanoseconds
-			n, err2 := strconv.ParseInt(val, 10, 64)
-			if err2 != nil {
-				return err // return original ParseDuration error
-			}
-			field.SetInt(n)
-			return nil
+			return err
 		}
 		field.SetInt(int64(dur))
 		return nil
 	}
 
 	if field.Type() == reflect.TypeOf(time.Duration(0)) {
-		dur, err := time.ParseDuration(val)
+		dur, err := parseDurationStrict(val)
 		if err != nil {
-			n, err2 := strconv.ParseInt(val, 10, 64)
-			if err2 != nil {
-				return err
-			}
-			dur = time.Duration(n)
+			return err
 		}
 		field.SetInt(int64(dur))
 		return nil
@@ -654,6 +677,11 @@ func (c *Config) Validate() error {
 	// Validate TLS MinVersion
 	if c.TLS.MinVersion != "" && c.TLS.MinVersion != "1.2" && c.TLS.MinVersion != "1.3" {
 		return fmt.Errorf("tls.min_version must be '1.2' or '1.3'")
+	}
+
+	// Uniform checks: negative sizes/durations, port ranges, bind addresses.
+	if err := validateByReflection(reflect.ValueOf(c).Elem(), ""); err != nil {
+		return err
 	}
 
 	// Validate ports
@@ -1022,7 +1050,11 @@ func (c *Config) EnsureDataDir() error {
 	return nil
 }
 
-// DatabasePath returns the full path to the database file
+// DatabasePath returns the full path to the accounts database file:
+// database.path when set, otherwise <data_dir>/umailserver.db.
 func (c *Config) DatabasePath() string {
-	return filepath.Join(c.Database.Path, "umailserver.db")
+	if c.Database.Path != "" {
+		return c.Database.Path
+	}
+	return filepath.Join(c.Server.DataDir, "umailserver.db")
 }

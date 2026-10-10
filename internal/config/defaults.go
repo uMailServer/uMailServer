@@ -179,7 +179,7 @@ func DefaultConfig() *Config {
 			SampleRate:   1.0,
 		},
 		Database: DatabaseConfig{
-			Path: "/var/lib/umailserver/db",
+			Path: "", // empty: <data_dir>/umailserver.db (see Config.DatabasePath)
 		},
 		Storage: StorageConfig{
 			Sync:          true,

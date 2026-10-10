@@ -3,10 +3,14 @@ package main
 import (
 	"encoding/base64"
 	"encoding/pem"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/umailserver/umailserver/internal/config"
 )
 
 // dkimPublicKeyB64 extracts the base64 DER body (the DNS "p=" value) from a
@@ -89,4 +93,64 @@ func configSearchPaths() []string {
 		paths = append(paths, p)
 	}
 	return append(paths, "./umailserver.yaml", "./umailserver.yml", "./demo.yaml", "/etc/umailserver/umailserver.yaml")
+}
+
+// dnsRecordLines renders the MX/A/SPF/DKIM/DMARC records for a domain from
+// stored data. selector/pubB64 come from the domain record; when no key is
+// stored an explicit notice is printed instead of a fake record (F6310).
+func dnsRecordLines(domain, selector, pubB64 string) string {
+	if selector == "" {
+		selector = "default"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# MX Record:\n%s.    IN    MX    10    mail.%s.\n\n", domain, domain)
+	fmt.Fprintf(&b, "# A Record:\nmail.%s.    IN    A    <YOUR_SERVER_IP>\n\n", domain)
+	fmt.Fprintf(&b, "# SPF Record:\n%s.    IN    TXT    \"v=spf1 mx ~all\"\n\n", domain)
+	fmt.Fprintf(&b, "# DKIM Record (%s._domainkey):\n", selector)
+	if pubB64 == "" {
+		fmt.Fprintf(&b, "(no DKIM public key stored for this domain; re-add the domain to generate one)\n\n")
+	} else {
+		fmt.Fprintf(&b, "%s._domainkey.%s.    IN    TXT    %s\n\n", selector, domain, dkimTXT(pubB64))
+	}
+	fmt.Fprintf(&b, "# DMARC Record:\n_dmarc.%s.    IN    TXT    \"v=DMARC1; p=quarantine; rua=mailto:dmarc@%s\"\n\n", domain, domain)
+	return b.String()
+}
+
+// cmdConfig implements `umailserver config check [--config path]`: it loads and
+// validates the file exactly as `serve` would and additionally fails on unknown
+// YAML keys (typos such as spam.thershold that Load only warns about).
+// It returns the process exit code.
+func cmdConfig(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "check" {
+		fmt.Fprintln(stderr, "Usage: umailserver config check [--config path]")
+		return 1
+	}
+	fs := flag.NewFlagSet("config check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("config", "", "Path to config file (default: $UMAILSERVER_CONFIG or ./umailserver.yaml)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 1
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "config check: unexpected argument: %s\n", fs.Arg(0))
+		return 1
+	}
+	if *path == "" {
+		if p := os.Getenv("UMAILSERVER_CONFIG"); p != "" {
+			*path = p
+		} else {
+			*path = "./umailserver.yaml"
+		}
+	}
+	cfg, err := config.Load(*path)
+	if err != nil {
+		fmt.Fprintf(stderr, "config check: %v\n", err)
+		return 1
+	}
+	if err := cfg.ValidateStrict(); err != nil {
+		fmt.Fprintf(stderr, "config check: %s: %v\n", *path, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "config OK: %s\n", cfg.Source())
+	return 0
 }
