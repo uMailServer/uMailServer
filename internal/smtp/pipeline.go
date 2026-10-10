@@ -208,7 +208,17 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 // carries the stage name as an attribute, the textual result as the status,
 // and stage-specific outputs (SPF/DKIM/DMARC/ARC verdicts, spam score) pulled
 // from the message context after the stage runs.
-func (p *Pipeline) runStage(traceCtx context.Context, stage PipelineStage, msgCtx *MessageContext) PipelineResult {
+func (p *Pipeline) runStage(traceCtx context.Context, stage PipelineStage, msgCtx *MessageContext) (result PipelineResult) {
+	// A panicking stage must not unwind the session; fail closed with a
+	// rejection instead of delivering an unchecked message (F6156).
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Error("pipeline stage panicked", "stage", stage.Name(), "panic", r)
+			msgCtx.RejectionMessage = "internal error in " + stage.Name()
+			msgCtx.RejectionCode = 451
+			result = ResultReject
+		}
+	}()
 	if p.tracingProvider == nil || !p.tracingProvider.IsEnabled() {
 		return stage.Process(msgCtx)
 	}
@@ -220,7 +230,7 @@ func (p *Pipeline) runStage(traceCtx context.Context, stage PipelineStage, msgCt
 	defer span.End()
 	tracing.SetStringAttribute(span, "smtp.stage", stage.Name())
 
-	result := stage.Process(msgCtx)
+	result = stage.Process(msgCtx)
 
 	switch result {
 	case ResultReject:

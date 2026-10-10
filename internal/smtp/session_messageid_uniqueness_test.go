@@ -7,6 +7,7 @@ import (
 	"net/mail"
 	"strings"
 	"testing"
+	"time"
 )
 
 type messageIDCaptureConn struct {
@@ -66,3 +67,5 @@ func TestHandleDATAGeneratesDistinctMessageIDsPerTransaction(t *testing.T) {
 		t.Fatal("session identity changed across mail transactions")
 	}
 }
+
+func (c *messageIDCaptureConn) SetReadDeadline(time.Time) error { return nil }

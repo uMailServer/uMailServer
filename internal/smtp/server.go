@@ -145,6 +145,42 @@ func (s *Server) clearAuthFailures(ip string) {
 	delete(s.authFailures, ip)
 }
 
+const (
+	defaultMaxMessageSize = 50 << 20 // used when Config.MaxMessageSize <= 0
+	defaultMaxRecipients  = 100      // used when Config.MaxRecipients <= 0
+	defaultMaxErrors      = 20
+	defaultMaxCommands    = 10000
+	minDataTimeout        = 10 * time.Minute
+)
+
+// maxMessageSize returns the effective message size limit (0 = default).
+func (c *Config) maxMessageSize() int64 {
+	if c.MaxMessageSize <= 0 {
+		return defaultMaxMessageSize
+	}
+	return c.MaxMessageSize
+}
+
+// maxRecipients returns the effective recipient limit (0 = default).
+func (c *Config) maxRecipients() int {
+	if c.MaxRecipients <= 0 {
+		return defaultMaxRecipients
+	}
+	return c.MaxRecipients
+}
+
+// dataTimeout returns the absolute DATA phase deadline length.
+func (c *Config) dataTimeout() time.Duration {
+	if c.DataTimeout > 0 {
+		return c.DataTimeout
+	}
+	d := 10 * c.ReadTimeout
+	if d < minDataTimeout {
+		d = minDataTimeout
+	}
+	return d
+}
+
 // Config holds SMTP server configuration
 type Config struct {
 	Hostname       string
@@ -153,8 +189,17 @@ type Config struct {
 	MaxConnections int
 	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
-	AllowInsecure  bool
-	TLSConfig      *tls.Config
+	// DataTimeout is the absolute time allowed for one DATA phase, however
+	// steadily the client trickles bytes (each line resets ReadTimeout).
+	// 0 selects max(10*ReadTimeout, 10m).
+	DataTimeout time.Duration
+	// MaxErrors is the number of 5xx replies tolerated per session before
+	// the connection is dropped with 421; 0 selects 20.
+	MaxErrors int
+	// MaxCommands bounds the commands per session; 0 selects 10000.
+	MaxCommands   int
+	AllowInsecure bool
+	TLSConfig     *tls.Config
 
 	// Submission mode settings
 	RequireAuth  bool // Reject MAIL FROM if not authenticated (submission mode)
@@ -462,6 +507,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 		if total > maxCommandLine {
 			_ = session.WriteResponse(500, "5.5.2 Line too long")
+			if session.errCount.Load() >= int64(defaultMaxErrors) {
+				return
+			}
 			continue
 		}
 
@@ -475,6 +523,19 @@ func (s *Server) handleConnection(conn net.Conn) {
 			slog.String("command", truncate(line, 50)),
 		)
 
+		maxCmds := s.config.MaxCommands
+		if maxCmds <= 0 {
+			maxCmds = defaultMaxCommands
+		}
+		maxErrs := s.config.MaxErrors
+		if maxErrs <= 0 {
+			maxErrs = defaultMaxErrors
+		}
+		if session.cmdCount.Add(1) > int64(maxCmds) {
+			_ = session.WriteResponse(421, "4.7.0 Too many commands, closing connection")
+			return
+		}
+
 		if err := session.HandleCommand(line); err != nil {
 			if errors.Is(err, ErrSessionQuit) {
 				return
@@ -483,6 +544,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 				slog.String("session_id", session.ID()),
 				slog.Any("error", err),
 			)
+		}
+		if session.errCount.Load() >= int64(maxErrs) {
+			_ = session.WriteResponse(421, "4.7.0 Too many errors, closing connection")
+			return
 		}
 	}
 }
