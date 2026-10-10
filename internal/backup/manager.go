@@ -40,6 +40,20 @@ func NewManager(dataDir string, db *storage.Database, msgStore *storage.MessageS
 	}
 }
 
+// messagesDir returns the message store root. The server builds Manager with
+// cfg.Server.DataDir and keeps its message store at <dataDir>/mail/messages
+// (server.New), so that tree is used whenever it exists; <dataDir>/messages is
+// the legacy layout. Using only the legacy path made every backup of a live
+// server fail or come out empty and restored mail where the store never
+// reads it (F5552).
+func (m *Manager) messagesDir() string {
+	live := filepath.Join(m.dataDir, "mail", "messages")
+	if info, err := os.Stat(live); err == nil && info.IsDir() {
+		return live
+	}
+	return filepath.Join(m.dataDir, "messages")
+}
+
 // validatePathPart rejects empty names, "..", and any path separator in
 // caller-supplied user/mailbox identifiers, matching
 // storage.MessageStore.validatePathComponent. These values are joined into
@@ -58,7 +72,7 @@ func (m *Manager) BackupUser(user string, destPath string, opts BackupOptions) e
 		return fmt.Errorf("invalid user: %w", err)
 	}
 
-	userPath := filepath.Join(m.dataDir, "messages", user)
+	userPath := filepath.Join(m.messagesDir(), user)
 	if _, err := os.Stat(userPath); os.IsNotExist(err) {
 		return fmt.Errorf("user %s does not exist", user)
 	}
@@ -68,7 +82,7 @@ func (m *Manager) BackupUser(user string, destPath string, opts BackupOptions) e
 
 // backupUserToPath creates a tar.gz archive of a user's maildir
 func (m *Manager) backupUserToPath(user, destPath string, opts BackupOptions) (retErr error) {
-	userPath := filepath.Join(m.dataDir, "messages", user)
+	userPath := filepath.Join(m.messagesDir(), user)
 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
@@ -141,7 +155,7 @@ func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptio
 		return fmt.Errorf("invalid mailbox: %w", err)
 	}
 
-	mailboxPath := filepath.Join(m.dataDir, "messages", user, mailbox)
+	mailboxPath := filepath.Join(m.messagesDir(), user, mailbox)
 	if _, err := os.Stat(mailboxPath); os.IsNotExist(err) {
 		return fmt.Errorf("mailbox %s for user %s does not exist", mailbox, user)
 	}
@@ -167,7 +181,7 @@ func (m *Manager) BackupMailbox(user, mailbox, destPath string, opts BackupOptio
 
 // BackupFull creates a full system backup
 func (m *Manager) BackupFull(destPath string, opts BackupOptions) (retErr error) {
-	messagesDir := filepath.Join(m.dataDir, "messages")
+	messagesDir := m.messagesDir()
 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0o750); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
@@ -401,11 +415,11 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 		if err := validatePathPart(opts.TargetUser); err != nil {
 			return fmt.Errorf("invalid target user: %w", err)
 		}
-		targetDir = filepath.Join(m.dataDir, "messages", opts.TargetUser)
+		targetDir = filepath.Join(m.messagesDir(), opts.TargetUser)
 	case RestoreModeMerge:
-		targetDir = filepath.Join(m.dataDir, "messages")
+		targetDir = m.messagesDir()
 	default:
-		targetDir = filepath.Join(m.dataDir, "messages")
+		targetDir = m.messagesDir()
 	}
 
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
