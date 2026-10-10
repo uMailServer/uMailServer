@@ -39,6 +39,10 @@ type ManageSieveServer struct {
 	running     bool
 	authHandler func(user, pass string) bool // Auth validation function
 
+	// userResolver maps an authenticated login to the key its scripts are
+	// stored under (SetUserResolver). F5631.
+	userResolver func(login string) string
+
 	// addr and tlsAddr override ManageSieveListenAddr and
 	// ManageSieveTLSListenAddr when set (SetListenAddrs).
 	addr    string
@@ -61,6 +65,24 @@ func NewManageSieveServer(manager *Manager, tlsCfg *tls.Config) *ManageSieveServ
 // SetAuthHandler sets the authentication handler for ManageSieve
 func (s *ManageSieveServer) SetAuthHandler(handler func(user, pass string) bool) {
 	s.authHandler = handler
+}
+
+// SetUserResolver sets the function that maps an authenticated login to the
+// canonical user key scripts are stored under, so ManageSieve and mail
+// delivery agree on one identity (an LDAP uid login "jdoe" is mailbox
+// jdoe@example.com). Without it the login string is the key. F5631.
+func (s *ManageSieveServer) SetUserResolver(resolve func(login string) string) {
+	s.userResolver = resolve
+}
+
+// sessionUser returns the script key for an authenticated login. F5631.
+func (s *ManageSieveServer) sessionUser(login string) string {
+	if s.userResolver != nil {
+		if key := s.userResolver(login); key != "" {
+			return key
+		}
+	}
+	return login
 }
 
 // SetListenAddrs sets the plain and TLS listen addresses used by Listen;
@@ -602,7 +624,7 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 
 		// Validate credentials using auth handler
 		if s.authHandler != nil && s.authHandler(authcid, password) {
-			session.user = authcid
+			session.user = s.sessionUser(authcid)
 			if err := s.sendResponse(session.conn, "OK \"Authentication successful\""); err != nil {
 				return err
 			}
@@ -637,7 +659,7 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 
 		// Validate credentials
 		if s.authHandler != nil && s.authHandler(string(username), string(password)) {
-			session.user = string(username)
+			session.user = s.sessionUser(string(username))
 			if err := s.sendResponse(session.conn, "OK \"Authentication successful\""); err != nil {
 				return err
 			}
@@ -674,11 +696,26 @@ func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
 }
 
+// unauthenticatedScriptCommand is the refusal of PUTSCRIPT/CHECKSCRIPT before
+// AUTHENTICATE. When the script argument is a literal or octet count its
+// octets are still on the wire and are never read here, so they would be
+// parsed as commands; the connection is closed instead. F5632.
+func unauthenticatedScriptCommand(args []string) error {
+	no := &manageSieveNo{msg: "not authenticated"}
+	if len(args) > 0 {
+		last := args[len(args)-1]
+		if strings.HasPrefix(last, "{") || (last != "" && strings.Trim(last, "0123456789") == "") {
+			no.closeConn = true
+		}
+	}
+	return no
+}
+
 // cmdPutScript handles PUTSCRIPT command
 // Format: PUTSCRIPT <script-name> <script-size>
 func (s *ManageSieveServer) cmdPutScript(session *manageSieveSession, args []string) error {
 	if session.user == "" {
-		return fmt.Errorf("not authenticated")
+		return unauthenticatedScriptCommand(args)
 	}
 
 	if len(args) < 2 {
@@ -755,13 +792,19 @@ func (s *ManageSieveServer) cmdSetActive(session *manageSieveSession, args []str
 	scriptName := unquoteManageSieveArg(args[0])
 	if scriptName == "" {
 		// F5464: RFC 5804 §2.8 — SETACTIVE "" deactivates all scripts.
-		s.manager.deactivateScript(session.user)
+		if err := s.manager.deactivateScript(session.user); err != nil {
+			return &manageSieveNo{msg: err.Error()}
+		}
 		return s.sendResponse(session.conn, "OK \"No active script\"")
 	}
 
 	// Set active script for the user (its only failure is a missing script)
 	if err := s.manager.SetActiveScriptByName(session.user, scriptName); err != nil {
-		return &manageSieveNo{code: "NONEXISTENT", msg: fmt.Sprintf("failed to set active script: %v", err)}
+		code := "NONEXISTENT"
+		if errors.Is(err, errScriptStorage) {
+			code = ""
+		}
+		return &manageSieveNo{code: code, msg: fmt.Sprintf("failed to set active script: %v", err)}
 	}
 
 	if err := s.sendResponse(session.conn, "OK \"Set active script\""); err != nil {
@@ -792,6 +835,8 @@ func (s *ManageSieveServer) cmdDeleteScript(session *manageSieveSession, args []
 		code := "NONEXISTENT"
 		if errors.Is(err, errScriptActive) {
 			code = "ACTIVE"
+		} else if errors.Is(err, errScriptStorage) {
+			code = ""
 		}
 		return &manageSieveNo{code: code, msg: err.Error()}
 	}
@@ -839,7 +884,7 @@ func (s *ManageSieveServer) cmdGetScript(session *manageSieveSession, args []str
 func (s *ManageSieveServer) cmdCheckScript(session *manageSieveSession, args []string) error {
 	// F5037: RFC 5804 §2.12 CHECKSCRIPT is only valid in authenticated state.
 	if session.user == "" {
-		return fmt.Errorf("not authenticated")
+		return unauthenticatedScriptCommand(args)
 	}
 
 	if len(args) < 1 {
@@ -942,6 +987,8 @@ func (s *ManageSieveServer) cmdRenameScript(session *manageSieveSession, args []
 		code := "NONEXISTENT"
 		if errors.Is(err, errScriptExists) {
 			code = "ALREADYEXISTS"
+		} else if errors.Is(err, errScriptStorage) {
+			code = ""
 		}
 		return &manageSieveNo{code: code, msg: err.Error()}
 	}

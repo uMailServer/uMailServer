@@ -25,12 +25,14 @@ type sieveOutcome struct {
 }
 
 // activeSieveUser returns the key under which mailbox's active script is
-// stored (ManageSieve stores scripts under the login, i.e. the address), or
+// stored (ManageSieve stores scripts under the canonical mailbox address,
+// F5631), or
 // "" when it has none.
 func (s *Server) activeSieveUser(mailbox string) string {
 	if s.sieveManager == nil {
 		return ""
 	}
+	s.attachSieveStore()
 	if s.sieveManager.HasActiveScript(mailbox) {
 		return mailbox
 	}
