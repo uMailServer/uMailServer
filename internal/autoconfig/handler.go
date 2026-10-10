@@ -80,6 +80,14 @@ func (h *Handler) HandleAutoconfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	domain := h.extractDomain(r)
+	// Thunderbird sends the address it is configuring; its domain is the one
+	// to answer for even when the request arrives on a host such as
+	// mail.example.com that is not an autoconfig. name (F5826).
+	if addr := r.URL.Query().Get("emailaddress"); addr != "" {
+		if d := h.validator.ExtractDomain(addr); d != "" && h.validator.IsValidDomain(d) {
+			domain = d
+		}
+	}
 	if domain == "" {
 		http.Error(w, "Domain required", http.StatusBadRequest)
 		return
@@ -95,6 +103,7 @@ func (h *Handler) HandleAutoconfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
+	_, _ = io.WriteString(w, xml.Header)
 	_ = xml.NewEncoder(w).Encode(config)
 }
 
@@ -152,6 +161,7 @@ func (h *Handler) HandleAutodiscover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 
+	_, _ = io.WriteString(w, xml.Header)
 	_ = xml.NewEncoder(w).Encode(resp)
 }
 
@@ -269,6 +279,8 @@ func (h *Handler) buildAutodiscoverResponse(email, domain string) *AutodiscoverR
 		Space: "http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006",
 	}
 
+	// Outlook only honours the response when Response carries its own
+	// namespace, set by the struct tag in AutodiscoverResponse (F5825).
 	resp.Response.User.DisplayName = email
 	resp.Response.User.EMailAddress = email
 	resp.Response.Account.AccountType = "email"

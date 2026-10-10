@@ -196,6 +196,7 @@ func (m *Manager) recordLocked(user, sender string, interval time.Duration) {
 	}
 	now := time.Now()
 	userCache[sender] = now
+	m.appendReply(user, sender, now)
 
 	if len(userCache) < max(m.pruneAt[user], minPruneSize) || interval <= 0 {
 		return
@@ -214,6 +215,7 @@ func (m *Manager) forgetReplies(user string) {
 	defer m.cacheMu.Unlock()
 	delete(m.sentCache, user)
 	delete(m.pruneAt, user)
+	_ = os.Remove(m.repliesPath(user))
 }
 
 // startsNewVacation reports whether next describes a different absence than
@@ -372,6 +374,10 @@ func (m *Manager) loadConfigs() error {
 		m.configs[email] = config
 	}
 
+	for email, config := range m.configs {
+		m.loadReplies(email, config.SendInterval)
+	}
+
 	return nil
 }
 
@@ -402,7 +408,21 @@ func (m *Manager) saveConfig(email string, config *Config) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0o600)
+	return writeFileAtomic(path, data)
+}
+
+// writeFileAtomic replaces path via a temp file and rename, so a crash never
+// leaves a truncated file behind (F5823).
+func writeFileAtomic(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // sanitizeFilename sanitizes an email address for use as filename using base64
@@ -474,4 +494,76 @@ func (m *Manager) ListActiveVacations() []string {
 	}
 
 	return result
+}
+
+// Reply-suppression records are persisted as an append-only JSON-lines file
+// per user next to the config (".replies", never ".json" so loadConfigs
+// ignores it). Without this a restart would answer every sender again
+// (F5822). Persistence is best effort: failures are logged, never block mail.
+
+type replyRecord struct {
+	Sender string    `json:"s"`
+	At     time.Time `json:"t"`
+}
+
+func (m *Manager) repliesPath(user string) string {
+	return filepath.Join(m.dataDir, sanitizeFilename(user)+".replies")
+}
+
+// appendReply persists one record. The caller holds cacheMu.
+func (m *Manager) appendReply(user, sender string, at time.Time) {
+	line, err := json.Marshal(replyRecord{Sender: sender, At: at})
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(m.repliesPath(user), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		m.logger.Warn("Failed to persist vacation reply record", "error", err)
+		return
+	}
+	defer f.Close()
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		m.logger.Warn("Failed to persist vacation reply record", "error", err)
+	}
+}
+
+// loadReplies restores the user's unexpired records and compacts the file.
+func (m *Manager) loadReplies(user string, interval time.Duration) {
+	if interval <= 0 {
+		interval = 7 * 24 * time.Hour
+	}
+	path := m.repliesPath(user)
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	latest := make(map[string]time.Time)
+	for _, ln := range strings.Split(string(data), "\n") {
+		var rec replyRecord
+		if ln == "" || json.Unmarshal([]byte(ln), &rec) != nil {
+			continue // torn last line after a crash
+		}
+		if now.Sub(rec.At) >= interval {
+			continue
+		}
+		if rec.At.After(latest[rec.Sender]) {
+			latest[rec.Sender] = rec.At
+		}
+	}
+	if len(latest) == 0 {
+		_ = os.Remove(path)
+		return
+	}
+	var buf []byte
+	for sender, at := range latest {
+		line, _ := json.Marshal(replyRecord{Sender: sender, At: at})
+		buf = append(append(buf, line...), '\n')
+	}
+	if err := writeFileAtomic(path, buf); err != nil {
+		m.logger.Warn("Failed to compact vacation reply records", "error", err)
+	}
+	m.cacheMu.Lock()
+	m.sentCache[user] = latest
+	m.cacheMu.Unlock()
 }

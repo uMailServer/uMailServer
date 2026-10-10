@@ -123,7 +123,11 @@ func incrementTokenTx(tx *bbolt.Tx, bucketName string, token string, delta uint3
 	if v := bucket.Get(key); len(v) >= 4 {
 		count = binary.BigEndian.Uint32(v)
 	}
-	count += delta
+	if delta > math.MaxUint32-count {
+		count = math.MaxUint32 // saturate instead of wrapping (F5812)
+	} else {
+		count += delta
+	}
 	var buf [4]byte
 	binary.BigEndian.PutUint32(buf[:], count)
 	return bucket.Put(key, buf[:])
@@ -460,7 +464,12 @@ func CombinedProbability(probs []float64) float64 {
 	var sumLogProb float64
 	var sumLogOneMinusProb float64
 
+	n := 0.0
 	for _, p := range probs {
+		if math.IsNaN(p) {
+			continue // an undefined probability carries no evidence (F5811)
+		}
+		n++
 		if p <= 0 {
 			p = 0.01
 		}
@@ -471,7 +480,6 @@ func CombinedProbability(probs []float64) float64 {
 		sumLogOneMinusProb += math.Log(1 - p)
 	}
 
-	n := float64(len(probs))
 	if n == 0 {
 		return 0.5
 	}

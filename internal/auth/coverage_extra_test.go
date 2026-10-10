@@ -1144,10 +1144,9 @@ func TestBuildAMSSignatureDataEmpty(t *testing.T) {
 	ams := "i=1; a=rsa-sha256"
 
 	data := buildAMSSignatureData(ams, headers, body)
-	// With empty headers and empty body, the result will be empty since the function
-	// only iterates headers and appends body
-	if len(data) != 0 {
-		t.Errorf("buildAMSSignatureData with empty inputs should return empty, got %d bytes", len(data))
+	// With no h= headers only the AMS field itself (b= emptied) is hashed.
+	if string(data) != "ARC-Message-Signature: i=1; a=rsa-sha256" {
+		t.Errorf("buildAMSSignatureData with empty inputs = %q", data)
 	}
 }
 
@@ -1157,7 +1156,7 @@ func TestBuildAMSSignatureDataMultipleValues(t *testing.T) {
 		"Received": {"by host1", "by host2", "by host3"},
 	}
 	body := []byte("Test message\r\n")
-	ams := "i=1; a=rsa-sha256"
+	ams := "i=1; a=rsa-sha256; h=received:received:received"
 
 	data := buildAMSSignatureData(ams, headers, body)
 	if len(data) == 0 {

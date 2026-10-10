@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -218,15 +219,15 @@ func (m *Manager) sendKeyed(key, name string, severity Severity, message string,
 		}
 	}
 
-	m.recordAlert(key)
-
 	if len(errs) > 0 {
 		return errs[0]
 	}
 	return nil
 }
 
-// shouldSend checks rate limiting before sending
+// shouldSend checks rate limiting and, when sending is allowed, atomically
+// reserves the slot (cooldown + hourly count) so concurrent callers with the
+// same key cannot all pass the check (F5790).
 func (m *Manager) shouldSend(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -249,6 +250,8 @@ func (m *Manager) shouldSend(name string) bool {
 		}
 	}
 
+	m.lastAlert[name] = time.Now()
+	m.hourlyCount++
 	return true
 }
 
@@ -526,7 +529,10 @@ func (m *Manager) GetStats() map[string]interface{} {
 	}
 }
 
+var alertSeq atomic.Uint64
+
 // generateAlertID generates a unique alert ID
 func generateAlertID() string {
-	return fmt.Sprintf("%d-%d", time.Now().Unix(), time.Now().Nanosecond())
+	now := time.Now()
+	return fmt.Sprintf("%d-%d-%d", now.Unix(), now.Nanosecond(), alertSeq.Add(1))
 }

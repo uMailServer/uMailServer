@@ -10,12 +10,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 )
@@ -69,9 +75,90 @@ type NotificationAction struct {
 
 // pushHTTPClient bounds every request to a push service. webpush-go otherwise
 // uses &http.Client{} with no timeout, so an endpoint chosen by a subscriber
-// that never answers would block the sender forever (F5182). Transport is
-// left nil so http.DefaultTransport is used.
-var pushHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// that never answers would block the sender forever (F5182). The transport
+// refuses to connect to loopback/private/link-local addresses (checked after
+// DNS resolution, so DNS rebinding cannot reach internal hosts, F5760) and
+// redirects are not followed.
+var pushHTTPClient = &http.Client{
+	Timeout:   30 * time.Second,
+	Transport: newPushTransport(),
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+func newPushTransport() http.RoundTripper {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
+	}
+	t := base.Clone()
+	t.Proxy = nil
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control: func(network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if addr, err := netip.ParseAddr(host); err == nil && isForbiddenAddr(addr) {
+				return fmt.Errorf("push endpoint address %s is not allowed", host)
+			}
+			return nil
+		},
+	}
+	t.DialContext = dialer.DialContext
+	return t
+}
+
+// isForbiddenAddr reports whether addr is not a public unicast address.
+func isForbiddenAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	if !addr.IsValid() || addr.IsLoopback() || addr.IsPrivate() || addr.IsUnspecified() ||
+		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() ||
+		addr.IsInterfaceLocalMulticast() {
+		return true
+	}
+	// 100.64.0.0/10 carrier-grade NAT
+	if addr.Is4() {
+		b := addr.As4()
+		if b[0] == 100 && b[1]&0xC0 == 64 {
+			return true
+		}
+	}
+	return false
+}
+
+// validateEndpoint rejects push endpoints that are not https URLs to a
+// public host (F5760). Subscriptions are subscriber-controlled, so without
+// this the server would POST to arbitrary internal URLs.
+func validateEndpoint(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid push endpoint: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("push endpoint must use https")
+	}
+	if u.User != nil {
+		return fmt.Errorf("push endpoint must not contain credentials")
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if host == "" {
+		return fmt.Errorf("push endpoint has no host")
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+		strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+		return fmt.Errorf("push endpoint host %q is not allowed", host)
+	}
+	if addr, err := netip.ParseAddr(host); err == nil && isForbiddenAddr(addr) {
+		return fmt.Errorf("push endpoint address %s is not allowed", host)
+	}
+	return nil
+}
+
+var validIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // Service manages push notifications
 type Service struct {
@@ -142,45 +229,64 @@ func (s *Service) GetVAPIDPublicKey() string {
 	return s.config.VAPIDPublicKey
 }
 
-// Subscribe adds a new push subscription for a user
+// Subscribe adds a new push subscription for a user. The caller's sub is not
+// retained (a copy is stored); sub.ID is filled in on return.
 func (s *Service) Subscribe(userID string, sub *Subscription) error {
+	if sub == nil {
+		return fmt.Errorf("subscription is nil")
+	}
+	if err := validateEndpoint(sub.Endpoint); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Generate ID if not provided
 	if sub.ID == "" {
 		sub.ID = generateSubscriptionID()
+		if sub.ID == "" {
+			return fmt.Errorf("failed to generate subscription ID")
+		}
+	}
+	// The ID becomes part of a file name (F5761).
+	if !validIDRe.MatchString(sub.ID) {
+		return fmt.Errorf("invalid subscription ID")
+	}
+	// A client-chosen ID must not overwrite another user's subscription (F5762).
+	if existing, ok := s.subscriptions[sub.ID]; ok {
+		if existing.UserID != userID {
+			return fmt.Errorf("subscription ID already in use")
+		}
+		s.removeLocked(sub.ID)
 	}
 
 	sub.UserID = userID
 	sub.CreatedAt = time.Now()
-	sub.UpdatedAt = time.Now()
+	sub.UpdatedAt = sub.CreatedAt
 
 	// A push endpoint identifies exactly one browser subscription (RFC 8030),
 	// so a re-registration replaces the previous record instead of adding a
 	// duplicate that would deliver every notification again (F5181). The
 	// endpoint now belongs to userID, even if another user registered it.
 	for id, existing := range s.subscriptions {
-		if id != sub.ID && existing.Endpoint == sub.Endpoint {
+		if existing.Endpoint == sub.Endpoint {
 			s.removeLocked(id)
 		}
 	}
 
-	// Store subscription
-	s.subscriptions[sub.ID] = sub
-
-	// Add to user's subscription list
-	s.userSubs[userID] = append(s.userSubs[userID], sub.ID)
-
-	// Persist to disk
-	if err := s.saveSubscription(sub); err != nil {
+	stored := *sub
+	// Persist first so a failed write leaves no phantom in-memory record (F5763).
+	if err := s.saveSubscription(&stored); err != nil {
 		return fmt.Errorf("failed to save subscription: %w", err)
 	}
+	s.subscriptions[stored.ID] = &stored
+	s.userSubs[userID] = append(s.userSubs[userID], stored.ID)
 
 	s.logger.Info("Push subscription added",
 		"user", userID,
-		"subscription", sub.ID,
-		"device", sub.DeviceInfo.Name,
+		"subscription", stored.ID,
+		"device", stored.DeviceInfo.Name,
 	)
 
 	return nil
@@ -221,6 +327,9 @@ func (s *Service) removeLocked(subscriptionID string) {
 			break
 		}
 	}
+	if len(s.userSubs[sub.UserID]) == 0 {
+		delete(s.userSubs, sub.UserID)
+	}
 
 	if err := s.deleteSubscriptionFile(subscriptionID); err != nil {
 		s.logger.Warn("Failed to delete subscription file", "error", err)
@@ -235,7 +344,8 @@ func (s *Service) GetUserSubscriptions(userID string) []*Subscription {
 	var subs []*Subscription
 	for _, id := range s.userSubs[userID] {
 		if sub, exists := s.subscriptions[id]; exists {
-			subs = append(subs, sub)
+			c := *sub // copy: callers must not race with UpdateDeviceInfo (F5764)
+			subs = append(subs, &c)
 		}
 	}
 
@@ -248,7 +358,14 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 		return fmt.Errorf("subscription is nil")
 	}
 
-	payload, err := json.Marshal(notification)
+	if notification == nil {
+		return fmt.Errorf("notification is nil")
+	}
+	if err := validateEndpoint(sub.Endpoint); err != nil {
+		return err
+	}
+
+	payload, err := marshalPayload(notification)
 	if err != nil {
 		return fmt.Errorf("failed to marshal notification: %w", err)
 	}
@@ -264,7 +381,7 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 
 	// Send the push notification
 	options := &webpush.Options{
-		Subscriber:      s.config.Subject,
+		Subscriber:      vapidSubscriber(s.config.Subject),
 		VAPIDPublicKey:  s.config.VAPIDPublicKey,
 		VAPIDPrivateKey: s.config.VAPIDPrivateKey,
 		TTL:             30,
@@ -290,7 +407,73 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 		return fmt.Errorf("push service returned HTTP %d", resp.StatusCode)
 	}
 
+	s.touch(sub.ID)
+
 	return nil
+}
+
+// maxPayload is the largest plaintext webpush-go accepts in one aes128gcm
+// record (4096 - 16 tag - 86 header - 1 delimiter).
+const maxPayload = 3993
+
+// marshalPayload encodes n, shrinking an oversized notification (an
+// attacker-controlled mail subject can be arbitrarily long) so that it is
+// still delivered instead of failing with ErrMaxPadExceeded (F5765).
+func marshalPayload(n *Notification) ([]byte, error) {
+	payload, err := json.Marshal(n)
+	if err != nil || len(payload) <= maxPayload {
+		return payload, err
+	}
+	c := *n
+	c.Data = nil
+	c.Body = truncateRunes(c.Body, 500)
+	c.Title = truncateRunes(c.Title, 200)
+	payload, err = json.Marshal(&c)
+	if err != nil || len(payload) <= maxPayload {
+		return payload, err
+	}
+	c.Actions = nil
+	c.Body = truncateRunes(c.Body, 100)
+	return json.Marshal(&c)
+}
+
+func truncateRunes(str string, n int) string {
+	if utf8.RuneCountInString(str) <= n {
+		return str
+	}
+	r := []rune(str)
+	return string(r[:n]) + "..."
+}
+
+// vapidSubscriber returns the VAPID subject in the form webpush-go expects:
+// it prepends "mailto:" to anything not starting with "https:", so a
+// configured "mailto:x" would otherwise be sent as "mailto:mailto:x" (F5766),
+// which push services such as Apple's reject.
+func vapidSubscriber(subject string) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		subject = "mailto:admin@umailserver.local"
+	}
+	if len(subject) >= 7 && strings.EqualFold(subject[:7], "mailto:") {
+		return subject[7:]
+	}
+	return subject
+}
+
+// touch refreshes UpdatedAt of a subscription that just accepted a push, so
+// CleanExpiredSubscriptions does not delete live subscriptions after 90 days
+// (F5767). Persisted at most once a day.
+func (s *Service) touch(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sub, ok := s.subscriptions[id]
+	if !ok || time.Since(sub.UpdatedAt) < 24*time.Hour {
+		return
+	}
+	sub.UpdatedAt = time.Now()
+	if err := s.saveSubscription(sub); err != nil {
+		s.logger.Warn("Failed to persist subscription refresh", "error", err)
+	}
 }
 
 // SendToUser sends a notification to all devices of a user
@@ -300,23 +483,36 @@ func (s *Service) SendToUser(userID string, notification *Notification) error {
 		return nil // No subscriptions, nothing to do
 	}
 
-	var lastErr error
-	sent := 0
-	failed := 0
-
+	// Send concurrently so one slow endpoint (30s timeout) does not delay
+	// the user's other devices (F5768).
+	var (
+		wg      sync.WaitGroup
+		rmu     sync.Mutex
+		lastErr error
+		sent    int
+		failed  int
+	)
 	for _, sub := range subs {
-		if err := s.SendNotification(sub, notification); err != nil {
-			lastErr = err
-			failed++
-			s.logger.Warn("Failed to send notification",
-				"user", userID,
-				"subscription", sub.ID,
-				"error", err,
-			)
-		} else {
-			sent++
-		}
+		wg.Add(1)
+		go func(sub *Subscription) {
+			defer wg.Done()
+			err := s.SendNotification(sub, notification)
+			rmu.Lock()
+			defer rmu.Unlock()
+			if err != nil {
+				lastErr = err
+				failed++
+				s.logger.Warn("Failed to send notification",
+					"user", userID,
+					"subscription", sub.ID,
+					"error", err,
+				)
+			} else {
+				sent++
+			}
+		}(sub)
 	}
+	wg.Wait()
 
 	s.logger.Debug("Push notifications sent",
 		"user", userID,
@@ -333,6 +529,9 @@ func (s *Service) SendToUser(userID string, notification *Notification) error {
 
 // SendNewMailNotification sends a notification for new mail
 func (s *Service) SendNewMailNotification(userID, from, subject, preview string) error {
+	from = truncateRunes(from, 200)
+	subject = truncateRunes(subject, 300)
+	preview = truncateRunes(preview, 500)
 	notification := &Notification{
 		Title: "New Email",
 		Body:  fmt.Sprintf("From: %s\n%s", from, subject),
@@ -408,7 +607,7 @@ func (s *Service) loadOrGenerateConfig() (*Config, error) {
 		return nil, err
 	}
 
-	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+	if err := writeFileAtomic(configPath, data); err != nil {
 		return nil, err
 	}
 
@@ -471,6 +670,9 @@ func (s *Service) loadSubscriptions() error {
 			continue
 		}
 
+		if !validIDRe.MatchString(sub.ID) || s.subscriptions[sub.ID] != nil {
+			continue
+		}
 		s.subscriptions[sub.ID] = &sub
 		s.userSubs[sub.UserID] = append(s.userSubs[sub.UserID], sub.ID)
 	}
@@ -488,7 +690,35 @@ func (s *Service) saveSubscription(sub *Subscription) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0o600)
+	return writeFileAtomic(path, data)
+}
+
+// writeFileAtomic writes via a temp file + rename so a crash never leaves a
+// truncated subscription that loadSubscriptions would silently drop (F5769).
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Chmod(name, 0o600); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return nil
 }
 
 // deleteSubscriptionFile removes a subscription file

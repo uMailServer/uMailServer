@@ -25,11 +25,16 @@ type RotatingWriter struct {
 	size int64
 }
 
+const defaultMaxSizeMB = 100
+
 // NewRotatingWriter creates a new RotatingWriter.
 // maxSizeMB: maximum file size in megabytes before rotation
 // maxBackups: maximum number of old files to keep
 // maxAgeDays: maximum age of old files in days
 func NewRotatingWriter(filename string, maxSizeMB, maxBackups, maxAgeDays int) (*RotatingWriter, error) {
+	if maxSizeMB <= 0 {
+		maxSizeMB = defaultMaxSizeMB // unset: avoid rotating on every write
+	}
 	w := &RotatingWriter{
 		filename:   filename,
 		maxSize:    int64(maxSizeMB) * 1024 * 1024,
@@ -84,7 +89,7 @@ func (w *RotatingWriter) Write(p []byte) (n int, err error) {
 	defer w.mu.Unlock()
 
 	// Check if rotation is needed
-	if w.size+int64(len(p)) > w.maxSize {
+	if w.size > 0 && w.size+int64(len(p)) > w.maxSize {
 		if err := w.rotate(); err != nil {
 			return 0, err
 		}

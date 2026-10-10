@@ -1114,7 +1114,7 @@ func (s *Session) handleAppend(args []string, line string) error {
 		mailboxName = dest
 		validity, uid, err := s.appendOne(mailboxName, flags, date, data)
 		if err != nil {
-			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			s.WriteResponse(s.tag, noText(err))
 			if span != nil {
 				tracing.RecordError(span, err)
 				tracing.SetStatus(span, tracing.StatusError, "append failed")
@@ -1198,7 +1198,7 @@ func (s *Session) handleAppend(args []string, line string) error {
 		if s.server.mailstore != nil {
 			_, uid, err := s.appendOne(mailboxName, nil, time.Now(), data)
 			if err != nil {
-				s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+				s.WriteResponse(s.tag, noText(err))
 				return nil
 			}
 			if uid != 0 {
@@ -2185,7 +2185,7 @@ func (s *Session) handleCopy(args []string) error {
 	if uc, ok := s.server.mailstore.(uidCopier); ok {
 		validity, src, dst, err := uc.CopyMessagesUIDs(s.user, s.selected.Name, destMailbox, seqSet)
 		if err != nil {
-			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			s.WriteResponse(s.tag, noText(err))
 			return nil
 		}
 		if validity != 0 && len(src) > 0 && len(src) == len(dst) {
@@ -2198,7 +2198,7 @@ func (s *Session) handleCopy(args []string) error {
 
 	err := s.server.mailstore.CopyMessages(s.user, s.selected.Name, destMailbox, seqSet)
 	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+		s.WriteResponse(s.tag, noText(err))
 		return nil
 	}
 
@@ -2287,7 +2287,7 @@ func (s *Session) handleMove(args []string) error {
 		// and the client is told their new UIDs (RFC 6851 §4.3).
 		validity, src, dst, err := um.MoveMessagesUIDs(s.user, s.selected.Name, destMailbox, seqSet)
 		if err != nil {
-			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			s.WriteResponse(s.tag, noText(err))
 			return nil
 		}
 		for _, uid := range src {
@@ -2305,14 +2305,14 @@ func (s *Session) handleMove(args []string) error {
 
 		err := s.server.mailstore.MoveMessages(s.user, s.selected.Name, destMailbox, seqSet)
 		if err != nil {
-			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			s.WriteResponse(s.tag, noText(err))
 			return nil
 		}
 	}
 
 	if ux, ok := s.server.mailstore.(uidExpunger); ok && len(moved) > 0 {
 		if err := s.expungeUIDSubset(ux, func(uid uint32) bool { return moved[uid] }); err != nil {
-			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			s.WriteResponse(s.tag, noText(err))
 			return nil
 		}
 	}
@@ -3347,4 +3347,13 @@ func splitAddress(addr string) (local, domain string) {
 		return addr[:atIdx], addr[atIdx+1:]
 	}
 	return addr, ""
+}
+
+// noText formats a failure as a tagged NO text; a quota refusal carries the
+// RFC 5530 [OVERQUOTA] response code (F5730).
+func noText(err error) string {
+	if errors.Is(err, storage.ErrQuotaExceeded) {
+		return "NO [OVERQUOTA] " + err.Error()
+	}
+	return fmt.Sprintf("NO %s", err)
 }

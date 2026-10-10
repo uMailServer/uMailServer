@@ -26,9 +26,12 @@ func TestRotatingWriter_Rotate(t *testing.T) {
 		data[i] = 'x'
 	}
 
-	_, err = r.Write(data)
-	if err != nil {
-		t.Fatalf("Write failed: %v", err)
+	// The first write goes into the empty file (no empty-backup rotation);
+	// the second exceeds the limit and rotates.
+	for i := 0; i < 2; i++ {
+		if _, err = r.Write(data); err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
 	}
 	r.Close()
 

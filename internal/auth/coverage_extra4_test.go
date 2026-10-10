@@ -829,8 +829,8 @@ func TestARCSign_WithExistingCVPass_Cov4(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	if !strings.Contains(set.AS, "cv=pass") {
-		t.Errorf("Expected cv=pass inherited from previous seal, got: %s", set.AS)
+	if !strings.Contains(set.AS, "cv=fail") {
+		t.Errorf("Expected cv=fail (unverifiable existing chain), got: %s", set.AS)
 	}
 }
 

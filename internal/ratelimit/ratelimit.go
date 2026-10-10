@@ -664,6 +664,16 @@ func (rl *RateLimiter) cleanup() {
 	}
 	rl.ipMu.Unlock()
 
+	// Cleanup user buckets whose daily window has expired. The daily quota is
+	// persisted and restored on re-creation, so nothing is lost (F5810).
+	rl.userMu.Lock()
+	for user, bucket := range rl.userCounters {
+		if now.After(bucket.dayReset) {
+			delete(rl.userCounters, user)
+		}
+	}
+	rl.userMu.Unlock()
+
 	// Cleanup connection counters
 	rl.connMu.Lock()
 	for ip, counter := range rl.connLimits {

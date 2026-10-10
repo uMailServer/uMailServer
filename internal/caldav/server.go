@@ -405,6 +405,20 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username s
 		return
 	}
 
+	// Dispatch on the REPORT root element (RFC 3253 §3.6): multiget,
+	// free-busy and sync-collection are distinct reports (F5752-F5754).
+	switch reportRoot(body) {
+	case "calendar-multiget":
+		s.reportMultiget(w, r, username, body)
+		return
+	case "free-busy-query":
+		s.reportFreeBusy(w, r, username, body)
+		return
+	case "sync-collection":
+		s.reportSyncCollection(w, r, username, body)
+		return
+	}
+
 	// Parse calendar query
 	var query CalendarQuery
 	if err := xml.Unmarshal(body, &query); err != nil {
@@ -1553,10 +1567,16 @@ func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response 
 	if etag := s.storage.GetCalendarETag(username, cal.ID); etag != "" {
 		props = append(props, Property{XMLName: xml.Name{Space: nsDAV, Local: "getetag"}, Value: etag})
 	}
+	if ctag := s.storage.GetCalendarCTag(username, cal.ID); ctag != "" {
+		props = append(props,
+			Property{XMLName: xml.Name{Space: nsCalendarServer, Local: "getctag"}, Value: ctag},
+			Property{XMLName: xml.Name{Space: nsDAV, Local: "sync-token"}, Value: syncTokenPrefix + ctag},
+		)
+	}
 	props = append(props,
 		Property{XMLName: xml.Name{Space: nsCalDAV, Local: "calendar-description"}, Value: cal.Description},
 		Property{XMLName: xml.Name{Space: nsCalDAV, Local: "supported-calendar-component-set"}, Inner: `<comp name="VEVENT"/><comp name="VTODO"/>`},
-		Property{XMLName: xml.Name{Space: nsDAV, Local: "supported-report-set"}, Inner: `<supported-report><report><calendar-query xmlns="` + nsCalDAV + `"/></report></supported-report>`},
+		Property{XMLName: xml.Name{Space: nsDAV, Local: "supported-report-set"}, Inner: `<supported-report><report><calendar-query xmlns="` + nsCalDAV + `"/></report></supported-report><supported-report><report><calendar-multiget xmlns="` + nsCalDAV + `"/></report></supported-report><supported-report><report><free-busy-query xmlns="` + nsCalDAV + `"/></report></supported-report><supported-report><report><sync-collection/></report></supported-report>`},
 	)
 	if cal.Color != "" {
 		props = append(props, Property{XMLName: xml.Name{Space: nsAppleICal, Local: "calendar-color"}, Value: cal.Color})
@@ -1868,6 +1888,8 @@ const (
 	nsDAV       = "DAV:"
 	nsCalDAV    = "urn:ietf:params:xml:ns:caldav"
 	nsAppleICal = "http://apple.com/ns/ical/"
+
+	nsCalendarServer = "http://calendarserver.org/ns/"
 )
 
 // propName is one requested property element, namespace resolved.
@@ -1888,6 +1910,7 @@ type Prop struct {
 type Multistatus struct {
 	XMLName   xml.Name   `xml:"DAV: multistatus"`
 	Responses []Response `xml:"response"`
+	SyncToken string     `xml:"sync-token,omitempty"`
 }
 
 // Response represents a response element in multistatus
@@ -1895,6 +1918,7 @@ type Response struct {
 	XMLName  xml.Name   `xml:"response"`
 	Href     string     `xml:"href"`
 	Propstat []Propstat `xml:"propstat"`
+	Status   string     `xml:"status,omitempty"`
 }
 
 // Propstat represents property status

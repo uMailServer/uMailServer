@@ -24,9 +24,9 @@ func (r *deadlineRecorder) RoundTrip(req *http.Request) (*http.Response, error) 
 // slot) forever.
 func TestSendNotification_RequestHasDeadline(t *testing.T) {
 	rec := &deadlineRecorder{deadlines: make(chan bool, 1)}
-	old := http.DefaultTransport
-	http.DefaultTransport = rec
-	defer func() { http.DefaultTransport = old }()
+	old := pushHTTPClient.Transport
+	pushHTTPClient.Transport = rec
+	defer func() { pushHTTPClient.Transport = old }()
 
 	key, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {

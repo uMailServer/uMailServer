@@ -27,6 +27,30 @@ type BboltMailstore struct {
 	mdnSentMu  sync.Mutex
 	mdnHandler func(from, to, messageID, inReplyTo string, msg []byte) error
 	mdnSem     chan struct{} // Bounds concurrent MDN goroutines
+
+	// quotaLimit returns the byte quota of a user (<= 0 = unlimited). Nil
+	// means no quota is enforced (F5730).
+	quotaLimit func(user string) int64
+}
+
+// SetQuotaLimitFunc installs the per-user quota lookup used by APPEND, COPY
+// and MOVE. Usage is recounted from the blob store, so EXPUNGE (which
+// releases blobs) frees quota without separate bookkeeping. The orchestrator
+// wires this from the accounts database (QuotaLimit of the account).
+func (m *BboltMailstore) SetQuotaLimitFunc(f func(user string) int64) {
+	m.quotaLimit = f
+}
+
+// storeBlob stores data for user, enforcing the account quota when a quota
+// lookup is installed. Over-quota returns an error matching
+// storage.ErrQuotaExceeded.
+func (m *BboltMailstore) storeBlob(user string, data []byte) (string, error) {
+	if m.quotaLimit != nil {
+		if limit := m.quotaLimit(user); limit > 0 {
+			return m.msgStore.StoreMessageWithQuota(user, data, limit)
+		}
+	}
+	return m.msgStore.StoreMessage(user, data)
 }
 
 // MDNHandler defines the interface for sending MDN notifications
@@ -713,7 +737,7 @@ func (m *BboltMailstore) AppendMessageUID(user, mailbox string, flags []string, 
 	}
 
 	// Store message
-	messageID, err := m.msgStore.StoreMessage(user, data)
+	messageID, err := m.storeBlob(user, data)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1211,7 +1235,7 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 		}
 
 		// Copy message
-		newMessageID, err := m.msgStore.StoreMessage(user, data)
+		newMessageID, err := m.storeBlob(user, data)
 		if err != nil {
 			return fail(uid, err)
 		}

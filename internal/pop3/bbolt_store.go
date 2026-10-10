@@ -117,26 +117,42 @@ func (s *BboltStore) DeleteMessage(user string, index int) error {
 		}
 	}
 
-	// Add \Deleted flag to the message
+	// RFC 1939 §4: UPDATE removes the message. Flagging \Deleted only left the
+	// metadata and blob on disk forever, so the user's quota was never freed
+	// (F5743). Remove the metadata row, then the content-addressed blob once no
+	// mailbox still references it.
 	meta, err := s.db.GetMessageMetadata(user, "INBOX", uid)
 	if err != nil {
 		return err
 	}
+	if err := s.db.DeleteMessage(user, "INBOX", uid); err != nil {
+		return err
+	}
+	if meta != nil && meta.MessageID != "" && !s.blobReferenced(user, meta.MessageID) {
+		_ = s.msgStore.DeleteMessage(user, meta.MessageID)
+	}
+	return nil
+}
 
-	// Check if already has \Deleted flag
-	hasDeleted := false
-	for _, f := range meta.Flags {
-		if strings.EqualFold(f, "\\Deleted") || strings.EqualFold(f, "Deleted") {
-			hasDeleted = true
-			break
+// blobReferenced reports whether any of the user's mailboxes still holds a
+// message whose content blob is blobID (copies share one blob).
+func (s *BboltStore) blobReferenced(user, blobID string) bool {
+	mailboxes, err := s.db.ListMailboxes(user)
+	if err != nil {
+		return true // unknown: keep the blob
+	}
+	for _, mbox := range mailboxes {
+		uids, err := s.db.GetMessageUIDs(user, mbox)
+		if err != nil {
+			return true
+		}
+		for _, uid := range uids {
+			if m, err := s.db.GetMessageMetadata(user, mbox, uid); err == nil && m != nil && m.MessageID == blobID {
+				return true
+			}
 		}
 	}
-
-	if !hasDeleted {
-		meta.Flags = append(meta.Flags, "\\Deleted")
-	}
-
-	return s.db.StoreMessageMetadata(user, "INBOX", uid, meta)
+	return false
 }
 
 // GetMessageCount returns the number of messages in the user's INBOX

@@ -78,6 +78,9 @@ func ParseSize(s string) (Size, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid size format: %s", s)
 		}
+		if n < 0 {
+			return 0, fmt.Errorf("invalid size: %s (must not be negative)", s)
+		}
 		return Size(n), nil
 	}
 

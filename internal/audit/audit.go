@@ -75,6 +75,9 @@ func NewLogger(logPath string, maxSizeMB, maxBackups, maxAgeDays int) (*Logger, 
 
 // newRotatingWriter creates a rotating writer for audit logs
 func newRotatingWriter(filename string, maxSizeMB, maxBackups, maxAgeDays int) (*rotatingWriter, error) {
+	if maxSizeMB <= 0 {
+		maxSizeMB = 100 // a zero limit would rotate on every write (F5791)
+	}
 	r := &rotatingWriter{
 		filename:   filename,
 		maxSize:    int64(maxSizeMB) * 1024 * 1024,
@@ -98,6 +101,7 @@ type rotatingWriter struct {
 	mu         sync.Mutex
 	file       *os.File
 	size       int64
+	closed     bool
 }
 
 func (r *rotatingWriter) open() error {
@@ -120,7 +124,15 @@ func (r *rotatingWriter) Write(p []byte) (n int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.size+int64(len(p)) > r.maxSize {
+	if r.closed {
+		return 0, os.ErrClosed
+	}
+	if r.file == nil {
+		if err := r.open(); err != nil {
+			return 0, err
+		}
+	}
+	if r.size > 0 && r.size+int64(len(p)) > r.maxSize {
 		if err := r.rotate(); err != nil {
 			return 0, err
 		}
@@ -136,6 +148,7 @@ func (r *rotatingWriter) rotate() error {
 		if err := r.file.Close(); err != nil {
 			return fmt.Errorf("failed to close audit log before rotation: %w", err)
 		}
+		r.file = nil // reopened below or lazily by Write on failure (F5792)
 	}
 	timestamp := time.Now().Format("20060102-150405.000000000")
 	backupName := fmt.Sprintf("%s.%s", r.filename, timestamp)
@@ -239,8 +252,12 @@ func (r *rotatingWriter) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.file != nil {
-		return r.file.Close()
+		err := r.file.Close()
+		r.file = nil
+		r.closed = true
+		return err
 	}
+	r.closed = true
 	return nil
 }
 

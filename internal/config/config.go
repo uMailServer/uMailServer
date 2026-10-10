@@ -759,6 +759,9 @@ func (c *Config) Validate() error {
 	if c.Logging.Level != "" && !validLevels[c.Logging.Level] {
 		return fmt.Errorf("logging.level must be 'debug', 'info', 'warn', or 'error'")
 	}
+	if c.Logging.MaxSizeMB < 0 || c.Logging.MaxBackups < 0 || c.Logging.MaxAgeDays < 0 {
+		return fmt.Errorf("logging.max_size_mb, max_backups and max_age_days must not be negative")
+	}
 	validFormats := map[string]bool{"json": true, "text": true}
 	if c.Logging.Format != "" && !validFormats[c.Logging.Format] {
 		return fmt.Errorf("logging.format must be 'json' or 'text'")
@@ -805,6 +808,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("duplicate domain: %s", domain.Name)
 		}
 		domainNames[domain.Name] = true
+		if domain.MaxMailboxSize < 0 {
+			return fmt.Errorf("domains[%d].max_mailbox_size must not be negative", i)
+		}
 		if domain.MaxAccounts < 0 {
 			return fmt.Errorf("domains[%d].max_accounts must be non-negative", i)
 		}
