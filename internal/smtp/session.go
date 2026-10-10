@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
@@ -229,7 +230,12 @@ func (s *Session) handleEHLO(arg string) error {
 
 	// Only advertise AUTH after TLS or if insecure auth is allowed on submission
 	if s.isTLS || (s.server.config.IsSubmission && s.server.config.AllowInsecure) {
-		authMechs := []string{"PLAIN LOGIN", "SCRAM-SHA-256"}
+		authMechs := []string{"PLAIN LOGIN"}
+		// SCRAM needs the plaintext password; advertise it only when a
+		// password source is wired (F5321).
+		if s.server.onGetPassword != nil {
+			authMechs = append(authMechs, "SCRAM-SHA-256")
+		}
 		// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
 		// if s.server.onGetUserSecret != nil {
 		// 	authMechs = append(authMechs, "CRAM-MD5")
@@ -1020,6 +1026,14 @@ func (s *Session) handleAUTH(arg string) error {
 		}
 		return s.WriteResponse(504, "CRAM-MD5 authentication mechanism is disabled")
 	case "SCRAM-SHA-256":
+		if s.server.onGetPassword == nil {
+			// Not advertised without a password source (F5321): refuse up
+			// front as unsupported, without charging the lockout counter.
+			if span != nil {
+				tracing.SetStatus(span, tracing.StatusError, "SCRAM-SHA-256 unavailable")
+			}
+			return s.WriteResponse(504, "5.5.4 Unrecognized authentication type")
+		}
 		return s.handleAuthSCRAMSHA256(parts)
 	default:
 		if span != nil {
@@ -1102,21 +1116,26 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 
 // handleAuthLOGIN handles LOGIN authentication
 func (s *Session) handleAuthLOGIN(parts []string) error {
-	// Request username
-	if err := s.WriteResponse(334, "VXNlcm5hbWU6"); err != nil { // base64("Username:")
-		return err
-	}
-
-	// Read username
 	reader := s.reader
 	if reader == nil {
 		reader = bufio.NewReader(s.conn)
 	}
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return err
+
+	// The user name may arrive as the initial response ("AUTH LOGIN <b64>");
+	// only prompt for it when it did not (F5322).
+	var usernameEnc string
+	if len(parts) > 1 {
+		usernameEnc = strings.TrimSpace(parts[1])
+	} else {
+		if err := s.WriteResponse(334, "VXNlcm5hbWU6"); err != nil { // base64("Username:")
+			return err
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		usernameEnc = strings.TrimSpace(line)
 	}
-	usernameEnc := strings.TrimSpace(line)
 
 	usernameBytes, err := base64.StdEncoding.DecodeString(usernameEnc)
 	if err != nil {
@@ -1135,7 +1154,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	}
 
 	// Read password
-	line, err = reader.ReadString('\n')
+	line, err := reader.ReadString('\n')
 	if err != nil {
 		return err
 	}
@@ -1213,6 +1232,14 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		return s.WriteResponse(501, "5.5.4 Invalid SCRAM-SHA-256 client-first message")
 	}
+	// client-first-message-bare follows the GS2 header "<flag>,[a=authzid],"
+	// (RFC 5802 §7); it, not the whole message, enters AuthMessage (F5320).
+	gs2 := strings.SplitN(clientFirst, ",", 3)
+	if len(gs2) != 3 {
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		return s.WriteResponse(501, "5.5.4 Invalid SCRAM-SHA-256 client-first message")
+	}
+	clientFirstBare := gs2[2]
 
 	username := clientFirstMsg.AuthCID
 	if username == "" {
@@ -1279,21 +1306,11 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	}
 
 	// Get user password for SCRAM
-	var password string
-	if s.server.onGetPassword != nil {
-		password, err = s.server.onGetPassword(usernameNormalized)
-		if err != nil {
-			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
-			return s.WriteResponse(535, "5.5.4 Authentication failed")
-		}
-	} else if s.server.onAuth != nil {
-		// Fallback: use onAuth but we need the password for SCRAM
-		// This won't work well for SCRAM since we need the password to derive keys
+	// handleAUTH only dispatches here when onGetPassword is set (F5321).
+	password, err := s.server.onGetPassword(usernameNormalized)
+	if err != nil {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
-		return s.WriteResponse(501, "5.5.4 Password lookup not available for SCRAM-SHA-256")
-	} else {
-		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
-		return s.WriteResponse(501, "5.5.4 Authentication not configured")
+		return s.WriteResponse(535, "5.5.4 Authentication failed")
 	}
 
 	// Create SCRAM authenticator with the password
@@ -1302,11 +1319,23 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 		return s.WriteResponse(501, "5.5.4 Server error in SCRAM-SHA-256")
 	}
 
-	// Compute expected client proof
-	expectedProof := auth.ClientProof(scram.StoredKey(), clientFirst, serverFirst, clientFinal)
-
-	// Verify client proof using constant-time comparison
-	if !hmac.Equal(clientFinalMsg.ClientProof, expectedProof) {
+	// RFC 5802 §3 (F5320): AuthMessage = client-first-message-bare ","
+	// server-first-message "," client-final-message-without-proof, and the
+	// proof is ClientKey XOR ClientSignature. The server recovers ClientKey
+	// and checks H(ClientKey) == StoredKey.
+	proofAt := strings.LastIndex(clientFinal, ",p=")
+	if proofAt < 0 {
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		return s.WriteResponse(501, "5.5.4 Invalid SCRAM-SHA-256 client-final message")
+	}
+	clientFinalWithoutProof := clientFinal[:proofAt]
+	clientSig := auth.ClientProof(scram.StoredKey(), clientFirstBare, serverFirst, clientFinalWithoutProof)
+	proofOK := len(clientFinalMsg.ClientProof) == len(clientSig)
+	if proofOK {
+		clientKey := sha256.Sum256(auth.XORBytes(clientFinalMsg.ClientProof, clientSig))
+		proofOK = hmac.Equal(clientKey[:], scram.StoredKey())
+	}
+	if !proofOK {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
 		if s.server.onLoginResult != nil {
 			s.server.onLoginResult(usernameNormalized, false, getIPFromAddr(s.conn.RemoteAddr().String()), "invalid_credentials")
@@ -1314,13 +1343,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 		return s.WriteResponse(535, "5.5.4 Authentication credentials invalid")
 	}
 
-	// Verify server signature
-	expectedServerSig := auth.ServerSignature(scram.ServerKey(), clientFirst, serverFirst, clientFinal)
-	serverSig := auth.ComputeSignatureKey(scram.SaltedPassword(), clientFirst, serverFirst, clientFinal)
-	if !hmac.Equal(serverSig, expectedServerSig) {
-		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
-		return s.WriteResponse(535, "5.5.4 Server signature verification failed")
-	}
+	serverSig := auth.ServerSignature(scram.ServerKey(), clientFirstBare, serverFirst, clientFinalWithoutProof)
 
 	// Authentication successful
 	s.isAuth = true
