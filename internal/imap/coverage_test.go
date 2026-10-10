@@ -1697,28 +1697,28 @@ func TestParseSortCriteria(t *testing.T) {
 		{
 			name: "single criterion",
 			args: []string{"DATE"},
-			want: []SortCriterion{{Field: "DATE", Descending: true}},
+			want: []SortCriterion{{Field: "DATE", Descending: false}},
 		},
 		{
 			name: "with reverse",
 			args: []string{"REVERSE", "SUBJECT"},
-			want: []SortCriterion{{Field: "SUBJECT", Descending: false}},
+			want: []SortCriterion{{Field: "SUBJECT", Descending: true}},
 		},
 		{
 			name: "multiple criteria",
 			args: []string{"ARRIVAL", "SUBJECT", "SIZE"},
 			want: []SortCriterion{
-				{Field: "ARRIVAL", Descending: true},
-				{Field: "SUBJECT", Descending: true},
-				{Field: "SIZE", Descending: true},
+				{Field: "ARRIVAL", Descending: false},
+				{Field: "SUBJECT", Descending: false},
+				{Field: "SIZE", Descending: false},
 			},
 		},
 		{
 			name: "case insensitive",
 			args: []string{"date", "reverse", "from"},
 			want: []SortCriterion{
-				{Field: "DATE", Descending: true},
-				{Field: "FROM", Descending: false},
+				{Field: "DATE", Descending: false},
+				{Field: "FROM", Descending: true},
 			},
 		},
 		{
@@ -1739,12 +1739,12 @@ func TestParseSortCriteria(t *testing.T) {
 		{
 			name: "CC criterion",
 			args: []string{"CC"},
-			want: []SortCriterion{{Field: "CC", Descending: true}},
+			want: []SortCriterion{{Field: "CC", Descending: false}},
 		},
 		{
 			name: "TO criterion",
 			args: []string{"TO"},
-			want: []SortCriterion{{Field: "TO", Descending: true}},
+			want: []SortCriterion{{Field: "TO", Descending: false}},
 		},
 	}
 

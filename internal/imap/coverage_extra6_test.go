@@ -20,28 +20,28 @@ func TestParseSortCriteria_Basic(t *testing.T) {
 			name:     "single ARRIVAL",
 			args:     []string{"ARRIVAL"},
 			wantErr:  false,
-			expected: []SortCriterion{{Field: "ARRIVAL", Descending: true}},
+			expected: []SortCriterion{{Field: "ARRIVAL", Descending: false}},
 		},
 		{
 			name:     "single SUBJECT",
 			args:     []string{"SUBJECT"},
 			wantErr:  false,
-			expected: []SortCriterion{{Field: "SUBJECT", Descending: true}},
+			expected: []SortCriterion{{Field: "SUBJECT", Descending: false}},
 		},
 		{
 			name:     "REVERSE changes direction",
 			args:     []string{"REVERSE", "DATE"},
 			wantErr:  false,
-			expected: []SortCriterion{{Field: "DATE", Descending: false}},
+			expected: []SortCriterion{{Field: "DATE", Descending: true}},
 		},
 		{
 			name:    "multiple criteria",
 			args:    []string{"ARRIVAL", "SUBJECT", "SIZE"},
 			wantErr: false,
 			expected: []SortCriterion{
-				{Field: "ARRIVAL", Descending: true},
-				{Field: "SUBJECT", Descending: true},
-				{Field: "SIZE", Descending: true},
+				{Field: "ARRIVAL", Descending: false},
+				{Field: "SUBJECT", Descending: false},
+				{Field: "SIZE", Descending: false},
 			},
 		},
 		{
@@ -63,25 +63,25 @@ func TestParseSortCriteria_Basic(t *testing.T) {
 			name:     "FROM criterion",
 			args:     []string{"FROM"},
 			wantErr:  false,
-			expected: []SortCriterion{{Field: "FROM", Descending: true}},
+			expected: []SortCriterion{{Field: "FROM", Descending: false}},
 		},
 		{
 			name:     "CC criterion",
 			args:     []string{"CC"},
 			wantErr:  false,
-			expected: []SortCriterion{{Field: "CC", Descending: true}},
+			expected: []SortCriterion{{Field: "CC", Descending: false}},
 		},
 		{
 			name:     "TO criterion",
 			args:     []string{"TO"},
 			wantErr:  false,
-			expected: []SortCriterion{{Field: "TO", Descending: true}},
+			expected: []SortCriterion{{Field: "TO", Descending: false}},
 		},
 		{
 			name:     "UID criterion",
 			args:     []string{"UID"},
 			wantErr:  false,
-			expected: []SortCriterion{{Field: "UID", Descending: true}},
+			expected: []SortCriterion{{Field: "UID", Descending: false}},
 		},
 	}
 
@@ -122,10 +122,10 @@ func TestParseSortCriteria_CaseInsensitive(t *testing.T) {
 	if len(result) != 2 {
 		t.Fatalf("Expected 2 criteria, got %d", len(result))
 	}
-	if result[0].Field != "ARRIVAL" || result[0].Descending != true {
+	if result[0].Field != "ARRIVAL" || result[0].Descending {
 		t.Errorf("First criterion incorrect")
 	}
-	if result[1].Field != "SUBJECT" || result[1].Descending != false {
+	if result[1].Field != "SUBJECT" || !result[1].Descending {
 		t.Errorf("Second criterion incorrect")
 	}
 }
