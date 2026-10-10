@@ -379,34 +379,20 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 	var emails []Email
 	var notFound []string
 
-	// Get list of mailboxes for this user
-	mailboxes, _ := s.db.ListMailboxes(user)
-
 	for _, id := range ids {
 		if idStr, ok := id.(string); ok {
-			// Try to find the message in any mailbox
-			var found bool
-			for _, mbox := range mailboxes {
-				uids, _ := s.db.GetMessageUIDs(user, mbox)
-				for _, uid := range uids {
-					meta, err := s.db.GetMessageMetadata(user, mbox, uid)
-					if err != nil || meta == nil {
-						continue
-					}
-					if meta.MessageID == idStr {
-						email := storageToJMAPEmail(meta, nil, mbox)
-						emails = append(emails, email)
-						found = true
-						break
-					}
-				}
-				if found {
-					break
-				}
-			}
-			if !found {
+			// F5221: an Email may live in several mailboxes; mailboxIds must
+			// list every one of them (RFC 8621 §4.1.1), not just the first.
+			copies := s.findEmailCopies(user, idStr)
+			if len(copies) == 0 {
 				notFound = append(notFound, idStr)
+				continue
 			}
+			email := storageToJMAPEmail(copies[0].meta, nil, copies[0].mailbox)
+			for _, c := range copies[1:] {
+				email.MailboxIDs[getMailboxIDFromName(c.mailbox)] = true
+			}
+			emails = append(emails, email)
 		}
 	}
 
@@ -976,32 +962,20 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 	// Handle destroy
 	for _, id := range destroy {
 		if emailID, ok := id.(string); ok {
-			// Find and delete the message
-			mailboxes, _ := s.db.ListMailboxes(user)
-			var found bool
-
-			for _, mbox := range mailboxes {
-				uids, _ := s.db.GetMessageUIDs(user, mbox)
-				for _, uid := range uids {
-					meta, err := s.db.GetMessageMetadata(user, mbox, uid)
-					if err != nil || meta == nil {
-						continue
-					}
-					if meta.MessageID == emailID {
-						// Delete message data from store
-						_ = s.msgStore.DeleteMessage(user, emailID)
-						// Delete metadata from database
-						_ = s.db.DeleteMessage(user, mbox, uid)
-						found = true
-						break
-					}
-				}
-				if found {
-					break
-				}
+			// F5220: destroying an Email removes it from EVERY mailbox it is
+			// in (RFC 8621 §4). Deleting only the first copy while also
+			// deleting the shared blob left a still-listed Email whose
+			// content was gone.
+			copies := s.findEmailCopies(user, emailID)
+			for _, c := range copies {
+				// Best-effort, as before: a metadata delete failure must not
+				// stop removal of the remaining copies.
+				_ = s.db.DeleteMessage(user, c.mailbox, c.uid)
 			}
-
-			if found {
+			if len(copies) > 0 {
+				// Best-effort blob removal once every metadata copy is gone; a
+				// leftover blob is unreachable, not a correctness issue.
+				_ = s.msgStore.DeleteMessage(user, emailID)
 				destroyed = append(destroyed, emailID)
 			} else {
 				notDestroyed[emailID] = map[string]interface{}{
@@ -1057,6 +1031,35 @@ func (s *Server) mailboxExists(user, name string) bool {
 		}
 	}
 	return false
+}
+
+// emailCopy is one stored copy (mailbox + UID) of an Email.
+type emailCopy struct {
+	mailbox string
+	uid     uint32
+	meta    *storage.MessageMetadata
+}
+
+// findEmailCopies returns every stored copy of the Email with this id across
+// all of the user's mailboxes, in mailbox-list order (F5220, F5221). An Email
+// imported into several mailboxes has one metadata row per mailbox sharing
+// the same MessageID.
+func (s *Server) findEmailCopies(user, emailID string) []emailCopy {
+	var copies []emailCopy
+	mailboxes, _ := s.db.ListMailboxes(user)
+	for _, mbox := range mailboxes {
+		uids, _ := s.db.GetMessageUIDs(user, mbox)
+		for _, uid := range uids {
+			meta, err := s.db.GetMessageMetadata(user, mbox, uid)
+			if err != nil || meta == nil {
+				continue
+			}
+			if meta.MessageID == emailID {
+				copies = append(copies, emailCopy{mailbox: mbox, uid: uid, meta: meta})
+			}
+		}
+	}
+	return copies
 }
 
 // stateToken returns the account's change-journal state token (RFC 8620 §2)
@@ -1343,11 +1346,32 @@ func (s *Server) handleThreadGet(user string, call MethodCall) Response {
 	// Get threads from storage
 	var threads []Thread
 	var notFound []string
+	mailboxes, _ := s.db.ListMailboxes(user)
 	for _, id := range ids {
 		if idStr, ok := id.(string); ok {
-			// Get thread messages from database
-			threadMsgs, err := s.db.GetThreadMessages(user, "INBOX", idStr)
-			if err != nil || len(threadMsgs) == 0 {
+			// F5222: a thread spans the whole account (RFC 8621 §3), and
+			// Thread/query enumerates thread ids from every mailbox, so
+			// collect the thread's messages from every mailbox — not only
+			// INBOX. A multi-mailbox email is listed once.
+			var threadMsgs []*storage.ThreadMessage
+			seen := make(map[string]bool)
+			for _, mbox := range mailboxes {
+				msgs, err := s.db.GetThreadMessages(user, mbox, idStr)
+				if err != nil {
+					continue
+				}
+				for _, m := range msgs {
+					if !seen[m.MessageID] {
+						seen[m.MessageID] = true
+						threadMsgs = append(threadMsgs, m)
+					}
+				}
+			}
+			// RFC 8621 §3: emailIds are sorted by receivedAt, oldest first.
+			sort.SliceStable(threadMsgs, func(i, j int) bool {
+				return threadMsgs[i].Date.Before(threadMsgs[j].Date)
+			})
+			if len(threadMsgs) == 0 {
 				// RFC 8620 §4.2: a requested id with no matching thread is
 				// reported in notFound instead of returning a phantom empty
 				// thread.
