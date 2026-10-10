@@ -129,7 +129,7 @@ func (w *Watcher) reload() {
 	w.logger.Info("Config file changed, reloading...")
 
 	// Load new config
-	newCfg, err := Load(w.path)
+	newCfg, data, err := loadWithData(w.path)
 	if err != nil {
 		w.logger.Error("Failed to reload config", "error", err)
 		return
@@ -144,7 +144,10 @@ func (w *Watcher) reload() {
 	if info != nil {
 		w.lastModTime = info.ModTime()
 	}
-	w.lastHash, _ = w.fileHash()
+	// Track the bytes that were actually loaded; re-reading the file here
+	// would mark an edit made during Load as applied (F5291).
+	sum := sha256.Sum256(data)
+	w.lastHash = hex.EncodeToString(sum[:])
 	w.mutex.Unlock()
 
 	// Call handler
