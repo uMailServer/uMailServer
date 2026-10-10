@@ -116,6 +116,9 @@ type Server struct {
 	jwtSecrets map[string]string // kid -> secret
 	currentKid string            // active key ID
 	jwtMu      sync.RWMutex      // guards jwtSecrets and currentKid (F4847)
+	// jwtRotateMu serializes handleJWTRotate so each rotation persists and
+	// then publishes a key set derived from the previous one (F5540).
+	jwtRotateMu sync.Mutex
 
 	// Draining state for zero-downtime deployment
 	draining atomic.Bool
@@ -244,6 +247,10 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	if config.DataDir != "" {
 		srv.vacationMgr = newProductionVacationManager(config.DataDir, logger)
 	}
+	// F5540: rotated keys survive a restart unless keys are configured.
+	if len(config.JWTSecretVersions) == 0 {
+		srv.loadJWTKeys()
+	}
 	return srv
 }
 
@@ -352,6 +359,10 @@ func NewServerWithInterfaces(
 		jwtSecrets:     jwtSecrets,
 		currentKid:     currentKid,
 		stopCh:         make(chan struct{}),
+	}
+	// F5540: rotated keys survive a restart unless keys are configured.
+	if len(config.JWTSecretVersions) == 0 {
+		srv.loadJWTKeys()
 	}
 	return srv
 }
