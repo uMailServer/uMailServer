@@ -111,6 +111,14 @@ func (m *Manager) addDirToTar(basePath, relPath string, tw *tar.Writer) error {
 			return err
 		}
 
+		// Only directories and regular files are archived. A symlink header
+		// carries Size 0 but the copy below follows the link, so archiving one
+		// failed with tar.ErrWriteTooLong (or pulled in the target's content);
+		// a FIFO would block the backup forever on open (F5912).
+		if !info.Mode().IsDir() && !info.Mode().IsRegular() {
+			return nil
+		}
+
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
@@ -395,6 +403,14 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 		return fmt.Errorf("cannot restore: invalid backup file")
 	}
 
+	// Validate the whole archive before extracting anything. Extraction
+	// renames members into the live tree one by one, so a truncated or
+	// corrupt archive otherwise leaves a half-restored mailbox behind before
+	// the damage is noticed at the end of the stream (F5914).
+	if _, err := m.Verify(backupPath); err != nil {
+		return fmt.Errorf("refusing to restore: %w", err)
+	}
+
 	f, err := os.Open(backupPath)
 	if err != nil {
 		return err
@@ -422,7 +438,7 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 		targetDir = m.messagesDir()
 	}
 
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
+	if err := os.MkdirAll(targetDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
 
@@ -466,12 +482,15 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
+			// Keep the owner able to enter and fill the directory: a
+			// header mode without rwx for the owner (0, 0555) made every
+			// member below it fail to extract (F5911).
+			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode).Perm()|0o700); err != nil {
 				return err
 			}
 		case tar.TypeReg:
 			parentDir := filepath.Dir(targetPath)
-			if err := os.MkdirAll(parentDir, 0755); err != nil {
+			if err := os.MkdirAll(parentDir, 0o750); err != nil {
 				return err
 			}
 
@@ -561,7 +580,7 @@ const backupEnvelopeVersion2 = byte(0x02)
 // "BK" | 0x02 | salt(16) | nonce | ciphertext. Files written by the previous
 // format (salt | nonce | ciphertext, unsalted SHA-256 key) remain decryptable
 // via Decrypt's legacy path.
-func (m *Manager) Encrypt(srcPath, destPath, password string) error {
+func (m *Manager) Encrypt(srcPath, destPath, password string) (retErr error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return err
@@ -599,7 +618,9 @@ func (m *Manager) Encrypt(srcPath, destPath, password string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// A deferred Close that drops its error hides a failed final flush (full
+	// disk, quota, NFS), leaving a truncated envelope reported as success (F5910).
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
 
 	if _, err := f.Write(backupEnvelopeMagic); err != nil {
 		return err
@@ -627,7 +648,7 @@ func (m *Manager) Encrypt(srcPath, destPath, password string) error {
 // the stored per-file salt; legacy files (salt | nonce | ciphertext) keep the
 // historical unsalted SHA-256(password) derivation so old backups stay
 // recoverable.
-func (m *Manager) Decrypt(srcPath, destPath, password string) error {
+func (m *Manager) Decrypt(srcPath, destPath, password string) (retErr error) {
 	f, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -724,7 +745,7 @@ func (m *Manager) Decrypt(srcPath, destPath, password string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { retErr = errors.Join(retErr, out.Close()) }()
 
 	if _, err := out.Write(plaintext); err != nil {
 		return err

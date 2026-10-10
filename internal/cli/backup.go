@@ -35,6 +35,11 @@ const (
 	keySize       = 32 // AES-256
 )
 
+// maxManifestSize bounds the manifest allocation: the size comes from the
+// archive header, so a crafted archive could otherwise force a huge
+// allocation (F5913).
+const maxManifestSize = 256 << 20
+
 // backupLockTimeout bounds the wait for the bbolt file lock (F5551).
 const backupLockTimeout = time.Second
 
@@ -348,8 +353,10 @@ func (bm *BackupManager) backupConfig(tw *tar.Writer) error {
 			return err
 		}
 
-		// Skip directories
-		if info.IsDir() {
+		// Skip directories and symlinks: a symlink is opened through the
+		// link but its header size is the link-target length
+		// (tar.ErrWriteTooLong) (F5912).
+		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return nil
 		}
 
@@ -439,6 +446,11 @@ func (bm *BackupManager) backupDataSubdir(tw *tar.Writer, sub string) error {
 			}
 
 			return tw.WriteHeader(header)
+		}
+
+		// Symlinks are not archived (F5912).
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
 		}
 
 		// Create tar header for file
@@ -541,6 +553,9 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		}
 
 		if header.Name == "manifest.json" {
+			if header.Size < 0 || header.Size > maxManifestSize {
+				return fmt.Errorf("invalid backup: manifest size %d out of range", header.Size)
+			}
 			data := make([]byte, header.Size)
 			_, err := io.ReadFull(tr, data)
 			if err != nil {
@@ -661,7 +676,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 				return fmt.Errorf("invalid mode in tar header: %d", header.Mode)
 			}
 			// #nosec G703 -- targetPath is validated above with filepath.Abs/Clean and prefix check
-			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode&0o7777)); err != nil {
+			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode&0o777)|0o700); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}
 
@@ -692,7 +707,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 				return fmt.Errorf("invalid mode in tar header: %d", header.Mode)
 			}
 			// #nosec G703 -- targetPath validated before extraction with filepath.Abs/Clean and prefix check
-			if err := os.Chmod(targetPath, os.FileMode(header.Mode&0o7777)); err != nil {
+			if err := os.Chmod(targetPath, os.FileMode(header.Mode&0o777)); err != nil {
 				return fmt.Errorf("failed to set permissions: %w", err)
 			}
 
@@ -806,6 +821,9 @@ func (bm *BackupManager) Verify(backupFile string) error {
 		}
 
 		if header.Name == "manifest.json" {
+			if header.Size < 0 || header.Size > maxManifestSize {
+				return fmt.Errorf("invalid backup: manifest size %d out of range", header.Size)
+			}
 			data := make([]byte, header.Size)
 			_, err := io.ReadFull(tr, data)
 			if err != nil {
