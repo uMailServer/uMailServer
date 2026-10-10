@@ -35,6 +35,9 @@ const maxJMAPAPIRequestBodySize = 32 << 20 // 32 MiB
 const (
 	maxCallsInRequest = 16
 	maxObjectsInGet   = 256
+	// maxObjectsInSet is the advertised cap on create+update+destroy
+	// objects in one /set call (RFC 8620 §5.3, F5332).
+	maxObjectsInSet = 128
 )
 
 // Server represents a JMAP server
@@ -46,6 +49,19 @@ type Server struct {
 	sessions        map[string]*Session
 	sessionMu       sync.RWMutex
 	tracingProvider *tracing.Provider
+	tokenValidator  TokenValidator
+}
+
+// TokenValidator is consulted after a bearer JWT's signature and expiry have
+// been verified. tokenHash is the hex SHA-256 of the raw token (the key the
+// HTTP API's logout/refresh revocation list uses) and subject is its "sub".
+// A non-nil error rejects the request (F5330, F5331).
+type TokenValidator func(tokenHash, subject string) error
+
+// SetTokenValidator installs the token-state check shared with the HTTP API
+// (revocation, disabled account). Call before serving requests.
+func (s *Server) SetTokenValidator(v TokenValidator) {
+	s.tokenValidator = v
 }
 
 // SetTracingProvider attaches an OpenTelemetry tracing provider so each
@@ -502,6 +518,22 @@ func (s *Server) dispatchMethodCall(user string, call MethodCall) Response {
 		}
 	}
 
+	// RFC 8620 §5.3: more create+update+destroy objects than the advertised
+	// maxObjectsInSet MUST be answered with requestTooLarge (F5332).
+	switch call.Name {
+	case "Mailbox/set", "Email/set", "Identity/set":
+		create, _ := call.Args["create"].(map[string]interface{})
+		update, _ := call.Args["update"].(map[string]interface{})
+		destroy, _ := call.Args["destroy"].([]interface{})
+		if len(create)+len(update)+len(destroy) > maxObjectsInSet {
+			return Response{
+				Name: "error",
+				Args: map[string]interface{}{"type": "requestTooLarge"},
+				ID:   call.ID,
+			}
+		}
+	}
+
 	switch call.Name {
 	// Mailbox methods
 	case "Mailbox/get":
@@ -724,6 +756,15 @@ func (s *Server) authenticate(r *http.Request) (string, bool) {
 	user, ok := claims["sub"].(string)
 	if !ok || user == "" {
 		return "", false
+	}
+
+	// F5330/F5331: a token the API has revoked (logout/refresh) or whose
+	// account is disabled must not keep working on /jmap/*.
+	if s.tokenValidator != nil {
+		tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(parts[1])))
+		if err := s.tokenValidator(tokenHash, user); err != nil {
+			return "", false
+		}
 	}
 
 	return user, true

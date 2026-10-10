@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -24,6 +25,7 @@ func (s *Server) startJMAP() {
 
 	jmapServer := jmap.NewServer(s.storageDB, s.msgStore, s.logger, jmapConfig)
 	jmapServer.SetTracingProvider(s.tracingProvider)
+	jmapServer.SetTokenValidator(s.jmapTokenValidator)
 
 	s.jmapServer = jmapServer
 
@@ -44,4 +46,24 @@ func (s *Server) startJMAP() {
 	}()
 
 	s.logger.Info("JMAP server started", "addr", addr)
+}
+
+// jmapTokenValidator applies the HTTP API's token-state checks to JMAP bearer
+// tokens: the persistent logout/refresh revocation list (F5330; a lookup
+// error is treated as revoked, as in api.IsTokenRevoked) and the account's
+// active flag (F5331; mirrors api.sessionAccountState).
+func (s *Server) jmapTokenValidator(tokenHash, subject string) error {
+	if s.database == nil {
+		return nil
+	}
+	revoked, err := s.database.IsTokenRevoked(tokenHash)
+	if err != nil || revoked {
+		return errors.New("token has been revoked")
+	}
+	localPart, domain := parseEmail(subject)
+	account, err := s.database.GetAccount(domain, localPart)
+	if err == nil && account != nil && !account.IsActive {
+		return errors.New("account is disabled")
+	}
+	return nil
 }
