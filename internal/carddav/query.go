@@ -271,6 +271,12 @@ func unfoldVCard(data string) []string {
 			out[len(out)-1] += line[1:]
 			continue
 		}
+		// Quoted-printable soft line break: "=" ends the physical line and the
+		// value continues on the next one (RFC 2045 §6.7, vCard 2.1/3.0).
+		if n := len(out); n > 0 && strings.HasSuffix(out[n-1], "=") && isQPLine(out[n-1]) {
+			out[n-1] = out[n-1][:len(out[n-1])-1] + line
+			continue
+		}
 		out = append(out, line)
 	}
 	return out
@@ -337,6 +343,9 @@ func parseContentLine(line string) (vcardProp, bool) {
 			p.params[key] = append(p.params[key], strings.Trim(v, `"`))
 		}
 	}
+	if hasQP(p.params) {
+		p.value = decodeQP(p.value, p.params["CHARSET"])
+	}
 	return p, true
 }
 
@@ -378,4 +387,81 @@ func rewriteVCardUID(data, uid string) string {
 		}
 	}
 	return data
+}
+
+// trimVCardExt strips the ".vcf" resource extension only; other dots belong
+// to the UID (F5893).
+func trimVCardExt(name string) string {
+	return strings.TrimSuffix(name, ".vcf")
+}
+
+// hasVCardEnd reports whether data contains an END:VCARD line.
+func hasVCardEnd(data string) bool {
+	for _, line := range unfoldVCard(data) {
+		if strings.EqualFold(strings.TrimSpace(line), "END:VCARD") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasQP(params map[string][]string) bool {
+	for _, k := range []string{"ENCODING", "TYPE"} {
+		for _, v := range params[k] {
+			if strings.EqualFold(v, "QUOTED-PRINTABLE") || strings.EqualFold(v, "QP") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isQPLine reports whether a raw content line declares a quoted-printable
+// value in its parameters.
+func isQPLine(line string) bool {
+	colon := valueColon(line)
+	if colon <= 0 {
+		return false
+	}
+	return strings.Contains(strings.ToUpper(line[:colon]), "QUOTED-PRINTABLE")
+}
+
+// decodeQP decodes a quoted-printable property value (F5895). Bytes are
+// interpreted as UTF-8 unless CHARSET names ISO-8859-1/US-ASCII/Windows-1252
+// (treated as Latin-1). Malformed escapes are kept literally.
+func decodeQP(v string, charset []string) string {
+	var b []byte
+	for i := 0; i < len(v); i++ {
+		if v[i] == '=' && i+2 < len(v) && isHex(v[i+1]) && isHex(v[i+2]) {
+			b = append(b, unhex(v[i+1])<<4|unhex(v[i+2]))
+			i += 2
+			continue
+		}
+		b = append(b, v[i])
+	}
+	for _, c := range charset {
+		switch strings.ToUpper(c) {
+		case "ISO-8859-1", "LATIN1", "US-ASCII", "WINDOWS-1252":
+			r := make([]rune, len(b))
+			for i, x := range b {
+				r[i] = rune(x)
+			}
+			return string(r)
+		}
+	}
+	return string(b)
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+func unhex(c byte) byte {
+	switch {
+	case c >= 'a':
+		return c - 'a' + 10
+	case c >= 'A':
+		return c - 'A' + 10
+	}
+	return c - '0'
 }

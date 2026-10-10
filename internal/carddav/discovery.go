@@ -68,7 +68,7 @@ func supportedReportSet() Property {
 	report := func(name string) string {
 		return `<supported-report><report><` + name + ` xmlns="` + nsCardDAV + `"/></report></supported-report>`
 	}
-	return rawProp(nsDAV, "supported-report-set", report("addressbook-query")+report("addressbook-multiget"))
+	return rawProp(nsDAV, "supported-report-set", report("addressbook-query")+report("addressbook-multiget")+`<supported-report><report><sync-collection xmlns="DAV:"/></report></supported-report>`)
 }
 
 // supportedCollationSet builds CARDDAV:supported-collation-set (RFC 6352 §8.3.1).

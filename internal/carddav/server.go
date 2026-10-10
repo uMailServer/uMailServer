@@ -336,7 +336,7 @@ func (s *Server) propfindTarget(w http.ResponseWriter, ms *Multistatus, username
 	}
 
 	if len(parts) == 2 && parts[1] != "" {
-		contactUID := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+		contactUID := trimVCardExt(parts[1])
 		vcardData, err := s.storage.GetContact(username, addressbookID, contactUID)
 		if err != nil && !errors.Is(err, errInvalidID) {
 			s.logger.Error("Failed to read contact", "error", err)
@@ -374,6 +374,11 @@ func (s *Server) propfindTarget(w http.ResponseWriter, ms *Multistatus, username
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, username string) {
 	body, ok := s.readBody(w, r)
 	if !ok {
+		return
+	}
+
+	if reportRootName(body) == "sync-collection" {
+		s.reportSyncCollection(w, r, username, body)
 		return
 	}
 
@@ -481,7 +486,7 @@ func (s *Server) multigetResponse(username, addressbookID, href string) Response
 	if !ok || rest == "" || strings.Contains(rest, "/") {
 		return status(http.StatusNotFound)
 	}
-	contactUID := strings.TrimSuffix(rest, filepath.Ext(rest))
+	contactUID := trimVCardExt(rest)
 	vcardData, err := s.storage.GetContact(username, addressbookID, contactUID)
 	if err != nil && !errors.Is(err, errInvalidID) {
 		s.logger.Error("Failed to read contact", "error", err)
@@ -515,6 +520,12 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 		s.sendError(w, http.StatusUnsupportedMediaType, "invalid vcard data")
 		return
 	}
+	// RFC 6352 §6.3.2.1 valid-address-data: a card without its END:VCARD is
+	// truncated and would be stored as an unparseable object (F5894).
+	if !hasVCardEnd(string(body)) {
+		s.sendPreconditionError(w, "valid-address-data")
+		return
+	}
 
 	// Extract address book ID and contact UID from URL path (same convention
 	// as handleGet, including extension trimming).
@@ -527,7 +538,7 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	addressbookID := parts[0]
 	urlUID := ""
 	if len(parts) == 2 {
-		urlUID = strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+		urlUID = trimVCardExt(parts[1])
 	}
 
 	// Verify the address book belongs to this user
@@ -586,6 +597,10 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	}
 
 	w.Header().Set("ETag", s.storage.GetETag(username, addressbookID, uid))
+	if existing != "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -600,7 +615,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 	}
 
 	addressbookID := parts[0]
-	contactUID := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+	contactUID := trimVCardExt(parts[1])
 
 	// Verify the address book belongs to this user
 	ab, err := s.storage.GetAddressbook(username, addressbookID)
@@ -633,7 +648,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 	}
 
 	addressbookID := parts[0]
-	contactUID := strings.TrimSuffix(parts[1], filepath.Ext(parts[1]))
+	contactUID := trimVCardExt(parts[1])
 
 	// Verify the address book belongs to this user
 	ab, err := s.storage.GetAddressbook(username, addressbookID)
@@ -652,6 +667,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 	}
 	if !preconditionsHold(r, existing != "", s.storage.GetETag(username, addressbookID, contactUID)) {
 		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
+		return
+	}
+	if existing == "" {
+		s.sendError(w, http.StatusNotFound, "contact not found")
 		return
 	}
 
@@ -1097,6 +1116,9 @@ type Multistatus struct {
 	XMLNSDav  string     `xml:"xmlns:dav,attr,omitempty"`
 	XMLNSCard string     `xml:"xmlns:card,attr,omitempty"`
 	Responses []Response `xml:"response"`
+	// SyncToken is the DAV:sync-token of a sync-collection response (RFC 6578
+	// §6.2); it must follow the responses.
+	SyncToken string `xml:"sync-token,omitempty"`
 }
 
 // Response represents a response element in multistatus. Status is set
