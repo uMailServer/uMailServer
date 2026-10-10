@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -50,6 +51,10 @@ type MessageContext struct {
 	// Metadata
 	ReceivedAt time.Time
 	Stage      string
+
+	// Context is cancelled when the running stage exceeds its time budget;
+	// stages that do I/O should honour it. Set by the pipeline per stage.
+	Context context.Context
 }
 
 // SpamResult holds spam check results
@@ -126,6 +131,21 @@ type Pipeline struct {
 	stages          []PipelineStage
 	logger          Logger
 	tracingProvider *tracing.Provider
+	stageTimeout    time.Duration
+}
+
+// DefaultStageTimeout bounds one pipeline stage when no other timeout is set.
+const DefaultStageTimeout = 30 * time.Second
+
+// errStageTimeout is returned by Process when a stage ran past its budget.
+// The stage may still be running and writing to the MessageContext, so the
+// caller must not read the context after receiving it.
+var errStageTimeout = errors.New("pipeline stage timed out")
+
+// SetStageTimeout sets the per-stage time budget; 0 selects
+// DefaultStageTimeout and a negative value disables the limit.
+func (p *Pipeline) SetStageTimeout(d time.Duration) {
+	p.stageTimeout = d
 }
 
 // SetTracingProvider attaches an OpenTelemetry tracing provider so each stage
@@ -160,6 +180,20 @@ func (p *Pipeline) AddStage(stage PipelineStage) {
 
 // Process processes a message through all pipeline stages
 func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
+	return p.ProcessWithTimeout(ctx, 0)
+}
+
+// ProcessWithTimeout is Process with a per-stage budget override (0 keeps the
+// pipeline's own setting). A stage that exceeds it is abandoned and the
+// message is answered with errStageTimeout so a stuck stage cannot hold the
+// session forever.
+func (p *Pipeline) ProcessWithTimeout(ctx *MessageContext, timeout time.Duration) (PipelineResult, error) {
+	if timeout == 0 {
+		timeout = p.stageTimeout
+	}
+	if timeout == 0 {
+		timeout = DefaultStageTimeout
+	}
 	p.logger.Info("Starting message pipeline",
 		"from", ctx.From,
 		"to", ctx.To,
@@ -170,7 +204,11 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 	for _, stage := range p.stages {
 		ctx.Stage = stage.Name()
 
-		result := p.runStage(traceCtx, stage, ctx)
+		result, timedOut := p.runStageTimed(traceCtx, stage, ctx, timeout)
+		if timedOut {
+			p.logger.Error("pipeline stage timed out", "stage", stage.Name(), "timeout", timeout)
+			return ResultReject, fmt.Errorf("%w: %s", errStageTimeout, stage.Name())
+		}
 
 		if result == ResultReject {
 			p.logger.Info("Message rejected by pipeline",
@@ -201,6 +239,31 @@ func (p *Pipeline) Process(ctx *MessageContext) (PipelineResult, error) {
 	}
 
 	return ResultAccept, nil
+}
+
+// runStageTimed runs a stage with a deadline (timeout < 0: none). On timeout
+// the stage goroutine is left to finish on its own and timedOut is true.
+func (p *Pipeline) runStageTimed(traceCtx context.Context, stage PipelineStage, msgCtx *MessageContext, timeout time.Duration) (PipelineResult, bool) {
+	if timeout < 0 {
+		msgCtx.Context = traceCtx
+		return p.runStage(traceCtx, stage, msgCtx), false
+	}
+	stageCtx, cancel := context.WithTimeout(traceCtx, timeout)
+	defer cancel()
+	msgCtx.Context = stageCtx
+	done := make(chan PipelineResult, 1)
+	go func() { done <- p.runStage(stageCtx, stage, msgCtx) }()
+	select {
+	case r := <-done:
+		return r, false
+	case <-stageCtx.Done():
+		select { // prefer a result that arrived at the same moment
+		case r := <-done:
+			return r, false
+		default:
+		}
+		return ResultReject, true
+	}
 }
 
 // runStage executes a single pipeline stage, wrapping it in a tracing span
@@ -305,9 +368,9 @@ func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
 	// refused for too many recipients was never sent. (F5128)
 	user := ""
 	if ctx.Authenticated && ctx.Username != "" {
-		user = ctx.Username
+		user = strings.ToLower(ctx.Username) // usernames are case-insensitive keys
 		if len(ctx.To) > 0 {
-			recipResult := s.limiter.CheckRecipients(ctx.Username, len(ctx.To))
+			recipResult := s.limiter.CheckRecipients(user, len(ctx.To))
 			if !recipResult.Allowed {
 				ctx.Rejected = true
 				ctx.RejectionCode = 421

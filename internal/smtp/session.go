@@ -72,6 +72,39 @@ type Session struct {
 	// Abuse limits (read by the server's command loop)
 	cmdCount atomic.Int64
 	errCount atomic.Int64
+	bytesIn  atomic.Int64 // octets read from the connection, all phases
+
+	// Per-transaction state from MAIL FROM parameters and address policy.
+	rcptRaw    []string // Received "for" form: local part as received, domain lower-cased
+	mailBinary bool     // BODY=BINARYMIME: only BDAT may carry the message
+	smtputf8   bool     // SMTPUTF8 requested on MAIL FROM
+}
+
+// errSessionBytes marks a session that has read more than its byte budget.
+var errSessionBytes = errors.New("session byte limit exceeded")
+
+// normalizeAddr returns the canonical lower-case form of an address, the form
+// handlers, policy checks and rate-limit keys see (addresses are
+// case-insensitive here, RFC 5321 §2.4 permits it).
+func normalizeAddr(a string) string { return strings.ToLower(a) }
+
+// receivedForm keeps the local part as the client sent it and lower-cases the
+// domain, which is case-insensitive by definition.
+func receivedForm(a string) string {
+	if at := strings.LastIndexByte(a, '@'); at >= 0 {
+		return a[:at+1] + strings.ToLower(a[at+1:])
+	}
+	return a
+}
+
+// isASCII reports whether s is pure ASCII.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
 }
 
 // NewSession creates a new SMTP session
@@ -240,10 +273,12 @@ func (s *Session) handleEHLO(arg string) error {
 		s.server.config.Hostname,
 		"SIZE " + fmt.Sprintf("%d", s.server.config.maxMessageSize()),
 		"8BITMIME",
+		"BINARYMIME",
 		"PIPELINING",
 		"ENHANCEDSTATUSCODES",
 		"SMTPUTF8",
 		"CHUNKING",
+		"DSN",
 		"DELIVERYSTATUS",
 	}
 
@@ -320,9 +355,15 @@ func (s *Session) handleMAIL(arg string) error {
 		from = validated
 	}
 
-	if code, msg := s.checkMailParams(arg); code != 0 {
+	mp, code, msg := s.checkMailParams(arg)
+	if code != 0 {
 		return s.WriteResponse(code, msg)
 	}
+	// A UTF-8 address needs the SMTPUTF8 parameter (RFC 6531 §3.4).
+	if !isASCII(from) && !mp.utf8 {
+		return s.WriteResponse(553, "5.6.7 Non-ASCII address requires SMTPUTF8")
+	}
+	from = normalizeAddr(from)
 
 	// An authenticated user may only send as themselves or their aliases
 	// (F6041).
@@ -333,6 +374,8 @@ func (s *Session) handleMAIL(arg string) error {
 	s.resetTransaction()
 	s.mailFrom = from
 	s.mailFromRet = ret
+	s.mailBinary = mp.binary
+	s.smtputf8 = mp.utf8
 	s.state = StateMailFrom
 
 	return s.WriteResponse(250, "OK")
@@ -357,36 +400,53 @@ func mailParamFields(arg string) []string {
 // A declared SIZE over the limit is refused here, before the client sends
 // the message (RFC 1870 §6; F5672); invalid or unknown parameters are
 // refused instead of silently ignored (F5673).
-func (s *Session) checkMailParams(arg string) (int, string) {
+// mailParams holds the MAIL FROM parameters that change later handling.
+type mailParams struct {
+	binary bool // BODY=BINARYMIME
+	utf8   bool // SMTPUTF8
+}
+
+func (s *Session) checkMailParams(arg string) (mp mailParams, code int, msg string) {
 	for _, field := range mailParamFields(arg) {
 		key, val, _ := strings.Cut(field, "=")
 		switch strings.ToUpper(key) {
 		case "SIZE":
 			n, err := strconv.ParseInt(val, 10, 64)
 			if err != nil || n < 0 {
-				return 501, "5.5.4 Invalid SIZE parameter"
+				return mp, 501, "5.5.4 Invalid SIZE parameter"
 			}
 			if max := s.server.config.maxMessageSize(); n > max {
-				return 552, "5.3.4 Message size exceeds fixed maximum message size"
+				return mp, 552, "5.3.4 Message size exceeds fixed maximum message size"
 			}
 		case "BODY":
-			if v := strings.ToUpper(val); v != "7BIT" && v != "8BITMIME" {
-				return 501, "5.5.4 Invalid BODY parameter"
+			// 8BITMIME and BINARYMIME are advertised in EHLO (BINARYMIME rides
+			// on CHUNKING and is only usable with BDAT).
+			switch strings.ToUpper(val) {
+			case "7BIT", "8BITMIME":
+			case "BINARYMIME":
+				mp.binary = true
+			default:
+				return mp, 501, "5.5.4 Invalid BODY parameter"
 			}
 		case "RET":
 			if v := strings.ToUpper(val); v != "FULL" && v != "HDRS" {
-				return 501, "5.5.4 Invalid RET parameter"
+				return mp, 501, "5.5.4 Invalid RET parameter"
 			}
 		case "ENVID", "AUTH":
 			if val == "" {
-				return 501, "5.5.4 Invalid " + strings.ToUpper(key) + " parameter"
+				return mp, 501, "5.5.4 Invalid " + strings.ToUpper(key) + " parameter"
 			}
 		case "SMTPUTF8":
+			if val != "" {
+				return mp, 501, "5.5.4 Invalid SMTPUTF8 parameter"
+			}
+			mp.utf8 = true
 		default:
-			return 555, "5.5.4 Unsupported MAIL FROM parameter"
+			// Includes REQUIRETLS and MT-PRIORITY, which are not advertised.
+			return mp, 555, "5.5.4 Unsupported MAIL FROM parameter"
 		}
 	}
-	return 0, ""
+	return mp, 0, ""
 }
 
 // checkRcptParams validates the RCPT TO parameters of RFC 3461: NOTIFY
@@ -442,6 +502,11 @@ func (s *Session) handleRCPT(arg string) error {
 	if code, msg := checkRcptParams(arg); code != 0 {
 		return s.WriteResponse(code, msg)
 	}
+	if !isASCII(validated) && !s.smtputf8 {
+		return s.WriteResponse(553, "5.6.7 Non-ASCII address requires SMTPUTF8")
+	}
+	rawFor := receivedForm(validated)
+	validated = normalizeAddr(validated)
 
 	// Check max recipients
 	if len(s.rcptTo) >= s.server.config.maxRecipients() {
@@ -468,6 +533,7 @@ func (s *Session) handleRCPT(arg string) error {
 	}
 
 	s.rcptTo = append(s.rcptTo, validated)
+	s.rcptRaw = append(s.rcptRaw, rawFor)
 	s.rcptToNotify = append(s.rcptToNotify, notify)
 	s.state = StateRcptTo
 
@@ -495,7 +561,7 @@ func (s *Session) handleDATA() error {
 
 	// Must have RCPT TO first; DATA may not follow a BDAT chunk of the same
 	// transaction (RFC 3030 §3, F5676).
-	if s.state != StateRcptTo || s.bdatBuffer != nil {
+	if s.state != StateRcptTo || s.bdatBuffer != nil || s.mailBinary {
 		if span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "bad sequence of commands")
 		}
@@ -513,6 +579,10 @@ func (s *Session) handleDATA() error {
 	data, err := s.readData()
 	if err != nil {
 		s.resetTransaction()
+		if errors.Is(err, errSessionBytes) {
+			_ = s.WriteResponse(421, "4.7.0 Session data limit exceeded, closing connection")
+			return ErrSessionQuit
+		}
 		if errors.Is(err, errMessageTooLarge) {
 			return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
 		}
@@ -556,7 +626,12 @@ func (s *Session) handleDATA() error {
 			}
 		}
 
-		result, err := s.server.pipeline.Process(ctx)
+		result, err := s.server.pipeline.ProcessWithTimeout(ctx, s.server.config.StageTimeout)
+		if errors.Is(err, errStageTimeout) {
+			// The stuck stage may still be writing ctx: do not read it.
+			s.resetTransaction()
+			return s.WriteResponse(451, "4.4.7 Message processing timed out, try again later")
+		}
 		// Process reports a stage rejection as ResultReject with a non-nil
 		// error; answer it with the stage's code below, not 451. (F4945)
 		if err != nil && result != ResultReject {
@@ -597,7 +672,8 @@ func (s *Session) handleDATA() error {
 	// Deliver message via deliver
 	if err := s.deliver(pctx); err != nil {
 		s.resetTransaction()
-		return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+		code, msg := deliveryReply(err)
+		return s.WriteResponse(code, msg)
 	}
 
 	s.resetTransaction()
@@ -732,9 +808,16 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 			ipLit = "IPv6:" + ipLit
 		}
 		var received string
+		forAddr := ""
+		if len(s.rcptTo) == 1 {
+			forAddr = s.rcptTo[0]
+			if len(s.rcptRaw) == 1 {
+				forAddr = s.rcptRaw[0]
+			}
+		}
 		if len(s.rcptTo) == 1 {
 			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
-				s.helloDomain, ipLit, hostname, proto, s.rcptTo[0],
+				s.helloDomain, ipLit, hostname, proto, forAddr,
 				time.Now().Format(time.RFC1123Z))
 		} else {
 			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
@@ -1014,6 +1097,9 @@ func (s *Session) readData() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		if s.bytesIn.Load() > s.server.config.maxSessionBytes() {
+			return nil, errSessionBytes
+		}
 		dotLine := atLineStart && len(line) > 0 && line[0] == '.'
 		atLineStart = endsCRLF
 
@@ -1193,17 +1279,27 @@ func (s *Session) handleBDAT(arg string) error {
 		if _, err := io.CopyN(s.bdatBuffer, reader, int64(size)); err != nil {
 			return fmt.Errorf("failed to read BDAT chunk: %w", err)
 		}
+		if s.bytesIn.Load() > s.server.config.maxSessionBytes() {
+			s.resetTransaction()
+			_ = s.WriteResponse(421, "4.7.0 Session data limit exceeded, closing connection")
+			return ErrSessionQuit
+		}
 	}
 
 	if isLast {
 		// Final chunk — process the complete message
 		raw := s.bdatBuffer.Bytes()
 		s.bdatBuffer = nil
-		if hasBareCR(raw) { // F6151
-			s.resetTransaction()
-			return s.WriteResponse(554, "5.6.0 Message contains bare CR")
+		data := raw
+		// BODY=BINARYMIME carries arbitrary octets: bare CR/LF and NUL are
+		// content there (RFC 3030 §3), not line-ending ambiguity.
+		if !s.mailBinary {
+			if hasBareCR(raw) { // F6151
+				s.resetTransaction()
+				return s.WriteResponse(554, "5.6.0 Message contains bare CR")
+			}
+			data = normalizeBareLF(raw) // F5670
 		}
-		data := normalizeBareLF(raw) // F5670
 
 		// Check total message size
 		if int64(len(data)) > s.server.config.maxMessageSize() {
@@ -1233,7 +1329,11 @@ func (s *Session) handleBDAT(arg string) error {
 				}
 			}
 
-			result, err := s.server.pipeline.Process(ctx)
+			result, err := s.server.pipeline.ProcessWithTimeout(ctx, s.server.config.StageTimeout)
+			if errors.Is(err, errStageTimeout) {
+				s.resetTransaction()
+				return s.WriteResponse(451, "4.4.7 Message processing timed out, try again later")
+			}
 			if err != nil && result != ResultReject { // F4945
 				s.resetTransaction()
 				return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
@@ -1269,7 +1369,8 @@ func (s *Session) handleBDAT(arg string) error {
 		// Deliver message via deliver
 		if err := s.deliver(pctx); err != nil {
 			s.resetTransaction()
-			return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
+			code, msg := deliveryReply(err)
+			return s.WriteResponse(code, msg)
 		}
 
 		s.resetTransaction()
@@ -1311,16 +1412,21 @@ func (s *Session) handleRSET() error {
 	return s.WriteResponse(250, "OK")
 }
 
-// handleVRFY handles the VRFY command
+// handleVRFY handles the VRFY command. The answer never depends on whether the
+// argument names an account, so it cannot be used to harvest addresses
+// (RFC 5321 §3.5.3, §7.3): a syntactically valid request is 252, an empty one
+// 501.
 func (s *Session) handleVRFY(arg string) error {
-	// We don't support address verification
-	return s.WriteResponse(252, "Cannot VRFY user, but will accept message and attempt delivery")
+	if strings.TrimSpace(arg) == "" {
+		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
+	}
+	return s.WriteResponse(252, "2.5.0 Cannot VRFY user, but will accept message and attempt delivery")
 }
 
-// handleEXPN handles the EXPN command
+// handleEXPN handles the EXPN command: list expansion is not provided, and
+// the reply is the same whatever the argument.
 func (s *Session) handleEXPN(arg string) error {
-	// We don't support mailing list expansion
-	return s.WriteResponse(550, "Action not taken: mailbox unavailable")
+	return s.WriteResponse(502, "5.5.1 EXPN not implemented")
 }
 
 // handleHELP handles the HELP command
@@ -1825,7 +1931,7 @@ func (s *Session) handleSTARTTLS() error {
 
 	// Reset the buffered reader to wrap the new TLS connection
 	if s.reader != nil {
-		s.reader.Reset(tlsConn)
+		s.reader.Reset(&countingReader{r: tlsConn, n: &s.bytesIn})
 	}
 
 	// Reset state after TLS upgrade (RFC 3207 Section 4.1)
@@ -1842,6 +1948,9 @@ func (s *Session) handleSTARTTLS() error {
 func (s *Session) resetTransaction() {
 	s.mailFrom = ""
 	s.rcptTo = make([]string, 0)
+	s.rcptRaw = nil
+	s.mailBinary = false
+	s.smtputf8 = false
 	s.rcptToNotify = make([]string, 0) // Clear per-recipient DSN NOTIFY preferences
 	s.data = nil
 	s.bdatBuffer = nil
