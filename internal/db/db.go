@@ -61,6 +61,34 @@ var ErrDomainAccountLimit = errors.New("domain account limit reached")
 // longer exists.
 var ErrQueueEntryNotFound = errors.New("queue entry not found")
 
+// ErrAccountNotFound is returned by UpdateAccount when the account no longer
+// exists (F6080).
+var ErrAccountNotFound = errors.New("account not found")
+
+// ErrAliasNotFound is returned by UpdateAlias when the alias no longer
+// exists (F6081).
+var ErrAliasNotFound = errors.New("alias not found")
+
+// ErrAliasConflict is returned by CreateAlias when the alias would shadow an
+// existing mailbox or point at itself (F6083).
+var ErrAliasConflict = errors.New("alias conflicts with a mailbox or targets itself")
+
+// ErrInvalidName is returned when a domain, local part or alias is empty or
+// contains a character that collides with the key scheme (F6085).
+var ErrInvalidName = errors.New("invalid name")
+
+// validName rejects empty names and names holding the key separators.
+func validName(s string, forbidden string) bool {
+	return s != "" && !strings.ContainsAny(s, forbidden)
+}
+
+func validAccountNames(domain, local string) error {
+	if !validName(domain, "/:") || !validName(local, "/") {
+		return fmt.Errorf("%w: %q/%q", ErrInvalidName, domain, local)
+	}
+	return nil
+}
+
 type AccountData struct {
 	Email            string    `json:"email"`
 	LocalPart        string    `json:"local_part"`
@@ -331,6 +359,9 @@ func AccountKey(domain, localPart string) string {
 
 // CreateAccount creates a new account
 func (d *DB) CreateAccount(account *AccountData) error {
+	if err := validAccountNames(account.Domain, account.LocalPart); err != nil {
+		return err
+	}
 	if account.CreatedAt.IsZero() {
 		account.CreatedAt = time.Now()
 	}
@@ -351,7 +382,7 @@ func (d *DB) CreateAccount(account *AccountData) error {
 		if b == nil {
 			return fmt.Errorf("bucket not found: %s", BucketAccounts)
 		}
-		if hasKeyFold(b, []byte(key)) {
+		if hasKeyFold(b, []byte(key)) || accountShadowsAlias(tx, account.Domain, account.LocalPart) {
 			return ErrAccountExists
 		}
 		return b.Put([]byte(key), data)
@@ -365,6 +396,9 @@ func (d *DB) CreateAccount(account *AccountData) error {
 // cannot leave an orphan account of a deleted domain (F5511). It returns
 // ErrDomainNotFound, ErrDomainAccountLimit or ErrAccountExists.
 func (d *DB) CreateAccountInDomain(account *AccountData) error {
+	if err := validAccountNames(account.Domain, account.LocalPart); err != nil {
+		return err
+	}
 	if account.CreatedAt.IsZero() {
 		account.CreatedAt = time.Now()
 	}
@@ -393,7 +427,7 @@ func (d *DB) CreateAccountInDomain(account *AccountData) error {
 		if b == nil {
 			return fmt.Errorf("bucket not found: %s", BucketAccounts)
 		}
-		if hasKeyFold(b, []byte(key)) {
+		if hasKeyFold(b, []byte(key)) || accountShadowsAlias(tx, account.Domain, account.LocalPart) {
 			return ErrAccountExists
 		}
 		if domain.MaxAccounts > 0 {
@@ -409,6 +443,13 @@ func (d *DB) CreateAccountInDomain(account *AccountData) error {
 		}
 		return b.Put([]byte(key), data)
 	})
+}
+
+// accountShadowsAlias reports whether an alias with the same address exists
+// (F6084): a mailbox and an alias for one address make delivery ambiguous.
+func accountShadowsAlias(tx *bbolt.Tx, domain, local string) bool {
+	ab := tx.Bucket([]byte(BucketAliases))
+	return ab != nil && hasKeyFold(ab, []byte(domain+":"+local))
 }
 
 // hasKeyFold reports whether bucket b holds key under any letter case.
@@ -440,7 +481,7 @@ func (d *DB) GetAccount(domain, localPart string) (*AccountData, error) {
 	return &account, nil
 }
 
-// UpdateAccount updates an existing account (or stores it if absent).
+// UpdateAccount updates an existing account; ErrAccountNotFound if absent.
 //
 // F5166: callers update from a snapshot read earlier (GetAccount -> modify ->
 // UpdateAccount). The counters below are owned by their own atomic
@@ -462,7 +503,13 @@ func (d *DB) UpdateAccount(account *AccountData) error {
 		if b == nil {
 			return fmt.Errorf("bucket not found: %s", BucketAccounts)
 		}
-		if cur := b.Get(key); cur != nil {
+		cur := b.Get(key)
+		if cur == nil {
+			// F6080: never resurrect an account deleted after the caller's
+			// snapshot was read.
+			return ErrAccountNotFound
+		}
+		{
 			// An unreadable stored row has no counters to keep; the update
 			// then replaces it, as before.
 			var stored AccountData
@@ -704,6 +751,9 @@ func (d *DB) ListAccountsByDomain(domain string) ([]*AccountData, error) {
 
 // CreateDomain creates a new domain
 func (d *DB) CreateDomain(domain *DomainData) error {
+	if !validName(domain.Name, "/:") {
+		return fmt.Errorf("%w: domain %q", ErrInvalidName, domain.Name)
+	}
 	if domain.CreatedAt.IsZero() {
 		domain.CreatedAt = time.Now()
 	}
@@ -738,10 +788,24 @@ func (d *DB) GetDomain(name string) (*DomainData, error) {
 	return &domain, nil
 }
 
-// UpdateDomain updates an existing domain
+// UpdateDomain updates an existing domain; ErrDomainNotFound if absent
 func (d *DB) UpdateDomain(domain *DomainData) error {
 	domain.UpdatedAt = time.Now()
-	return d.Put(BucketDomains, domain.Name, domain)
+	data, err := json.Marshal(domain)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value: %w", err)
+	}
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketDomains))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketDomains)
+		}
+		// F6082: never resurrect a domain deleted after the read.
+		if b.Get([]byte(domain.Name)) == nil {
+			return ErrDomainNotFound
+		}
+		return b.Put([]byte(domain.Name), data)
+	})
 }
 
 // DeleteDomain removes a domain together with its accounts and aliases in a
@@ -956,6 +1020,14 @@ func (d *DB) ListAliases() ([]*AliasData, error) {
 
 // CreateAlias creates a new alias
 func (d *DB) CreateAlias(alias *AliasData) error {
+	if !validName(alias.Domain, "/:") || !validName(alias.Alias, "/") {
+		return fmt.Errorf("%w: alias %q@%q", ErrInvalidName, alias.Alias, alias.Domain)
+	}
+	// F6083: an alias pointing at itself is a delivery loop.
+	if t := strings.ToLower(alias.Target); t == strings.ToLower(alias.Alias) ||
+		t == strings.ToLower(alias.Alias+"@"+alias.Domain) {
+		return ErrAliasConflict
+	}
 	if alias.CreatedAt.IsZero() {
 		alias.CreatedAt = time.Now()
 	}
@@ -975,6 +1047,11 @@ func (d *DB) CreateAlias(alias *AliasData) error {
 		if hasKeyFold(b, []byte(key)) { // F5165: case-insensitive
 			return ErrAliasExists
 		}
+		// F6083: an alias must not shadow a mailbox.
+		if ab := tx.Bucket([]byte(BucketAccounts)); ab != nil &&
+			hasKeyFold(ab, []byte(AccountKey(alias.Domain, alias.Alias))) {
+			return ErrAliasConflict
+		}
 		return b.Put([]byte(key), data)
 	})
 }
@@ -982,7 +1059,21 @@ func (d *DB) CreateAlias(alias *AliasData) error {
 // UpdateAlias updates an existing alias
 func (d *DB) UpdateAlias(alias *AliasData) error {
 	key := alias.Domain + ":" + strings.ToLower(alias.Alias)
-	return d.Put(BucketAliases, key, alias)
+	data, err := json.Marshal(alias)
+	if err != nil {
+		return fmt.Errorf("failed to marshal value: %w", err)
+	}
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAliases))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAliases)
+		}
+		// F6081: never resurrect an alias deleted after the read.
+		if b.Get([]byte(key)) == nil {
+			return ErrAliasNotFound
+		}
+		return b.Put([]byte(key), data)
+	})
 }
 
 // DeleteAlias removes an alias
