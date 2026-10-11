@@ -139,7 +139,7 @@ func TestR187_CaseInsensitiveLogin(t *testing.T) {
 		// parseEmail (no lowercasing) and db.GetAccount is case-sensitive, so
 		// REST login with a mixed-case address is 401 although SMTP/IMAP/POP3
 		// accept it (policy: addresses are case-insensitive system-wide).
-		if r187Known(t, "F6647") {
+		{ // F6647 fixed in R193: gate removed
 			if tok, st := e.restLogin(v, e.password); st != 200 || tok == "" {
 				t.Errorf("REST login %s: %d", v, st)
 			} else if e.jmapStatus(tok) != 200 || e.restStatus(tok) != 200 {

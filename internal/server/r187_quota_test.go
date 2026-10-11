@@ -83,9 +83,6 @@ func TestR187_SharedBlob_IMAPExpunge(t *testing.T) {
 // QUIT -> quota 166 (want 249). Repro 2: append the same bytes twice, POP3
 // DELE 1 -> quota 0 although one message + blob remain.
 func TestR187_SharedBlob_POP3Dele(t *testing.T) {
-	if !r187Known(t, "F6644") {
-		t.Skip("known product defect")
-	}
 	e, _, msg := r187TwinSetup(t)
 	p := e.pop3Login("bob@test.com")
 	p.pop3Cmd("DELE 1")
@@ -95,9 +92,6 @@ func TestR187_SharedBlob_POP3Dele(t *testing.T) {
 }
 
 func TestR187_SharedBlob_JMAPDestroy(t *testing.T) {
-	if !r187Known(t, "F6645") {
-		t.Skip("known product defect")
-	}
 	e, _, msg := r187TwinSetup(t)
 	tok := e.jmapToken("bob@test.com")
 	em := e.jmapEmails(tok, "bob@test.com", []string{"subject"})
@@ -113,9 +107,6 @@ func TestR187_SharedBlob_JMAPDestroy(t *testing.T) {
 }
 
 func TestR187_SharedBlob_RESTDelete(t *testing.T) {
-	if !r187Known(t, "F6645") {
-		t.Skip("known product defect")
-	}
 	e, _, msg := r187TwinSetup(t)
 	rt, _ := e.restLogin("bob@test.com", e.password)
 	ms := e.restList(rt, "inbox")
@@ -174,7 +165,7 @@ func TestR187_QuotaReleasePerProtocol(t *testing.T) {
 	p.pop3Cmd("DELE 1")
 	p.pop3Cmd("QUIT")
 	time.Sleep(100 * time.Millisecond)
-	step("POP3", 1, r187Known(t, "F6644"))
+	step("POP3", 1, true)
 	// Resync the counter so later steps are judged independently.
 	prev = e.quotaUsed("bob")
 	// JMAP destroy q2

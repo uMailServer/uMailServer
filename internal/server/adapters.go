@@ -156,3 +156,22 @@ func (s *Server) indexOne(job indexJob) {
 		}
 	}
 }
+
+// accountPurger implements api.AccountPurger: it removes the per-user data of
+// a deleted mailbox that the api package cannot reach itself (F6649c).
+type accountPurger struct{ srv *Server }
+
+func (p accountPurger) PurgeAccount(email string) error {
+	s := p.srv
+	if s.sieveManager != nil {
+		for _, name := range s.sieveManager.ListScripts(email) {
+			s.sieveManager.DeleteScript(email, name)
+		}
+	}
+	if s.pushSvc != nil {
+		for _, sub := range s.pushSvc.GetUserSubscriptions(email) {
+			_ = s.pushSvc.Unsubscribe(email, sub.ID)
+		}
+	}
+	return nil
+}

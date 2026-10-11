@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/imap"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/smtp"
@@ -773,6 +774,13 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 			// IMAP APPEND path so the REST threads list reflects SMTP mail.
 			if threadID != "" {
 				s.updateThreadAggregate(email, subject, fromAddr, meta, threadID)
+			}
+
+			// Wake IMAP IDLE and SSE subscribers (F6649d). This is the one
+			// store path for SMTP, Sieve fileinto, forwarding fallbacks and
+			// local JMAP/API submission.
+			if uids, uerr := s.storageDB.GetMessageUIDs(email, folder); uerr == nil && len(uids) > 0 {
+				imap.GetNotificationHub().NotifyNewMessage(email, folder, uid, uint32(len(uids)))
 			}
 
 			if s.searchSvc != nil {

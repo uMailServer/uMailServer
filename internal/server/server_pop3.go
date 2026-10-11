@@ -22,7 +22,9 @@ func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	}
 	pop3Server := pop3.NewServer(pop3Addr, pop3Adapter, s.logger)
 	pop3Server.SetAuthFunc(s.authenticate)
-	pop3Server.SetQuotaReleaseFunc(func(user string, bytes int64) { s.quotaAdjust(user, -bytes) })
+	// No SetQuotaReleaseFunc: pop3MailstoreAdapter.DeleteMessage goes through
+	// BboltMailstore.ExpungeUIDs, which already releases quota (blob-reference
+	// aware). Also releasing from pop3's UPDATE released twice (F6644).
 	pop3Server.SetRequireTLS(true)
 	pop3Server.SetAuthLimits(s.config.Security.MaxLoginAttempts, time.Duration(s.config.Security.LockoutDuration))
 	pop3Server.SetReadTimeout(10 * time.Minute)
