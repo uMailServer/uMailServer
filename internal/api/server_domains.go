@@ -43,7 +43,7 @@ func (s *Server) handleDomains(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.createDomain(w, r)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET, POST")
 	}
 }
 
@@ -58,7 +58,7 @@ func (s *Server) handleDomainDetail(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		s.deleteDomain(w, r, domain)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET, PUT, DELETE")
 	}
 }
 
@@ -233,6 +233,8 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 }
 
 func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, name string) {
+	adminGuardMu.Lock() // F6650: the cascade removes the domain's admins
+	defer adminGuardMu.Unlock()
 	if _, err := s.db.GetDomain(name); err != nil { // F6130
 		if isKeyNotFound(err) {
 			s.sendError(w, http.StatusNotFound, "domain not found")
@@ -240,6 +242,25 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, name strin
 			s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
 		}
 		return
+	}
+	if accts, err := s.db.ListAccountsByDomain(name); err == nil {
+		hasAdmin := false
+		for _, a := range accts {
+			if a.IsAdmin && a.IsActive {
+				hasAdmin = true
+			}
+		}
+		if hasAdmin {
+			others, oerr := s.otherActiveAdmins(func(d, _ string) bool { return d == name })
+			if oerr != nil {
+				s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
+				return
+			}
+			if !others {
+				s.sendError(w, http.StatusConflict, "cannot delete the domain holding the last active administrator")
+				return
+			}
+		}
 	}
 	if err := s.db.DeleteDomain(name); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to delete domain")

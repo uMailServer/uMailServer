@@ -1168,5 +1168,8 @@ func (s *Server) sendJSON(w http.ResponseWriter, status int, data interface{}) {
 }
 
 func (s *Server) sendError(w http.ResponseWriter, status int, message string) {
+	if status == http.StatusTooManyRequests && w.Header().Get("Retry-After") == "" {
+		w.Header().Set("Retry-After", retryAfterSeconds) // F6654
+	}
 	s.sendJSON(w, status, map[string]string{"error": message})
 }
