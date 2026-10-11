@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -221,6 +222,10 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 				return SPFPermError, "multiple redirect modifiers"
 			}
 			seenRedirect = true
+			if m.value == "" {
+				// F6842: redirect requires a domain-spec (RFC 7208 §6.1).
+				return SPFPermError, "redirect without domain-spec"
+			}
 			redirect = m.value
 			continue
 		}
@@ -232,6 +237,24 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 			// F5414: RFC 7208 §4.6/§5 — an unknown mechanism is a syntax
 			// error: permerror before any term is interpreted.
 			return SPFPermError, "unknown SPF mechanism"
+		}
+		// F6842: RFC 7208 §4.6.1/§5 — include and exists need a domain-spec,
+		// "a:"/"mx:" need one after the colon, and "all" takes no argument.
+		switch m.typ {
+		case "include", "exists":
+			if m.value == "" {
+				return SPFPermError, m.typ + " without domain-spec"
+			}
+		case "a", "mx":
+			if m.colon {
+				if host, _, _, err := spfSplitDualCIDR(m.value); err == nil && host == "" {
+					return SPFPermError, m.typ + " without domain-spec"
+				}
+			}
+		case "all":
+			if m.colon || m.value != "" {
+				return SPFPermError, "all takes no argument"
+			}
 		}
 		mechanisms = append(mechanisms, m)
 	}
@@ -564,6 +587,7 @@ type spfMechanism struct {
 	qualifier SPFResult
 	typ       string
 	value     string
+	colon     bool // value was introduced by ":" (an empty value is then a syntax error)
 }
 
 func (m spfMechanism) String() string {
@@ -646,6 +670,7 @@ func parseMechanism(part string) spfMechanism {
 	if idx := strings.Index(part, ":"); idx > 0 {
 		m.typ = strings.ToLower(part[:idx])
 		m.value = part[idx+1:]
+		m.colon = true
 	} else if strings.HasPrefix(part, "ip4:") || strings.HasPrefix(part, "ip6:") {
 		// Handle ip4: and ip6: without explicit split
 		m.typ = part[:3]
@@ -719,14 +744,9 @@ func (c *spfCache) evictOldest() {
 		entries = append(entries, entryWithExpiry{domain, entry.expiresAt})
 	}
 
-	// Sort by expiry time (oldest first)
-	for i := 0; i < len(entries); i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[i].expiresAt.After(entries[j].expiresAt) {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
-		}
-	}
+	// Sort by expiry time (oldest first). F6841: sort.Slice, not the former
+	// O(n^2) exchange sort that stalled every SPF check under the write lock.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].expiresAt.Before(entries[j].expiresAt) })
 
 	// Remove oldest entries until we're at target size
 	for i := 0; i < len(entries) && len(c.records) > targetSize; i++ {

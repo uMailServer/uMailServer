@@ -255,6 +255,14 @@ func (v *DANEValidator) lookupTLSARecords(query string) ([]*TLSARecord, error) {
 		return nil, fmt.Errorf("TLSA lookup failed: %s", dns.RcodeToString[reply.Rcode])
 	}
 
+	// F6844: RFC 7672 §2.2 — TLSA data is usable only when DNSSEC-validated.
+	// The resolver signals that with the AD bit; an unauthenticated answer
+	// (spoofable, or from a non-validating resolver) is "insecure", i.e. the
+	// host has no usable DANE policy.
+	if !reply.AuthenticatedData {
+		return nil, nil
+	}
+
 	var records []*TLSARecord
 	for _, rr := range reply.Answer {
 		if tlsaRR, ok := rr.(*dns.TLSA); ok {

@@ -46,6 +46,7 @@ func daneHexDNS(t *testing.T, rrs ...*dns.TLSA) string {
 		Handler: dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
 			m := new(dns.Msg)
 			m.SetReply(r)
+			m.AuthenticatedData = true // F6844: only DNSSEC-validated TLSA is used
 			for _, rr := range rrs {
 				c := *rr
 				c.Hdr = dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTLSA, Class: dns.ClassINET, Ttl: 60}

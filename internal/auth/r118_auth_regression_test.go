@@ -117,6 +117,7 @@ func TestR118_F6004_TruncatedRetriesTCP(t *testing.T) {
 	tcp := func(w dns.ResponseWriter, r *dns.Msg) {
 		m := new(dns.Msg)
 		m.SetReply(r)
+		m.AuthenticatedData = true // F6844: only DNSSEC-validated TLSA is used
 		m.Answer = append(m.Answer, &dns.TLSA{
 			Hdr:   dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeTLSA, Class: dns.ClassINET, Ttl: 60},
 			Usage: 3, Selector: 1, MatchingType: 1, Certificate: hex.EncodeToString(make([]byte, 32)),
