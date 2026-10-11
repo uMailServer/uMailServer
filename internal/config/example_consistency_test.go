@@ -78,7 +78,7 @@ func TestExampleConfigMatchesStruct(t *testing.T) {
 	text := string(data)
 	var missing []string
 	for p := range want {
-		if have[p] {
+		if have[p] || isIgnoredKeyPath(p) {
 			continue
 		}
 		leaf := p[strings.LastIndex(p, ".")+1:]
@@ -91,4 +91,16 @@ func TestExampleConfigMatchesStruct(t *testing.T) {
 	if len(missing) > 0 {
 		t.Errorf("Config keys missing from umailserver.yaml.example: %v", missing)
 	}
+}
+
+// isIgnoredKeyPath reports whether p is (or lies under) a setting that is
+// accepted for compatibility but read by no runtime code (F6892).
+func isIgnoredKeyPath(p string) bool {
+	for _, k := range ignoredKeys {
+		j := strings.Join(k, ".")
+		if p == j || strings.HasPrefix(p, j+".") {
+			return true
+		}
+	}
+	return false
 }
