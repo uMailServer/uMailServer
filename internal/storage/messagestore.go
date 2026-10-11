@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,8 +348,142 @@ func (s *MessageStore) ReadMessage(user, messageID string) ([]byte, error) {
 		return nil, fmt.Errorf("invalid message ID")
 	}
 
-	msgPath := filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID)
-	return os.ReadFile(filepath.Clean(msgPath))
+	msgPath := filepath.Clean(filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID))
+	f, err := os.Open(msgPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	// F6668: never load a file larger than the store accepts (a corrupted or
+	// replaced blob must not exhaust memory). Read at most max+1 so a file
+	// that grows between Stat and Read is caught too.
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("message path is not a regular file")
+	}
+	if info.Size() > maxMessageSize {
+		return nil, fmt.Errorf("message exceeds maximum size of %d bytes", maxMessageSize)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxMessageSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxMessageSize {
+		return nil, fmt.Errorf("message exceeds maximum size of %d bytes", maxMessageSize)
+	}
+	return data, nil
+}
+
+// orphanGCGrace is how old a blob file must be before GCOrphanBlobs may
+// remove it. Delivery paths that do not hold UserGuard across "store blob +
+// write metadata row" have a short window in which a fresh blob has no row.
+const orphanGCGrace = time.Hour
+
+// GCOrphanBlobs removes the user's blobs that have no metadata row and no
+// pending upload (as reported by the installed reference checker), plus stale
+// ".tmp-" files. Blobs younger than orphanGCGrace are kept. It refuses to run
+// without a reference checker, since "unreferenced" cannot be decided then.
+// The sweep holds UserGuard(user) and the per-user blob lock, so it is
+// serialized against every cooperating writer/deleter. It is not scheduled by
+// the store; operators call it explicitly. It returns the number of blobs
+// removed.
+func (s *MessageStore) GCOrphanBlobs(user string) (int, error) {
+	if err := validatePathComponent(user); err != nil {
+		return 0, err
+	}
+	p := s.refChecker.Load()
+	if p == nil {
+		return 0, errors.New("orphan GC requires a blob reference checker")
+	}
+	g := s.UserGuard(user)
+	g.Lock()
+	defer g.Unlock()
+	defer s.lockUser(user)()
+
+	root := filepath.Join(s.basePath, user)
+	type cand struct{ id, path string }
+	var cands []cand
+	var dirs []string
+	cutoff := time.Now().Add(-orphanGCGrace)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			if path != root {
+				dirs = append(dirs, path)
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".tmp-") {
+			if time.Since(info.ModTime()) > staleTempAge {
+				_ = os.Remove(path)
+			}
+			return nil
+		}
+		// Only canonical content-addressed blobs: <root>/ab/cd/<64 hex>.
+		if len(name) != 64 || !isLowerHex(name) {
+			return nil
+		}
+		if filepath.Dir(path) != filepath.Join(root, name[:2], name[2:4]) {
+			return nil
+		}
+		if info.ModTime().After(cutoff) {
+			return nil
+		}
+		cands = append(cands, cand{name, path})
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	if len(cands) > 0 {
+		ids := make([]string, len(cands))
+		for i, c := range cands {
+			ids[i] = c.id
+		}
+		refs, err := (*p)(user, ids)
+		if err != nil {
+			return 0, fmt.Errorf("reference check failed: %w", err)
+		}
+		for _, c := range cands {
+			if refs[c.id] {
+				continue
+			}
+			if err := os.Remove(c.path); err == nil {
+				removed++
+			} else if !os.IsNotExist(err) {
+				return removed, err
+			}
+		}
+	}
+	// Best-effort prune of now-empty shard directories (deepest first).
+	for i := len(dirs) - 1; i >= 0; i-- {
+		_ = os.Remove(dirs[i]) // fails harmlessly when not empty
+	}
+	return removed, nil
+}
+
+func isLowerHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // DeleteMessage removes a blob. With a reference checker installed it only

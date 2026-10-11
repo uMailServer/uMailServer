@@ -33,7 +33,7 @@ func (db *Database) BlobReferenced(user string, ids []string) (map[string]bool, 
 	for _, id := range ids {
 		want[id] = struct{}{}
 	}
-	prefix := []byte("msgs:" + user + ":")
+	prefix := []byte("msgs:" + keyUser(user) + ":")
 	err := db.bolt.View(func(tx *bbolt.Tx) error {
 		done := func() bool { return len(out) == len(want) }
 		if pb := tx.Bucket([]byte(pendingUploadsBucketName)); pb != nil {

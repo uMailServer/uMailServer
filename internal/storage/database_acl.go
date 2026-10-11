@@ -76,12 +76,12 @@ func (r ACLRights) String() string {
 // aclKey builds the bbolt key for an ACL entry
 // Key format: "acl:{owner}:{mailbox}:{grantee}"
 func aclKey(owner, mailbox, grantee string) string {
-	return fmt.Sprintf("acl:%s:%s:%s", owner, mailbox, grantee)
+	return fmt.Sprintf("acl:%s:%s:%s", keyUser(owner), mailbox, grantee)
 }
 
 // aclOwnerMailboxPrefix returns the prefix for scanning all ACL entries for a mailbox
 func aclOwnerMailboxPrefix(owner, mailbox string) string {
-	return fmt.Sprintf("acl:%s:%s:", owner, mailbox)
+	return fmt.Sprintf("acl:%s:%s:", keyUser(owner), mailbox)
 }
 
 // aclKeyBelongsTo reports whether the ACL bucket entry (k, v) belongs to
@@ -316,7 +316,7 @@ func (db *Database) ListMailboxesSharedWith(user string) ([]string, error) {
 			// Mailbox names may contain colons; the grantee is the final field.
 			last := strings.LastIndexByte(grantee, ':')
 			if last >= 0 && grantee[last+1:] == user {
-				result = append(result, ownerMailbox+":"+grantee[:last])
+				result = append(result, userKeyUnescaper.Replace(ownerMailbox)+":"+grantee[:last])
 			}
 		}
 		return nil
@@ -331,7 +331,7 @@ func (db *Database) ListGranteesMailboxes(owner string) ([]string, error) {
 	}
 
 	var result []string
-	prefix := fmt.Sprintf("acl:%s:", owner)
+	prefix := fmt.Sprintf("acl:%s:", keyUser(owner))
 	err := db.bolt.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte("acl"))
 		if b == nil {
