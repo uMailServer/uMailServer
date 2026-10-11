@@ -2,10 +2,10 @@ package imap
 
 import (
 	"bufio"
-	"compress/gzip"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -433,19 +433,20 @@ func (s *Server) handleConnection(conn net.Conn) {
 	caps := session.sessionCapabilities()
 	session.WriteResponse("*", "OK [CAPABILITY "+strings.Join(caps, " ")+"] uMailServer ready")
 
-	// Handle commands
+	// Cleanup runs even when a handler panics (the recover above only closes
+	// the socket), so the session does not stay counted against maxConnections
+	// and an IDLE subscription is released (F6531).
+	defer func() {
+		_ = session.conn.Close()
+		session.stopIdle()
+		s.sessionsMu.Lock()
+		delete(s.sessions, session.ID())
+		s.sessionsMu.Unlock()
+		s.logger.Info("IMAP session ended", "session", session.ID())
+	}()
+
+	// Handle returns on LOGOUT, Stop, or a read error.
 	session.Handle()
-
-	// Handle returns on LOGOUT, Stop, or a read error (peer gone, read
-	// deadline, over-long line); only the first two closed the socket.
-	_ = session.conn.Close()
-
-	// Cleanup
-	s.sessionsMu.Lock()
-	delete(s.sessions, session.ID())
-	s.sessionsMu.Unlock()
-
-	s.logger.Info("IMAP session ended", "session", session.ID())
 }
 
 // Session represents an IMAP client session
@@ -466,8 +467,8 @@ type Session struct {
 
 	// Compression
 	compressActive bool
-	compressReader *gzip.Reader
-	compressWriter *gzip.Writer
+	compressReader io.ReadCloser
+	compressWriter *flushWriter
 
 	// Enabled capabilities (via ENABLE command, RFC 5161)
 	enabledCaps map[string]bool
