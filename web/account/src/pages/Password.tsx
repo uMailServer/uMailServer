@@ -1,5 +1,27 @@
 import { useState } from 'react'
 
+// Mirrors internal/api validatePassword (byte length 8..128, upper, lower,
+// digit, special) so the user gets feedback without a round trip.
+function utf8Length(s: string): number {
+  let n = 0
+  for (const ch of s) {
+    const c = ch.codePointAt(0) as number
+    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4
+  }
+  return n
+}
+
+function validatePassword(pw: string): string {
+  const len = utf8Length(pw)
+  if (len < 8) return 'Password must be at least 8 characters'
+  if (len > 128) return 'Password must be at most 128 characters'
+  if (!/[A-Z]/.test(pw)) return 'Password must contain at least one uppercase letter'
+  if (!/[a-z]/.test(pw)) return 'Password must contain at least one lowercase letter'
+  if (!/[0-9]/.test(pw)) return 'Password must contain at least one digit'
+  if (!/[!@#$%^&*()_+\-=[\]{}|;':",./<>?`~\\]/.test(pw)) return 'Password must contain at least one special character'
+  return ''
+}
+
 function PasswordPage() {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -10,6 +32,7 @@ function PasswordPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (saving) return
     setError('')
     setSuccess(false)
 
@@ -18,8 +41,9 @@ function PasswordPage() {
       return
     }
 
-    if (newPassword.length < 8) {
-      setError('Password must be at least 8 characters')
+    const policyError = validatePassword(newPassword)
+    if (policyError !== '') {
+      setError(policyError)
       return
     }
 
@@ -37,6 +61,11 @@ function PasswordPage() {
           new_password: newPassword,
         }),
       })
+      if (res.status === 401) {
+        // Session expired or revoked: the cookie is no longer valid.
+        if (typeof window !== 'undefined') window.location.href = '/login'
+        return
+      }
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null
         setError(data?.error ?? 'Password change failed. Please try again.')
@@ -97,7 +126,7 @@ function PasswordPage() {
             className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-primary-500 focus:border-primary-500"
           />
           <p className="mt-1 text-sm text-gray-500">
-            Must be at least 8 characters
+            At least 8 characters with upper and lower case letters, a digit and a special character
           </p>
         </div>
 
