@@ -6,30 +6,52 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
 
+const SETTINGS_KEY = "umail.webmail.settings"
+const DEFAULT_SETTINGS = {
+  // Notifications
+  emailNotifications: true,
+  browserNotifications: false,
+  soundNotifications: true,
+  desktopNotifications: true,
+  // Email
+  autoSaveDraft: true,
+  readReceipts: false,
+  deliveryReceipts: true,
+  // Privacy
+  showOnlineStatus: false,
+  allowReadReceipts: true,
+  // Composition
+  richTextMode: true,
+  autoCorrect: true,
+  spellCheck: true,
+}
+type Settings = typeof DEFAULT_SETTINGS
+
+function readStoredSettings(): Partial<Settings> {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
 export function SettingsPage() {
   const { theme, setTheme, resolvedTheme } = useTheme()
-  const [settings, setSettings] = useState({
-    // Notifications
-    emailNotifications: true,
-    browserNotifications: false,
-    soundNotifications: true,
-    desktopNotifications: true,
-    // Email
-    autoSaveDraft: true,
-    readReceipts: false,
-    deliveryReceipts: true,
-    // Privacy
-    showOnlineStatus: false,
-    allowReadReceipts: true,
-    // Composition
-    richTextMode: true,
-    autoCorrect: true,
-    spellCheck: true,
-  })
+  const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...readStoredSettings() }))
 
-  const handleToggle = (key: keyof typeof settings) => {
-    setSettings({ ...settings, [key]: !settings[key] })
-    toast.success("Setting updated")
+  // These preferences are stored only in this browser (the server has no
+  // settings endpoint); say so and report a failed write honestly.
+  const handleToggle = (key: keyof Settings) => {
+    const next = { ...settings, [key]: !settings[key] }
+    setSettings(next)
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next))
+      toast.success("Setting saved on this device")
+    } catch {
+      toast.error("Could not save setting; it will reset on reload")
+    }
   }
 
   const SettingSection = ({

@@ -28,8 +28,8 @@ describe('F6311 moveMail uses POST /mail/move', () => {
 
   it('trash Restore no longer permanently deletes; login demo text is DEV-gated', async () => {
     const fs = await import('node:fs')
-    const trash = fs.readFileSync(`${process.cwd()}/src/pages/trash.tsx`, 'utf8')
-    const restore = trash.slice(trash.indexOf('const handleRestore '), trash.indexOf('const handleRestoreSelected'))
+    const trash = fs.readFileSync(`${process.cwd()}/src/components/mail-folder-list.tsx`, 'utf8')
+    const restore = trash.slice(trash.indexOf('const restore = '), trash.indexOf('const sel = '))
     expect(restore).toContain('moveMail')
     expect(restore).not.toContain('deleteMail')
     const login = fs.readFileSync(`${process.cwd()}/src/pages/login.tsx`, 'utf8')
