@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -34,6 +36,8 @@ const (
 // DB wraps bbolt database
 type DB struct {
 	bolt *bbolt.DB
+
+	lastRevokedPurge atomic.Int64 // unix ns of the last expired-revocation sweep
 }
 
 // AccountData holds account information
@@ -226,6 +230,11 @@ func Open(path string) (*DB, error) {
 
 	db := &DB{bolt: bolt}
 
+	// F6620: refuse a database written by a newer binary before touching it.
+	if err := db.checkSchemaCompatible(); err != nil {
+		return nil, fmt.Errorf("cannot open database %s: %w", path, err)
+	}
+
 	// Initialize buckets
 	if err := db.initBuckets(); err != nil {
 		return nil, fmt.Errorf("failed to initialize buckets: %w", err)
@@ -245,12 +254,30 @@ func (d *DB) BoltDB() *bbolt.DB {
 	return d.bolt
 }
 
-// RunMigrations runs all pending database migrations
+// RunMigrations runs all pending database migrations atomically. It returns
+// migrations.ErrSchemaTooNew when the file was written by a newer binary.
 func (d *DB) RunMigrations() error {
 	registry := migrations.NewRegistry()
 	migrations.InitMigrations(registry)
 	migrator := migrations.NewMigrator(d.bolt, registry)
 	return migrator.Migrate()
+}
+
+func (d *DB) checkSchemaCompatible() error {
+	registry := migrations.NewRegistry()
+	migrations.InitMigrations(registry)
+	return migrations.NewMigrator(d.bolt, registry).CheckCompatible()
+}
+
+// Backup writes a consistent point-in-time snapshot of the whole database
+// (every bucket, including revoked_tokens and the migration records) to w.
+// It uses a read transaction, so it is safe while the server is writing and
+// the result is a complete bbolt file that Open accepts (F6626).
+func (d *DB) Backup(w io.Writer) error {
+	return d.bolt.View(func(tx *bbolt.Tx) error {
+		_, err := tx.WriteTo(w)
+		return err
+	})
 }
 
 // initBuckets creates all required buckets
@@ -266,6 +293,7 @@ func (d *DB) initBuckets() error {
 		BucketContacts,
 		BucketAliases,
 		BucketFilters,
+		BucketRevokedTokens, // F6625: created at Open, not lazily on first revoke
 	}
 
 	return d.bolt.Update(func(tx *bbolt.Tx) error {
@@ -322,41 +350,63 @@ func (d *DB) Delete(bucket string, key string) error {
 	})
 }
 
-// ForEach iterates over all entries in a bucket
-func (d *DB) ForEach(bucket string, fn func(key string, value []byte) error) error {
-	return d.bolt.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return fmt.Errorf("bucket not found: %s", bucket)
-		}
+// iterPageSize bounds how many entries are copied out of one read
+// transaction before the callbacks run.
+const iterPageSize = 256
 
-		c := b.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			if err := fn(string(k), v); err != nil {
+// iterate walks bucket keys (optionally restricted to prefix) in pages. Each
+// page is copied inside a short read transaction and the callbacks run AFTER
+// it ends, so a callback may freely call back into the DB (a bbolt Update
+// inside View can deadlock on mmap growth), may mutate the bucket being
+// iterated, and may retain key/value (F6628). Entries are not a single
+// snapshot: concurrent writers may be seen between pages.
+func (d *DB) iterate(bucket, prefix string, fn func(key string, value []byte) error) error {
+	type kv struct{ k, v []byte }
+	p := []byte(prefix)
+	var after []byte // last key delivered
+	for {
+		page := make([]kv, 0, 16)
+		err := d.bolt.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(bucket))
+			if b == nil {
+				return fmt.Errorf("bucket not found: %s", bucket)
+			}
+			c := b.Cursor()
+			var k, v []byte
+			if after == nil {
+				k, v = c.Seek(p)
+			} else if k, v = c.Seek(after); k != nil && bytes.Equal(k, after) {
+				k, v = c.Next()
+			}
+			for ; k != nil && bytes.HasPrefix(k, p) && len(page) < iterPageSize; k, v = c.Next() {
+				page = append(page, kv{append([]byte(nil), k...), append([]byte(nil), v...)})
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, e := range page {
+			if err := fn(string(e.k), e.v); err != nil {
 				return err
 			}
 		}
-		return nil
-	})
+		if len(page) < iterPageSize {
+			return nil
+		}
+		after = page[len(page)-1].k
+	}
 }
 
-// ForEachPrefix iterates over entries with a given prefix
-func (d *DB) ForEachPrefix(bucket string, prefix string, fn func(key string, value []byte) error) error {
-	return d.bolt.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(bucket))
-		if b == nil {
-			return fmt.Errorf("bucket not found: %s", bucket)
-		}
+// ForEach iterates over all entries in a bucket. The callback runs outside
+// any bbolt transaction, so it may call other DB methods.
+func (d *DB) ForEach(bucket string, fn func(key string, value []byte) error) error {
+	return d.iterate(bucket, "", fn)
+}
 
-		c := b.Cursor()
-		prefixBytes := []byte(prefix)
-		for k, v := c.Seek(prefixBytes); k != nil && len(k) >= len(prefixBytes) && string(k[:len(prefixBytes)]) == prefix; k, v = c.Next() {
-			if err := fn(string(k), v); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+// ForEachPrefix iterates over entries with a given prefix (see ForEach).
+func (d *DB) ForEachPrefix(bucket string, prefix string, fn func(key string, value []byte) error) error {
+	return d.iterate(bucket, prefix, fn)
 }
 
 // --- Account Operations ---
@@ -725,8 +775,41 @@ func (d *DB) StoreRevokedToken(tokenHash string, expiry time.Time) error {
 			return err
 		}
 		data, _ := json.Marshal(expiry)
-		return b.Put([]byte(tokenHash), data)
+		if err := b.Put([]byte(tokenHash), data); err != nil {
+			return err
+		}
+		// F6624: bound growth. Callers rarely invoke CleanupRevokedTokens, so
+		// sweep expired entries here, at most once per revokedPurgeEvery.
+		nowNs := time.Now().UnixNano()
+		last := d.lastRevokedPurge.Load()
+		if nowNs-last >= int64(revokedPurgeEvery) && d.lastRevokedPurge.CompareAndSwap(last, nowNs) {
+			return purgeExpiredRevoked(b, time.Now())
+		}
+		return nil
 	})
+}
+
+// revokedPurgeEvery rate-limits the full-bucket expiry sweep in StoreRevokedToken.
+const revokedPurgeEvery = time.Minute
+
+// purgeExpiredRevoked deletes expired/corrupt entries. Keys are collected
+// first: deleting while bbolt's ForEach/cursor is running skips the entry
+// that follows each deletion (F6623).
+func purgeExpiredRevoked(b *bbolt.Bucket, now time.Time) error {
+	var keys [][]byte
+	_ = b.ForEach(func(k, v []byte) error {
+		var expiry time.Time
+		if err := json.Unmarshal(v, &expiry); err != nil || now.After(expiry) {
+			keys = append(keys, append([]byte(nil), k...))
+		}
+		return nil
+	})
+	for _, k := range keys {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // IsTokenRevoked checks whether a token hash is in the persistent revocation list.
@@ -785,14 +868,7 @@ func (d *DB) CleanupRevokedTokens() error {
 		if b == nil {
 			return nil
 		}
-		now := time.Now()
-		return b.ForEach(func(k, v []byte) error {
-			var expiry time.Time
-			if err := json.Unmarshal(v, &expiry); err != nil || now.After(expiry) {
-				_ = b.Delete(k)
-			}
-			return nil
-		})
+		return purgeExpiredRevoked(b, time.Now())
 	})
 }
 
@@ -1049,6 +1125,45 @@ func (d *DB) UpdateQueueEntry(entry *QueueEntry) error {
 		}
 		return b.Put([]byte(entry.ID), data)
 	})
+}
+
+// ErrQueueEntryNotClaimable is returned by ClaimQueueEntry when the entry is
+// no longer pending (another worker claimed it, or it was already finished).
+var ErrQueueEntryNotClaimable = errors.New("queue entry is not claimable")
+
+// ClaimQueueEntry atomically moves a pending, due entry to "sending" and
+// returns the claimed entry. Between GetPendingQueue and a blind
+// UpdateQueueEntry two workers (or a worker and the sweeper) could both pick
+// the same entry and deliver it twice; the status check and write happen in
+// one write transaction here so exactly one caller wins (F6627).
+func (d *DB) ClaimQueueEntry(id string, now time.Time) (*QueueEntry, error) {
+	var claimed QueueEntry
+	err := d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketQueue))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketQueue)
+		}
+		raw := b.Get([]byte(id))
+		if raw == nil {
+			return fmt.Errorf("%w: %s", ErrQueueEntryNotFound, id)
+		}
+		if err := json.Unmarshal(raw, &claimed); err != nil {
+			return err
+		}
+		if claimed.Status != "pending" || claimed.NextRetry.After(now) {
+			return fmt.Errorf("%w: %s (status %q)", ErrQueueEntryNotClaimable, id, claimed.Status)
+		}
+		claimed.Status = "sending"
+		data, err := json.Marshal(&claimed)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(id), data)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &claimed, nil
 }
 
 // Dequeue removes a message from the queue
