@@ -208,9 +208,14 @@ func writeNewFile(path string, data []byte) error {
 	}
 	if _, err := f.Write(data); err != nil {
 		_ = f.Close()
+		_ = os.Remove(filepath.Clean(path)) // F6401: no truncated backup left behind
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(filepath.Clean(path))
+		return err
+	}
+	return nil
 }
 
 // encryptBackup encrypts tar.gz data using AES-256-GCM with scrypt key derivation
@@ -881,18 +886,18 @@ func (bm *BackupManager) Verify(backupFile string) error {
 			continue
 		}
 
-		// Read file content to compute hash
-		content := make([]byte, header.Size)
-		_, err = io.ReadFull(tr, content)
-		if err != nil {
+		// F6400: stream the member through the hash; never allocate the
+		// attacker-declared header.Size up front.
+		hasher := sha256.New()
+		if _, err = io.CopyN(hasher, tr, header.Size); err != nil {
 			return fmt.Errorf("failed to read file %s: %w", header.Name, err)
 		}
+		computed := hex.EncodeToString(hasher.Sum(nil))
 
 		for _, expected := range expectedHashes {
 			if expected.Path == header.Name {
 				seen[expected.Path] = true
-				computedHash := sha256.Sum256(content)
-				if hex.EncodeToString(computedHash[:]) != expected.Hash {
+				if computed != expected.Hash {
 					fmt.Printf("  ✗ FAILED: %s\n", header.Name)
 					filesFailed++
 				} else {
