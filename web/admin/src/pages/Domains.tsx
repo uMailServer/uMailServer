@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Globe,
   Plus,
@@ -37,6 +37,8 @@ import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDomains } from "@/hooks/useApi";
+import { toast } from "sonner";
+import { domainError } from "@/lib/validation";
 import { cn } from "@/lib/utils";
 import type { Domain } from "@/types";
 
@@ -58,6 +60,19 @@ export function Domains() {
   const [newDomainName, setNewDomainName] = useState("");
   const [newDomainMaxAccounts, setNewDomainMaxAccounts] = useState(100);
   const [formError, setFormError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const guarded = async (fn: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
   const [copiedDNS, setCopiedDNS] = useState(false);
 
   useEffect(() => {
@@ -68,24 +83,25 @@ export function Domains() {
     d.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleCreateDomain = async () => {
+  const handleCreateDomain = () => guarded(async () => {
     setFormError("");
-    if (!newDomainName) {
-      setFormError("Domain name is required");
+    const nameErr = domainError(newDomainName.trim());
+    if (nameErr) {
+      setFormError(nameErr);
       return;
     }
 
     try {
-      await createDomain(newDomainName, newDomainMaxAccounts);
+      await createDomain(newDomainName.trim(), newDomainMaxAccounts);
       setIsAddDialogOpen(false);
       setNewDomainName("");
       setNewDomainMaxAccounts(100);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create domain");
     }
-  };
+  });
 
-  const handleDeleteDomain = async () => {
+  const handleDeleteDomain = () => guarded(async () => {
     if (!selectedDomain) return;
 
     setFormError("");
@@ -96,13 +112,13 @@ export function Domains() {
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to delete domain");
     }
-  };
+  });
 
   const handleToggleDomain = async (domain: Domain) => {
     try {
       await updateDomain(domain.name, { is_active: !domain.is_active });
     } catch (err) {
-      console.error("Failed to update domain:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to update domain");
     }
   };
 
@@ -181,7 +197,7 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleCreateDomain}>Add Domain</Button>
+              <Button onClick={handleCreateDomain} disabled={busy}>Add Domain</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -277,7 +293,7 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
             <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={handleDeleteDomain}>
+            <Button variant="destructive" onClick={handleDeleteDomain} disabled={busy}>
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
             </Button>

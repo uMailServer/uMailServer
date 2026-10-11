@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Mail,
   RefreshCw,
@@ -78,21 +78,36 @@ export function Queue() {
     page * itemsPerPage
   );
 
+  // Synchronous guard against double-click double submit.
+  const actingRef = useRef(false);
+
   const handleRetry = async () => {
-    if (!selectedEntry) return;
+    if (!selectedEntry || actingRef.current) return;
+    actingRef.current = true;
     setActionError(null);
     try {
       await retryEntry(selectedEntry.id);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to retry email");
       return;
+    } finally {
+      actingRef.current = false;
     }
     setIsRetryDialogOpen(false);
     setSelectedEntry(null);
   };
 
   const handleDrop = async () => {
-    if (!selectedEntry) return;
+    if (!selectedEntry || actingRef.current) return;
+    actingRef.current = true;
+    try {
+      await doDrop(selectedEntry);
+    } finally {
+      actingRef.current = false;
+    }
+  };
+
+  const doDrop = async (selectedEntry: QueueEntry) => {
     setActionError(null);
     try {
       await dropEntry(selectedEntry.id);

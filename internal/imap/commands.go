@@ -1,7 +1,7 @@
 package imap
 
 import (
-	"compress/gzip"
+	"compress/flate"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -32,6 +32,10 @@ func (s *Session) handleCommand(line string) error {
 		return nil
 	}
 
+	if !validTag(parts[0]) {
+		s.WriteData("BAD Invalid command tag")
+		return nil
+	}
 	s.tag = parts[0]
 	command := strings.ToUpper(parts[1])
 	args := regroupArgs(command, line, parts[2:])
@@ -54,6 +58,21 @@ func (s *Session) handleCommand(line string) error {
 	return nil
 }
 
+// validTag reports whether tag matches RFC 3501 "tag = 1*<ASTRING-CHAR
+// except "+">": no CTLs, SP, "(", ")", "{", "%", "*", quoted specials or "+".
+func validTag(tag string) bool {
+	if tag == "" {
+		return false
+	}
+	for i := 0; i < len(tag); i++ {
+		c := tag[i]
+		if c <= 0x20 || c >= 0x7f || strings.IndexByte("(){%*\"\\+", c) >= 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // handleNotAuthenticated handles commands in the Not Authenticated state
 func (s *Session) handleNotAuthenticated(command string, args []string, line string) error {
 	switch command {
@@ -69,8 +88,6 @@ func (s *Session) handleNotAuthenticated(command string, args []string, line str
 		return s.handleNoop()
 	case "LOGOUT":
 		return s.handleLogout()
-	case "COMPRESS":
-		return s.handleCompress(args)
 	case "ID":
 		return s.handleIDLine(args, line)
 	default:
@@ -292,6 +309,17 @@ func tlsConfigUsable(cfg *tls.Config) bool {
 	return cfg != nil && (len(cfg.Certificates) > 0 || cfg.GetCertificate != nil || cfg.GetConfigForClient != nil)
 }
 
+// flushWriter sync-flushes a DEFLATE stream after every write.
+type flushWriter struct{ fw *flate.Writer }
+
+func (f *flushWriter) Write(p []byte) (int, error) {
+	n, err := f.fw.Write(p)
+	if err != nil {
+		return n, err
+	}
+	return n, f.fw.Flush()
+}
+
 // handleCompress enables compression using DEFLATE algorithm (RFC 4978)
 func (s *Session) handleCompress(args []string) error {
 	if s.compressActive {
@@ -304,19 +332,23 @@ func (s *Session) handleCompress(args []string) error {
 		return nil
 	}
 
-	s.WriteResponse(s.tag, "OK Compression active")
-
-	// Create gzip writer for compressing responses to client
-	s.compressWriter = gzip.NewWriter(s.conn)
-	s.writer.Reset(s.compressWriter)
-
-	// Create gzip reader for decompressing requests from client
-	gzReader, err := gzip.NewReader(s.conn)
-	if err != nil {
-		s.WriteResponse(s.tag, "BAD Compression initialization failed")
+	// Bytes already buffered were sent before the OK and are not compressed.
+	if s.reader.Buffered() > 0 {
+		s.WriteResponse(s.tag, "BAD COMPRESS must not be pipelined")
 		return nil
 	}
-	s.compressReader = gzReader
+
+	s.WriteResponse(s.tag, "OK Compression active")
+
+	// RFC 4978: raw DEFLATE (RFC 1951), sync-flushed after every write so the
+	// peer can decode each response as soon as it is sent.
+	fw, err := flate.NewWriter(s.conn, flate.DefaultCompression)
+	if err != nil {
+		return err
+	}
+	s.compressWriter = &flushWriter{fw: fw}
+	s.writer.Reset(s.compressWriter)
+	s.compressReader = flate.NewReader(s.conn)
 	s.reader.Reset(s.compressReader)
 
 	s.compressActive = true
@@ -2101,56 +2133,80 @@ func (s *Session) handleExpunge() error {
 		return nil
 	}
 
-	// Before expunging, find messages with \Deleted flag to report their
-	// sequence numbers via untagged EXPUNGE responses.
-	criteria := SearchCriteria{Deleted: true}
-	deletedSeqs, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, criteria)
-	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
-		if span != nil {
-			tracing.RecordError(span, err)
-			tracing.SetStatus(span, tracing.StatusError, "search deleted messages failed")
-		}
-		return nil
-	}
-
-	if span != nil {
-		tracing.SetIntAttribute(span, "expunge.deleted_count", len(deletedSeqs))
-	}
-
-	// The onExpunge hook (search index removal) is keyed by UID, so resolve
-	// the deleted sequence numbers to UIDs while they are still valid.
-	var deletedUIDs []uint32
-	if s.server.onExpunge != nil && len(deletedSeqs) > 0 {
-		msgs, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
-		if err == nil {
-			uidBySeq := make(map[uint32]uint32, len(msgs))
-			for _, m := range msgs {
-				uidBySeq[m.SeqNum] = m.UID
+	var deletedSeqs []uint32
+	var err error
+	if rep, ok := s.server.mailstore.(interface {
+		ExpungeReport(user, mailbox string) (seqs, uids []uint32, err error)
+	}); ok {
+		// F6534: the store reports exactly what it removed, atomically.
+		var uids []uint32
+		deletedSeqs, uids, err = rep.ExpungeReport(s.user, s.selected.Name)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			if span != nil {
+				tracing.RecordError(span, err)
+				tracing.SetStatus(span, tracing.StatusError, "expunge failed")
 			}
-			for _, seq := range deletedSeqs {
-				if uid, ok := uidBySeq[seq]; ok {
-					deletedUIDs = append(deletedUIDs, uid)
+			return nil
+		}
+		if s.server.onExpunge != nil {
+			for _, uid := range uids {
+				s.server.onExpunge(s.user, s.selected.Name, uid)
+			}
+		}
+	} else {
+		// Before expunging, find messages with \Deleted flag to report their
+		// sequence numbers via untagged EXPUNGE responses.
+		criteria := SearchCriteria{Deleted: true}
+		deletedSeqs, err = s.server.mailstore.SearchMessages(s.user, s.selected.Name, criteria)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			if span != nil {
+				tracing.RecordError(span, err)
+				tracing.SetStatus(span, tracing.StatusError, "search deleted messages failed")
+			}
+			return nil
+		}
+
+		if span != nil {
+			tracing.SetIntAttribute(span, "expunge.deleted_count", len(deletedSeqs))
+		}
+
+		// The onExpunge hook (search index removal) is keyed by UID, so resolve
+		// the deleted sequence numbers to UIDs while they are still valid.
+		var deletedUIDs []uint32
+		if s.server.onExpunge != nil && len(deletedSeqs) > 0 {
+			msgs, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
+			if err == nil {
+				uidBySeq := make(map[uint32]uint32, len(msgs))
+				for _, m := range msgs {
+					uidBySeq[m.SeqNum] = m.UID
+				}
+				for _, seq := range deletedSeqs {
+					if uid, ok := uidBySeq[seq]; ok {
+						deletedUIDs = append(deletedUIDs, uid)
+					}
 				}
 			}
 		}
-	}
 
-	err = s.server.mailstore.Expunge(s.user, s.selected.Name)
-	if err != nil {
-		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
-		if span != nil {
-			tracing.RecordError(span, err)
-			tracing.SetStatus(span, tracing.StatusError, "expunge failed")
+		err = s.server.mailstore.Expunge(s.user, s.selected.Name)
+		if err != nil {
+			s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
+			if span != nil {
+				tracing.RecordError(span, err)
+				tracing.SetStatus(span, tracing.StatusError, "expunge failed")
+			}
+			return nil
 		}
-		return nil
-	}
 
-	// Notify search index about expunged messages, by UID.
-	if s.server.onExpunge != nil {
-		for _, uid := range deletedUIDs {
-			s.server.onExpunge(s.user, s.selected.Name, uid)
+		// Notify search index about expunged messages, by UID.
+		if s.server.onExpunge != nil {
+			for _, uid := range deletedUIDs {
+				s.server.onExpunge(s.user, s.selected.Name, uid)
+			}
 		}
+
 	}
 
 	// Send untagged EXPUNGE responses in reverse order (highest seq first)

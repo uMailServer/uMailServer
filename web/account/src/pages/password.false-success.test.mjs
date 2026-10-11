@@ -109,8 +109,8 @@ assert.equal(typeof PasswordPage, 'function', 'CONTROL FAILED: PasswordPage not 
 
 async function submitValidForm() {
   states[0] = 'current-secret';
-  states[1] = 'newpass123';
-  states[2] = 'newpass123';
+  states[1] = 'NewPass123!';
+  states[2] = 'NewPass123!';
   const tree = renderComponent(PasswordPage);
   const form = findNode(tree, (node) => node.type === 'form');
   assert.ok(form, 'CONTROL FAILED: password form not found');
@@ -127,8 +127,8 @@ assert.ok(
 console.log('CONTROL EXPECTED: initial render with Change Password form | ACTUAL: shown');
 
 // CONTROL: mismatched confirmation surfaces the validation error, no network.
-states[1] = 'newpass123';
-states[2] = 'newpass124';
+states[1] = 'NewPass123!';
+states[2] = 'NewPass124!';
 const treeMismatch = renderComponent(PasswordPage);
 const mismatchForm = findNode(treeMismatch, (node) => node.type === 'form');
 await mismatchForm.props.onSubmit({ preventDefault() {} });
@@ -171,7 +171,7 @@ assert.equal(
 );
 const sentBody = JSON.parse(fetchCalls[0].options?.body ?? '{}');
 assert.equal(sentBody.current_password, 'current-secret', 'PROBLEM CONFIRMED: current_password not sent');
-assert.equal(sentBody.new_password, 'newpass123', 'PROBLEM CONFIRMED: new_password not sent');
+assert.equal(sentBody.new_password, 'NewPass123!', 'PROBLEM CONFIRMED: new_password not sent');
 assert.ok(
   textValid.includes('Password changed successfully!'),
   'PROBLEM CONFIRMED: server confirmed the change but no success banner rendered'

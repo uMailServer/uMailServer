@@ -42,6 +42,18 @@ type BboltMailstore struct {
 	// "is the blob still referenced / free" per user, so the reserved and
 	// released byte counts stay symmetric when identical content races.
 	userLocks sync.Map
+
+	// expungeLocks serialises the scan-delete-announce sequence of EXPUNGE /
+	// UID EXPUNGE per user, so concurrent expunges of one mailbox cannot both
+	// delete and announce the same messages (F6533).
+	expungeLocks sync.Map
+}
+
+// lockExpunge takes the per-user expunge guard and returns its release func.
+func (m *BboltMailstore) lockExpunge(user string) func() {
+	mu, _ := m.expungeLocks.LoadOrStore(user, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
 }
 
 // blobRef names a content-addressed blob and its size in bytes.
@@ -718,15 +730,23 @@ func hasFlag(flags []string, flag string) bool {
 
 // Expunge removes messages marked as deleted
 func (m *BboltMailstore) Expunge(user, mailbox string) error {
-	// Get all messages
-	uids, err := m.db.GetMessageUIDs(user, mailbox)
+	_, _, err := m.ExpungeReport(user, mailbox)
+	return err
+}
+
+// ExpungeReport is Expunge returning the pre-removal sequence numbers
+// (ascending) and UIDs of exactly the messages this call removed, so the
+// EXPUNGE command reports what it deleted rather than what a separate,
+// racy SEARCH saw (F6534).
+func (m *BboltMailstore) ExpungeReport(user, mailbox string) (seqs, uids []uint32, err error) {
+	defer m.lockExpunge(user)()
+	all, err := m.db.GetMessageUIDs(user, mailbox)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	var released []blobRef
-	var gone []uint32 // sequence numbers (before removal) of the expunged messages
-	for i, uid := range uids {
+	for i, uid := range all {
 		meta, err := m.db.GetMessageMetadata(user, mailbox, uid)
 		if err != nil {
 			continue
@@ -736,14 +756,15 @@ func (m *BboltMailstore) Expunge(user, mailbox string) error {
 		if hasFlag(meta.Flags, "\\Deleted") {
 			if m.db.DeleteMessage(user, mailbox, uid) == nil {
 				released = append(released, blobRef{meta.MessageID, meta.Size})
-				gone = append(gone, uint32(i+1))
+				seqs = append(seqs, uint32(i+1))
+				uids = append(uids, uid)
 			}
 		}
 	}
 
 	m.releaseBlobs(user, released)
-	notifyExpunged(user, mailbox, gone)
-	return nil
+	notifyExpunged(user, mailbox, seqs)
+	return seqs, uids, nil
 }
 
 // notifyExpunged tells IDLE sessions of user that the messages at the given
@@ -759,6 +780,7 @@ func notifyExpunged(user, mailbox string, seqs []uint32) {
 // ExpungeUIDs removes only the messages whose UID is in uids and that carry
 // \Deleted (RFC 4315 UID EXPUNGE; also used to complete RFC 6851 MOVE).
 func (m *BboltMailstore) ExpungeUIDs(user, mailbox string, uids []uint32) error {
+	defer m.lockExpunge(user)()
 	seqOf := map[uint32]uint32{}
 	if all, err := m.db.GetMessageUIDs(user, mailbox); err == nil {
 		for i, u := range all {

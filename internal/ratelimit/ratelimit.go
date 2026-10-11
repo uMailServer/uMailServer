@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,6 +180,15 @@ func (rl *RateLimiter) configLocked() *Config {
 // so rotating the interface ID cannot bypass the limit (F5106). IPv4-mapped
 // IPv6 addresses share the IPv4 bucket. Unparseable input is used verbatim.
 func ipKey(ip string) string {
+	// Strip a port ("1.2.3.4:25", "[2001:db8::1]:25"), brackets and an IPv6
+	// zone so every spelling of one peer shares a bucket (F6571).
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	ip = strings.TrimSuffix(strings.TrimPrefix(ip, "["), "]")
+	if i := strings.IndexByte(ip, '%'); i >= 0 {
+		ip = ip[:i]
+	}
 	addr := net.ParseIP(ip)
 	if addr == nil {
 		return ip
@@ -280,8 +290,16 @@ func (b *ipBucket) commit() {
 	b.dayCount++
 }
 
+// userKey canonicalises an account name: mailbox names are case-insensitive,
+// so case or whitespace variants must share one bucket and one persisted
+// quota (F6570).
+func userKey(user string) string {
+	return strings.ToLower(strings.TrimSpace(user))
+}
+
 // CheckUser checks rate limits for an authenticated user (outbound sending)
 func (rl *RateLimiter) CheckUser(user string) Result {
+	user = userKey(user)
 	rl.userMu.Lock()
 	defer rl.userMu.Unlock()
 
@@ -462,6 +480,7 @@ func (rl *RateLimiter) commitGlobal() {
 // quota (F5205). Limits are evaluated in the order user, IP, global and the
 // first refusal is returned.
 func (rl *RateLimiter) CheckMessage(user, ip string) Result {
+	user = userKey(user)
 	now := time.Now()
 
 	// Lock order: userMu → ipMu → globalMu (configMu is taken innermost by
@@ -596,6 +615,7 @@ func (rl *RateLimiter) GetIPStats(ip string) map[string]any {
 
 // GetUserStats returns current rate limit stats for a user
 func (rl *RateLimiter) GetUserStats(user string) map[string]any {
+	user = userKey(user)
 	rl.userMu.RLock()
 	defer rl.userMu.RUnlock()
 	cfg := rl.configLocked()

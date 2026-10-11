@@ -20,7 +20,7 @@ it('account paths and domain filter are encoded', async () => {
     await act(async () => { await cur.fetchAccounts('a.com&x=1') })
     await act(async () => { await cur.deleteAccount('a/b?c#d@x.com') })
     const urls = fetchMock.mock.calls.map((x) => x[0])
-    expect(urls[0]).toBe('/api/v1/accounts?domain=a.com%26x%3D1')
+    expect(urls[0]).toBe('/api/v1/accounts?domain=a.com%26x%3D1&limit=1000&offset=0')
     expect(urls[1]).toBe('/api/v1/accounts/a%2Fb%3Fc%23d%40x.com')
   } finally {
     await act(async () => root.unmount())

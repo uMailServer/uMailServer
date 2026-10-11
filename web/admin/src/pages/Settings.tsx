@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Settings,
   Shield,
@@ -7,7 +6,6 @@ import {
   Database,
   Save,
   AlertCircle,
-  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,13 +17,8 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export function SettingsPage() {
-  const [saved, setSaved] = useState(false);
-  const [error] = useState("");
-
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
-  };
+  // There is no settings endpoint in internal/api: nothing here can be
+  // persisted, so the page is a read-only preview and must not claim a save.
 
   return (
     <div className="space-y-6">
@@ -37,19 +30,13 @@ export function SettingsPage() {
         </p>
       </div>
 
-      {saved && (
-        <Alert className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">
-          <Check className="h-4 w-4" />
-          <AlertDescription>Settings saved successfully</AlertDescription>
-        </Alert>
-      )}
-
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      <Alert>
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>
+          Settings are read-only for now: values shown are placeholders and
+          changes are not saved. Edit umailserver.yaml and restart to configure the server.
+        </AlertDescription>
+      </Alert>
 
       <Tabs defaultValue="general" className="space-y-6">
         <TabsList>
@@ -68,6 +55,7 @@ export function SettingsPage() {
         </TabsList>
 
         <TabsContent value="general" className="space-y-6">
+          <fieldset disabled className="contents">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -174,14 +162,16 @@ export function SettingsPage() {
           </Card>
 
           <div className="flex justify-end">
-            <Button onClick={handleSave}>
+            <Button disabled>
               <Save className="mr-2 h-4 w-4" />
               Save Changes
             </Button>
           </div>
+        </fieldset>
         </TabsContent>
 
         <TabsContent value="security" className="space-y-6">
+          <fieldset disabled className="contents">
           <Card>
             <CardHeader>
               <CardTitle>TLS & Encryption</CardTitle>
@@ -250,9 +240,11 @@ export function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+        </fieldset>
         </TabsContent>
 
         <TabsContent value="notifications" className="space-y-6">
+          <fieldset disabled className="contents">
           <Card>
             <CardHeader>
               <CardTitle>Email Notifications</CardTitle>
@@ -292,6 +284,7 @@ export function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+        </fieldset>
         </TabsContent>
       </Tabs>
     </div>

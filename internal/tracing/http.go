@@ -3,6 +3,7 @@ package tracing
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/otel/propagation"
 )
@@ -79,6 +80,10 @@ func HTTPMiddleware(provider *Provider, component string, next http.Handler) htt
 			SetStringAttribute(span, "http.scheme", scheme)
 		}
 		if ua := r.UserAgent(); ua != "" {
+			// Client-controlled and unbounded: cap what reaches the exporter.
+			if len(ua) > 256 {
+				ua = strings.ToValidUTF8(ua[:256], "")
+			}
 			SetStringAttribute(span, "http.user_agent", ua)
 		}
 

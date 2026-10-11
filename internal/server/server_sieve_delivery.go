@@ -102,11 +102,11 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 	mailbox := user + "@" + domain
 	scriptUser := s.activeSieveUser(mailbox)
 	if scriptUser == "" {
-		return s.deliverLocal(user, domain, from, data, folder)
+		return s.deliverLocalFor(rcpt, user, domain, from, data, folder)
 	}
 	out, ok := s.runUserSieve(scriptUser, rcpt, from, data)
 	if !ok {
-		return s.deliverLocal(user, domain, from, data, folder)
+		return s.deliverLocalFor(rcpt, user, domain, from, data, folder)
 	}
 
 	keep := out.keep
@@ -164,7 +164,7 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 		add(f)
 	}
 	for _, f := range targets {
-		if err := s.deliverLocal(user, domain, from, data, f); err != nil {
+		if err := s.deliverLocalFor(rcpt, user, domain, from, data, f); err != nil {
 			return err
 		}
 	}

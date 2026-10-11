@@ -91,6 +91,18 @@ func (w *RotatingWriter) Write(p []byte) (n int, err error) {
 	// Check if rotation is needed
 	if w.size > 0 && w.size+int64(len(p)) > w.maxSize {
 		if err := w.rotate(); err != nil {
+			// Rotation is best effort (disk full, read-only dir, ...): keep
+			// appending to the current file rather than dropping the record
+			// or leaving the writer without a file (F6573).
+			if w.file == nil {
+				if oerr := w.open(); oerr != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+	if w.file == nil {
+		if err := w.open(); err != nil {
 			return 0, err
 		}
 	}
@@ -115,9 +127,9 @@ func (w *RotatingWriter) Close() error {
 func (w *RotatingWriter) rotate() error {
 	// Close current file
 	if w.file != nil {
-		if err := w.file.Close(); err != nil {
-			return err
-		}
+		// The file is gone either way; a close error must not leave w.file
+		// pointing at a closed descriptor.
+		_ = w.file.Close()
 		w.file = nil
 	}
 

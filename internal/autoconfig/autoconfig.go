@@ -165,9 +165,20 @@ func (v *Validator) IsValidDomain(domain string) bool {
 	if len(parts) < 2 {
 		return false
 	}
+	if len(domain) > 253 {
+		return false
+	}
+	// F6551: LDH labels only; no brackets (address literals), underscores,
+	// or leading/trailing hyphens in a label.
 	for _, part := range parts {
-		if len(part) == 0 || len(part) > 63 {
+		if len(part) == 0 || len(part) > 63 || part[0] == '-' || part[len(part)-1] == '-' {
 			return false
+		}
+		for i := 0; i < len(part); i++ {
+			c := part[i]
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
 		}
 	}
 	return true

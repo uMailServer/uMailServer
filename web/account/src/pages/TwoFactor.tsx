@@ -17,6 +17,14 @@ function secretFromUri(uri: string): string {
   }
 }
 
+// A 401 means the session cookie expired or was revoked: send the user to
+// sign in again instead of showing a generic failure.
+function redirectIfUnauthorized(res: { status: number }): boolean {
+  if (res.status !== 401) return false
+  if (typeof window !== 'undefined') window.location.href = '/login'
+  return true
+}
+
 function TwoFactorPage() {
   const [phase, setPhase] = useState<TotpPhase>('loading')
   const [setupUri, setSetupUri] = useState('')
@@ -29,7 +37,8 @@ function TwoFactorPage() {
     const loadStatus = async () => {
       try {
         const res = await fetch('/api/v1/account/totp', { credentials: 'include' })
-        if (!res.ok) throw new Error('status unavailable')
+        if (redirectIfUnauthorized(res)) return
+    if (!res.ok) throw new Error('status unavailable')
         const data = (await res.json()) as TotpStatus
         if (stale) return
         if (data.enabled) {
@@ -54,6 +63,7 @@ function TwoFactorPage() {
 
   const refreshStatus = async () => {
     const res = await fetch('/api/v1/account/totp', { credentials: 'include' })
+    if (redirectIfUnauthorized(res)) return
     if (!res.ok) throw new Error('status unavailable')
     const data = (await res.json()) as TotpStatus
     if (data.enabled) {
@@ -70,6 +80,7 @@ function TwoFactorPage() {
     setBusy(true)
     try {
       const res = await fetch('/api/v1/account/totp/setup', { method: 'POST', credentials: 'include' })
+      if (redirectIfUnauthorized(res)) return
       if (!res.ok) throw new Error('setup failed')
       const data = (await res.json()) as { uri: string }
       setSetupUri(data.uri)
@@ -94,6 +105,9 @@ function TwoFactorPage() {
       })
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null
+        // The server also answers 401 for a wrong/replayed code; only an
+        // authentication failure means the session is gone.
+        if (res.status === 401 && !/totp code/i.test(data?.error ?? '') && redirectIfUnauthorized(res)) return
         setError(data?.error ?? 'Verification failed. Please try again.')
         return
       }
@@ -122,6 +136,9 @@ function TwoFactorPage() {
       })
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null
+        // The server also answers 401 for a wrong/replayed code; only an
+        // authentication failure means the session is gone.
+        if (res.status === 401 && !/totp code/i.test(data?.error ?? '') && redirectIfUnauthorized(res)) return
         setError(data?.error ?? 'Could not disable two-factor authentication. Please try again.')
         return
       }
