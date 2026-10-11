@@ -1283,8 +1283,9 @@ END:VCARD`
 
 	server.ServeHTTP(w, req)
 
-	if w.Code != http.StatusMultiStatus {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusMultiStatus)
+	// F6911: infinity is refused with propfind-finite-depth.
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 

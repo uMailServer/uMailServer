@@ -17,6 +17,8 @@ import (
 type Storage struct {
 	dataDir string
 	mu      sync.RWMutex
+	// migrated records usernames whose legacy directory was already examined.
+	migrated sync.Map
 }
 
 // NewStorage creates a new CardDAV storage
@@ -26,11 +28,58 @@ func NewStorage(dataDir string) *Storage {
 	}
 }
 
-// userDir returns the directory for a user's address books
+// legacyUserKey is the pre-round-214 directory name of a user: "@" became
+// "_at_". It is not injective ("a@b" and "a_at_b" shared one namespace).
+func legacyUserKey(username string) string {
+	return strings.ReplaceAll(username, "@", "_at_")
+}
+
+// userKey maps a username to its directory name injectively (F6910), as
+// CalDAV does (F6160). Names whose legacy mapping is unambiguous keep it, so
+// existing directories stay in place; any other name is percent-encoded
+// byte-wise, which always contains "%" and so never equals a legacy name.
+func userKey(username string) string {
+	legacy := legacyUserKey(username)
+	if username != "." && !strings.Contains(username, "%") && strings.ReplaceAll(legacy, "_at_", "@") == username {
+		return legacy
+	}
+	return escapeUserKey(username)
+}
+
+func escapeUserKey(username string) string {
+	const hexd = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(username); i++ {
+		c := username[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-':
+			b.WriteByte(c)
+		default:
+			b.WriteByte('%')
+			b.WriteByte(hexd[c>>4])
+			b.WriteByte(hexd[c&15])
+		}
+	}
+	return b.String()
+}
+
+// userDir returns the directory for a user's address books. A legacy
+// directory is renamed into place on first access only when its owner is
+// unambiguous (its legacy name round-trips to the username).
 func (s *Storage) userDir(username string) string {
-	// Sanitize username for filesystem
-	safeUsername := strings.ReplaceAll(username, "@", "_at_")
-	return filepath.Join(s.dataDir, safeUsername)
+	key := userKey(username)
+	dir := filepath.Join(s.dataDir, key)
+	if legacy := legacyUserKey(username); legacy != key && strings.ReplaceAll(legacy, "_at_", "@") == username && username != "." {
+		if _, loaded := s.migrated.LoadOrStore(username, true); !loaded {
+			old := filepath.Join(s.dataDir, legacy)
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				if _, err := os.Stat(old); err == nil {
+					_ = os.Rename(old, dir)
+				}
+			}
+		}
+	}
+	return dir
 }
 
 // errInvalidID marks an identifier that would resolve outside its parent
@@ -364,7 +413,10 @@ func (s *Storage) PurgeUser(username string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := filepath.Base(s.userDir(username))
+	names := []string{userKey(username)}
+	if legacy := legacyUserKey(username); legacy != names[0] && strings.ReplaceAll(legacy, "_at_", "@") == username {
+		names = append(names, legacy)
+	}
 	entries, err := os.ReadDir(s.dataDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -374,12 +426,16 @@ func (s *Storage) PurgeUser(username string) error {
 	}
 	var errs []error
 	for _, e := range entries {
-		if strings.EqualFold(e.Name(), key) {
-			if err := os.RemoveAll(filepath.Join(s.dataDir, e.Name())); err != nil {
-				errs = append(errs, err)
+		for _, n := range names {
+			if strings.EqualFold(e.Name(), n) {
+				if err := os.RemoveAll(filepath.Join(s.dataDir, e.Name())); err != nil {
+					errs = append(errs, err)
+				}
+				break
 			}
 		}
 	}
+	s.migrated.Delete(username)
 	return errors.Join(errs...)
 }
 

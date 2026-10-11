@@ -151,7 +151,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 // handleOptions handles OPTIONS requests
 func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Allow", "OPTIONS, GET, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MKCOL, MOVE, COPY")
-	w.Header().Set("DAV", "1, 2, 3, addressbook")
+	// No LOCK/UNLOCK is implemented, so class 2 must not be advertised (F6912).
+	w.Header().Set("DAV", "1, 3, addressbook")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -257,9 +258,21 @@ func (s *Server) handlePropfind(w http.ResponseWriter, r *http.Request, username
 	}
 
 	// Determine depth
-	depth := r.Header.Get("Depth")
-	if depth == "" {
+	// RFC 4918 §9.1: "infinity" is refused with DAV:propfind-finite-depth;
+	// other unknown values are a client error (F6911). Absent means 1.
+	depth := strings.ToLower(strings.TrimSpace(r.Header.Get("Depth")))
+	switch depth {
+	case "":
 		depth = "1"
+	case "0", "1":
+	case "infinity":
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(xml.Header + `<d:error xmlns:d="DAV:"><d:propfind-finite-depth/></d:error>`))
+		return
+	default:
+		s.sendError(w, http.StatusBadRequest, "invalid Depth header")
+		return
 	}
 
 	// Build response
