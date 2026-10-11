@@ -1447,17 +1447,6 @@ func TestParseTagValueListEmpty(t *testing.T) {
 	}
 }
 
-// TestParseTagValueListEscapedSemicolon tests that escaped semicolons are handled.
-func TestParseTagValueListEscapedSemicolon(t *testing.T) {
-	result := parseTagValueList("a=hello\\;world")
-	if len(result) != 1 {
-		t.Errorf("Expected 1 entry with escaped semicolon, got %d", len(result))
-	}
-	if result["a"] != "hello\\;world" {
-		t.Errorf("parseTagValueList('a=hello\\;world')[a] = %q, want %q", result["a"], "hello\\;world")
-	}
-}
-
 // TestParseTagValueListBHWhitespace tests that b= and bh= values have whitespace removed.
 func TestParseTagValueListBHWhitespace(t *testing.T) {
 	result := parseTagValueList("bh=abc def ghi; b=xyz 123")

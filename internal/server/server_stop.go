@@ -62,7 +62,7 @@ func (s *Server) Stop() error {
 	s.deliveries.Wait()
 	// Push/vacation goroutines started by those deliveries use the queue and
 	// databases closed below; wait for them (bounded, push may hit the network).
-	s.waitBackground(10 * time.Second)
+	s.waitBackground(s.gracefulTimeout())
 
 	// Close search indexing work queue to drain workers (once only)
 	s.stopOnce.Do(func() { close(s.indexWork) })
@@ -207,6 +207,16 @@ func (s *Server) Wait() error {
 	s.logger.Info("Received signal", "signal", sig)
 
 	return s.Stop()
+}
+
+// gracefulTimeout is how long shutdown waits for background tasks (push,
+// vacation) started by deliveries: server.graceful_timeout seconds, or 10s
+// when unset (F6890).
+func (s *Server) gracefulTimeout() time.Duration {
+	if s.config != nil && s.config.Server.GracefulTimeout > 0 {
+		return time.Duration(s.config.Server.GracefulTimeout) * time.Second
+	}
+	return 10 * time.Second
 }
 
 // waitBackground waits up to d for the delivery-spawned background goroutines.

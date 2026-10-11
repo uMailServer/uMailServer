@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -176,6 +177,58 @@ type Service struct {
 	subscriptions map[string]*Subscription // key: subscription ID
 	userSubs      map[string][]string      // user ID -> subscription IDs
 	mu            sync.RWMutex
+
+	slotsOnce sync.Once
+	slots     chan struct{} // bounds in-flight sends across all users (F6967)
+	dropped   atomic.Uint64
+	// sendFn replaces SendNotification in tests.
+	sendFn func(*Subscription, *Notification) error
+}
+
+// MaxConcurrentSends bounds push requests in flight at once. Every mail
+// triggers one POST per subscription to a subscriber-chosen host with a 30s
+// timeout, so a mail flood against a user whose endpoints stall otherwise
+// grows goroutines and sockets without limit (F6967). Pushes beyond the
+// bound are dropped: they are best-effort and the mail is already stored.
+const MaxConcurrentSends = 64
+
+// Field bounds for subscriber-supplied values, each of which is persisted.
+const (
+	maxEndpointLen = 2048
+	maxKeyLen      = 256
+	maxDeviceField = 128
+)
+
+func (s *Service) acquireSlot() bool {
+	s.slotsOnce.Do(func() { s.slots = make(chan struct{}, MaxConcurrentSends) })
+	select {
+	case s.slots <- struct{}{}:
+		return true
+	default:
+		s.dropped.Add(1)
+		return false
+	}
+}
+
+func (s *Service) releaseSlot() { <-s.slots }
+
+// DroppedPushes returns how many pushes were dropped because MaxConcurrentSends
+// were already in flight.
+func (s *Service) DroppedPushes() uint64 { return s.dropped.Load() }
+
+func validateSubscriptionFields(sub *Subscription) error {
+	if len(sub.Endpoint) > maxEndpointLen || len(sub.P256dh) > maxKeyLen || len(sub.Auth) > maxKeyLen {
+		return fmt.Errorf("push subscription field too long")
+	}
+	return validateDeviceInfo(sub.DeviceInfo)
+}
+
+func validateDeviceInfo(d DeviceInfo) error {
+	if len(d.DeviceType) > maxDeviceField || len(d.OS) > maxDeviceField ||
+		len(d.Browser) > maxDeviceField || len(d.Name) > maxDeviceField {
+		return fmt.Errorf("device info field too long")
+	}
+	return nil
 }
 
 // NewService creates a new push notification service. VAPID keys are loaded
@@ -242,6 +295,9 @@ func (s *Service) GetVAPIDPublicKey() string {
 func (s *Service) Subscribe(userID string, sub *Subscription) error {
 	if sub == nil {
 		return fmt.Errorf("subscription is nil")
+	}
+	if err := validateSubscriptionFields(sub); err != nil {
+		return err
 	}
 	if err := validateEndpoint(sub.Endpoint); err != nil {
 		return err
@@ -531,7 +587,17 @@ func (s *Service) SendToUser(userID string, notification *Notification) error {
 		wg.Add(1)
 		go func(sub *Subscription) {
 			defer wg.Done()
-			err := s.SendNotification(sub, notification)
+			var err error
+			if !s.acquireSlot() {
+				err = fmt.Errorf("push dropped: %d sends already in flight", MaxConcurrentSends)
+			} else {
+				send := s.SendNotification
+				if s.sendFn != nil {
+					send = s.sendFn
+				}
+				err = send(sub, notification)
+				s.releaseSlot()
+			}
 			rmu.Lock()
 			defer rmu.Unlock()
 			if err != nil {
@@ -777,6 +843,9 @@ func (s *Service) UpdateDeviceInfo(userID, subscriptionID string, info DeviceInf
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := validateDeviceInfo(info); err != nil {
+		return err
+	}
 	sub, exists := s.subscriptions[subscriptionID]
 	if !exists || sub.UserID != userID {
 		return fmt.Errorf("subscription not found")

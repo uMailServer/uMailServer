@@ -335,3 +335,72 @@ func secretsFileTooOpen(path string, cfg *Config) (os.FileMode, bool) {
 	}
 	return perm, true
 }
+
+// ignoredKeys lists settings that are accepted (and validated) for backward
+// compatibility but are read by no runtime code. Load warns when a config file
+// sets one so operators are not misled into thinking it has an effect (F6890).
+var ignoredKeys = [][]string{
+	{"server", "force_close_after"},
+	{"spam", "quarantine_threshold"},
+	{"spam", "bayesian", "auto_train"},
+	{"spam", "greylisting", "delay"},
+	{"security", "rate_limit", "imap_connections"},
+	{"tls", "acme", "challenge"},
+	{"tls", "acme", "dns_provider"},
+	{"http", "http_port"},
+	{"domains"},
+	{"storage", "shared_folders"},
+}
+
+// yamlHasKey reports whether the document sets the dotted key path.
+func yamlHasKey(root *yaml.Node, path []string) bool {
+	n := root
+	for n != nil && n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
+		n = n.Content[0]
+	}
+	for _, p := range path {
+		for n != nil && n.Kind == yaml.AliasNode {
+			n = n.Alias
+		}
+		if n == nil || n.Kind != yaml.MappingNode {
+			return false
+		}
+		var next *yaml.Node
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if n.Content[i].Value == p {
+				next = n.Content[i+1]
+				break
+			}
+		}
+		if next == nil {
+			return false
+		}
+		n = next
+	}
+	return true
+}
+
+// findIgnoredKeys returns the dotted names of ignored settings present in root.
+func findIgnoredKeys(root *yaml.Node) []string {
+	var out []string
+	for _, p := range ignoredKeys {
+		if yamlHasKey(root, p) {
+			out = append(out, strings.Join(p, "."))
+		}
+	}
+	return out
+}
+
+// applyLegacyRateAliases maps the documented legacy aliases
+// security.rate_limit.smtp_per_minute/smtp_per_hour onto ip_per_minute/
+// ip_per_hour when the file sets the alias but not the canonical key (F6891).
+func applyLegacyRateAliases(root *yaml.Node, cfg *Config) {
+	rl := []string{"security", "rate_limit"}
+	has := func(k string) bool { return yamlHasKey(root, append(append([]string{}, rl...), k)) }
+	if has("smtp_per_minute") && !has("ip_per_minute") {
+		cfg.Security.RateLimit.IPPerMinute = cfg.Security.RateLimit.SMTPPerMinute
+	}
+	if has("smtp_per_hour") && !has("ip_per_hour") {
+		cfg.Security.RateLimit.IPPerHour = cfg.Security.RateLimit.SMTPPerHour
+	}
+}

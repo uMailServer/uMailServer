@@ -178,6 +178,17 @@ func tokenEqual(got, want string) bool {
 	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
+// maxSpanText caps client-supplied strings recorded on trace spans.
+const maxSpanText = 128
+
+// spanText truncates v to maxSpanText bytes on a rune boundary.
+func spanText(v string) string {
+	if len(v) <= maxSpanText {
+		return v
+	}
+	return strings.ToValidUTF8(v[:maxSpanText], "")
+}
+
 // maxRequestBodyBytes caps a single MCP request body (F5018).
 const maxRequestBodyBytes = 1 << 20
 
@@ -289,11 +300,15 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.tracingProvider != nil && s.tracingProvider.IsEnabled() {
 		var span otrace.Span
+		// Method and id are client-controlled and only bounded by the 1 MiB
+		// body cap: truncate what reaches the span name/attributes and the
+		// exporter (F6968).
+		method := spanText(req.Method)
 		ctx, span = s.tracingProvider.StartSpanWithKind(ctx,
-			"mcp."+req.Method,
+			"mcp."+method,
 			tracing.SpanKindServer,
-			attribute.String("mcp.method", req.Method),
-			attribute.String("mcp.request_id", string(req.ID)),
+			attribute.String("mcp.method", method),
+			attribute.String("mcp.request_id", spanText(string(req.ID))),
 			attribute.String("ip", ip),
 		)
 		// tools/call benefits from the inner tool name on the same span;
@@ -303,7 +318,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 				Name string `json:"name"`
 			}
 			if err := json.Unmarshal(req.Params, &probe); err == nil && probe.Name != "" {
-				tracing.SetStringAttribute(span, "mcp.tool", probe.Name)
+				tracing.SetStringAttribute(span, "mcp.tool", spanText(probe.Name))
 			}
 		}
 		defer span.End()

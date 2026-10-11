@@ -13,6 +13,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { sanitizeHTML } from "@/utils/sanitize"
+import { replySubject, forwardSubject } from "@/utils/quote"
 import api, { Mail, ApiError, FLAG_SEEN, FLAG_FLAGGED } from "@/utils/api"
 
 const LOOKS_LIKE_HTML = /<\s*(?:p|div|br|html|body|table|span|a|img|ul|ol|h[1-6]|b|i|strong|em)\b/i
@@ -206,7 +207,7 @@ export function EmailDetailPage() {
         <Button
           className="gap-2"
           onClick={() =>
-            navigate(`/compose?replyTo=${encodeURIComponent(email.fromEmail)}&subject=${encodeURIComponent("Re: " + email.subject)}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
+            navigate(`/compose?replyTo=${encodeURIComponent(email.fromEmail)}&mode=reply&inReplyTo=${encodeURIComponent(mail.messageId || "")}&subject=${encodeURIComponent(replySubject(email.subject))}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
           }
         >
           <Reply className="h-4 w-4" />
@@ -216,7 +217,7 @@ export function EmailDetailPage() {
           variant="outline"
           className="gap-2"
           onClick={() =>
-            navigate(`/compose?forward=true&subject=${encodeURIComponent("Fwd: " + email.subject)}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
+            navigate(`/compose?mode=forward&subject=${encodeURIComponent(forwardSubject(email.subject))}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
           }
         >
           <Forward className="h-4 w-4" />

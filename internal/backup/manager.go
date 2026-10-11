@@ -103,11 +103,22 @@ func (m *Manager) backupUserToPath(user, destPath string, opts BackupOptions) (r
 	return m.addDirToTar(userPath, user, tw)
 }
 
+// archiveFileHook, when set, runs after a file was listed by the walk and
+// before it is opened. Tests use it to model Maildir deliveries and flag
+// renames racing with a backup deterministically (F6960).
+var archiveFileHook func(path string)
+
 // addDirToTar recursively adds a directory to a tar archive
 // basePath is the directory to walk, relPath is the archive prefix for all entries
 func (m *Manager) addDirToTar(basePath, relPath string, tw *tar.Writer) error {
 	return filepath.Walk(basePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// A live Maildir loses entries between the directory listing and
+			// the stat (delivery moves tmp/ to new/, IMAP renames for flags).
+			// Skip what vanished; the root itself must exist (F6960).
+			if os.IsNotExist(err) && path != basePath {
+				return nil
+			}
 			return err
 		}
 
@@ -119,11 +130,6 @@ func (m *Manager) addDirToTar(basePath, relPath string, tw *tar.Writer) error {
 			return nil
 		}
 
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-
 		// Compute archive path: relPath prefix + relative path from basePath
 		rel, err := filepath.Rel(basePath, path)
 		if err != nil {
@@ -131,27 +137,64 @@ func (m *Manager) addDirToTar(basePath, relPath string, tw *tar.Writer) error {
 		}
 
 		arcPath := filepath.Join(relPath, rel)
-		if info.Mode().IsDir() && arcPath != "" && !strings.HasSuffix(arcPath, "/") {
-			arcPath += "/"
-		}
-		header.Name = arcPath
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		if !info.Mode().IsDir() {
-			file, err := os.Open(path)
+		if info.Mode().IsDir() {
+			header, err := tar.FileInfoHeader(info, "")
 			if err != nil {
 				return err
 			}
-			defer file.Close()
-			if _, err := io.Copy(tw, file); err != nil {
-				return err
+			if arcPath != "" && !strings.HasSuffix(arcPath, "/") {
+				arcPath += "/"
 			}
+			header.Name = arcPath
+			return tw.WriteHeader(header)
 		}
-		return nil
+
+		return addFileToTar(tw, path, arcPath)
 	})
+}
+
+// addFileToTar archives one regular file. The header is built from the opened
+// file (fstat) rather than the stale walk listing, so a file that changed in
+// between is archived consistently, and a file that disappeared is skipped
+// (F6960).
+func addFileToTar(tw *tar.Writer, path, arcPath string) error {
+	if archiveFileHook != nil {
+		archiveFileHook(path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	header, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return err
+	}
+	header.Name = arcPath
+	if err := tw.WriteHeader(header); err != nil {
+		return err
+	}
+	// Copy exactly the announced size: a file appended to while being read
+	// must not overrun the header (tar.ErrWriteTooLong).
+	n, err := io.Copy(tw, io.LimitReader(file, header.Size))
+	if err != nil {
+		return err
+	}
+	if n != header.Size {
+		return fmt.Errorf("file %s shrank while being archived", path)
+	}
+	return nil
 }
 
 // BackupMailbox creates a backup of a specific mailbox

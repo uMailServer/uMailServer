@@ -95,6 +95,11 @@ type RedisLeaderElection struct {
 
 // NewRedisLeaderElection creates a new Redis leader election
 func NewRedisLeaderElection(redisURL, instanceID string, leaseTTL time.Duration) (*RedisLeaderElection, error) {
+	// Leadership is the instance ID stored in Redis: an empty (or shared) ID
+	// makes every instance that uses it believe it is the leader (F6962).
+	if instanceID == "" {
+		return nil, fmt.Errorf("leader election requires a non-empty instance ID")
+	}
 	client := redis.NewClient(&redis.Options{
 		Addr: redisURL,
 	})
@@ -114,6 +119,19 @@ func NewRedisLeaderElection(redisURL, instanceID string, leaseTTL time.Duration)
 	}, nil
 }
 
+// defaultLeaseTTL applies when no usable lease is configured.
+const defaultLeaseTTL = 15 * time.Second
+
+// lease returns the effective lease. A zero or sub-millisecond TTL would make
+// SET NX store the leader key without expiry (and PEXPIRE 0 delete it), so a
+// crashed leader could never be replaced (F6969).
+func (l *RedisLeaderElection) lease() time.Duration {
+	if l.leaseTTL < time.Millisecond {
+		return defaultLeaseTTL
+	}
+	return l.leaseTTL
+}
+
 // leaderKey returns the Redis key for a leader election
 func leaderKey(electionKey string) string {
 	return fmt.Sprintf("lock:leader:%s", electionKey)
@@ -122,7 +140,7 @@ func leaderKey(electionKey string) string {
 // TryAcquire attempts to become the leader
 func (l *RedisLeaderElection) TryAcquire(ctx context.Context, electionKey string) (bool, error) {
 	// Use SET with NX and EX to atomically set the leader if not exists
-	result, err := l.client.SetNX(ctx, leaderKey(electionKey), l.instanceID, l.leaseTTL).Result()
+	result, err := l.client.SetNX(ctx, leaderKey(electionKey), l.instanceID, l.lease()).Result()
 	if err != nil {
 		return false, err
 	}
@@ -169,7 +187,7 @@ func (l *RedisLeaderElection) Refresh(ctx context.Context, electionKey string) e
 			return 0
 		end
 	`)
-	res, err := script.Run(ctx, l.client, []string{leaderKey(electionKey)}, l.instanceID, l.leaseTTL.Milliseconds()).Int64()
+	res, err := script.Run(ctx, l.client, []string{leaderKey(electionKey)}, l.instanceID, l.lease().Milliseconds()).Int64()
 	if err != nil {
 		return err
 	}
@@ -230,6 +248,11 @@ func lockKey(lockName string) string {
 
 // Acquire attempts to acquire the lock with TTL
 func (l *RedisDistributedLock) Acquire(ctx context.Context, lockName string, ttl time.Duration) (bool, error) {
+	// A non-positive TTL would store the lock without expiry: a crashed holder
+	// would block every instance forever (F6969).
+	if ttl < time.Millisecond {
+		return false, fmt.Errorf("lock TTL must be at least 1ms, got %v", ttl)
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// Generate a unique lock value for ownership verification

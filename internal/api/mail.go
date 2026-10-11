@@ -34,6 +34,7 @@ type Mail struct {
 	Starred        bool     `json:"starred"`
 	Folder         string   `json:"folder"`
 	HasAttachments bool     `json:"hasAttachments"`
+	MessageIDHdr   string   `json:"messageId,omitempty"` // RFC 5322 Message-ID header, for reply threading
 	Size           int64    `json:"size"`
 }
 
@@ -44,6 +45,9 @@ type SendMailRequest struct {
 	BCC     []string `json:"bcc"`
 	Subject string   `json:"subject"`
 	Body    string   `json:"body"`
+	// InReplyTo / References carry RFC 5322 threading headers for replies.
+	InReplyTo  string   `json:"inReplyTo,omitempty"`
+	References []string `json:"references,omitempty"`
 }
 
 // MailHandler handles mail-related API requests
@@ -309,11 +313,18 @@ func (h *MailHandler) getEmailsPageFiltered(userEmail, mailbox string, limit, of
 
 		// Read message body
 		var body string
+		var rawData []byte
 		if h.msgStore != nil {
 			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
 			if err == nil {
+				rawData = data
 				body = h.extractBody(string(data))
 			}
+		}
+
+		hasAtt := false
+		if h.msgStore != nil {
+			hasAtt = rawHasAttachment(rawData)
 		}
 
 		// Determine preview
@@ -344,6 +355,8 @@ func (h *MailHandler) getEmailsPageFiltered(userEmail, mailbox string, limit, of
 			Starred: hasFlag(meta.Flags, "\\Flagged"),
 			Folder:  folderName,
 			Size:    meta.Size,
+
+			HasAttachments: hasAtt,
 		}
 		emails = append(emails, email)
 	}
@@ -454,6 +467,9 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 		Starred: hasFlag(meta.Flags, "\\Flagged"),
 		Folder:  folderName,
 		Size:    meta.Size,
+
+		HasAttachments: rawHasAttachment(data),
+		MessageIDHdr:   rawMessageIDHeader(data),
 	}, nil
 }
 
@@ -587,6 +603,12 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	// header bytes are invalid and get mangled by relays.
 	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", safeSubject)))
 	sb.WriteString(fmt.Sprintf("Date: %s\r\n", dateStr))
+	if v := threadingHeaderValue(req.InReplyTo); v != "" {
+		sb.WriteString("In-Reply-To: " + v + "\r\n")
+	}
+	if refs := threadingHeaderValues(req.References, req.InReplyTo); len(refs) > 0 {
+		sb.WriteString("References: " + strings.Join(refs, " ") + "\r\n")
+	}
 	sb.WriteString("MIME-Version: 1.0\r\n")
 	sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
 	sb.WriteString("\r\n")
@@ -651,6 +673,8 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 			Date:         dateStr,
 			From:         from,
 			To:           to,
+			InReplyTo:    threadingHeaderValue(req.InReplyTo),
+			References:   threadingHeaderValues(req.References, req.InReplyTo),
 		}
 		if err := h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta); err != nil {
 			fmt.Printf("ERROR: failed to store message metadata: %v\n", err)

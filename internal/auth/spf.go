@@ -354,7 +354,7 @@ func (c *SPFChecker) evaluateMechanism(ctx context.Context, ip net.IP, domain, s
 		if err != nil {
 			return false, false, err
 		}
-		return c.evaluateMX(ctx, ip, spec, domain, lim.lookups, lim.voids)
+		return c.evaluateMXLim(ctx, ip, spec, domain, lim)
 
 	case "ptr":
 		// PTR is discouraged in SPF, return false
@@ -489,6 +489,12 @@ func spfIPInCIDR(client, target net.IP, v4len, v6len int) bool {
 
 // evaluateMX checks if IP matches an MX record
 func (c *SPFChecker) evaluateMX(ctx context.Context, ip net.IP, value, domain string, lookups, voidLookups int) (bool, bool, error) {
+	return c.evaluateMXLim(ctx, ip, value, domain, &spfLimits{lookups: lookups, voids: voidLookups})
+}
+
+// evaluateMXLim is evaluateMX with shared counters so void lookups from the
+// per-MX-host address queries count (F6920, RFC 7208 §4.6.4).
+func (c *SPFChecker) evaluateMXLim(ctx context.Context, ip net.IP, value, domain string, lim *spfLimits) (bool, bool, error) {
 	mxDomain, v4len, v6len, err := spfSplitDualCIDR(value)
 	if err != nil {
 		return false, false, err
@@ -520,6 +526,13 @@ func (c *SPFChecker) evaluateMX(ctx context.Context, ip net.IP, value, domain st
 		if err != nil {
 			if isTemporaryError(err) {
 				return false, false, err
+			}
+			mxIPs = nil
+		}
+		if len(mxIPs) == 0 {
+			lim.voids++
+			if lim.voids > spfMaxVoidLookups {
+				return false, false, &spfPermError{"Too many void lookups"}
 			}
 			continue
 		}

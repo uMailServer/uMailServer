@@ -49,6 +49,19 @@ func (w *statusCaptureWriter) Flush() {
 	}
 }
 
+// maxAttrLen caps client-controlled strings recorded on spans (F6961).
+const maxAttrLen = 256
+
+// truncateAttr bounds a client-controlled value (path, host, user agent) to
+// maxAttrLen bytes on a rune boundary; request lines may be up to the
+// server's header limit, which would otherwise reach the exporter verbatim.
+func truncateAttr(v string) string {
+	if len(v) <= maxAttrLen {
+		return v
+	}
+	return strings.ToValidUTF8(v[:maxAttrLen], "")
+}
+
 // HTTPMiddleware returns an http.Handler that wraps next in an http.<METHOD>
 // server-kind span when the provider is enabled. W3C trace context is
 // extracted from the incoming request headers so the span joins any upstream
@@ -74,17 +87,14 @@ func HTTPMiddleware(provider *Provider, component string, next http.Handler) htt
 		defer span.End()
 
 		SetStringAttribute(span, "http.method", r.Method)
-		SetStringAttribute(span, "http.target", r.URL.Path)
-		SetStringAttribute(span, "http.host", r.Host)
+		SetStringAttribute(span, "http.target", truncateAttr(r.URL.Path))
+		SetStringAttribute(span, "http.host", truncateAttr(r.Host))
 		if scheme := r.URL.Scheme; scheme != "" {
 			SetStringAttribute(span, "http.scheme", scheme)
 		}
 		if ua := r.UserAgent(); ua != "" {
 			// Client-controlled and unbounded: cap what reaches the exporter.
-			if len(ua) > 256 {
-				ua = strings.ToValidUTF8(ua[:256], "")
-			}
-			SetStringAttribute(span, "http.user_agent", ua)
+			SetStringAttribute(span, "http.user_agent", truncateAttr(ua))
 		}
 
 		rec := &statusCaptureWriter{ResponseWriter: w, status: http.StatusOK}

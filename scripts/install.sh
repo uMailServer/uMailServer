@@ -16,7 +16,7 @@ VERSION="${VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 DATA_DIR="${DATA_DIR:-/var/lib/umailserver}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/umailserver}"
-USER="${USER:-umail}"
+SERVICE_USER="${SERVICE_USER:-umail}"
 
 # Architecture detection
 ARCH=$(uname -m)
@@ -76,18 +76,18 @@ check_dependencies() {
 }
 
 create_user() {
-    if ! id "$USER" &>/dev/null; then
-        log_info "Creating user: $USER"
-        useradd -r -s /bin/false -d "$DATA_DIR" "$USER"
+    if ! id "$SERVICE_USER" &>/dev/null; then
+        log_info "Creating user: $SERVICE_USER"
+        useradd -r -s /bin/false -d "$DATA_DIR" "$SERVICE_USER"
     else
-        log_warn "User $USER already exists"
+        log_warn "User $SERVICE_USER already exists"
     fi
 }
 
 create_directories() {
     log_info "Creating directories..."
     mkdir -p "$DATA_DIR" "$CONFIG_DIR"
-    chown "$USER:$USER" "$DATA_DIR"
+    chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
     chmod 750 "$DATA_DIR"
 }
 
@@ -115,7 +115,7 @@ download_binary() {
 create_systemd_service() {
     log_info "Creating systemd service..."
 
-    cat > /etc/systemd/system/umailserver.service << 'EOF'
+    cat > /etc/systemd/system/umailserver.service << EOF
 [Unit]
 Description=uMailServer - One binary. Complete email.
 Documentation=https://umailserver.com/docs
@@ -123,8 +123,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=umail
-Group=umail
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
 ExecStart=/usr/local/bin/umailserver serve --config /etc/umailserver/umailserver.yaml
 Restart=always
 RestartSec=5

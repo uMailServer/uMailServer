@@ -446,6 +446,10 @@ func loadWithOptions(path string, optional bool) (*Config, []byte, error) {
 			var root yaml.Node
 			if err := yaml.Unmarshal(data, &root); err == nil {
 				findUnknownKeys(&root, reflect.TypeOf(*cfg), "", &cfg.unknownKeys)
+				applyLegacyRateAliases(&root, cfg)
+				for _, k := range findIgnoredKeys(&root) {
+					slog.Warn("config: key is accepted but has no effect and will be removed", "key", k, "file", path)
+				}
 			}
 			for _, k := range cfg.unknownKeys {
 				slog.Warn("config: unknown key ignored", "key", k, "file", path)

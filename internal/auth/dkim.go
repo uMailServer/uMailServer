@@ -325,9 +325,11 @@ func (v *DKIMVerifier) Verify(headers map[string][]string, body []byte, dkimHead
 	canonicalBody := canonicalizeBody(body, sig.BodyCanon)
 	if sig.BodyLength >= 0 {
 		// Apply body length limit
-		if len(canonicalBody) > sig.BodyLength {
-			canonicalBody = canonicalBody[:sig.BodyLength]
+		// F6921: RFC 6376 §3.5/§8.2 — l= beyond the actual body is invalid.
+		if sig.BodyLength > len(canonicalBody) {
+			return DKIMFail, sig, fmt.Errorf("l= (%d) exceeds body length (%d)", sig.BodyLength, len(canonicalBody))
 		}
+		canonicalBody = canonicalBody[:sig.BodyLength]
 	}
 	computedBodyHash := sha256Hash(canonicalBody)
 	if computedBodyHash != sig.BodyHash {
@@ -488,26 +490,16 @@ func parseTagValueList(s string) map[string]string {
 func parseTagValueListDup(s string) (map[string]string, bool) {
 	result := make(map[string]string)
 	dup := false
-	// Split by semicolon, but handle b= value which can contain semicolons
+	// F6922: RFC 6376 §3.2 has no backslash escape; ';' always ends a tag.
 	var current strings.Builder
-	escaped := false
 
-	for i, r := range s {
-		if r == '\\' && i+1 < len(s) {
-			escaped = true
-			continue
-		}
-		if r == ';' && !escaped {
-			// End of tag-value pair
+	for _, r := range s {
+		if r == ';' {
 			if parsePair(current.String(), result) {
 				dup = true
 			}
 			current.Reset()
 		} else {
-			if escaped {
-				current.WriteByte('\\')
-				escaped = false
-			}
 			current.WriteRune(r)
 		}
 	}

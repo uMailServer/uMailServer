@@ -5,8 +5,7 @@
 server:
   hostname: mail.example.com
   data_dir: /var/lib/umailserver
-  graceful_timeout: 30        # [not yet enforced] Seconds to wait for connections to drain on shutdown
-  force_close_after: 60       # [not yet enforced] Seconds after which remaining connections are force-closed
+  graceful_timeout: 30        # Seconds shutdown waits for in-flight background tasks (default 10 when unset)
 
 # TLS Configuration
 tls:
@@ -17,8 +16,6 @@ tls:
     enabled: true
     email: admin@example.com
     provider: letsencrypt     # letsencrypt or letsencrypt-staging
-    challenge: http-01        # http-01 or dns-01 [validated only; http-01 is always used]
-    # dns_provider: cloudflare  # [not yet enforced] Only for dns-01
   client_auth:                # Client certificate (mTLS) authentication
     enabled: false
     require_cert: false
@@ -60,16 +57,15 @@ imap:
   max_connections: 10000      # Max concurrent connections (0 = unlimited)
   idle_timeout: 30m
 
-# HTTP API and Web UI
+# HTTP API and Web UI (plain HTTP: terminate TLS in a reverse proxy; the tls: section covers SMTP/IMAP/POP3/ManageSieve)
 http:
   enabled: true
   bind: "0.0.0.0"
   port: 443
-  http_port: 80               # [not yet enforced] only checked for port conflicts; no plain-HTTP listener is started from it
   cors_origins: []
-  trusted_proxies: []         # IPs allowed to set X-Forwarded-For
+  trusted_proxies: []         # IPs/CIDRs allowed to set X-Forwarded-For (client IP for rate limits and the audit log)
 
-# Admin Panel (currently serves same server as http)
+# Admin Panel (separate plain-HTTP listener; keep it on loopback)
 admin:
   enabled: true
   bind: "127.0.0.1"
@@ -80,13 +76,10 @@ spam:
   enabled: true
   reject_threshold: 9.0       # Score at/above which mail is rejected
   junk_threshold: 3.0         # Score at/above which mail goes to Junk
-  quarantine_threshold: 6.0   # [not yet enforced] validated (must lie between junk_threshold and reject_threshold) but no quarantine action exists
   bayesian:
     enabled: true
-    auto_train: true      # [not yet enforced]
   greylisting:
     enabled: true
-    delay: 5m              # [not yet enforced] greylist delay is built in
   rbl_servers:
     - zen.spamhaus.org
 
@@ -114,9 +107,8 @@ security:
     user_max_recipients: 100  # Recipients per message
     global_per_minute: 10000
     global_per_hour: 100000
-    smtp_per_minute: 30       # [not yet enforced] SMTP auth attempts per minute per IP
-    smtp_per_hour: 500        # [not yet enforced] SMTP connections per hour per IP
-    imap_connections: 50      # [not yet enforced] Max concurrent IMAP connections per IP
+    # smtp_per_minute: 30     # legacy alias of ip_per_minute (used only when ip_per_minute is absent)
+    # smtp_per_hour: 500      # legacy alias of ip_per_hour (used only when ip_per_hour is absent)
     http_requests_per_minute: 120  # API requests per minute per IP
 
 # Antivirus (ClamAV)
@@ -133,7 +125,6 @@ database:
 # Storage
 storage:
   sync: true                  # fsync message files
-  shared_folders: false       # [not yet enforced]
 
 # DMARC aggregate reporting
 dmarc:
@@ -158,7 +149,7 @@ logging:
   max_backups: 10             # Number of old log files to keep
   max_age_days: 30            # Max age of old log files in days
 
-# Metrics (Prometheus-compatible)
+# Metrics (Prometheus text format on /metrics, plus /healthz); unauthenticated, keep on loopback
 metrics:
   enabled: true
   bind: "127.0.0.1"
@@ -217,16 +208,6 @@ alert:
   tls_warning_days: 7             # Days before cert expiry to alert
   queue_threshold: 1000           # Pending queue items that trigger a warning
 
-# Domains
-# [not yet enforced] The whole domains: list is validated but never read at runtime;
-# create domains with the CLI / admin API instead.
-domains:
-  - name: example.com
-    max_accounts: 100
-    max_mailbox_size: 5GB
-    dkim:
-      selector: default
-
 # POP3 Server Configuration
 pop3:
   enabled: false
@@ -234,7 +215,7 @@ pop3:
   port: 995
   max_connections: 10000      # Max concurrent connections (0 = unlimited)
 
-# MCP Server (Model Context Protocol)
+# MCP Server (Model Context Protocol); a non-loopback bind is refused unless auth_token is set
 mcp:
   enabled: true
   bind: "127.0.0.1"

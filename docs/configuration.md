@@ -118,7 +118,6 @@ imap:
 http:
   enabled: true
   port: 443
-  http_port: 80                    # Redirects to HTTPS
   bind: 0.0.0.0
 
   # Static files (webmail, admin panel)
@@ -184,7 +183,7 @@ spam:
   # Greylisting
   greylisting:
     enabled: true
-    delay: 5m                      # Initial delay
+    # Note: the greylist delay is fixed at 5 minutes; a `delay` key is ignored (warned at load)
     max_record_age: 24h            # How long to remember good senders
 
   # Bayesian classifier
@@ -218,32 +217,9 @@ dkim:
 
 ## Domain Configuration
 
-```yaml
-domains:
-  - name: example.com
-    max_accounts: 100
-    max_mailbox_size: 5368709120   # 5GB in bytes
-    max_message_size: 52428800     # 50MB
-    is_active: true
-
-    # DKIM for this domain
-    dkim:
-      selector: default
-      key_file: /var/lib/umailserver/dkim/example.com.private.pem
-
-    # Aliases
-    aliases:
-      - alias: "postmaster"
-        target: "admin"
-      - alias: "abuse"
-        target: "admin"
-      - alias: "@"                   # Catch-all
-        target: "admin"
-
-  - name: another-domain.com
-    max_accounts: 50
-    # ...
-```
+Domains are not configured in the YAML file. A top-level `domains:` list is accepted for
+backward compatibility but ignored (a warning is logged at load); create domains with the
+CLI or the admin API.
 
 ## Storage
 
@@ -286,27 +262,24 @@ queue:
 ## Monitoring
 
 ```yaml
-monitoring:
-  # Prometheus metrics
-  prometheus:
-    enabled: true
-    port: 9090
-    path: /metrics
+# Prometheus metrics: a separate listener serving metrics.path and /healthz
+metrics:
+  enabled: true
+  bind: "127.0.0.1"
+  port: 8080
+  path: /metrics
 
-  # Health check endpoint
-  health:
-    enabled: true
-    port: 8080
-    path: /health
+# Health checks (GET /health, GET /health/ready) are served by the web listener
+# (http.port) and need no configuration.
 
-  # Distributed tracing (OpenTelemetry)
-  tracing:
-    enabled: false
-    service_name: "umailserver"
-    exporter: "noop"              # Options: noop, stdout, otlp
-    otlp_endpoint: ""             # OTLP collector endpoint (e.g., "localhost:4317")
-    environment: "production"     # Environment tag
-    sample_rate: 1.0              # 0.0 to 1.0 (1.0 = trace all)
+# Distributed tracing (OpenTelemetry), a top-level section
+tracing:
+  enabled: false
+  service_name: "umailserver"
+  exporter: "noop"                # Options: noop, stdout, otlp
+  otlp_endpoint: "localhost:4317" # OTLP collector endpoint
+  environment: "production"       # Environment tag
+  sample_rate: 1.0                # 0.0 to 1.0 (1.0 = trace all)
     attributes:                   # Additional resource attributes
       deployment: "primary"
       region: "us-east-1"

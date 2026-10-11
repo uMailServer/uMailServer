@@ -600,20 +600,35 @@ func addReturnPath(data []byte, from string) []byte {
 
 // deliverLocal delivers a message to a local mailbox
 func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFolders ...string) error {
-	return s.deliverLocalHop("", user, domain, from, data, true, targetFolders...)
+	return s.deliverLocalHop("", user, domain, from, data, true, nil, targetFolders...)
 }
 
 // deliverLocalFor is deliverLocal that also knows the recipient address the
 // sender wrote to (an alias or plus address), so an auto-reply can come from
 // that address (F6510).
 func (s *Server) deliverLocalFor(origRcpt, user, domain, from string, data []byte, targetFolders ...string) error {
-	return s.deliverLocalHop(origRcpt, user, domain, from, data, true, targetFolders...)
+	return s.deliverLocalHop(origRcpt, user, domain, from, data, true, nil, targetFolders...)
+}
+
+// copyState carries per-message actions across the several local copies one
+// recipient's Sieve script can ask for, so an account forward and a vacation
+// reply happen once per message rather than once per stored copy (F6881).
+type copyState struct {
+	forwardHandled bool
+	dropLocal      bool // the forward consumed the message (no keep-copy)
+	vacationSent   bool
+}
+
+// deliverLocalCopies is deliverLocalFor for one of several copies of a
+// message sharing st.
+func (s *Server) deliverLocalCopies(origRcpt, user, domain, from string, data []byte, st *copyState, targetFolders ...string) error {
+	return s.deliverLocalHop(origRcpt, user, domain, from, data, true, st, targetFolders...)
 }
 
 // deliverLocalHop is deliverLocal with the catch-all redirect allowed at most
 // once: the catch-all target itself is delivered with allowCatchAll=false, so
 // a target that is missing or inactive fails instead of recursing (F4877).
-func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byte, allowCatchAll bool, targetFolders ...string) error {
+func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byte, allowCatchAll bool, st *copyState, targetFolders ...string) error {
 	user, domain = strings.ToLower(user), strings.TrimRight(strings.ToLower(domain), ".")
 	email := user + "@" + domain
 
@@ -632,7 +647,7 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 			if domainData, derr := s.database.GetDomain(domain); derr == nil && domainData != nil && domainData.CatchAllTarget != "" {
 				tUser, tDomain := normalizeRcpt(domainData.CatchAllTarget)
 				if tUser != "" && tDomain != "" {
-					return s.deliverLocalHop(origRcpt, tUser, tDomain, from, data, false, targetFolders...)
+					return s.deliverLocalHop(origRcpt, tUser, tDomain, from, data, false, st, targetFolders...)
 				}
 			}
 		}
@@ -643,7 +658,11 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 	}
 
 	// Handle mail forwarding (before storing, so we skip local store if not keeping copy)
-	if account.ForwardTo != "" {
+	if st != nil && st.forwardHandled {
+		if st.dropLocal {
+			return nil
+		}
+	} else if account.ForwardTo != "" {
 		// Check for forwarding loop. A looped message is not forwarded
 		// again; it falls through to the local store so it is neither lost
 		// nor left holding the quota reserved above (F4878).
@@ -679,6 +698,10 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 		}
 		// Drop the local copy only when every forward was queued; otherwise
 		// keep it so the message is not lost (F4879).
+		if st != nil {
+			st.forwardHandled = true
+			st.dropLocal = !account.ForwardKeepCopy && forwarded > 0 && !forwardFailed
+		}
 		if !account.ForwardKeepCopy && forwarded > 0 && !forwardFailed {
 			s.logger.Debug("Message forwarded (no local copy)",
 				"to", email,
@@ -702,7 +725,21 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 	// otherwise the second charge is never released (quota drifts above disk).
 	// The check-and-store runs under a per-user lock so concurrent identical
 	// deliveries agree on who pays.
-	unlock := s.lockDeliveryUser(email)
+	//
+	// The lock is held until the metadata is written and is shared with the
+	// account purger (LockDelivery): the account is re-checked under it, so a
+	// delivery that passed the first check just before the row was deleted
+	// cannot write after the purge and resurrect the mailbox (F6880).
+	if deliverAfterAccountCheckHook != nil {
+		deliverAfterAccountCheckHook(email)
+	}
+	var unlockOnce sync.Once
+	unlockFn := s.lockDeliveryUser(email)
+	unlock := func() { unlockOnce.Do(unlockFn) }
+	defer unlock()
+	if acc2, aerr := s.database.GetAccount(domain, user); aerr != nil || acc2 == nil || !acc2.IsActive {
+		return fmt.Errorf("user does not exist or is not active: %s", email)
+	}
 	reserved := int64(len(data))
 	if sum := sha256.Sum256(data); s.msgStore.MessageExists(email, hex.EncodeToString(sum[:])) {
 		reserved = 0
@@ -717,7 +754,6 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 
 	// Store message locally
 	messageID, err := s.msgStore.StoreMessage(email, data)
-	unlock()
 	if err != nil {
 		// Release the quota we reserved since store failed
 		if reserved > 0 {
@@ -793,6 +829,8 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 		}
 	}
 
+	unlock()
+
 	// Trigger webhook for mail received
 	if s.webhookMgr != nil {
 		s.webhookMgr.Trigger(webhook.EventMailReceived, map[string]interface{}{
@@ -835,7 +873,10 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 	metrics.Get().DeliverySuccess()
 
 	// Send vacation auto-reply if configured
-	if account.VacationSettings != "" && s.queue != nil && folder != "Junk" && autoReplyAllowed(from, data) {
+	if account.VacationSettings != "" && s.queue != nil && folder != "Junk" && autoReplyAllowed(from, data) && (st == nil || !st.vacationSent) {
+		if st != nil {
+			st.vacationSent = true
+		}
 		select {
 		case s.bgSem <- struct{}{}:
 			s.bgWG.Add(1) // F6513: Stop waits for these before closing stores
@@ -1036,6 +1077,14 @@ func (s *Server) authenticateClientCert(cert *x509.Certificate) (string, bool) {
 
 	return email, true
 }
+
+// deliverAfterAccountCheckHook is a test seam fired after the first account
+// check and before the delivery lock is taken.
+var deliverAfterAccountCheckHook func(email string)
+
+// LockDelivery blocks local deliveries to the mailbox until the returned
+// function is called; the account purger holds it while deleting data (F6880).
+func (s *Server) LockDelivery(email string) func() { return s.lockDeliveryUser(email) }
 
 // lockDeliveryUser serialises the blob-exists check and store of local
 // deliveries per mailbox and returns the unlock function.

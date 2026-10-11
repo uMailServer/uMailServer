@@ -329,30 +329,44 @@ func (c *LDAPClient) connect() (*ldap.Conn, error) {
 		}
 	}
 
-	var conn *ldap.Conn
-	timeout := c.config.Timeout
-
-	if u.Scheme == "ldaps" {
-		tlsConfig, err := c.buildLDAPTLSConfig(u.Hostname())
+	var tlsConfig *tls.Config
+	if u.Scheme == "ldaps" || c.config.StartTLS {
+		tlsConfig, err = c.buildLDAPTLSConfig(u.Hostname())
 		if err != nil {
 			return nil, err
 		}
-		conn, err = ldap.DialURL(fmt.Sprintf("ldaps://%s", host), ldap.DialWithTLSConfig(tlsConfig))
+	}
+	return dialLDAP(u.Scheme, host, c.config.StartTLS, tlsConfig, c.config.Timeout)
+}
+
+// dialLDAP opens an LDAP connection (ldap:// with optional StartTLS, or
+// ldaps://). Every phase is bounded by timeout: the TCP connect and TLS
+// handshake via the dialer, and the StartTLS exchange via the connection
+// timeout, which used to be set only afterwards. A server that accepted the
+// connection and then stayed silent therefore hung the caller (and its login
+// request) forever, and a failed StartTLS leaked the connection (F6963).
+func dialLDAP(scheme, host string, startTLS bool, tlsConfig *tls.Config, timeout time.Duration) (*ldap.Conn, error) {
+	dialer := &net.Dialer{Timeout: timeout}
+	var conn *ldap.Conn
+	var err error
+	if scheme == "ldaps" {
+		conn, err = ldap.DialURL("ldaps://"+host,
+			ldap.DialWithTLSDialer(tlsConfig, dialer))
 	} else {
-		conn, err = ldap.DialURL(fmt.Sprintf("ldap://%s", host))
-		if err == nil && c.config.StartTLS {
-			tlsConfig, tlsErr := c.buildLDAPTLSConfig(u.Hostname())
-			if tlsErr != nil {
-				return nil, tlsErr
+		conn, err = ldap.DialURL("ldap://"+host, ldap.DialWithDialer(dialer))
+		if err == nil {
+			conn.SetTimeout(timeout)
+			if startTLS {
+				if err = conn.StartTLS(tlsConfig); err != nil {
+					_ = conn.Close()
+					conn = nil
+				}
 			}
-			err = conn.StartTLS(tlsConfig)
 		}
 	}
-
 	if err != nil {
 		return nil, fmt.Errorf("ldap connection failed: %w", err)
 	}
-
 	conn.SetTimeout(timeout)
 	return conn, nil
 }
@@ -361,6 +375,14 @@ func (c *LDAPClient) connect() (*ldap.Conn, error) {
 func (c *LDAPClient) Authenticate(username, password string) (*LDAPUser, error) {
 	if !c.config.Enabled {
 		return nil, fmt.Errorf("ldap authentication is disabled")
+	}
+
+	// An empty password is an RFC 4513 "unauthenticated bind": many servers
+	// answer it with success, which would authenticate any existing user.
+	// Refuse it (and an empty name, which matches nothing useful) before any
+	// network traffic, independently of the client library's own guard (F6964).
+	if username == "" || password == "" {
+		return nil, fmt.Errorf("invalid credentials")
 	}
 
 	// Check rate limit (5 failures per 15 minutes per username)
