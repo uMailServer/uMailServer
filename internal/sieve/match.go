@@ -213,6 +213,21 @@ func (i *Interpreter) matchOne(ms matchSpec, cmp, nv, nk, rawV, rawK string, fol
 	return false, fmt.Errorf("unsupported match type %q", ms.Type)
 }
 
+// decodedHeaderValues is headerValues with RFC 2047 encoded-words decoded, as
+// RFC 5228 §2.7.2 requires for header tests (F6544).
+func (i *Interpreter) decodedHeaderValues(names []string) []string {
+	raw := i.headerValues(names)
+	dec := new(mime.WordDecoder)
+	for idx, v := range raw {
+		if strings.Contains(v, "=?") {
+			if d, err := dec.DecodeHeader(v); err == nil {
+				raw[idx] = d
+			}
+		}
+	}
+	return raw
+}
+
 func (i *Interpreter) headerValues(names []string) []string {
 	var out []string
 	for key, vals := range i.ctx.Headers {

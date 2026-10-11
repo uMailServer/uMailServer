@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -53,6 +54,10 @@ type ManageSieveServer struct {
 	// server-kind span when set.
 	tracingProvider *tracing.Provider
 
+	// Concurrent connection cap (F6546); zero means defaultMaxConnections.
+	maxConns  int
+	activeCnt atomic.Int64
+
 	// Brute-force protection (F5852): failed AUTHENTICATE attempts per
 	// client IP; zero maxAuthFailures disables the lockout.
 	authMu          sync.Mutex
@@ -78,6 +83,28 @@ func (s *ManageSieveServer) SetAuthLimits(maxAttempts int, lockout time.Duration
 	defer s.authMu.Unlock()
 	s.maxAuthFailures = maxAttempts
 	s.lockoutDuration = lockout
+}
+
+// defaultMaxConnections bounds concurrent ManageSieve connections (F6546).
+const defaultMaxConnections = 1024
+
+// SetMaxConnections sets the concurrent connection cap. Call before Listen.
+func (s *ManageSieveServer) SetMaxConnections(n int) { s.maxConns = n }
+
+// admit reserves a connection slot, or refuses the connection with NO.
+func (s *ManageSieveServer) admit(conn net.Conn) bool {
+	limit := int64(s.maxConns)
+	if limit <= 0 {
+		limit = defaultMaxConnections
+	}
+	if s.activeCnt.Add(1) > limit {
+		s.activeCnt.Add(-1)
+		_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Write([]byte("NO \"Too many connections\"\r\n"))
+		_ = conn.Close()
+		return false
+	}
+	return true
 }
 
 func (s *ManageSieveServer) authLocked(ip string) bool {
@@ -288,6 +315,9 @@ func (s *ManageSieveServer) serve(ln net.Listener) {
 				continue
 			}
 		}
+		if !s.admit(conn) {
+			continue
+		}
 		s.wg.Add(1)
 		go s.handleConn(conn)
 	}
@@ -306,6 +336,9 @@ func (s *ManageSieveServer) serveTLS(ln net.Listener) {
 				continue
 			}
 		}
+		if !s.admit(conn) {
+			continue
+		}
 		s.wg.Add(1)
 		go s.handleConn(conn)
 	}
@@ -314,6 +347,7 @@ func (s *ManageSieveServer) serveTLS(ln net.Listener) {
 // handleConn handles a ManageSieve connection
 func (s *ManageSieveServer) handleConn(conn net.Conn) {
 	defer s.wg.Done()
+	defer s.activeCnt.Add(-1)
 
 	// Create session state for this connection
 	_, isTLS := conn.(*tls.Conn)

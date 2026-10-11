@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"sort"
 	"sync"
 	"time"
 
@@ -266,6 +267,7 @@ func (m *Manager) ListScripts(userID string) []string {
 			result = append(result, name)
 		}
 	}
+	sort.Strings(result) // F6545: deterministic LISTSCRIPTS
 	return result
 }
 

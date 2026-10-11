@@ -639,7 +639,7 @@ func (i *Interpreter) evaluateHeaderTest(t *HeaderTest) (bool, error) {
 	if ms.Type == "" {
 		ms.Type = "is"
 	}
-	return i.matchValues(ms, i.headerValues(t.Headers), t.KeyList)
+	return i.matchValues(ms, i.decodedHeaderValues(t.Headers), t.KeyList)
 }
 
 func (i *Interpreter) evaluateStringTest(t *StringTest) (bool, error) {

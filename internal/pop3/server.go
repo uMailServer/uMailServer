@@ -65,6 +65,10 @@ type Server struct {
 	// Session.handleAuthorizationCommand).
 	onLoginResult atomic.Pointer[func(username string, success bool, ip, reason string)]
 
+	// maildrops holds the per-user exclusive maildrop lock (RFC 1939 §8, F6540).
+	maildropMu sync.Mutex
+	maildrops  map[string]*Session
+
 	// tracingProvider wraps command dispatch and authentication when set.
 	tracingProvider *tracing.Provider
 }
@@ -120,6 +124,8 @@ type Session struct {
 	messages          []*Message
 	deletedUIDs       map[string]bool // UIDs marked DELE this session (RFC 1939 §3)
 	isTLS             bool
+	lockedUser        string // maildrop lock key held by this session (F6540)
+	failedPass        int    // failed PASS attempts on this connection (F6543)
 	greetingTimestamp string // Timestamp from greeting banner
 
 	// activeSpan is set by handleCommand for the duration of one command so
@@ -479,8 +485,43 @@ func (s *Session) Close() {
 	}
 }
 
+// maxFailedPassPerConn bounds failed PASS attempts on one connection (F6543).
+const maxFailedPassPerConn = 5
+
+// acquireMaildrop takes the exclusive maildrop lock for user (RFC 1939 §8).
+func (s *Server) acquireMaildrop(user string, sess *Session) bool {
+	key := strings.ToLower(strings.TrimSpace(user))
+	s.maildropMu.Lock()
+	defer s.maildropMu.Unlock()
+	if s.maildrops == nil {
+		s.maildrops = make(map[string]*Session)
+	}
+	if _, held := s.maildrops[key]; held {
+		return false
+	}
+	s.maildrops[key] = sess
+	sess.lockedUser = key
+	return true
+}
+
+// releaseMaildrop frees the lock held by this session, if any. It never
+// deletes anything: a dropped connection only leaves UPDATE unperformed.
+func (s *Session) releaseMaildrop() {
+	if s.lockedUser == "" {
+		return
+	}
+	srv := s.server
+	srv.maildropMu.Lock()
+	if srv.maildrops[s.lockedUser] == s {
+		delete(srv.maildrops, s.lockedUser)
+	}
+	srv.maildropMu.Unlock()
+	s.lockedUser = ""
+}
+
 // Handle processes commands from the client
 func (s *Session) Handle() {
+	defer s.releaseMaildrop()
 	for {
 		line, err := s.readLine()
 		if err != nil {
@@ -758,22 +799,38 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		if !authenticated {
 			s.server.recordAuthFailure(host)
 			s.server.recordUserFailure(s.user)
-			s.WriteResponse("-ERR Authentication failed")
+			s.failedPass++
+			if s.failedPass >= maxFailedPassPerConn {
+				s.WriteResponse("-ERR Too many authentication failures")
+			} else {
+				s.WriteResponse("-ERR Authentication failed")
+			}
 			if cb := s.server.onLoginResult.Load(); cb != nil {
 				(*cb)(s.user, false, host, "invalid_credentials")
 			}
 			tracing.SetBoolAttribute(span, "auth.success", false)
 			tracing.SetStatus(span, tracing.StatusError, "authentication failed")
 			s.user = ""
+			if s.failedPass >= maxFailedPassPerConn {
+				return fmt.Errorf("auth failures")
+			}
 			return nil
 		}
 
 		s.server.clearAuthFailures(host)
 		s.server.clearUserFailures(s.user)
 
+		// F6540: RFC 1939 §8 exclusive-access lock on the maildrop.
+		if !s.server.acquireMaildrop(s.user, s) {
+			s.WriteResponse("-ERR [IN-USE] Maildrop is locked by another session")
+			s.user = ""
+			return nil
+		}
+
 		// Load messages
 		messages, err := s.server.mailstore.ListMessages(s.user)
 		if err != nil {
+			s.releaseMaildrop()
 			s.WriteResponse("-ERR Unable to load messages")
 			return nil
 		}
@@ -1063,6 +1120,9 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 	// snapshot's indexes go stale as the maildrop changes.
 	current, err := s.server.mailstore.ListMessages(s.user)
 	if err != nil {
+		// The maildrop lock is dropped before the reply so a client that
+		// reconnects as soon as it reads it is not told IN-USE.
+		s.releaseMaildrop()
 		// QUIT always ends the session (RFC 1939 §6); marked messages stay in
 		// the maildrop. Returning nil kept the session alive in UPDATE state,
 		// so the next command of any kind silently committed the deletions
@@ -1083,6 +1143,7 @@ func (s *Session) handleUpdateCommand(command string, args []string) error {
 		}
 	}
 
+	s.releaseMaildrop()
 	if failed {
 		s.WriteResponse("-ERR Unable to delete some messages")
 	} else {
@@ -1117,11 +1178,14 @@ func (s *Session) sendTop(data []byte, lines int) {
 	// blank line; the body starts after whichever separator was found, so its
 	// byte length must be tracked (a bare "\n\n" is 2 bytes, not 4).
 	content := string(data)
-	headerEnd := strings.Index(content, "\r\n\r\n")
-	sepLen := 4
-	if headerEnd == -1 {
-		headerEnd = strings.Index(content, "\n\n")
-		sepLen = 2
+	// F6541: the header block ends at the EARLIEST blank line; preferring
+	// CRLFCRLF over an earlier bare-LF blank line leaked body text into TOP 0.
+	headerEnd, sepLen := -1, 0
+	if i := strings.Index(content, "\r\n\r\n"); i >= 0 {
+		headerEnd, sepLen = i, 4
+	}
+	if i := strings.Index(content, "\n\n"); i >= 0 && (headerEnd == -1 || i < headerEnd) {
+		headerEnd, sepLen = i, 2
 	}
 
 	if headerEnd == -1 {
