@@ -184,12 +184,18 @@ func (s *Server) SweepUploads(now time.Time) int {
 			return nil
 		})
 		if still {
+			// F6362: DeleteMessage refuses a blob that a pending upload still
+			// references, so un-track first, then release under the shared
+			// guard (a blob an Email owns is kept by the reference check).
+			gmu := s.userGuard(e.user)
+			gmu.Lock()
+			s.untrackUpload(e.user, e.id)
 			if len(s.findEmailCopies(e.user, e.id)) == 0 {
 				if s.msgStore.DeleteMessage(e.user, e.id) == nil {
 					removed++
 				}
 			}
-			s.untrackUpload(e.user, e.id)
+			gmu.Unlock()
 		}
 		mu.Unlock()
 	}
@@ -241,4 +247,16 @@ func (s *Server) Stop() {
 		close(stop)
 		<-done
 	}
+}
+
+// noStoreGuard serializes the (test-only) wiring that has no MessageStore.
+var noStoreGuard sync.Mutex
+
+// userGuard returns the MessageStore's shared per-user reference guard
+// (F6362), or a process-wide fallback when no store is wired.
+func (s *Server) userGuard(user string) *sync.Mutex {
+	if s.msgStore == nil {
+		return &noStoreGuard
+	}
+	return s.msgStore.UserGuard(user)
 }

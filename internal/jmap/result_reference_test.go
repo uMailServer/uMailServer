@@ -146,9 +146,11 @@ func TestResultReference_Edges(t *testing.T) {
 			}
 		}
 	}
-	// "/list/0" resolves to an object, not an id array: the handler sees no ids.
-	fmt.Printf("EDGE call g (non-array value): EXPECTED Email/get with empty list | ACTUAL %s list=%d\n", res[6].Name, resultRefListLen(res[6]))
-	if res[6].Name != "Email/get" || resultRefListLen(res[6]) != 0 {
+	// "/list/0" resolves to an object, not an id array: the resolved
+	// argument has the wrong type, so the method fails invalidArguments
+	// (F6471) instead of silently treating ids as absent.
+	fmt.Printf("EDGE call g (non-array value): EXPECTED error invalidArguments | ACTUAL %s %v\n", res[6].Name, res[6].Args["type"])
+	if res[6].Name != "error" || res[6].Args["type"] != "invalidArguments" {
 		t.Errorf("edge g failed")
 	}
 }

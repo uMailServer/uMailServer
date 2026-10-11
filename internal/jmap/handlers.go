@@ -577,6 +577,9 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 		return resp
 	}
 
+	if qerr := validateQueryArgTypes(args); qerr != nil {
+		return qerr.response(call.ID)
+	}
 	filter := args["filter"]
 	sort, _ := args["sort"].([]interface{})
 	position, _ := args["position"].(float64)
@@ -589,7 +592,10 @@ func (s *Server) handleEmailQuery(user string, call MethodCall) Response {
 	}
 	limit = float64(clampQueryLimit(limit))
 
-	fullIDs := s.runEmailQuery(user, filter, sort)
+	fullIDs, qerr := s.runEmailQuery(user, filter, args["sort"])
+	if qerr != nil {
+		return qerr.response(call.ID)
+	}
 
 	// Snapshot the full ordered result for Email/queryChanges deltas
 	// (RFC 8620 §5.6), keyed by the filter/sort pair and stamped with the
@@ -686,85 +692,66 @@ func resolveQueryPosition(position float64, total int) int {
 // runEmailQuery computes the full ordered result of an Email/query for a
 // filter/sort pair, independent of paging — shared by Email/query and the
 // Email/queryChanges delta computation.
-func (s *Server) runEmailQuery(user string, filter interface{}, sort interface{}) []string {
-	// Parse filter
-	filterCondition := parseFilter(filter)
-	sortList, _ := sort.([]interface{})
+func (s *Server) runEmailQuery(user string, filter interface{}, sortArg interface{}) ([]string, *queryError) {
+	if qerr := validateEmailFilter(filter, 0); qerr != nil {
+		return nil, qerr
+	}
+	comps, qerr := parseEmailComparators(sortArg)
+	if qerr != nil {
+		return nil, qerr
+	}
 
-	// Get all messages from mailboxes
+	// Group every copy of an Email (one per mailbox) so the filter tree —
+	// including NOT/OR over mailbox conditions — sees its full mailbox set.
 	var allMessages []struct {
 		id      string
 		mailbox string
 		uid     uint32
 		meta    *storage.MessageMetadata
 	}
+	boxesOf := make(map[string]map[string]bool)
 
 	mailboxes, _ := s.db.ListMailboxes(user)
-	targetMbox := ""
-	seenIDs := make(map[string]bool)
-
-	// If filter specifies a mailbox, only query that one
-	if filterCondition != nil && filterCondition.InMailbox != "" {
-		targetMbox = getMailboxNameFromID(filterCondition.InMailbox)
-	}
-
 	for _, mbox := range mailboxes {
-		// Skip if filtering to a specific mailbox and this isn't it
-		if targetMbox != "" && mbox != targetMbox {
-			continue
-		}
-		// F6183: inMailboxOtherThan — a message matches if it is in at
-		// least one mailbox outside the list, so skip the excluded ones.
-		if filterCondition != nil && mailboxExcluded(mbox, filterCondition.InMailboxOtherThan) {
-			continue
-		}
-
 		uids, _ := s.db.GetMessageUIDs(user, mbox)
 		for _, uid := range uids {
 			meta, err := s.db.GetMessageMetadata(user, mbox, uid)
 			if err != nil || meta == nil {
 				continue
 			}
-
-			// Apply filters
-			if !matchesFilter(meta, filterCondition) {
+			if boxes, seen := boxesOf[meta.MessageID]; seen {
+				boxes[mbox] = true
 				continue
 			}
-			if seenIDs[meta.MessageID] {
-				continue
-			}
-			seenIDs[meta.MessageID] = true
-
+			boxesOf[meta.MessageID] = map[string]bool{mbox: true}
 			allMessages = append(allMessages, struct {
 				id      string
 				mailbox string
 				uid     uint32
 				meta    *storage.MessageMetadata
-			}{
-				id:      meta.MessageID,
-				mailbox: mbox,
-				uid:     uid,
-				meta:    meta,
-			})
+			}{id: meta.MessageID, mailbox: mbox, uid: uid, meta: meta})
 		}
 	}
 
-	// Apply sorting
-	if len(sortList) > 0 {
-		// Parse first sort comparator
-		data, _ := json.Marshal(sortList[0])
-		var comp Comparator
-		_ = json.Unmarshal(data, &comp)
+	if filter != nil {
+		kept := allMessages[:0]
+		for _, m := range allMessages {
+			if evalEmailFilter(filter, m.meta, boxesOf[m.id]) {
+				kept = append(kept, m)
+			}
+		}
+		allMessages = kept
+	}
 
-		// Sort messages
-		sortMessages(allMessages, comp)
+	if len(comps) > 0 {
+		sortMessagesBy(allMessages, comps)
 	}
 
 	fullIDs := make([]string, len(allMessages))
 	for i := range allMessages {
 		fullIDs[i] = allMessages[i].id
 	}
-	return fullIDs
+	return fullIDs, nil
 }
 
 // querySnapshotHash derives the snapshot storage key for a query method and
@@ -900,47 +887,54 @@ func sortMessages(messages []struct {
 	if comp.Property == "" {
 		comp.Property = "receivedAt"
 	}
+	sortMessagesBy(messages, []Comparator{comp})
+}
 
-	// Honor the comparator's isAscending exactly as the client requested.
-	// The Go zero value (false) is already descending, so a date sort with an
-	// omitted isAscending naturally defaults to descending without inverting an
-	// explicit ascending request. RFC 8620 §2.7.1 requires the sort order in
-	// the request to be honored.
-	ascending := comp.IsAscending
+// compareByProperty is the three-way comparison for one comparator property,
+// before direction is applied.
+func compareByProperty(a, b *storage.MessageMetadata, property string) int {
+	switch property {
+	case "sentAt":
+		return strings.Compare(a.Date, b.Date)
+	case "from":
+		return strings.Compare(strings.ToLower(a.From), strings.ToLower(b.From))
+	case "to":
+		return strings.Compare(strings.ToLower(a.To), strings.ToLower(b.To))
+	case "subject":
+		return strings.Compare(strings.ToLower(a.Subject), strings.ToLower(b.Subject))
+	case "size":
+		switch {
+		case a.Size < b.Size:
+			return -1
+		case a.Size > b.Size:
+			return 1
+		}
+		return 0
+	}
+	return a.InternalDate.Compare(b.InternalDate) // receivedAt
+}
 
-	// F6180: derive a three-way comparison so descending order is a strict
-	// weak ordering. The old `return !less` reported both a<b and b<a for
-	// equal keys, making tie order (and thus paging) arbitrary. Ties fall
-	// back to the email id, ascending, for a deterministic result.
+// sortMessagesBy orders messages by the comparators in priority order
+// (RFC 8620 §5.5: later comparators break ties of earlier ones). Remaining
+// ties fall back to the email id so paging is deterministic (F6180).
+func sortMessagesBy(messages []struct {
+	id      string
+	mailbox string
+	uid     uint32
+	meta    *storage.MessageMetadata
+}, comps []Comparator) {
 	sort.SliceStable(messages, func(i, j int) bool {
 		a, b := messages[i].meta, messages[j].meta
-		var c int
-		switch comp.Property {
-		case "sentAt":
-			c = strings.Compare(a.Date, b.Date)
-		case "from":
-			c = strings.Compare(strings.ToLower(a.From), strings.ToLower(b.From))
-		case "to":
-			c = strings.Compare(strings.ToLower(a.To), strings.ToLower(b.To))
-		case "subject":
-			c = strings.Compare(strings.ToLower(a.Subject), strings.ToLower(b.Subject))
-		case "size":
-			switch {
-			case a.Size < b.Size:
-				c = -1
-			case a.Size > b.Size:
-				c = 1
+		for _, comp := range comps {
+			c := compareByProperty(a, b, comp.Property)
+			if !comp.IsAscending {
+				c = -c
 			}
-		default: // receivedAt and unknown properties
-			c = a.InternalDate.Compare(b.InternalDate)
+			if c != 0 {
+				return c < 0
+			}
 		}
-		if !ascending {
-			c = -c
-		}
-		if c == 0 {
-			return messages[i].id < messages[j].id
-		}
-		return c < 0
+		return messages[i].id < messages[j].id
 	})
 }
 
@@ -1044,7 +1038,19 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 	// (RFC 8621 §4), so the patch is applied to all copies: keywords reach
 	// every copy and mailboxIds (full or "mailboxIds/<id>" path form)
 	// describe the complete set of mailboxes the Email ends up in.
+	willDestroy := make(map[string]bool, len(destroy))
+	for _, d := range destroy {
+		if id, ok := d.(string); ok {
+			willDestroy[id] = true
+		}
+	}
 	for emailID, val := range update {
+		// RFC 8620 §5.3: an id both updated and destroyed keeps only the
+		// destroy; the update is reported as willDestroy (F6472).
+		if willDestroy[emailID] {
+			notUpdated[emailID] = map[string]interface{}{"type": "willDestroy"}
+			continue
+		}
 		updateData, ok := val.(map[string]interface{})
 		if !ok {
 			notUpdated[emailID] = map[string]interface{}{
@@ -1165,6 +1171,8 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			// in (RFC 8621 §4). Deleting only the first copy while also
 			// deleting the shared blob left a still-listed Email whose
 			// content was gone.
+			gmu := s.userGuard(user)
+			gmu.Lock()
 			copies := s.findEmailCopies(user, emailID)
 			for _, c := range copies {
 				// Best-effort, as before: a metadata delete failure must not
@@ -1174,14 +1182,19 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			if len(copies) > 0 {
 				// Best-effort blob removal once every metadata copy is gone; a
 				// leftover blob is unreachable, not a correctness issue.
-				_ = s.msgStore.DeleteMessage(user, emailID)
-				_ = s.adjustQuota(user, -copies[0].meta.Size) // F5742
+				// F6362: the reference-aware DeleteMessage keeps a blob that a
+				// pending upload still references; quota is released only
+				// when the file actually went away.
+				if s.msgStore.DeleteMessage(user, emailID) == nil {
+					_ = s.adjustQuota(user, -copies[0].meta.Size) // F5742
+				}
 				destroyed = append(destroyed, emailID)
 			} else {
 				notDestroyed[emailID] = map[string]interface{}{
 					"type": "notFound",
 				}
 			}
+			gmu.Unlock()
 		}
 	}
 
@@ -1244,12 +1257,17 @@ func validateEmailPatch(update map[string]interface{}) (string, []string) {
 				badProps = append(badProps, k)
 				continue
 			}
-			if base == "keywords" {
-				for _, v := range m {
-					if b, ok := v.(bool); !ok || !b {
-						badProps = append(badProps, k)
-						break
-					}
+			for name, v := range m {
+				if b, ok := v.(bool); !ok || !b {
+					badProps = append(badProps, k)
+					break
+				}
+				// An Email's keywords/mailboxIds map holds only true
+				// entries (RFC 8621 §4.1.1); a keyword the server cannot
+				// persist is rejected rather than reported as updated.
+				if base == "keywords" && !keywordModeled(name) {
+					badProps = append(badProps, k)
+					break
 				}
 			}
 			continue
@@ -1258,6 +1276,9 @@ func validateEmailPatch(update map[string]interface{}) (string, []string) {
 			return "invalidPatch", nil
 		}
 		hasPath[base] = true
+		if base == "keywords" && update[k] == true && !keywordModeled(rest) {
+			badProps = append(badProps, k)
+		}
 	}
 	if len(badProps) > 0 {
 		return "invalidProperties", badProps
@@ -2344,7 +2365,10 @@ func (s *Server) handleEmailQueryChanges(user string, call MethodCall) Response 
 		}
 	}
 
-	newIDs := s.runEmailQuery(user, args["filter"], sortList)
+	newIDs, qerr := s.runEmailQuery(user, args["filter"], args["sort"])
+	if qerr != nil {
+		return qerr.response(call.ID)
+	}
 	newSet := make(map[string]bool, len(newIDs))
 	for _, id := range newIDs {
 		newSet[id] = true
