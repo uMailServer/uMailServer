@@ -419,9 +419,53 @@ func (l *Logger) LogTOTPDisable(user, target, ip string) {
 	})
 }
 
-// ExtractIP extracts the IP address from a request
+var (
+	trustedMu      sync.RWMutex
+	trustedProxies []string
+)
+
+// SetTrustedProxies configures the proxy addresses (exact IPs or CIDRs, the
+// same list as the API's trusted_proxies) whose X-Forwarded-For / X-Real-IP
+// headers ExtractIP honours. With none configured the headers are ignored (F6801).
+func SetTrustedProxies(list []string) {
+	trustedMu.Lock()
+	trustedProxies = append([]string(nil), list...)
+	trustedMu.Unlock()
+}
+
+func isTrustedProxy(ip string) bool {
+	parsed := net.ParseIP(ip)
+	trustedMu.RLock()
+	defer trustedMu.RUnlock()
+	for _, t := range trustedProxies {
+		t = strings.TrimSpace(t)
+		if t == ip {
+			return true
+		}
+		if parsed == nil {
+			continue
+		}
+		if _, n, err := net.ParseCIDR(t); err == nil && n.Contains(parsed) {
+			return true
+		}
+		if tp := net.ParseIP(t); tp != nil && tp.Equal(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// ExtractIP returns the client IP for an audit record. Forwarding headers are
+// client-controlled, so they count only when the direct peer is a configured
+// trusted proxy; otherwise RemoteAddr is used.
 func ExtractIP(r *http.Request) string {
-	// Check X-Forwarded-For first (for reverse proxy setups)
+	peer, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		peer = r.RemoteAddr
+	}
+	if !isTrustedProxy(peer) {
+		return peer
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if idx := strings.Index(xff, ","); idx != -1 {
 			xff = xff[:idx]
@@ -431,20 +475,10 @@ func ExtractIP(r *http.Request) string {
 			return xff
 		}
 	}
-
-	// Check X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		if net.ParseIP(xri) != nil {
-			return xri
-		}
+	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" && net.ParseIP(xri) != nil {
+		return xri
 	}
-
-	// Fall back to RemoteAddr
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
-	return ip
+	return peer
 }
 
 // Close closes the audit logger

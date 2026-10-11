@@ -1,6 +1,7 @@
 package server
 
 import (
+	"path/filepath"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/alert"
@@ -60,6 +61,10 @@ func buildAlertConfig(c config.AlertConfig) alert.Config {
 func (s *Server) startAlertChecker() {
 	if s.alertMgr == nil || !s.alertMgr.IsEnabled() {
 		return
+	}
+	// Persist alert cooldowns so a restart does not re-alert (F6871).
+	if err := s.alertMgr.SetStateFile(filepath.Join(s.config.Server.DataDir, "alert_state.json")); err != nil {
+		s.logger.Warn("Failed to load alert state", "error", err)
 	}
 	s.wg.Add(1)
 	go func() {

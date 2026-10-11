@@ -254,10 +254,22 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 	// F6649c: the cascade removed the accounts; remove their mailbox data too.
+	// F6811: a failed purge is not success: the domain is gone so it cannot be
+	// retried by domain, but DELETE /accounts/{email} re-runs the purge for
+	// each leftover address, which the error names.
+	var failed []string
 	for _, a := range accts {
-		if err := s.purgeAccountData(a.LocalPart + "@" + name); err != nil && s.logger != nil {
-			s.logger.Error("account data purge failed", "account", a.LocalPart+"@"+name, "error", err)
+		addr := a.LocalPart + "@" + name
+		if err := s.purgeAccountData(addr); err != nil {
+			failed = append(failed, addr)
+			if s.logger != nil {
+				s.logger.Error("account data purge failed", "account", addr, "error", err)
+			}
 		}
+	}
+	if len(failed) > 0 {
+		s.sendError(w, http.StatusInternalServerError, "domain removed but mailbox data purge failed for: "+strings.Join(failed, ", ")+"; retry DELETE on each account")
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)

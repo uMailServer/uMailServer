@@ -108,6 +108,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Addresses are case-insensitive and the account is stored lowercase, so
+	// the storage namespace must be too; otherwise "Alice@x" and "alice@x"
+	// would keep separate calendars/contacts that account deletion misses
+	// (F6810).
+	username = canonicalUser(username)
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	}
@@ -2143,4 +2148,13 @@ func eventContentType(data string) string {
 		return "text/calendar; component=vjournal"
 	}
 	return "text/calendar; component=vevent"
+}
+
+// canonicalUser maps a login to the lowercase address used as storage key.
+func canonicalUser(u string) string {
+	u = strings.ToLower(strings.TrimSpace(u))
+	if i := strings.LastIndex(u, "@"); i >= 0 {
+		u = u[:i+1] + strings.TrimRight(u[i+1:], ".")
+	}
+	return u
 }

@@ -100,6 +100,16 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		s.authGuard.success(username, ip)
 	}
 
+	// Addresses are case-insensitive and the account is stored lowercase, so
+	// the storage namespace must be too; otherwise "Alice@x" and "alice@x"
+	// would keep separate calendars/contacts that account deletion misses
+	// (F6810).
+	username = canonicalUser(username)
+	if username == "" || strings.ContainsAny(username, "/\\\x00") || strings.Contains(username, "..") {
+		s.sendError(w, http.StatusForbidden, "invalid username")
+		return
+	}
+
 	if r.Body != nil {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	}
@@ -1230,4 +1240,13 @@ type Addressbook struct {
 	ReadOnly    bool      `json:"read_only,omitempty"`
 	Created     time.Time `json:"created"`
 	Modified    time.Time `json:"modified"`
+}
+
+// canonicalUser maps a login to the lowercase address used as storage key.
+func canonicalUser(u string) string {
+	u = strings.ToLower(strings.TrimSpace(u))
+	if i := strings.LastIndex(u, "@"); i >= 0 {
+		u = u[:i+1] + strings.TrimRight(u[i+1:], ".")
+	}
+	return u
 }
