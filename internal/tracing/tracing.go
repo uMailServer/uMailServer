@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -41,7 +42,11 @@ type Provider struct {
 	stopFunc       func(context.Context) error
 	stopOnce       sync.Once
 	stopErr        error
+
+	shutdownTimeout time.Duration // bound for Stop when ctx has no deadline; 0 = default
 }
+
+const defaultShutdownTimeout = 10 * time.Second
 
 // NewProvider creates a new tracing provider with OpenTelemetry
 func NewProvider(config Config) (*Provider, error) {
@@ -180,7 +185,20 @@ func (p *Provider) Stop(ctx context.Context) error {
 	}
 	// Idempotent (F6298): a second Stop re-ran the SDK shutdown and returned
 	// its "already shutdown" error.
-	p.stopOnce.Do(func() { p.stopErr = p.stopFunc(ctx) })
+	p.stopOnce.Do(func() {
+		// A stuck collector must not hang shutdown forever when the caller
+		// passed a deadline-less context (F6574).
+		if _, ok := ctx.Deadline(); !ok {
+			d := p.shutdownTimeout
+			if d <= 0 {
+				d = defaultShutdownTimeout
+			}
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, d)
+			defer cancel()
+		}
+		p.stopErr = p.stopFunc(ctx)
+	})
 	return p.stopErr
 }
 

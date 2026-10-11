@@ -52,11 +52,12 @@ type CircuitBreaker struct {
 	state  State
 	mutex  sync.RWMutex
 
-	failures    int
-	successes   int
-	lastFailure time.Time
-	halfOpenReq int    // Count of requests in half-open state
-	halfOpenGen uint64 // Id of the current half-open round; bumped on each open->half-open transition
+	failures      int
+	successes     int
+	lastFailure   time.Time
+	halfOpenReq   int       // Count of requests in half-open state
+	halfOpenSince time.Time // start of the current half-open round
+	halfOpenGen   uint64    // Id of the current half-open round; bumped on each open->half-open transition
 }
 
 // New creates a new circuit breaker
@@ -91,20 +92,7 @@ func (cb *CircuitBreaker) Allow() bool {
 	case StateOpen:
 		// Check if we should transition to half-open
 		if time.Since(cb.lastFailure) > cb.config.Timeout {
-			cb.state = StateHalfOpen
-			cb.failures = 0
-			cb.successes = 0
-			// Start a new half-open round. Bumping the id here is what lets a
-			// completion tell whether it belongs to this round or to a probe
-			// still in flight from the previous one, so a straggler cannot
-			// release a slot that belongs to the new round.
-			cb.halfOpenGen++
-			cb.halfOpenReq = 0
-			// Count the probe this transition admits. Without the increment the
-			// counter still reads 0, so the next Allow() admits a further probe
-			// and the round runs SuccessThreshold+1 concurrent probes rather
-			// than the documented cap.
-			cb.halfOpenReq++
+			cb.startHalfOpenRoundLocked()
 			return true
 		}
 		return false
@@ -115,11 +103,34 @@ func (cb *CircuitBreaker) Allow() bool {
 			cb.halfOpenReq++
 			return true
 		}
+		// Allow/Record* callers never release slots, so a mixed round that
+		// crosses neither threshold would hold them forever. Once a round has
+		// outlived Timeout, start a fresh one instead of wedging (F6572).
+		if time.Since(cb.halfOpenSince) > cb.config.Timeout {
+			cb.startHalfOpenRoundLocked()
+			return true
+		}
 		return false
 
 	default:
 		return false
 	}
+}
+
+// startHalfOpenRoundLocked begins a new half-open round and counts the probe
+// it admits. The caller holds the mutex.
+func (cb *CircuitBreaker) startHalfOpenRoundLocked() {
+	cb.state = StateHalfOpen
+	cb.failures = 0
+	cb.successes = 0
+	// Bumping the id lets a completion tell whether it belongs to this round
+	// or to a probe still in flight from the previous one, so a straggler
+	// cannot release a slot that belongs to the new round.
+	cb.halfOpenGen++
+	// Count the probe this transition admits, so the round runs at most
+	// SuccessThreshold concurrent probes.
+	cb.halfOpenReq = 1
+	cb.halfOpenSince = time.Now()
 }
 
 // RecordSuccess records a successful operation.
