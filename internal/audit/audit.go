@@ -272,6 +272,8 @@ func (l *Logger) Log(event Event) error {
 		event.Timestamp = time.Now().UTC().Format(time.RFC3339)
 	}
 
+	event.Details = redactDetails(event.Details)
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("audit: failed to marshal event: %w", err)
@@ -440,4 +442,24 @@ func (l *Logger) Close() error {
 		return l.writer.Close()
 	}
 	return nil
+}
+
+// redactDetails returns details with the values of secret-looking keys
+// replaced, so credentials passed by a caller never reach the log (F6419).
+func redactDetails(details map[string]string) map[string]string {
+	if len(details) == 0 {
+		return details
+	}
+	out := make(map[string]string, len(details))
+	for k, v := range details {
+		lk := strings.ToLower(k)
+		for _, w := range []string{"password", "passwd", "secret", "token", "authorization", "cookie", "apikey", "api_key", "totp", "otp", "credential"} {
+			if strings.Contains(lk, w) {
+				v = "[REDACTED]"
+				break
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
