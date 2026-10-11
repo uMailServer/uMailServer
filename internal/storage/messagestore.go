@@ -58,6 +58,27 @@ type MessageStore struct {
 	// quotaLocks serializes the usage-check-then-store step of
 	// StoreMessageWithQuota per user (F5720).
 	quotaLocks sync.Map // user -> *sync.Mutex
+
+	// Test seams (nil in production), used to order concurrent writers
+	// deterministically.
+	afterQuotaCheck func() // quota check passed, store not yet started
+	onLockContended func() // a writer found the user lock held
+}
+
+// lockUser takes the per-user write lock shared by every blob writer and
+// deleter (R154: SMTP delivery, IMAP APPEND and DeleteMessage previously
+// serialized only on the quota path, so plain stores raced the quota check
+// and deletes raced dedupe hits).
+func (s *MessageStore) lockUser(user string) func() {
+	m, _ := s.quotaLocks.LoadOrStore(user, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	if !mu.TryLock() {
+		if s.onLockContended != nil {
+			s.onLockContended()
+		}
+		mu.Lock()
+	}
+	return mu.Unlock
 }
 
 // ErrQuotaExceeded is matched (errors.Is) by every *QuotaExceededError.
@@ -107,24 +128,24 @@ func (s *MessageStore) UserUsage(user string) (int64, error) {
 // StoreMessageWithQuota is StoreMessage with a per-user byte limit
 // (limit <= 0 means unlimited). The usage check and the store are serialized
 // per user, so concurrent calls cannot jointly exceed the limit. Content that
-// is already stored adds no bytes and is always accepted. Writers that use
-// plain StoreMessage are not serialized with this path.
+// is already stored adds no bytes and is always accepted. StoreMessage and
+// DeleteMessage share the same per-user lock.
 func (s *MessageStore) StoreMessageWithQuota(user string, data []byte, limit int64) (string, error) {
 	if err := validatePathComponent(user); err != nil {
 		return "", err
 	}
+	defer s.lockUser(user)()
 	if limit <= 0 {
-		return s.StoreMessage(user, data)
+		return s.storeMessageLocked(user, data)
 	}
-	m, _ := s.quotaLocks.LoadOrStore(user, &sync.Mutex{})
-	mu := m.(*sync.Mutex)
-	mu.Lock()
-	defer mu.Unlock()
 
 	hash := sha256.Sum256(data)
 	messageID := hex.EncodeToString(hash[:])
 	if info, err := os.Stat(filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID)); err == nil &&
 		info.Mode().IsRegular() && info.Size() == int64(len(data)) {
+		if s.afterQuotaCheck != nil {
+			s.afterQuotaCheck()
+		}
 		return messageID, nil
 	}
 	used, err := s.UserUsage(user)
@@ -134,7 +155,10 @@ func (s *MessageStore) StoreMessageWithQuota(user string, data []byte, limit int
 	if used+int64(len(data)) > limit {
 		return "", &QuotaExceededError{User: user, Used: used, Need: int64(len(data)), Limit: limit}
 	}
-	return s.StoreMessage(user, data)
+	if s.afterQuotaCheck != nil {
+		s.afterQuotaCheck()
+	}
+	return s.storeMessageLocked(user, data)
 }
 
 // NewMessageStore creates a new message store
@@ -160,6 +184,12 @@ func (s *MessageStore) StoreMessage(user string, data []byte) (string, error) {
 	if err := validatePathComponent(user); err != nil {
 		return "", err
 	}
+	defer s.lockUser(user)()
+	return s.storeMessageLocked(user, data)
+}
+
+// storeMessageLocked requires the caller to hold the per-user lock.
+func (s *MessageStore) storeMessageLocked(user string, data []byte) (string, error) {
 	if len(data) > maxMessageSize {
 		return "", fmt.Errorf("message exceeds maximum size of %d bytes", maxMessageSize)
 	}
@@ -289,6 +319,7 @@ func (s *MessageStore) DeleteMessage(user, messageID string) error {
 		return fmt.Errorf("invalid message ID")
 	}
 
+	defer s.lockUser(user)()
 	msgPath := filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID)
 	return os.Remove(msgPath)
 }

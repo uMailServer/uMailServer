@@ -223,8 +223,21 @@ func (s *Server) SetAuthTracker(t *AuthTracker) {
 	}
 }
 
-// isAuthLockedOut returns true if the given IP is temporarily locked out
-func (s *Server) isAuthLockedOut(ip string) bool {
+// maxTrackedAuthKeys bounds the tracker map so a spray of distinct IPs or
+// usernames cannot grow memory without limit (F6340).
+const maxTrackedAuthKeys = 50000
+
+// userAuthLimitFactor scales the per-account failure budget relative to the
+// per-IP budget so a botnet cannot brute-force one account (F6340) while a
+// single attacker cannot trivially lock a victim out.
+const userAuthLimitFactor = 3
+
+// authUserKey builds the normalised (trimmed, lowercased) per-account key.
+func authUserKey(username string) string {
+	return "user:" + strings.ToLower(strings.TrimSpace(username))
+}
+
+func (s *Server) lockedKey(key string, limit int) bool {
 	if s.maxLoginAttempts <= 0 {
 		return false
 	}
@@ -234,37 +247,70 @@ func (s *Server) isAuthLockedOut(ip string) bool {
 
 	cutoff := time.Now().Add(-s.lockoutDuration)
 	var recent []time.Time
-	for _, ts := range t.failures[ip] {
+	for _, ts := range t.failures[key] {
 		if ts.After(cutoff) {
 			recent = append(recent, ts)
 		}
 	}
 	if len(recent) == 0 {
-		delete(t.failures, ip)
+		delete(t.failures, key)
 	} else {
-		t.failures[ip] = recent
+		t.failures[key] = recent
 	}
-	return len(recent) >= s.maxLoginAttempts
+	return len(recent) >= limit
 }
 
-// recordAuthFailure records a failed authentication attempt from the given IP
-func (s *Server) recordAuthFailure(ip string) {
+func (s *Server) recordKey(key string) {
 	if s.maxLoginAttempts <= 0 {
 		return
 	}
 	t := s.auth
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.failures[ip] = append(t.failures[ip], time.Now())
+	now := time.Now()
+	if _, ok := t.failures[key]; !ok && len(t.failures) >= maxTrackedAuthKeys {
+		cutoff := now.Add(-s.lockoutDuration)
+		for k, v := range t.failures {
+			if len(v) == 0 || !v[len(v)-1].After(cutoff) {
+				delete(t.failures, k)
+			}
+		}
+		for k := range t.failures { // still full: evict one arbitrary entry
+			if len(t.failures) < maxTrackedAuthKeys {
+				break
+			}
+			delete(t.failures, k)
+		}
+	}
+	t.failures[key] = append(t.failures[key], now)
 }
 
-// clearAuthFailures removes recorded failures for the given IP
-func (s *Server) clearAuthFailures(ip string) {
+func (s *Server) clearKey(key string) {
 	t := s.auth
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.failures, ip)
+	delete(t.failures, key)
 }
+
+// isAuthLockedOut returns true if the given IP is temporarily locked out
+func (s *Server) isAuthLockedOut(ip string) bool {
+	return s.lockedKey(ip, s.maxLoginAttempts)
+}
+
+// recordAuthFailure records a failed authentication attempt from the given IP
+func (s *Server) recordAuthFailure(ip string) { s.recordKey(ip) }
+
+// clearAuthFailures removes recorded failures for the given IP
+func (s *Server) clearAuthFailures(ip string) { s.clearKey(ip) }
+
+// isUserLockedOut reports whether the account (case-insensitively) has too
+// many recent failures from any source.
+func (s *Server) isUserLockedOut(username string) bool {
+	return s.lockedKey(authUserKey(username), s.maxLoginAttempts*userAuthLimitFactor)
+}
+
+func (s *Server) recordUserFailure(username string) { s.recordKey(authUserKey(username)) }
+func (s *Server) clearUserFailures(username string) { s.clearKey(authUserKey(username)) }
 
 // Start starts the IMAP server
 func (s *Server) Start() error {

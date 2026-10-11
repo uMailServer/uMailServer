@@ -747,8 +747,9 @@ func TestSearchWithDBMetadataError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("expected 1 result, got %d", len(results))
+	// F6410: a hit without stored metadata is stale and dropped.
+	if len(results) != 0 {
+		t.Errorf("expected stale hit dropped, got %d", len(results))
 	}
 	// Metadata should be empty since nothing was stored
 	if len(results) > 0 {

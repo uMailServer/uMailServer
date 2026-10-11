@@ -207,7 +207,13 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 
 		if s.db != nil {
 			meta, err := s.db.GetMessageMetadata(opts.User, folder, uid)
-			if err == nil && meta != nil {
+			if err == nil && (meta == nil || meta.MessageID == "") {
+				// The message was deleted or moved without the index being
+				// told: never return a stale hit (F6410). A lookup error is not
+				// proof of absence, so such hits are kept as before.
+				continue
+			}
+			if err == nil {
 				searchResult.From = meta.From
 				searchResult.To = meta.To
 				searchResult.Subject = meta.Subject
@@ -294,12 +300,14 @@ func (s *Service) BuildIndex(user string) error {
 func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 	s.mu.RLock()
 	index, exists := s.indexes[user]
-	s.mu.RUnlock()
-
 	if !exists {
+		s.mu.RUnlock()
 		// Build index if it doesn't exist
 		return s.BuildIndex(user)
 	}
+	// Hold the read lock so a concurrent BuildIndex cannot swap the index
+	// away and drop this update (F6413).
+	defer s.mu.RUnlock()
 
 	if s.db == nil {
 		return fmt.Errorf("database not available")
@@ -341,9 +349,8 @@ func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 // Called from IMAP EXPUNGE handler (imap commands.go) and admin message deletion.
 func (s *Service) RemoveMessage(user, folder string, uid uint32) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	index, exists := s.indexes[user]
-	s.mu.RUnlock()
-
 	if !exists {
 		return
 	}

@@ -1609,11 +1609,16 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	// RFC 7616 PRECIS: normalize username (UsernameCaseMapped: lowercase)
 	usernameNormalized := strings.ToLower(username)
 
+	if s.server.isUserLockedOut(usernameNormalized) {
+		return s.WriteResponse(535, "5.7.8 Too many failed authentication attempts")
+	}
+
 	// An authzid other than the authenticating identity asks to act as
 	// someone else; no proxy authorization is implemented, so refuse it
 	// rather than silently dropping it (RFC 4616 §2, F6158).
 	if authzid := credParts[0]; authzid != "" && strings.ToLower(authzid) != usernameNormalized {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		s.server.recordUserFailure(usernameNormalized)
 		return s.WriteResponse(535, "5.7.8 Authorization identity not permitted")
 	}
 
@@ -1627,6 +1632,7 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 		}
 		if err != nil || !ok {
 			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+			s.server.recordUserFailure(usernameNormalized)
 			if m := metrics.Get(); m != nil {
 				m.SMTPAuthFailure()
 			}
@@ -1639,6 +1645,7 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 
 	s.isAuth = true
 	s.username = usernameNormalized
+	s.server.clearUserFailures(usernameNormalized)
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(usernameNormalized, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
@@ -1681,6 +1688,10 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	// RFC 7616 PRECIS: normalize username (UsernameCaseMapped: lowercase)
 	usernameNormalized := strings.ToLower(username)
 
+	if s.server.isUserLockedOut(usernameNormalized) {
+		return s.WriteResponse(535, "5.7.8 Too many failed authentication attempts")
+	}
+
 	// Request password
 	if err := s.WriteResponse(334, "UGFzc3dvcmQ6"); err != nil { // base64("Password:")
 		return err
@@ -1711,6 +1722,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 		}
 		if err != nil || !ok {
 			s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+			s.server.recordUserFailure(usernameNormalized)
 			if m := metrics.Get(); m != nil {
 				m.SMTPAuthFailure()
 			}
@@ -1723,6 +1735,7 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 
 	s.isAuth = true
 	s.username = usernameNormalized
+	s.server.clearUserFailures(usernameNormalized)
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(usernameNormalized, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
@@ -1788,6 +1801,10 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	// the same UsernameCaseMapped normalization PLAIN and LOGIN apply.
 	usernameNormalized := strings.ToLower(username)
 
+	if s.server.isUserLockedOut(usernameNormalized) {
+		return s.WriteResponse(535, "5.7.8 Too many failed authentication attempts")
+	}
+
 	// Generate server nonce and salt
 	serverNonce, err := auth.GenerateNonce()
 	if err != nil {
@@ -1848,6 +1865,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	password, err := s.server.onGetPassword(usernameNormalized)
 	if err != nil {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		s.server.recordUserFailure(usernameNormalized)
 		return s.WriteResponse(535, "5.5.4 Authentication failed")
 	}
 
@@ -1875,6 +1893,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	}
 	if !proofOK {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		s.server.recordUserFailure(usernameNormalized)
 		if s.server.onLoginResult != nil {
 			s.server.onLoginResult(usernameNormalized, false, getIPFromAddr(s.conn.RemoteAddr().String()), "invalid_credentials")
 		}
@@ -1886,6 +1905,7 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	// Authentication successful
 	s.isAuth = true
 	s.username = usernameNormalized
+	s.server.clearUserFailures(usernameNormalized)
 	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(s.username, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")

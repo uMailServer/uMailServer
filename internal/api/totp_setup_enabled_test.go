@@ -123,6 +123,9 @@ func TestTOTPSetupEnabled_DisableThenSetup(t *testing.T) {
 	if c := a5028Do(s, http.MethodPost, "/api/v1/account/totp/disable", tok, body); c != http.StatusOK {
 		t.Fatalf("disable=%d", c)
 	}
+	// F6380: the disable revoked the old session; use a freshly issued one.
+	time.Sleep(1100 * time.Millisecond) // legacy iat has 1s precision
+	tok = a5028Session(t)
 	for i := 0; i < 2; i++ {
 		if c := a5028Do(s, http.MethodPost, "/api/v1/account/totp/setup", tok, "{}"); c != http.StatusOK {
 			t.Fatalf("setup #%d=%d want 200", i+1, c)

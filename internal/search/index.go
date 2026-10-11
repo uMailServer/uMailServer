@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Document represents a searchable document
@@ -62,6 +63,9 @@ func (idx *Index) Add(doc *Document) {
 	idx.docs[doc.ID] = doc
 	idx.docCount++
 
+	// Bound per-document growth (F6412).
+	doc.Content = truncateRunes(doc.Content, maxIndexedContent)
+
 	// Index all text content
 	allText := doc.Content
 	for field, value := range doc.Fields {
@@ -79,6 +83,24 @@ func (idx *Index) Add(doc *Document) {
 	for _, token := range tokens {
 		idx.addToken(token, doc.ID)
 	}
+}
+
+// maxIndexedContent bounds the body text indexed per document and
+// maxTokenBytes the length of a single token (F6412): base64 blobs and
+// minified payloads otherwise create enormous single tokens and vocabularies.
+const (
+	maxIndexedContent = 1 << 20
+	maxTokenBytes     = 128
+)
+
+func truncateRunes(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 // addToken adds a token to the index
@@ -289,7 +311,7 @@ func tokenize(text string) []string {
 		} else {
 			if current.Len() > 0 {
 				token := current.String()
-				if !isStopWord(token) {
+				if !isStopWord(token) && len(token) <= maxTokenBytes {
 					tokens = append(tokens, token)
 				}
 				current.Reset()
@@ -299,7 +321,7 @@ func tokenize(text string) []string {
 
 	if current.Len() > 0 {
 		token := current.String()
-		if !isStopWord(token) {
+		if !isStopWord(token) && len(token) <= maxTokenBytes {
 			tokens = append(tokens, token)
 		}
 	}

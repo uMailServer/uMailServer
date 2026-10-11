@@ -743,6 +743,8 @@ func TestServiceSearchWithDB(t *testing.T) {
 		},
 	})
 
+	// F6410: hits are validated against stored metadata.
+	_ = database.StoreMessageMetadata("testuser", "INBOX", 1, &storage.MessageMetadata{MessageID: "m1", Subject: "Test Subject"})
 	results, err := svc.Search(MessageSearchOptions{
 		User:  "testuser",
 		Query: "hello",

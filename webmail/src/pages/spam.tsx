@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   AlertCircle,
@@ -18,76 +18,51 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { toast } from "sonner"
-
-interface SpamEmail {
-  id: string
-  from: string
-  fromEmail: string
-  subject: string
-  preview: string
-  date: string
-  read: boolean
-  spamScore: number
-}
-
-const mockSpamEmails: SpamEmail[] = [
-  {
-    id: "s1",
-    from: "Casino Winner",
-    fromEmail: "winner@casino-spam.com",
-    subject: "Congratulations! You Won 1 Million Euro!",
-    preview: "You are very lucky to receive this email...",
-    date: "2 days ago",
-    read: false,
-    spamScore: 95,
-  },
-  {
-    id: "s2",
-    from: "Nigerian Prince",
-    fromEmail: "prince@nigeria-fund.com",
-    subject: "Urgent Assistance Needed",
-    preview: "Dear friend, I have a large inheritance...",
-    date: "1 day ago",
-    read: false,
-    spamScore: 88,
-  },
-  {
-    id: "s3",
-    from: "Fake Store",
-    fromEmail: "deals@fake-store99.com",
-    subject: "90% Off All Items!",
-    preview: "Today only, huge discounts on all products...",
-    date: "3 days ago",
-    read: true,
-    spamScore: 72,
-  },
-]
+import api from "@/utils/api"
+import { useMailFolder } from "@/hooks/useMailFolder"
 
 export function SpamPage() {
   const navigate = useNavigate()
-  const [loading, _setLoading] = useState(false)
-  const [emails] = useState<SpamEmail[]>(mockSpamEmails)
+  const { emails, loading, error, reload, removeLocal } = useMailFolder("spam")
+  const [busy, setBusy] = useState(false)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
   const [selected, setSelected] = useState<Set<string>>(new Set())
 
   const toggleSelect = (id: string) => {
     const newSelected = new Set(selected)
-    if (newSelected.has(id)) {
-      newSelected.delete(id)
-    } else {
-      newSelected.add(id)
-    }
+    if (newSelected.has(id)) newSelected.delete(id)
+    else newSelected.add(id)
     setSelected(newSelected)
   }
 
-  const handleDelete = () => {
-    toast.success(`${selected.size} message${selected.size !== 1 ? "s" : ""} permanently deleted`)
-    setSelected(new Set())
+  const run = async (ids: string[], op: () => Promise<void>, msg: string) => {
+    if (ids.length === 0 || busy) return
+    setBusy(true)
+    try {
+      await op()
+      if (!mountedRef.current) return
+      removeLocal(ids)
+      setSelected(new Set())
+      toast.success(msg)
+    } catch (err) {
+      if (!mountedRef.current) return
+      toast.error(err instanceof Error && err.message ? err.message : "Operation failed")
+    } finally {
+      if (mountedRef.current) setBusy(false)
+    }
   }
 
-  const handleNotSpam = () => {
-    toast.success(`${selected.size} message${selected.size !== 1 ? "s" : ""} marked as not spam`)
-    setSelected(new Set())
-  }
+  const label = (n: number) => `${n} message${n !== 1 ? "s" : ""}`
+
+  const handleDelete = (ids: string[] = Array.from(selected)) =>
+    run(ids, async () => { for (const id of ids) await api.deleteMail(id) }, `${label(ids.length)} permanently deleted`)
+
+  const handleNotSpam = (ids: string[] = Array.from(selected)) =>
+    run(ids, () => api.moveMail(ids, "spam", "inbox"), `${label(ids.length)} marked as not spam`)
 
   return (
     <div className="space-y-4">
@@ -95,14 +70,14 @@ export function SpamPage() {
         <div className="flex items-center gap-2">
           <AlertCircle className="h-5 w-5 text-red-500" />
           <h1 className="text-xl font-semibold">Spam</h1>
-          <Badge variant="destructive">{emails.length}</Badge>
+          {!loading && !error && <Badge variant="destructive">{emails.length}</Badge>}
         </div>
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
-            onClick={handleNotSpam}
-            disabled={selected.size === 0 || loading}
+            onClick={() => handleNotSpam()}
+            disabled={selected.size === 0 || loading || busy}
           >
             <Archive className="h-4 w-4 mr-1" />
             Not Spam
@@ -111,8 +86,8 @@ export function SpamPage() {
             variant="outline"
             size="sm"
             className="text-destructive"
-            onClick={handleDelete}
-            disabled={selected.size === 0 || loading}
+            onClick={() => handleDelete()}
+            disabled={selected.size === 0 || loading || busy}
           >
             <Trash2 className="h-4 w-4 mr-1" />
             Delete
@@ -122,7 +97,7 @@ export function SpamPage() {
 
       <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-4">
         <p className="text-sm text-destructive">
-          Spam messages are automatically deleted after 30 days.
+          Messages filtered as spam appear here.
           Use "Not Spam" to rescue legitimate emails.
         </p>
       </div>
@@ -138,6 +113,12 @@ export function SpamPage() {
               </div>
             </div>
           ))}
+        </div>
+      ) : error ? (
+        <div role="alert" className="flex flex-col items-center justify-center py-16 text-center">
+          <h3 className="text-lg font-semibold">Could not load spam</h3>
+          <p className="text-sm text-muted-foreground">{error}</p>
+          <Button variant="outline" size="sm" className="mt-4" onClick={() => void reload()}>Retry</Button>
         </div>
       ) : emails.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -158,7 +139,7 @@ export function SpamPage() {
                 "flex items-start gap-3 p-4 cursor-pointer transition-colors hover:bg-accent/50",
                 !email.read && "bg-accent/10"
               )}
-              onClick={() => navigate(`/email/${email.id}`)}
+              onClick={() => navigate(`/email/${encodeURIComponent(email.id)}`)}
             >
               <Checkbox
                 className="mt-1"
@@ -170,10 +151,7 @@ export function SpamPage() {
                   {!email.read && (
                     <span className="h-2 w-2 rounded-full bg-red-500 shrink-0" />
                   )}
-                  <span className="font-medium">{email.from}</span>
-                  <Badge variant="destructive" className="text-[10px]">
-                    {email.spamScore}%
-                  </Badge>
+                  <span className="font-medium">{email.fromName || email.from}</span>
                 </div>
                 <div className="text-sm">
                   <span className="font-medium">{email.subject}</span>
@@ -195,11 +173,11 @@ export function SpamPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={handleNotSpam}>
+                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); void handleNotSpam([email.id]) }}>
                     <Archive className="h-4 w-4 mr-2" />
                     Not Spam
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={handleDelete} className="text-destructive">
+                  <DropdownMenuItem onClick={(e) => { e.stopPropagation(); void handleDelete([email.id]) }} className="text-destructive">
                     <Trash2 className="h-4 w-4 mr-2" />
                     Delete
                   </DropdownMenuItem>

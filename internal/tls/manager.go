@@ -68,6 +68,11 @@ func NewManager(config Config, logger *slog.Logger) (*Manager, error) {
 	if err := os.MkdirAll(m.certDir, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create cert directory: %w", err)
 	}
+	// MkdirAll leaves an existing directory's mode alone; it holds private
+	// keys, so tighten it.
+	if err := os.Chmod(m.certDir, 0o700); err != nil {
+		m.logger.Warn("Failed to restrict cert directory permissions", "dir", m.certDir, "error", err)
+	}
 
 	// Setup autocert if auto TLS is enabled
 	if config.AutoTLS {
@@ -467,9 +472,20 @@ func (m *Manager) GetCertificateStatus() []CertificateStatus {
 			continue
 		}
 
-		status.Valid = true
 		status.ExpiresAt = cert.NotAfter
 		status.Issuer = cert.Issuer.CommonName
+		now := time.Now()
+		if now.Before(cert.NotBefore) {
+			status.Error = "certificate is not yet valid"
+			statuses = append(statuses, status)
+			continue
+		}
+		if !now.Before(cert.NotAfter) {
+			status.Error = "certificate has expired"
+			statuses = append(statuses, status)
+			continue
+		}
+		status.Valid = true
 
 		// Check if expiring soon
 		if time.Until(cert.NotAfter) < 7*24*time.Hour {

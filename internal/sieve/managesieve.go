@@ -110,7 +110,22 @@ func (s *ManageSieveServer) recordAuthFailure(ip string) {
 	if s.authFailures == nil {
 		s.authFailures = make(map[string][]time.Time)
 	}
-	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+	now := time.Now()
+	if _, ok := s.authFailures[ip]; !ok && len(s.authFailures) >= 50000 { // F6340: bound memory
+		cutoff := now.Add(-s.lockoutDuration)
+		for k, v := range s.authFailures {
+			if len(v) == 0 || !v[len(v)-1].After(cutoff) {
+				delete(s.authFailures, k)
+			}
+		}
+		for k := range s.authFailures {
+			if len(s.authFailures) < 50000 {
+				break
+			}
+			delete(s.authFailures, k)
+		}
+	}
+	s.authFailures[ip] = append(s.authFailures[ip], now)
 }
 
 func (s *ManageSieveServer) clearAuthFailures(ip string) {

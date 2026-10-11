@@ -398,8 +398,9 @@ func (mm *MigrationManager) importMaildir(maildirPath string) error {
 			return err
 		}
 
-		// Skip directories
-		if info.IsDir() {
+		// Skip directories, and symlinks/devices: following a link planted in
+		// cur/ or new/ would copy an arbitrary host file into a mailbox (F6402).
+		if info.IsDir() || !info.Mode().IsRegular() {
 			return nil
 		}
 

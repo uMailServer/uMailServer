@@ -146,6 +146,16 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 	if dsn.MessageID == "" {
 		dsn.MessageID = GenerateMessageID()
 	}
+	// Addresses come from the SMTP envelope; CR/LF in them would inject
+	// headers or DSN fields (F6390).
+	d := *dsn
+	d.ReportedDomain = sanitizeDSNField(d.ReportedDomain)
+	d.OriginalFrom = sanitizeDSNField(d.OriginalFrom)
+	d.OriginalTo = sanitizeDSNField(d.OriginalTo)
+	d.RemoteMTA = sanitizeDSNField(d.RemoteMTA)
+	d.Recipient.Original = sanitizeDSNField(d.Recipient.Original)
+	d.Recipient.DSNAddress = sanitizeDSNField(d.Recipient.DSNAddress)
+	dsn = &d
 
 	// Generate DSN message
 	boundary := "boundary_" + generateBoundary()
@@ -307,4 +317,15 @@ func generateBoundary() string {
 		}
 	}
 	return hex.EncodeToString(b)
+}
+
+// sanitizeDSNField collapses control characters (CR, LF, NUL, ...) to spaces
+// so a value stays on one header or DSN field line.
+func sanitizeDSNField(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
 }

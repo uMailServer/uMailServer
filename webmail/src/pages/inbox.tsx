@@ -1,10 +1,8 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
   Star,
-  Archive,
   Trash2,
-  MailOpen,
   Paperclip,
   RefreshCw,
   ChevronLeft,
@@ -26,11 +24,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
+import api, { Mail } from "@/utils/api"
+import { useMailFolder } from "@/hooks/useMailFolder"
 
 interface Email {
   id: string
@@ -42,80 +41,26 @@ interface Email {
   read: boolean
   starred: boolean
   hasAttachments: boolean
-  folder: string
   labels: string[]
+}
+
+function toRow(m: Mail): Email {
+  return {
+    id: m.id,
+    from: m.fromName || m.from,
+    fromEmail: m.from,
+    subject: m.subject,
+    preview: m.preview,
+    date: m.date,
+    read: m.read,
+    starred: m.starred,
+    hasAttachments: !!m.hasAttachments,
+    labels: [],
+  }
 }
 
 type ViewMode = "list" | "compact"
 type SortOption = "date" | "from" | "subject"
-
-const mockEmails: Email[] = [
-  {
-    id: "1",
-    from: "John Smith",
-    fromEmail: "john@example.com",
-    subject: "Project Meeting Discussion",
-    preview: "I wanted to remind you about the meeting tomorrow at 2pm. There are important topics to discuss...",
-    date: "10:30",
-    read: false,
-    starred: true,
-    hasAttachments: true,
-    folder: "inbox",
-    labels: ["work", "important"],
-  },
-  {
-    id: "2",
-    from: "Tech Newsletter",
-    fromEmail: "newsletter@tech.com",
-    subject: "Weekly Tech Digest",
-    preview: "This week's top stories: AI, cloud computing and more...",
-    date: "09:15",
-    read: true,
-    starred: false,
-    hasAttachments: false,
-    folder: "inbox",
-    labels: [],
-  },
-  {
-    id: "3",
-    from: "Sarah Johnson",
-    fromEmail: "sarah.johnson@company.com",
-    subject: "Invoice Approval",
-    preview: "Please approve the invoice payment for March. Details attached...",
-    date: "Yesterday",
-    read: false,
-    starred: false,
-    hasAttachments: true,
-    folder: "inbox",
-    labels: ["invoice"],
-  },
-  {
-    id: "4",
-    from: "System",
-    fromEmail: "noreply@umailserver.com",
-    subject: "Security Alert",
-    preview: "New device sign-in detected. If this wasn't you, please review your account activity...",
-    date: "Yesterday",
-    read: true,
-    starred: false,
-    hasAttachments: false,
-    folder: "inbox",
-    labels: ["security"],
-  },
-  {
-    id: "5",
-    from: "Mike Wilson",
-    fromEmail: "mike.wilson@gmail.com",
-    subject: "Weekend Party",
-    preview: "Everyone is invited to my party this Saturday. Can you make it? It will be fun...",
-    date: "2 days ago",
-    read: true,
-    starred: true,
-    hasAttachments: false,
-    folder: "inbox",
-    labels: ["personal"],
-  },
-]
 
 interface InboxPageProps {
   folder?: string
@@ -123,14 +68,22 @@ interface InboxPageProps {
 
 export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   const navigate = useNavigate()
-  const [emails, setEmails] = useState<Email[]>(
-    mockEmails.filter((e) => e.folder === folder || (folder === "starred" && e.starred))
-  )
+  // "starred" is a view over the inbox: the API has no starred-folder route.
+  const apiFolder = folder === "starred" ? "inbox" : folder
+  const { emails: fetched, loading, error, reload, removeLocal } = useMailFolder(apiFolder)
+  const emails = fetched
+    .map(toRow)
+    .filter((e) => folder !== "starred" || e.starred)
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
   const [activeFilter, setActiveFilter] = useState("all")
-  const [loading, setLoading] = useState(false)
   const [viewMode, setViewMode] = useState<ViewMode>("list")
   const [sortBy, setSortBy] = useState<SortOption>("date")
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  useEffect(() => { setSelectedEmails(new Set()) }, [apiFolder])
   const [showWelcome, setShowWelcome] = useState(true)
 
   const toggleSelectAll = () => {
@@ -151,45 +104,35 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
     setSelectedEmails(newSelected)
   }
 
-  const toggleStar = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    setEmails(emails.map((email) =>
-      email.id === id ? { ...email, starred: !email.starred } : email
-    ))
-  }
-
-  const markAsRead = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    setEmails(emails.map((email) =>
-      email.id === id ? { ...email, read: true } : email
-    ))
-  }
-
+  // The server exposes no flag/read endpoint, so star and read state are
+  // display-only here; only move/delete are real operations.
   const handleRefresh = () => {
-    setLoading(true)
-    setTimeout(() => {
-      setLoading(false)
-      toast.success(" inbox refreshed")
-    }, 1000)
+    void reload()
   }
 
-  const handleArchive = () => {
-    toast.success(`${selectedEmails.size} message${selectedEmails.size !== 1 ? "s" : ""} archived`)
-    setSelectedEmails(new Set())
+  const moveSelected = async (ids: string[], to: string, doneMsg: string) => {
+    if (ids.length === 0) return
+    try {
+      if (to === "") {
+        for (const id of ids) await api.deleteMail(id)
+      } else {
+        await api.moveMail(ids, apiFolder, to)
+      }
+      if (!mountedRef.current) return
+      removeLocal(ids)
+      setSelectedEmails(new Set())
+      toast.success(doneMsg)
+    } catch (err) {
+      if (!mountedRef.current) return
+      toast.error(err instanceof Error && err.message ? err.message : "Operation failed")
+    }
   }
 
-  const handleDelete = () => {
-    toast.success(`${selectedEmails.size} message${selectedEmails.size !== 1 ? "s" : ""} moved to trash`)
-    setEmails(emails.filter((e) => !selectedEmails.has(e.id)))
-    setSelectedEmails(new Set())
-  }
-
-  const handleMarkRead = () => {
-    toast.success(`${selectedEmails.size} message${selectedEmails.size !== 1 ? "s" : ""} marked as read`)
-    setEmails(emails.map((e) =>
-      selectedEmails.has(e.id) ? { ...e, read: true } : e
-    ))
-    setSelectedEmails(new Set())
+  const handleDelete = (ids: string[] = Array.from(selectedEmails)) => {
+    const n = ids.length
+    const label = `${n} message${n !== 1 ? "s" : ""}`
+    if (apiFolder === "trash") return moveSelected(ids, "", `${label} deleted`)
+    return moveSelected(ids, "trash", `${label} moved to trash`)
   }
 
   const filteredEmails = emails
@@ -215,7 +158,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
         !email.read && viewMode === "list" && "bg-accent/5",
         selectedEmails.has(email.id) && "bg-primary/5"
       )}
-      onClick={() => navigate(`/email/${email.id}`)}
+      onClick={() => navigate(`/email/${encodeURIComponent(email.id)}`)}
     >
       <Checkbox
         checked={selectedEmails.has(email.id)}
@@ -223,17 +166,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
         onClick={(e) => e.stopPropagation()}
       />
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className={cn(
-          "h-8 w-8 shrink-0 transition-colors",
-          email.starred ? "text-amber-500" : "text-muted-foreground hover:text-foreground"
-        )}
-        onClick={(e) => toggleStar(email.id, e)}
-      >
-        <Star className={cn("h-4 w-4", email.starred && "fill-current")} />
-      </Button>
+      <Star className={cn("h-4 w-4 shrink-0", email.starred ? "fill-current text-amber-500" : "text-muted-foreground/40")} />
 
       <div className={cn("flex-1 min-w-0", viewMode === "compact" && "flex items-center gap-4")}>
         <div className="flex items-center gap-2">
@@ -281,20 +214,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={(e) => markAsRead(email.id, e)}>
-              <MailOpen className="mr-2 h-4 w-4" />
-              Mark as read
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={(e) => toggleStar(email.id, e)}>
-              <Star className={cn("mr-2 h-4 w-4", email.starred && "fill-current")} />
-              {email.starred ? "Remove star" : "Add star"}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={handleArchive}>
-              <Archive className="mr-2 h-4 w-4" />
-              Archive
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive" onClick={handleDelete}>
+            <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); void handleDelete([email.id]) }}>
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
             </DropdownMenuItem>
@@ -322,14 +242,8 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
                 {selectedEmails.size} selected
               </span>
               <Separator orientation="vertical" className="h-4" />
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleArchive} title="Archive">
-                <Archive className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={handleDelete} title="Delete">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete()} title="Delete">
                 <Trash2 className="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleMarkRead} title="Mark as read">
-                <MailOpen className="h-4 w-4" />
               </Button>
             </div>
           ) : (
@@ -412,6 +326,12 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
                 </div>
               </div>
             ))}
+          </div>
+        ) : error ? (
+          <div role="alert" className="flex flex-col items-center justify-center py-16 text-center">
+            <h3 className="text-lg font-semibold">Could not load messages</h3>
+            <p className="text-sm text-muted-foreground">{error}</p>
+            <Button variant="outline" size="sm" className="mt-4" onClick={handleRefresh}>Retry</Button>
           </div>
         ) : filteredEmails.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">

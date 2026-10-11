@@ -96,16 +96,27 @@ func (m *Manager) SetConfig(email string, config *Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// The subject becomes a header of the auto-reply: refuse line breaks
+	// that would inject further headers (F6415).
+	if strings.ContainsAny(config.Subject, "\r\n\x00") {
+		return fmt.Errorf("subject must not contain line breaks")
+	}
+	for _, a := range config.ExcludeAddresses {
+		if strings.ContainsAny(a, "\r\n\x00") {
+			return fmt.Errorf("invalid exclude address")
+		}
+	}
+
 	// Validate config
+	if config.SendInterval <= 0 {
+		config.SendInterval = 7 * 24 * time.Hour
+	}
 	if config.Enabled {
 		if config.Subject == "" {
 			return fmt.Errorf("subject is required when vacation is enabled")
 		}
 		if config.Message == "" {
 			return fmt.Errorf("message is required when vacation is enabled")
-		}
-		if config.SendInterval == 0 {
-			config.SendInterval = 7 * 24 * time.Hour
 		}
 	}
 
@@ -207,6 +218,23 @@ func (m *Manager) recordLocked(user, sender string, interval time.Duration) {
 		}
 	}
 	m.pruneAt[user] = 2 * len(userCache)
+	m.rewriteReplies(user, userCache)
+}
+
+// rewriteReplies compacts the persisted log to the live records so the file
+// is bounded like the in-memory store (F6418). The caller holds cacheMu.
+func (m *Manager) rewriteReplies(user string, cache map[string]time.Time) {
+	var buf []byte
+	for sender, at := range cache {
+		line, err := json.Marshal(replyRecord{Sender: sender, At: at})
+		if err != nil {
+			continue
+		}
+		buf = append(append(buf, line...), '\n')
+	}
+	if err := writeFileAtomic(m.repliesPath(user), buf); err != nil {
+		m.logger.Warn("Failed to compact vacation reply records", "error", err)
+	}
 }
 
 // forgetReplies drops the dedup records of user.
@@ -262,11 +290,11 @@ func (m *Manager) eligibleConfig(user, sender string, headers map[string]string)
 	}
 
 	// Header values such as Precedence are case-insensitive (F5206).
-	precedence := strings.ToLower(strings.TrimSpace(headers["Precedence"]))
+	precedence := strings.ToLower(strings.TrimSpace(hdr(headers, "Precedence")))
 
 	// Check headers for mailing list
 	if config.IgnoreLists {
-		if headers["List-Id"] != "" || headers["List-Unsubscribe"] != "" {
+		if hdr(headers, "List-Id") != "" || hdr(headers, "List-Post") != "" || hdr(headers, "List-Unsubscribe") != "" {
 			return nil, false
 		}
 		if precedence == "list" || precedence == "bulk" {
@@ -279,21 +307,21 @@ func (m *Manager) eligibleConfig(user, sender string, headers map[string]string)
 		if precedence == "bulk" || precedence == "junk" {
 			return nil, false
 		}
-		if headers["X-Mailer"] == "MassMailer" {
+		if hdr(headers, "X-Mailer") == "MassMailer" {
 			return nil, false
 		}
 	}
 
 	// Don't reply to auto-generated messages
-	if autoSubmitted := strings.TrimSpace(headers["Auto-Submitted"]); autoSubmitted != "" && !strings.EqualFold(autoSubmitted, "no") {
+	if autoSubmitted := strings.TrimSpace(hdr(headers, "Auto-Submitted")); autoSubmitted != "" && !strings.EqualFold(autoSubmitted, "no") {
 		return nil, false
 	}
-	if headers["X-Auto-Response-Suppress"] != "" {
+	if hdr(headers, "X-Auto-Response-Suppress") != "" {
 		return nil, false
 	}
 
 	// Don't reply if this address already appears in the mail loop chain
-	if loopHeader := headers["X-Mail-Loop"]; loopHeader != "" {
+	if loopHeader := hdr(headers, "X-Mail-Loop"); loopHeader != "" {
 		for _, loopAddr := range strings.Split(loopHeader, ",") {
 			if strings.EqualFold(strings.TrimSpace(loopAddr), user) {
 				return nil, false
@@ -301,7 +329,28 @@ func (m *Manager) eligibleConfig(user, sender string, headers map[string]string)
 		}
 	}
 
+	if config.SendInterval <= 0 {
+		// Hand-edited or legacy file: never fall back to "every message"
+		// (F6417).
+		c := *config
+		c.SendInterval = 7 * 24 * time.Hour
+		return &c, true
+	}
 	return config, true
+}
+
+// hdr looks a header up case-insensitively (header names are, RFC 5322 §1.2.2),
+// so callers may pass canonical or lower-case keys (F6416).
+func hdr(headers map[string]string, name string) string {
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
 }
 
 // normalizeAddress returns sender in the form used for comparisons: without

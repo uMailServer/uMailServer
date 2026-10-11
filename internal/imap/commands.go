@@ -490,6 +490,17 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 	}
 	passwordNormalized := normalizePassword(password)
 
+	if s.server.isUserLockedOut(usernameNormalized) {
+		s.WriteResponse(s.tag, "NO Too many failed authentication attempts")
+		if span != nil {
+			tracing.SetStatus(span, tracing.StatusError, "auth locked out")
+		}
+		if s.server.onLoginResult != nil {
+			s.server.onLoginResult(usernameNormalized, false, ip, "lockout")
+		}
+		return nil
+	}
+
 	if s.server.authFunc != nil {
 		auth, err := s.server.authFunc(usernameNormalized, passwordNormalized)
 		if err == nil && auth {
@@ -504,6 +515,7 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 
 	if !authenticated {
 		s.server.recordAuthFailure(ip)
+		s.server.recordUserFailure(usernameNormalized)
 		s.WriteResponse(s.tag, "NO "+failMsg)
 		if span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "authentication failed")
@@ -516,6 +528,7 @@ func (s *Session) authenticateUser(username, password, okMsg, failMsg string) er
 	}
 
 	s.server.clearAuthFailures(ip)
+	s.server.clearUserFailures(usernameNormalized)
 	s.user = usernameNormalized
 	s.stateMu.Lock()
 	s.state = StateAuthenticated

@@ -64,6 +64,7 @@ type Server struct {
 	lockoutDuration  time.Duration
 	authFailures     map[string][]time.Time // IP -> failure timestamps
 	authFailuresMu   sync.Mutex
+	userFailures     map[string][]time.Time // canonical username -> failure timestamps (F6330)
 
 	// Tracing provider for OpenTelemetry
 	tracingProvider *tracing.Provider
@@ -240,6 +241,7 @@ func NewServer(config *Config, logger *slog.Logger) *Server {
 		shutdown:     make(chan struct{}),
 		logger:       logger,
 		authFailures: make(map[string][]time.Time),
+		userFailures: make(map[string][]time.Time),
 	}
 }
 
@@ -681,4 +683,73 @@ func (s *Server) tlsAvailable() bool {
 		return false
 	}
 	return len(c.Certificates) > 0 || c.GetCertificate != nil || c.GetConfigForClient != nil
+}
+
+// canonicalAuthUser is the key form for per-username lockout counters: trimmed
+// and lower-cased (the lookup form is lower-cased), bounded in length so a
+// client cannot grow the map with huge keys (F6330).
+func canonicalAuthUser(u string) string {
+	u = strings.ToLower(strings.TrimSpace(u))
+	if len(u) > 256 {
+		u = u[:256]
+	}
+	return u
+}
+
+// isUserLockedOut reports whether the username has too many recent failures,
+// regardless of source IP.
+func (s *Server) isUserLockedOut(user string) bool {
+	user = canonicalAuthUser(user)
+	if s.maxLoginAttempts <= 0 || user == "" {
+		return false
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	cutoff := time.Now().Add(-s.lockoutDuration)
+	var recent []time.Time
+	for _, t := range s.userFailures[user] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	if len(recent) == 0 {
+		delete(s.userFailures, user)
+	} else {
+		s.userFailures[user] = recent
+	}
+	return len(recent) >= s.maxLoginAttempts
+}
+
+// recordUserFailure records a failed attempt against the canonical username.
+func (s *Server) recordUserFailure(user string) {
+	user = canonicalAuthUser(user)
+	if s.maxLoginAttempts <= 0 || user == "" {
+		return
+	}
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	s.userFailures[user] = append(s.userFailures[user], time.Now())
+	if len(s.userFailures) >= 100 {
+		cutoff := time.Now().Add(-s.lockoutDuration)
+		for k, times := range s.userFailures {
+			var recent []time.Time
+			for _, t := range times {
+				if t.After(cutoff) {
+					recent = append(recent, t)
+				}
+			}
+			if len(recent) > 0 {
+				s.userFailures[k] = recent
+			} else {
+				delete(s.userFailures, k)
+			}
+		}
+	}
+}
+
+// clearUserFailures resets the username's counter after a successful login.
+func (s *Server) clearUserFailures(user string) {
+	s.authFailuresMu.Lock()
+	defer s.authFailuresMu.Unlock()
+	delete(s.userFailures, canonicalAuthUser(user))
 }

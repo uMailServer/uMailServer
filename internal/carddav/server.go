@@ -28,6 +28,7 @@ const maxRequestBodyBytes = 10 << 20
 type Server struct {
 	logger          *slog.Logger
 	authFunc        func(username, password string) (bool, error)
+	authGuard       *authGuard
 	dataDir         string
 	storage         *Storage
 	tracingProvider *tracing.Provider
@@ -48,9 +49,10 @@ func NewServer(dataDir string, logger *slog.Logger) *Server {
 		logger = slog.Default()
 	}
 	return &Server{
-		logger:  logger,
-		dataDir: dataDir,
-		storage: NewStorage(dataDir),
+		logger:    logger,
+		dataDir:   dataDir,
+		storage:   NewStorage(dataDir),
+		authGuard: newAuthGuard(),
 	}
 }
 
@@ -83,12 +85,20 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.authFunc != nil {
+		ip := clientIP(r)
+		if wait := s.authGuard.locked(username, ip); wait > 0 {
+			w.Header().Set("Retry-After", retryAfterSeconds(wait))
+			s.sendError(w, http.StatusTooManyRequests, "too many failed logins")
+			return
+		}
 		authenticated, err := s.authFunc(username, password)
 		if err != nil || !authenticated {
+			s.authGuard.fail(username, ip)
 			w.Header().Set("WWW-Authenticate", `Basic realm="CardDAV"`)
 			s.sendError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
+		s.authGuard.success(username, ip)
 	}
 
 	if r.Body != nil {
