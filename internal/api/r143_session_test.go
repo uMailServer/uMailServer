@@ -97,7 +97,7 @@ func TestR143PasswordChangeRevokesOtherSessions(t *testing.T) {
 	other := r143Login(t, s, "user@example.com")
 
 	rec := r143Do(s, s.handleAccountPassword, acting, http.MethodPost, "/api/v1/account/password",
-		map[string]string{"current_password": r143Password, "new_password": "another-password-1"})
+		map[string]string{"current_password": r143Password, "new_password": "Another-Passw0rd-1!"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("change: %d %s", rec.Code, rec.Body.String())
 	}
@@ -252,7 +252,7 @@ func TestR143PasswordChangeDoesNotReenableDisabledAccount(t *testing.T) {
 	}
 	defer func() { beforeCredentialWrite = nil }()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/account/password", bytes.NewReader([]byte(
-		`{"current_password":"`+r143Password+`","new_password":"another-password-1"}`)))
+		`{"current_password":"`+r143Password+`","new_password":"Another-Passw0rd-1!"}`)))
 	req = req.WithContext(context.WithValue(req.Context(), "user", "user@example.com"))
 	rec := httptest.NewRecorder()
 	s.handleAccountPassword(rec, req)

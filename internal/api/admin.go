@@ -196,7 +196,7 @@ func (s *AdminServer) withAuth(next http.Handler) http.HandlerFunc {
 				return []byte(s.config.JWTSecret), nil
 			}
 			return nil, fmt.Errorf("unknown signing key")
-		})
+		}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()) // F6423
 		if err != nil || !parsed.Valid {
 			writeError(w, "unauthorized", "Invalid token", http.StatusUnauthorized)
 			return
