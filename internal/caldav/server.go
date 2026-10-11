@@ -1067,7 +1067,6 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 		s.sendError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
-
 	calendarID := parts[2]
 	eventUID := parts[3]
 
@@ -1075,6 +1074,12 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request, username stri
 	cal, err := s.storage.GetCalendar(username, calendarID)
 	if err != nil || cal == nil {
 		s.sendError(w, http.StatusForbidden, "calendar not found")
+		return
+	}
+
+	// Resources are addressed as /{calendar}/{name}; deeper paths name nothing.
+	if len(parts) > 4 {
+		s.sendError(w, http.StatusNotFound, "event not found")
 		return
 	}
 
@@ -1136,6 +1141,12 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 		return
 	}
 
+	// Resources are addressed as /{calendar}/{name}; deeper paths name nothing.
+	if len(parts) > 4 {
+		s.sendError(w, http.StatusNotFound, "event not found")
+		return
+	}
+
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -1151,6 +1162,10 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, username s
 	}
 	if !preconditionsHold(r, existing != "", currentETag) {
 		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
+		return
+	}
+	if existing == "" {
+		s.sendError(w, http.StatusNotFound, "event not found")
 		return
 	}
 
@@ -1424,6 +1439,11 @@ func (s *Server) transferEvent(w http.ResponseWriter, r *http.Request, username 
 		return
 	}
 
+	if len(sourceParts) > 4 {
+		s.sendError(w, http.StatusNotFound, "source event not found")
+		return
+	}
+
 	sourceCalendarID := sourceParts[2]
 	sourceEventUID := sourceParts[3]
 
@@ -1659,7 +1679,7 @@ func (s *Server) buildCalendarResponse(username string, cal *Calendar) Response 
 	// Hrefs follow the server's request convention "/dav/calendars/{calendarID}/"
 	// (the authenticated username scopes storage and is not part of the URL), so
 	// clients operating on these hrefs (RFC 4918 §8.3) reach the item handlers.
-	href := fmt.Sprintf("/dav/calendars/%s/", cal.ID)
+	href := (&url.URL{Path: "/dav/calendars/" + cal.ID + "/"}).EscapedPath()
 	props := []Property{
 		{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}, Inner: `<collection/><calendar xmlns="` + nsCalDAV + `"/>`},
 		{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: cal.Name},
@@ -1838,7 +1858,7 @@ func (s *Server) buildEventResponse(username, calendarID, eventUID, eventData st
 // file). name is the resource name, not the UID.
 func (s *Server) buildEventResponseTag(calendarID, eventUID, eventData, etag string) Response {
 	// Request convention: "/dav/calendars/{calendarID}/{eventUID}" (no username segment).
-	href := fmt.Sprintf("/dav/calendars/%s/%s", calendarID, eventUID)
+	href := (&url.URL{Path: "/dav/calendars/" + calendarID + "/" + eventUID}).EscapedPath()
 	props := []Property{
 		{XMLName: xml.Name{Space: nsDAV, Local: "resourcetype"}},
 		{XMLName: xml.Name{Space: nsDAV, Local: "displayname"}, Value: eventUID},
