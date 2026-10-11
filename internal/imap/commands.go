@@ -405,7 +405,7 @@ func (s *Session) handleAuthPlain(args []string) error {
 		}
 		// Client may send "*" to cancel
 		if line == "*" {
-			s.WriteResponse(s.tag, "NO AUTHENTICATE cancelled")
+			s.WriteResponse(s.tag, "BAD AUTHENTICATE cancelled")
 			return nil
 		}
 		credentials, err = base64.StdEncoding.DecodeString(line)
@@ -440,7 +440,7 @@ func (s *Session) handleAuthLogin() error {
 		return fmt.Errorf("failed to read LOGIN username: %w", err)
 	}
 	if line == "*" {
-		s.WriteResponse(s.tag, "NO AUTHENTICATE cancelled")
+		s.WriteResponse(s.tag, "BAD AUTHENTICATE cancelled")
 		return nil
 	}
 	usernameBytes, err := base64.StdEncoding.DecodeString(line)
@@ -459,7 +459,7 @@ func (s *Session) handleAuthLogin() error {
 		return fmt.Errorf("failed to read LOGIN password: %w", err)
 	}
 	if line == "*" {
-		s.WriteResponse(s.tag, "NO AUTHENTICATE cancelled")
+		s.WriteResponse(s.tag, "BAD AUTHENTICATE cancelled")
 		return nil
 	}
 	passwordBytes, err := base64.StdEncoding.DecodeString(line)
@@ -1066,6 +1066,15 @@ func (s *Session) handleList(args []string) error {
 	return s.handleListLine(args, "x LIST "+strings.Join(quoted, " "))
 }
 
+// foldInboxPattern upper-cases a leading INBOX path element: RFC 3501 §5.1
+// makes INBOX case-insensitive, so LIST/LSUB "inbox" must find it (F6824).
+func foldInboxPattern(p string) string {
+	if len(p) >= 5 && strings.EqualFold(p[:5], "INBOX") && (len(p) == 5 || p[5] == '/') {
+		return "INBOX" + p[5:]
+	}
+	return p
+}
+
 // specialUseAttr maps a mailbox name to its RFC 6154 special-use attribute
 // ("" when it has none).
 func specialUseAttr(name string) string {
@@ -1197,7 +1206,7 @@ func (s *Session) handleListLine(args []string, line string) error {
 			s.WriteResponse(s.tag, "BAD "+derr.Error())
 			return nil
 		}
-		req.patterns[i] = normMailbox(d)
+		req.patterns[i] = foldInboxPattern(normMailbox(d))
 	}
 	var forms []string
 	for _, p := range req.patterns {
@@ -1269,6 +1278,35 @@ func (s *Session) handleListLine(args []string, line string) error {
 		exists[m] = true
 	}
 
+	// RFC 3501 §6.3.8: a "%" / "x/%" pattern must reveal hierarchy levels that
+	// only exist as parents of deeper mailboxes ("a" for "a/b/c"), reported
+	// \Noselect (F6820).
+	implicitParent := map[string]bool{}
+	if !req.selSubscribed && !req.selSpecialUse {
+		for _, m := range allMailboxes {
+			for i := 0; i < len(m); i++ {
+				if m[i] != '/' || i == 0 {
+					continue
+				}
+				par := m[:i]
+				if exists[par] || seen[par] {
+					continue
+				}
+				for _, p := range req.patterns {
+					if imapWildcardMatch(par, p) {
+						seen[par] = true
+						implicitParent[par] = true
+						mailboxes = append(mailboxes, par)
+						break
+					}
+				}
+			}
+		}
+		if len(implicitParent) > 0 {
+			sort.Strings(mailboxes)
+		}
+	}
+
 	for _, mbox := range mailboxes {
 		isSub := subSet[mbox]
 		special := specialUseAttr(mbox)
@@ -1307,7 +1345,9 @@ func (s *Session) handleListLine(args []string, line string) error {
 		}
 
 		var attrs []string
-		if !exists[mbox] {
+		if implicitParent[mbox] {
+			attrs = append(attrs, "\\Noselect")
+		} else if !exists[mbox] {
 			attrs = append(attrs, "\\NonExistent")
 		}
 		if hasChildren {
@@ -1355,6 +1395,7 @@ func (s *Session) handleLsub(args []string) error {
 		}
 		fullPattern += pattern
 	}
+	fullPattern = foldInboxPattern(fullPattern)
 
 	if s.server.mailstore == nil {
 		s.WriteResponse(s.tag, "NO Mailstore not available")
@@ -1611,7 +1652,8 @@ func (s *Session) handleAppendInner(args []string, line string, consumed *bool) 
 	}
 
 	// Check if non-synchronizing literal (no + suffix) - needs continuation
-	needsCont := !strings.Contains(line, "+}")
+	_, _, litNonSync, _ := trailingLiteral(line)
+	needsCont := !litNonSync // F6823: a mailbox name containing "+}" is not a LITERAL+ marker
 
 	// Request the literal if non-synchronizing
 	if needsCont {
@@ -1674,7 +1716,7 @@ func (s *Session) handleAppendInner(args []string, line string, consumed *bool) 
 			}
 			return skipRest()
 		}
-		if !strings.Contains(rest, "+}") {
+		if !restNonSync {
 			s.WriteContinuation(fmt.Sprintf("Ready for %d octets", nextSize))
 		}
 		ndata := make([]byte, nextSize)
@@ -2075,7 +2117,12 @@ func (s *Session) handleEnable(args []string) error {
 	// F5565: CONDSTORE and QRESYNC are no longer advertised (their STORE /
 	// FETCH / SEARCH / SELECT modifiers are not implemented), so ENABLE
 	// ignores them like any unknown extension (RFC 5161 §3.1) and answers
-	// an empty ENABLED.
+	// an empty ENABLED. RFC 5161 §3.1: "enable-data = ENABLE 1*(SP capability)",
+	// so a bare ENABLE is a syntax error (F6825).
+	if len(args) == 0 {
+		s.WriteResponse(s.tag, "BAD Missing capability name")
+		return nil
+	}
 	s.WriteData("ENABLED")
 
 	s.WriteResponse(s.tag, "OK ENABLE completed")
