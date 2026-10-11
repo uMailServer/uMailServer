@@ -108,3 +108,18 @@ func TestAuthUserLockoutClearedOnSuccess(t *testing.T) {
 		t.Fatal("counter not cleared")
 	}
 }
+
+// F6450: a successful login must not reset the IP counter for other users.
+func TestAuthSuccessDoesNotResetIPCounter(t *testing.T) {
+	srv := newLockoutServer(true)
+	for _, u := range []string{"a@example.com", "b@example.com"} {
+		runAuth(t, srv, "203.0.113.7", "AUTH PLAIN "+lkB64("\x00"+u+"\x00wrong"))
+	}
+	if got := runAuth(t, srv, "203.0.113.7", "AUTH PLAIN "+lkB64("\x00alice@example.com\x00secret")); !strings.HasPrefix(got, "235") {
+		t.Fatalf("login: %s", got)
+	}
+	runAuth(t, srv, "203.0.113.7", "AUTH PLAIN "+lkB64("\x00c@example.com\x00wrong"))
+	if !srv.isAuthLockedOut("203.0.113.7") {
+		t.Fatal("IP counter was reset by another account's success")
+	}
+}

@@ -128,6 +128,30 @@ func (s *ManageSieveServer) recordAuthFailure(ip string) {
 	s.authFailures[ip] = append(s.authFailures[ip], now)
 }
 
+// userLockKey is the per-account lockout key (trimmed, lower-cased, bounded).
+func userLockKey(u string) string {
+	u = strings.ToLower(strings.TrimSpace(u))
+	if len(u) > 256 {
+		u = u[:256]
+	}
+	return "user:" + u
+}
+
+// checkedAuth runs the credential check with a per-account lockout that is
+// evaluated once the username is known. F6451.
+func (s *ManageSieveServer) checkedAuth(user, password string) (bool, error) {
+	key := userLockKey(user)
+	if s.authLocked(key) {
+		return false, &manageSieveNo{msg: "too many failed authentication attempts", closeConn: true}
+	}
+	if s.authHandler != nil && s.authHandler(user, password) {
+		s.clearAuthFailures(key)
+		return true, nil
+	}
+	s.recordAuthFailure(key)
+	return false, nil
+}
+
 func (s *ManageSieveServer) clearAuthFailures(ip string) {
 	s.authMu.Lock()
 	defer s.authMu.Unlock()
@@ -484,9 +508,10 @@ func (s *ManageSieveServer) dispatchCommand(session *manageSieveSession, cmd str
 		}
 		err := s.cmdAuthenticate(session, args)
 		var no *manageSieveNo
-		if session.user != "" {
-			s.clearAuthFailures(ip)
-		} else if err != nil && !errors.As(err, &no) {
+		// F6451: success clears only that account's counter (in
+		// cmdAuthenticate); the IP counter is left to age out so one valid
+		// login cannot reset an attacker's failures against other accounts.
+		if session.user == "" && err != nil && !errors.As(err, &no) {
 			s.recordAuthFailure(ip)
 		}
 		if err != nil && !errors.As(err, &no) {
@@ -741,7 +766,11 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 		}
 
 		// Validate credentials using auth handler
-		if s.authHandler != nil && s.authHandler(authcid, password) {
+		ok, lerr := s.checkedAuth(authcid, password)
+		if lerr != nil {
+			return lerr
+		}
+		if ok {
 			session.user = s.sessionUser(authcid)
 			if err := s.sendResponse(session.conn, "OK \"Authentication successful\""); err != nil {
 				return err
@@ -776,7 +805,11 @@ func (s *ManageSieveServer) cmdAuthenticate(session *manageSieveSession, args []
 		}
 
 		// Validate credentials
-		if s.authHandler != nil && s.authHandler(string(username), string(password)) {
+		ok, lerr := s.checkedAuth(string(username), string(password))
+		if lerr != nil {
+			return lerr
+		}
+		if ok {
 			session.user = s.sessionUser(string(username))
 			if err := s.sendResponse(session.conn, "OK \"Authentication successful\""); err != nil {
 				return err
