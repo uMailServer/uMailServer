@@ -20,6 +20,8 @@ export interface Mail {
   starred: boolean
   folder: string
   hasAttachments: boolean
+  /** RFC 5322 Message-ID header, used for reply threading. */
+  messageId?: string
   size: number
 }
 
@@ -29,6 +31,8 @@ export interface SendMailRequest {
   bcc?: string[]
   subject: string
   body: string
+  inReplyTo?: string
+  references?: string[]
 }
 
 export interface MailListResponse {

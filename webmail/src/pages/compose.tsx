@@ -7,9 +7,12 @@ import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { quoteForReply, forwardBody } from "@/utils/quote"
 import api, { FLAG_ANSWERED } from "@/utils/api"
 
 const EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
+
+const COMPOSE_BACKUP_KEY = "umail.compose.backup"
 
 type Field = "to" | "cc" | "bcc"
 
@@ -79,6 +82,33 @@ export function ComposePage() {
   const latest = useRef({ to, cc, bcc, subject, body })
   latest.current = { to, cc, bcc, subject, body }
 
+  // Session-expiry safety net: a 401 hard-redirects to /login, so mirror the
+  // unsent text locally and restore it when a fresh compose page opens.
+  useEffect(() => {
+    if (draftId || origId) return
+    try {
+      const raw = sessionStorage.getItem(COMPOSE_BACKUP_KEY)
+      if (!raw) return
+      const b = JSON.parse(raw)
+      if (Array.isArray(b.to)) setTo(b.to.filter((x: unknown) => typeof x === "string"))
+      if (Array.isArray(b.cc)) setCc(b.cc.filter((x: unknown) => typeof x === "string"))
+      if (typeof b.subject === "string") setSubject((c) => c || b.subject)
+      if (typeof b.body === "string") setBody(b.body)
+    } catch { /* storage unavailable or corrupt */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const backupArmed = useRef(false)
+  useEffect(() => {
+    // Skip the mount pass so empty initial state cannot wipe the backup
+    // before the restore effect's setState values render.
+    if (!backupArmed.current) { backupArmed.current = true; return }
+    try {
+      if (sentRef.current) { sessionStorage.removeItem(COMPOSE_BACKUP_KEY); return }
+      if (to.length || cc.length || subject || body) sessionStorage.setItem(COMPOSE_BACKUP_KEY, JSON.stringify({ to, cc, subject, body }))
+      else sessionStorage.removeItem(COMPOSE_BACKUP_KEY)
+    } catch { /* ignore */ }
+  }, [to, cc, subject, body])
+
   useEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
@@ -95,6 +125,24 @@ export function ComposePage() {
   const [savedAt, setSavedAt] = useState<boolean>(false)
   const origId = searchParams.get("origId")
   const origFolder = searchParams.get("origFolder") || undefined
+  const mode = searchParams.get("mode")
+  const inReplyTo = searchParams.get("inReplyTo") || ""
+
+  // Reply/forward: prefill the quoted original once (never over user edits).
+  useEffect(() => {
+    if (draftId || !origId || (mode !== "reply" && mode !== "forward")) return
+    let cancelled = false
+    api.getMessage(origId, origFolder).then((m) => {
+      if (cancelled || !m) return
+      const who = m.fromName ? `${m.fromName} <${m.from}>` : m.from
+      const quoted = mode === "reply"
+        ? quoteForReply(who, m.date, m.body || "")
+        : forwardBody(who, m.date, m.subject, m.to || [], m.body || "")
+      setBody((cur) => (cur === "" ? quoted : cur))
+      savedSnapshot.current = JSON.stringify({ ...latest.current, body: "" })
+    }).catch(() => toast.error("Could not load the original message for quoting"))
+    return () => { cancelled = true }
+  }, [draftId, origId, origFolder, mode])
 
   // Prefill from an existing draft via GET /mail/message.
   useEffect(() => {
@@ -183,6 +231,7 @@ export function ComposePage() {
         ...(cur.bcc.length ? { bcc: cur.bcc } : {}),
         subject: cur.subject,
         body: cur.body,
+        ...(mode === "reply" && inReplyTo ? { inReplyTo } : {}),
       })
       // Best-effort follow-ups: the message is already sent.
       const tasks: Promise<unknown>[] = []
@@ -190,6 +239,7 @@ export function ComposePage() {
       if (origId) tasks.push(api.setFlags(origId, { add: [FLAG_ANSWERED], folder: origFolder }).catch(() => undefined))
       await Promise.all(tasks)
       if (!mounted.current) return
+      try { sessionStorage.removeItem(COMPOSE_BACKUP_KEY) } catch { /* ignore */ }
       toast.success("Email sent")
       navigate("/sent")
     } catch (err) {
