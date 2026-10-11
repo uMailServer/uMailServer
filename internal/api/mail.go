@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/mail"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -145,7 +146,27 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 		internalFolder = folder
 	}
 
-	emails, err := h.getEmailsFromStorage(userEmail, internalFolder)
+	// Pagination is counted from the newest message; each page is returned
+	// in ascending UID order. Bounds keep one request from reading every body.
+	limit, offset := defMailListLimit, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > maxMailListLimit {
+			h.sendError(w, http.StatusBadRequest, fmt.Sprintf("limit must be between 1 and %d", maxMailListLimit))
+			return
+		}
+		limit = n
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			h.sendError(w, http.StatusBadRequest, "offset must be a non-negative integer")
+			return
+		}
+		offset = n
+	}
+
+	emails, total, err := h.getEmailsPage(userEmail, internalFolder, limit, offset)
 	if err != nil {
 		h.sendError(w, http.StatusInternalServerError, "Failed to list emails")
 		return
@@ -154,7 +175,9 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"emails": emails,
-		"total":  len(emails),
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
 		"folder": folder,
 	}); err != nil {
 		fmt.Printf("ERROR: failed to encode mail list response: %v\n", err)
@@ -163,20 +186,39 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 
 // getEmailsFromStorage retrieves emails from real storage
 func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, error) {
+	emails, _, err := h.getEmailsPage(userEmail, mailbox, 0, 0)
+	return emails, err
+}
+
+// getEmailsPage returns up to limit emails (0 = all), skipping the offset
+// newest messages, plus the mailbox's total message count.
+func (h *MailHandler) getEmailsPage(userEmail, mailbox string, limit, offset int) ([]Mail, int, error) {
 	if h.mailDB == nil || h.msgStore == nil {
-		return []Mail{}, nil
+		return []Mail{}, 0, nil
 	}
 
 	// Ensure mailbox exists - try to get it
 	_, err := h.mailDB.GetMailbox(userEmail, mailbox)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// Get message UIDs
 	uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	total := len(uids)
+	if limit > 0 {
+		end := total - offset
+		if end < 0 {
+			end = 0
+		}
+		start := end - limit
+		if start < 0 {
+			start = 0
+		}
+		uids = uids[start:end]
 	}
 
 	emails := make([]Mail, 0, len(uids))
@@ -227,7 +269,7 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 		emails = append(emails, email)
 	}
 
-	return emails, nil
+	return emails, total, nil
 }
 
 // extractBody extracts the body from a raw email message
@@ -579,12 +621,11 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userVal := r.Context().Value("user")
-	if userVal == nil {
+	userEmail, ok := r.Context().Value("user").(string)
+	if !ok || userEmail == "" {
 		h.sendError(w, http.StatusUnauthorized, "Unauthorized")
 		return
 	}
-	userEmail := userVal.(string)
 
 	// Extract message ID from query string or request body
 	var messageID string

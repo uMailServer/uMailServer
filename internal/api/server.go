@@ -514,6 +514,9 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/send", http.HandlerFunc(s.mailHandler.handleMailSend).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/delete", http.HandlerFunc(s.mailHandler.handleMailDelete).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/move", http.HandlerFunc(s.mailHandler.handleMailMove).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/message", http.HandlerFunc(s.mailHandler.handleMailMessage).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/flags", http.HandlerFunc(s.mailHandler.handleMailFlags).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/draft", http.HandlerFunc(s.mailHandler.handleMailDraft).ServeHTTP)
 
 	// Cluster management (HA) — administrative operations, admin only
 	api.HandleFunc("/api/v1/cluster/status", s.adminMiddleware(http.HandlerFunc(s.handleClusterStatus)).ServeHTTP)
@@ -535,7 +538,7 @@ func (s *Server) limitBodyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
 			maxSize := int64(4 << 20) // 4 MB default
-			if r.URL.Path == "/api/v1/mail/send" {
+			if r.URL.Path == "/api/v1/mail/send" || r.URL.Path == "/api/v1/mail/draft" {
 				maxSize = 26 << 20 // 25MB message limit + JSON overhead
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, maxSize)

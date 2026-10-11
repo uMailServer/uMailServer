@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -57,6 +58,12 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Content-Security-Policy", strings.Join(csp, "; "))
 
+		// F6527: API responses carry per-user mail and tokens; keep them out of
+		// shared and browser caches.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+
 		// HSTS for HTTPS connections
 		if r.TLS != nil {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
@@ -104,6 +111,14 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 						http.Error(w, "Forbidden - CSRF check failed", http.StatusForbidden)
 						return
 					}
+					// F6520: a cookie is sent by the browser on cross-site
+					// requests, so for cookie-authenticated requests the
+					// source must be this host or an allowed CORS origin.
+					if hasAuthCookie(r) && !s.sourceAllowed(r, origin, referer) {
+						s.logger.Warn("CSRF: cross-origin cookie request", "origin", origin, "referer", referer, "path", r.URL.Path)
+						http.Error(w, "Forbidden - CSRF check failed", http.StatusForbidden)
+						return
+					}
 					// If origin is present but referer is missing (privacy tool stripped it), allow
 					// If referer is present but origin is missing, allow (some setups don't send Origin)
 				}
@@ -112,6 +127,35 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// hasAuthCookie reports whether the request carries the session cookie that
+// authMiddleware prefers over the Authorization header.
+func hasAuthCookie(r *http.Request) bool {
+	c, err := r.Cookie("jwt")
+	return err == nil && c.Value != ""
+}
+
+// sourceAllowed checks the Origin (preferred) or Referer host against the
+// request Host and the configured CORS origins.
+func (s *Server) sourceAllowed(r *http.Request, origin, referer string) bool {
+	src := origin
+	if src == "" {
+		src = referer
+	}
+	u, err := url.Parse(src)
+	if err != nil || u.Host == "" {
+		return false // includes Origin: null
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	for _, o := range s.config.CorsOrigins {
+		if ou, err := url.Parse(o); err == nil && ou.Host != "" && strings.EqualFold(ou.Scheme, u.Scheme) && strings.EqualFold(ou.Host, u.Host) {
+			return true
+		}
+	}
+	return false
 }
 
 // isSafeMethod returns true for HTTP methods that don't modify state

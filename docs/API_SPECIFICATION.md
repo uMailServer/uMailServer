@@ -219,6 +219,43 @@ paths:
         '429':
           description: Rate limit exceeded (too many emails sent)
 
+  /mail/message:
+    get:
+      tags: [Mail]
+      summary: Get one message (query form)
+      description: Read-only. Searches the caller's mailboxes (or only `folder`). Another user's id is 404.
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string}}
+        - {name: folder, in: query, schema: {type: string}}
+      responses:
+        '200': {description: Email}
+        '404': {description: Email not found}
+
+  /mail/flags:
+    post:
+      tags: [Mail]
+      summary: Set or clear message flags
+      description: 'Body {id|ids[], folder?, add[], remove[]}. Allowed flags: \\Seen, \\Flagged, \\Answered, \\Draft. All-or-nothing validation; 404 if any id is not the caller''s. Response {updated:[ids]}.'
+      responses:
+        '200': {description: Updated}
+        '400': {description: Invalid flag, id or folder}
+        '404': {description: Email not found}
+
+  /mail/draft:
+    post:
+      tags: [Mail]
+      summary: Save a draft
+      description: 'Body {id?, to[], cc[], bcc[], subject, body}. Stores in Drafts (flags \\Draft \\Seen). Response {id, folder:"Drafts", saved:true}. The id changes when content changes.'
+      responses:
+        '200': {description: Saved}
+    put:
+      tags: [Mail]
+      summary: Update a draft
+      description: Same body as POST; `id` is required and must be a draft of the caller (404 otherwise). The superseded draft is removed.
+      responses:
+        '200': {description: Saved}
+        '404': {description: Draft not found}
+
   /mail/{id}:
     get:
       tags: [Mail]
