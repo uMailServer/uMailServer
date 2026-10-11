@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,12 +77,61 @@ type Mailbox struct {
 
 // mailboxKey returns the bucket name for a user's mailbox metadata
 func mailboxKey(user, mailbox string) string {
-	return fmt.Sprintf("mailbox:%s:%s", user, mailbox)
+	return fmt.Sprintf("mailbox:%s:%s", keyUser(user), mailbox)
 }
 
 // messagesBucket returns the bucket name for a user's mailbox messages
 func messagesBucket(user, mailbox string) string {
-	return fmt.Sprintf("msgs:%s:%s", user, mailbox)
+	return fmt.Sprintf("msgs:%s:%s", keyUser(user), mailbox)
+}
+
+// keyUser makes a user name safe to embed in a ':'-separated bucket or key
+// name. Without it user "a" / mailbox "b:c" and user "a:b" / mailbox "c" share
+// the bucket "msgs:a:b:c", so one user could read, overwrite or be billed for
+// another's data (F6663). The mapping is injective, leaves every ordinary
+// address unchanged (no migration needed), and escapes with NUL, which never
+// appears in a ':' position.
+func keyUser(user string) string {
+	if !strings.ContainsAny(user, ":\x00") {
+		return user
+	}
+	return userKeyEscaper.Replace(user)
+}
+
+var (
+	userKeyEscaper   = strings.NewReplacer("\x00", "\x00z", ":", "\x00c")
+	userKeyUnescaper = strings.NewReplacer("\x00c", ":", "\x00z", "\x00")
+)
+
+// isINBOX reports whether name is INBOX in any case (RFC 3501: INBOX is
+// case-insensitive and always exists).
+func isINBOX(name string) bool { return strings.EqualFold(name, "INBOX") }
+
+// MaxStoredReferences bounds the References list kept per message so a
+// hostile header cannot bloat a metadata row without limit. The newest
+// (last) references are the closest ancestors and are kept.
+const MaxStoredReferences = 100
+
+// normalizeFlags drops empty flags and case-insensitive duplicates, keeping
+// the first spelling of each. It returns a new slice.
+func normalizeFlags(flags []string) []string {
+	if flags == nil {
+		return nil
+	}
+	out := make([]string, 0, len(flags))
+	seen := make(map[string]struct{}, len(flags))
+	for _, f := range flags {
+		if f == "" {
+			continue
+		}
+		k := strings.ToLower(f)
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, f)
+	}
+	return out
 }
 
 // GetMailbox retrieves mailbox information
@@ -202,6 +253,9 @@ func (db *Database) DeleteMailbox(user, mailbox string) error {
 	if db.bolt == nil {
 		return nil
 	}
+	if isINBOX(mailbox) {
+		return errors.New("cannot delete INBOX")
+	}
 	existed := false
 	err := db.bolt.Update(func(tx *bbolt.Tx) error {
 		if tx.Bucket([]byte(mailboxKey(user, mailbox))) != nil {
@@ -252,11 +306,11 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 			if err != nil {
 				return err
 			}
-			now := time.Now().Unix()
-			if now < 0 || now > 0x7FFFFFFF {
-				return fmt.Errorf("timestamp out of range for uidvalidity")
+			uv, err := nextUIDValidityTx(tx, newKey)
+			if err != nil {
+				return err
 			}
-			if err := newB.Put([]byte("uidvalidity"), itob(uint32(now))); err != nil {
+			if err := newB.Put([]byte("uidvalidity"), itob(uv)); err != nil {
 				return err
 			}
 			if err := newB.Put([]byte("uidnext"), itob(1)); err != nil {
@@ -275,6 +329,16 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 			return newB.Put(k, v)
 		}); err != nil {
 			return err
+		}
+
+		// F6665: the retired UIDVALIDITY of a previous mailbox with the
+		// destination's name is a floor; never go backwards across reuse.
+		if fb := tx.Bucket([]byte(uidValidityFloorBucket)); fb != nil {
+			if floor := btoi(fb.Get([]byte(newKey))); floor >= btoi(newB.Get([]byte("uidvalidity"))) {
+				if err := newB.Put([]byte("uidvalidity"), itob(floor+1)); err != nil {
+					return err
+				}
+			}
 		}
 
 		// Create new messages bucket and copy messages
@@ -301,7 +365,7 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 		// Migrate ACL entries to the new mailbox name
 		aclB := tx.Bucket([]byte("acl"))
 		if aclB != nil {
-			prefix := fmt.Sprintf("acl:%s:%s:", user, oldName)
+			prefix := aclOwnerMailboxPrefix(user, oldName)
 			// F5095: collect first, mutate after. Put/Delete on the bucket
 			// invalidate a live cursor (page splits/rebalances), which made
 			// the scan skip grants: they stayed on the old name and were
@@ -317,8 +381,7 @@ func (db *Database) RenameMailbox(user, oldName, newName string) error {
 			}
 			for _, m := range moves {
 				grantee := string(m.k[len(prefix):])
-				newKey := fmt.Sprintf("acl:%s:%s:%s", user, newName, grantee)
-				if err := aclB.Put([]byte(newKey), m.v); err != nil {
+				if err := aclB.Put([]byte(aclKey(user, newName, grantee)), m.v); err != nil {
 					return err
 				}
 				if err := aclB.Delete(m.k); err != nil {
@@ -343,7 +406,7 @@ func (db *Database) ListMailboxes(user string) ([]string, error) {
 	}
 
 	var result []string
-	prefix := fmt.Sprintf("mailbox:%s:", user)
+	prefix := fmt.Sprintf("mailbox:%s:", keyUser(user))
 	err := db.bolt.View(func(tx *bbolt.Tx) error {
 		c := tx.Cursor()
 		for k, _ := c.Seek([]byte(prefix)); k != nil && strings.HasPrefix(string(k), prefix); k, _ = c.Next() {
@@ -366,7 +429,7 @@ func (db *Database) ListMailboxes(user string) ([]string, error) {
 
 // subscribedBucket returns the bucket name for user's subscribed mailboxes
 func subscribedBucket(user string) string {
-	return fmt.Sprintf("subscribed:%s", user)
+	return fmt.Sprintf("subscribed:%s", keyUser(user))
 }
 
 // SetSubscribed sets the subscription status of a mailbox
@@ -460,6 +523,23 @@ func (db *Database) GetMailboxCounts(user, mailbox string) (exists, recent, unse
 	return exists, recent, unseen, err
 }
 
+// ErrUIDSpaceExhausted is returned by GetNextUID when the mailbox has issued
+// every UID; the caller must change UIDVALIDITY (recreate the mailbox).
+var ErrUIDSpaceExhausted = errors.New("mailbox UID space exhausted")
+
+// ensureUIDValidityTx gives a mailbox bucket that was auto-created by a
+// counter call a valid (non-zero, never reused) UIDVALIDITY.
+func ensureUIDValidityTx(tx *bbolt.Tx, b *bbolt.Bucket, key string) error {
+	if b.Get([]byte("uidvalidity")) != nil {
+		return nil
+	}
+	uv, err := nextUIDValidityTx(tx, key)
+	if err != nil {
+		return err
+	}
+	return b.Put([]byte("uidvalidity"), itob(uv))
+}
+
 // GetNextUID returns the next UID for a mailbox and increments it
 func (db *Database) GetNextUID(user, mailbox string) (uint32, error) {
 	if db.bolt == nil {
@@ -472,9 +552,17 @@ func (db *Database) GetNextUID(user, mailbox string) (uint32, error) {
 		if err != nil {
 			return err
 		}
+		if err := ensureUIDValidityTx(tx, b, mailboxKey(user, mailbox)); err != nil {
+			return err
+		}
 		uid = btoi(b.Get([]byte("uidnext")))
 		if uid == 0 {
 			uid = 1
+		}
+		if uid == math.MaxUint32 {
+			// uid+1 would wrap to 0 and the next call would re-issue UID 1.
+			uid = 0
+			return ErrUIDSpaceExhausted
 		}
 		return b.Put([]byte("uidnext"), itob(uid+1))
 	})
@@ -491,6 +579,9 @@ func (db *Database) GetNextModSeq(user, mailbox string) (uint64, error) {
 	err := db.bolt.Update(func(tx *bbolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(mailboxKey(user, mailbox)))
 		if err != nil {
+			return err
+		}
+		if err := ensureUIDValidityTx(tx, b, mailboxKey(user, mailbox)); err != nil {
 			return err
 		}
 		modSeq = btoi64(b.Get([]byte("highestmodseq")))
@@ -614,23 +705,50 @@ func (db *Database) StoreMessageMetadata(user, mailbox string, uid uint32, meta 
 		return nil
 	}
 
-	data, err := json.Marshal(meta)
-	if err != nil {
-		return err
+	if meta == nil {
+		return errors.New("nil message metadata")
+	}
+	// Work on a copy: normalisation must not mutate the caller's struct.
+	cp := *meta
+	cp.Flags = normalizeFlags(cp.Flags)
+	if len(cp.References) > MaxStoredReferences {
+		cp.References = append([]string(nil), cp.References[len(cp.References)-MaxStoredReferences:]...)
 	}
 
 	preexisting := false
-	err = db.bolt.Update(func(tx *bbolt.Tx) error {
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists([]byte(messagesBucket(user, mailbox)))
 		if err != nil {
 			return err
 		}
-		if b.Get(itob(uid)) != nil {
+		if old := b.Get(itob(uid)); old != nil {
 			preexisting = true
+			// F6666: a replace carrying a stale (or zero) ModSeq must not
+			// lower the row's ModSeq; give it a fresh one instead so CONDSTORE
+			// clients still see the change.
+			var prev MessageMetadata
+			if json.Unmarshal(old, &prev) == nil && cp.ModSeq <= prev.ModSeq {
+				if err := raiseHighestModSeqTx(tx, user, mailbox, prev.ModSeq); err != nil {
+					return err
+				}
+				ms, err := db.getNextModSeqTx(tx, user, mailbox)
+				if err != nil {
+					return err
+				}
+				cp.ModSeq = ms
+			}
+		}
+		// HIGHESTMODSEQ must cover every message ModSeq (RFC 7162).
+		if err := raiseHighestModSeqTx(tx, user, mailbox, cp.ModSeq); err != nil {
+			return err
+		}
+		data, err := json.Marshal(&cp)
+		if err != nil {
+			return err
 		}
 		return b.Put(itob(uid), data)
 	})
-	if err == nil && meta != nil && meta.MessageID != "" {
+	if err == nil && meta.MessageID != "" {
 		kind := ChangeKindCreated
 		if preexisting {
 			kind = ChangeKindUpdated
@@ -663,23 +781,27 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 
 	preexisting := false
 	err := db.bolt.Update(func(tx *bbolt.Tx) error {
-		b, err := tx.CreateBucketIfNotExists([]byte(messagesBucket(user, mailbox)))
-		if err != nil {
-			return err
+		// F6660: an update racing an expunge must not resurrect the row (or
+		// invent a bucket for a mailbox that no longer exists).
+		b := tx.Bucket([]byte(messagesBucket(user, mailbox)))
+		if b == nil {
+			return nil
 		}
 
 		var meta MessageMetadata
 		data := b.Get(itob(uid))
-		if data != nil {
-			preexisting = true
-			if err := json.Unmarshal(data, &meta); err != nil {
-				return err
-			}
+		if data == nil {
+			return nil
+		}
+		preexisting = true
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return err
 		}
 
 		if err := fn(&meta); err != nil {
 			return err
 		}
+		meta.Flags = normalizeFlags(meta.Flags)
 
 		// Update ModSeq if this is an existing message (RFC 7162)
 		if preexisting {
@@ -703,6 +825,19 @@ func (db *Database) UpdateMessageMetadataFunc(user, mailbox string, uid uint32, 
 		_ = struct{}{}
 	}
 	return err
+}
+
+// raiseHighestModSeqTx lifts the mailbox's HIGHESTMODSEQ to at least v. It
+// never creates the mailbox record and never lowers the value.
+func raiseHighestModSeqTx(tx *bbolt.Tx, user, mailbox string, v uint64) error {
+	if v == 0 {
+		return nil
+	}
+	mb := tx.Bucket([]byte(mailboxKey(user, mailbox)))
+	if mb == nil || btoi64(mb.Get([]byte("highestmodseq"))) >= v {
+		return nil
+	}
+	return mb.Put([]byte("highestmodseq"), itob64(v))
 }
 
 // getNextModSeqTx returns the next modseq for a mailbox within a transaction
@@ -851,7 +986,7 @@ func btoi64(b []byte) uint64 {
 
 // threadBucket returns the bucket name for thread storage
 func threadBucket(user string) string {
-	return fmt.Sprintf("threads:%s", user)
+	return fmt.Sprintf("threads:%s", keyUser(user))
 }
 
 // GetOrCreateThreadID finds an existing thread for a message or creates a new one
@@ -977,8 +1112,10 @@ func NormalizeSubject(subject string) string {
 			subject = strings.TrimSpace(subject[3:])
 		case strings.HasPrefix(upper, "RE["):
 			// Handle Re[n]: format
+			// Only a numeric counter "Re[12]:" is a reply prefix; anything
+			// else ("Re[ticket 4] ... ]:") is subject text.
 			idx := strings.Index(subject, "]:")
-			if idx == -1 {
+			if idx < 3 || !isDigits(subject[3:idx]) {
 				return strings.TrimSpace(subject)
 			}
 			subject = strings.TrimSpace(subject[idx+2:])
@@ -990,6 +1127,18 @@ func NormalizeSubject(subject string) string {
 			return strings.TrimSpace(subject)
 		}
 	}
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // generateThreadID creates a unique thread ID based on subject and timestamp
@@ -1118,6 +1267,9 @@ func (db *Database) UpdateThread(user string, thread *Thread) error {
 		return nil
 	}
 
+	if thread == nil || thread.ThreadID == "" {
+		return errors.New("thread requires a non-empty ThreadID")
+	}
 	data, err := json.Marshal(thread)
 	if err != nil {
 		return err

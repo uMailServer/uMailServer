@@ -45,7 +45,7 @@ const ChangesRetention = 30 * 24 * time.Hour
 const ChangesMaxEntriesPerUser = 50000
 
 func changesBucket(user string) string {
-	return fmt.Sprintf("changes:%s", user)
+	return fmt.Sprintf("changes:%s", keyUser(user))
 }
 
 func seqKey(s uint64) []byte {

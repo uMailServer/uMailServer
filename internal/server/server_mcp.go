@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -21,6 +23,12 @@ func (s *Server) startMCP() error {
 
 	mcpAddr := fmt.Sprintf("%s:%d", s.config.MCP.Bind, s.config.MCP.Port)
 	mcpSrv := mcp.NewServer(s.database)
+	// F6593: an empty bind means all interfaces; a generated token read from
+	// a local file is not an acceptable credential for a network-exposed
+	// listener, so require an explicit token there.
+	if !isLoopbackBind(s.config.MCP.Bind) && s.config.MCP.AuthToken == "" && s.config.MCP.AdminAuthToken == "" {
+		return fmt.Errorf("MCP: refusing to listen on non-loopback bind %q without an explicit mcp.auth_token", s.config.MCP.Bind)
+	}
 	if s.config.MCP.AuthToken == "" && s.config.MCP.AdminAuthToken == "" {
 		// F5590: a generated token must be obtainable by the operator, or
 		// no client can ever authenticate. Keep it in data_dir (0600, stable
@@ -73,6 +81,10 @@ func (s *Server) loadOrCreateMCPToken() (token, path string, err error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		if token = strings.TrimSpace(string(data)); token != "" {
+			// F6593: an existing file may have looser permissions.
+			if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
+				return "", path, err
+			}
 			return token, path, nil
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -83,4 +95,18 @@ func (s *Server) loadOrCreateMCPToken() (token, path string, err error) {
 		return "", path, err
 	}
 	return token, path, nil
+}
+
+// isLoopbackBind reports whether bind names only a loopback address. An empty
+// bind (all interfaces) and unspecified addresses are not loopback.
+func isLoopbackBind(bind string) bool {
+	bind = strings.Trim(strings.TrimSpace(bind), "[]")
+	if bind == "" {
+		return false
+	}
+	if strings.EqualFold(bind, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(bind)
+	return ip != nil && ip.IsLoopback()
 }

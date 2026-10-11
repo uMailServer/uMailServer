@@ -33,12 +33,12 @@ func (s *Server) handleAliases(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.createAlias(w, r)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET, POST")
 	}
 }
 
 func (s *Server) handleAliasDetail(w http.ResponseWriter, r *http.Request) {
-	suffix := strings.TrimPrefix(r.URL.Path, "/api/v1/aliases/")
+	suffix := strings.ToLower(strings.TrimPrefix(r.URL.Path, "/api/v1/aliases/")) // F6653
 
 	switch r.Method {
 	case http.MethodGet:
@@ -48,7 +48,7 @@ func (s *Server) handleAliasDetail(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		s.deleteAlias(w, r, suffix)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET, PUT, DELETE")
 	}
 }
 
@@ -196,6 +196,7 @@ func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request, alias strin
 		return
 	}
 
+	req.Target = strings.ToLower(strings.TrimSpace(req.Target)) // F6653
 	if req.Target != "" {
 		targetUser, targetDomain := parseEmail(req.Target)
 		if targetUser == "" || targetDomain == "" {

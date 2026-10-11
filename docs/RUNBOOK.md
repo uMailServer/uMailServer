@@ -54,17 +54,18 @@ sudo kill -SIGKILL $(cat /var/lib/umailserver/umailserver.pid)
 
 ```bash
 # Full backup (config + database + messages)
-umailserver backup create --path /path/to/backup.tar.gz.enc
+# (the argument is a DIRECTORY; a timestamped umailserver_backup_<TS>.tar.gz is created inside)
+umailserver backup /path/to/backups --config /etc/umailserver/umailserver.yaml
 
-# With encryption
-umailserver backup create --path /backup/$(date +%Y%m%d).tar.gz.enc --password "strong-password"
+# With encryption (prefer the env var; --password is visible in ps)
+UMAILSERVER_BACKUP_PASSWORD="strong-password" umailserver backup /backup --config /etc/umailserver/umailserver.yaml
 ```
 
 ### Scheduling Backups (cron)
 
 ```bash
 # Daily backup at 2 AM
-0 2 * * * umailserver backup create --path /backups/umailserver-$(date +\%Y\%m\%d).tar.gz.enc --password "password"
+0 2 * * * UMAILSERVER_BACKUP_PASSWORD="password" umailserver backup /backups --config /etc/umailserver/umailserver.yaml
 ```
 
 ### Restoring from Backup
@@ -74,10 +75,11 @@ umailserver backup create --path /backup/$(date +%Y%m%d).tar.gz.enc --password "
 sudo systemctl stop umailserver
 
 # Restore
-umailserver backup restore /path/to/backup.tar.gz.enc --password "password"
+umailserver restore /path/to/umailserver_backup_<TS>.tar.gz.enc --password "password"
 
 # Verify
-umailserver diagnostics --check-storage
+umailserver status
+umailserver db status
 
 # Restart
 sudo systemctl start umailserver
@@ -91,13 +93,13 @@ sudo systemctl start umailserver
 
 ```bash
 # Liveness (is server alive?)
-curl http://localhost:8080/health/live
+curl https://localhost/health
 
 # Readiness (is server ready to accept traffic?)
-curl http://localhost:8080/health/ready
+curl https://localhost/health/ready
 
 # Full health report
-curl http://localhost:8080/health
+curl https://localhost/health
 ```
 
 ### Metrics
@@ -107,7 +109,7 @@ curl http://localhost:8080/health
 curl http://localhost:9090/metrics
 
 # API metrics endpoint
-curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/metrics
+curl -H "Authorization: Bearer <token>" https://localhost/api/v1/metrics
 ```
 
 ### Log Inspection
@@ -120,7 +122,7 @@ tail -100 /var/log/umailserver/umailserver.log | grep -i error
 tail -100 /var/lib/umailserver/logs/audit.log | jq .
 
 # Queue status
-curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/queue
+curl -H "Authorization: Bearer <token>" https://localhost/api/v1/queue
 ```
 
 ---
@@ -191,7 +193,7 @@ sudo systemctl restart umailserver
 tail -50 /var/log/umailserver/umailserver.log
 
 # Verify config
-umailserver setup --validate --config /etc/umailserver/umailserver.yaml
+umailserver config check --config /etc/umailserver/umailserver.yaml
 
 # Check ports are available
 ss -tlnp | grep -E ':(25|465|587|143|993|110|995|8080)\b'
@@ -220,13 +222,13 @@ rm /var/lib/umailserver/umailserver.db.lock
 
 ```bash
 # Check queue status
-curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/queue
+curl -H "Authorization: Bearer <token>" https://localhost/api/v1/queue
 
 # View pending entries
-umailserver diagnostics --queue
+umailserver queue list
 
-# Force retry
-umailserver queue retry --all
+# Re-queue all failed entries (or one: umailserver queue retry <id>)
+umailserver queue flush
 ```
 
 ### Authentication Failures
@@ -238,12 +240,12 @@ umailserver queue retry --all
 grep login_failure /var/lib/umailserver/logs/audit.log
 
 # Verify account exists
-curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/accounts/user@example.com
+curl -H "Authorization: Bearer <token>" https://localhost/api/v1/accounts/user@example.com
 
 # Reset password if needed
 curl -X PUT -H "Authorization: Bearer <token>" \
   -d '{"password": "newpassword123"}' \
-  http://localhost:8080/api/v1/accounts/user@example.com
+  https://localhost/api/v1/accounts/user@example.com
 ```
 
 ---
@@ -259,11 +261,11 @@ sudo systemctl stop umailserver
 # 2. Backup current state
 cp -r /var/lib/umailserver /var/lib/umailserver.broken
 
-# 3. Run repair tool
-umailserver diagnostics --repair
+# 3. Check database state
+umailserver db status
 
-# 4. If repair fails, restore from backup
-umailserver backup restore /path/to/backup.tar.gz.enc --password "password"
+# 4. If the database is unusable, restore from backup
+umailserver restore /path/to/umailserver_backup_<TS>.tar.gz.enc --password "password"
 
 # 5. Restart
 sudo systemctl start umailserver
@@ -290,13 +292,10 @@ sudo systemctl restart umailserver
 
 ```bash
 # Check certificate status
-umailserver diagnostics --tls
+umailserver check tls mail.example.com
 
-# Force ACME renewal
-umailserver tls renew
-
-# Or import custom certificate
-umailserver tls import --cert /path/to/cert.pem --key /path/to/key.pem
+# ACME renews automatically; to use a custom certificate set
+# tls.cert_file / tls.key_file in umailserver.yaml and restart
 ```
 
 ### Disk Full
@@ -309,15 +308,14 @@ df -h /var/lib/umailserver
 du -ah /var/lib/umailserver | sort -rh | head -20
 
 # Clean old backups
-umailserver backup list
-umailserver backup prune --keep 3
+ls -lt /backups   # delete old umailserver_backup_*.tar.gz* files manually
 
 # Clean logs
 journalctl --vacuum-size=100M
 find /var/log/umailserver -name "*.log.*" -delete
 
 # Clean mail queue (failed messages)
-umailserver queue purge --status failed
+umailserver queue list   # then: umailserver queue drop <id>
 ```
 
 ---

@@ -98,7 +98,9 @@ type Server struct {
 	// for deliveries before closing indexWork and the databases.
 	deliveryMu     sync.Mutex
 	deliveryClosed bool
-	deliveries     sync.WaitGroup
+	// sieveFolderFaultHook injects per-folder delivery failures in tests.
+	sieveFolderFaultHook func(folder string) error
+	deliveries           sync.WaitGroup
 }
 
 // New creates a new Server instance

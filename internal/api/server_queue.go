@@ -17,7 +17,7 @@ func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.listQueue(w, r)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET")
 	}
 }
 
@@ -34,7 +34,7 @@ func (s *Server) handleQueueDetail(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		s.dropQueueEntry(w, r, id)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET, POST, DELETE")
 	}
 }
 

@@ -927,7 +927,7 @@ func TestGreylistStage_AllowedEntryAccepted(t *testing.T) {
 	ip := net.ParseIP("192.168.1.100")
 
 	// Create the entry and set it as allowed with a past firstSeen
-	key := fmt.Sprintf("%s:%s:%s", ip.String(), "s@example.com", "r@example.com")
+	key := greylistClient(ip) + "|s@example.com|r@example.com"
 	stage.greylist[key] = &greylistEntry{
 		firstSeen: time.Now().Add(-10 * time.Minute),
 		allowed:   true,
@@ -949,7 +949,7 @@ func TestGreylistStage_EntryBecomesAllowed(t *testing.T) {
 	ip := net.ParseIP("192.168.1.101")
 
 	// Create entry with firstSeen 6 minutes ago (past the 5-min window)
-	key := fmt.Sprintf("%s:%s:%s", ip.String(), "s@example.com", "r@example.com")
+	key := greylistClient(ip) + "|s@example.com|r@example.com"
 	stage.greylist[key] = &greylistEntry{
 		firstSeen: time.Now().Add(-6 * time.Minute),
 		allowed:   false,

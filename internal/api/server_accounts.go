@@ -20,7 +20,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		s.createAccount(w, r)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET, POST")
 	}
 }
 
@@ -42,7 +42,8 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 //	@Success 201 {object} map[string]interface{} "Account created"
 //	@Router /api/v1/accounts [post]
 func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) {
-	suffix := r.URL.Path[len("/api/v1/accounts/"):]
+	// F6655: addresses are stored lower-case; mixed-case paths 404'd.
+	suffix := strings.ToLower(r.URL.Path[len("/api/v1/accounts/"):])
 
 	// Handle TOTP 2FA sub-paths
 	if len(suffix) > 11 && suffix[len(suffix)-11:] == "/totp/setup" {
@@ -70,7 +71,7 @@ func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) {
 	case http.MethodDelete:
 		s.deleteAccount(w, r, suffix)
 	default:
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "GET, PUT, DELETE")
 	}
 }
 
@@ -91,7 +92,7 @@ func (s *Server) handleAccountDetail(w http.ResponseWriter, r *http.Request) {
 //	@Router /api/v1/account/password [post]
 func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
+		s.methodNotAllowed(w, "POST")
 		return
 	}
 
@@ -443,6 +444,16 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
+	// F6651: same validation as the self-service forwarding endpoint.
+	if req.ForwardTo != nil {
+		fwd, valid := normalizeForwardTo(*req.ForwardTo)
+		if !valid {
+			s.sendError(w, http.StatusBadRequest, "forward_to must be a valid email address")
+			return
+		}
+		req.ForwardTo = &fwd
+	}
+
 	if req.QuotaLimit != nil && *req.QuotaLimit < 0 {
 		s.sendError(w, http.StatusBadRequest, "quota_limit must be non-negative")
 		return
@@ -498,6 +509,27 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 			action = "promoted"
 		}
 		s.auditLogger.LogAccountUpdate(authUser, email, ip, []string{"admin_status_" + action})
+	}
+
+	// F6650: never leave the system without an active administrator.
+	adminGuardMu.Lock()
+	defer adminGuardMu.Unlock()
+	if account.IsAdmin && account.IsActive {
+		stillAdmin, stillActive := wantAdmin, account.IsActive
+		if req.IsActive != nil {
+			stillActive = *req.IsActive
+		}
+		if !stillAdmin || !stillActive {
+			others, err := s.otherActiveAdmins(func(d, l string) bool { return d == domain && l == user })
+			if err != nil {
+				s.sendError(w, http.StatusInternalServerError, "failed to update account")
+				return
+			}
+			if !others {
+				s.sendError(w, http.StatusConflict, "cannot demote or deactivate the last active administrator")
+				return
+			}
+		}
 	}
 
 	var newHash, newAPOP string
@@ -588,13 +620,27 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 
 	// F6130: deleting a missing account is a 404, not a 204 with an audit
 	// entry for a deletion that never happened.
-	if _, err := s.db.GetAccount(domain, user); err != nil {
+	adminGuardMu.Lock() // F6650
+	defer adminGuardMu.Unlock()
+	target, err := s.db.GetAccount(domain, user)
+	if err != nil {
 		if isKeyNotFound(err) {
 			s.sendError(w, http.StatusNotFound, "account not found")
 		} else {
 			s.sendError(w, http.StatusInternalServerError, "failed to delete account")
 		}
 		return
+	}
+	if target.IsAdmin && target.IsActive {
+		others, err := s.otherActiveAdmins(func(d, l string) bool { return d == domain && l == user })
+		if err != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to delete account")
+			return
+		}
+		if !others {
+			s.sendError(w, http.StatusConflict, "cannot delete the last active administrator")
+			return
+		}
 	}
 	if err := s.db.DeleteAccount(domain, user); err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to delete account")

@@ -163,12 +163,60 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 		}
 		add(f)
 	}
+	// F6591: deliver every target even when one fails. Reporting a failure
+	// after earlier copies were stored makes the sender retry and duplicate
+	// them, so once any copy is stored the recipient counts as delivered; a
+	// failed folder falls back to an INBOX keep (unless INBOX is what failed).
+	var firstErr error
+	stored := 0
+	var failedFolders []string
 	for _, f := range targets {
-		if err := s.deliverLocalFor(rcpt, user, domain, from, data, f); err != nil {
-			return err
+		err := s.sieveFolderFault(f)
+		if err == nil {
+			err = s.deliverLocalFor(rcpt, user, domain, from, data, f)
+		}
+		if err != nil {
+			s.logger.Warn("Sieve delivery to folder failed", "mailbox", mailbox, "folder", f, "error", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			failedFolders = append(failedFolders, f)
+			continue
+		}
+		stored++
+	}
+	if firstErr == nil {
+		return nil
+	}
+	if stored == 0 {
+		return firstErr
+	}
+	// At least one copy exists: keep INBOX as the fallback for failures.
+	inboxStored := false
+	for _, f := range targets {
+		if f == "" && !sieveHasFolder(failedFolders, "") {
+			inboxStored = true
+		}
+	}
+	if !inboxStored {
+		err := s.sieveFolderFault("")
+		if err == nil {
+			err = s.deliverLocalFor(rcpt, user, domain, from, data, "")
+		}
+		if err != nil {
+			s.logger.Warn("Sieve INBOX fallback failed; other copies were stored", "mailbox", mailbox, "error", err)
 		}
 	}
 	return nil
+}
+
+func sieveHasFolder(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // redirectBySieve queues the script's redirects from mailbox and reports
@@ -208,4 +256,13 @@ func (s *Server) redirectBySieve(mailbox, from string, data []byte, redirects []
 		s.logger.Debug("Message redirected by Sieve", "mailbox", mailbox, "from", from, "to", addr.Address)
 	}
 	return failed
+}
+
+// sieveFolderFault returns the injected per-folder failure, if any (nil in
+// production; set by tests to exercise partial multi-folder delivery).
+func (s *Server) sieveFolderFault(folder string) error {
+	if s.sieveFolderFaultHook == nil {
+		return nil
+	}
+	return s.sieveFolderFaultHook(folder)
 }

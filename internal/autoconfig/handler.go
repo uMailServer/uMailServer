@@ -22,6 +22,46 @@ type ConfigProvider interface {
 	SupportsSSL(domain string) bool
 }
 
+// HostedDomainChecker is optionally implemented by a ConfigProvider. When it
+// is, the handler answers only for domains this server hosts and returns 404
+// for anything else (F6590), instead of reflecting any well-formed domain
+// into a config document.
+type HostedDomainChecker interface {
+	IsHostedDomain(domain string) bool
+}
+
+// HostedProvider decorates a ConfigProvider with a hosted-domain lookup.
+type HostedProvider struct {
+	ConfigProvider
+	Lookup func(domain string) bool
+}
+
+// NewHostedProvider wraps base (DefaultConfigProvider when nil) with lookup.
+func NewHostedProvider(base ConfigProvider, lookup func(domain string) bool) *HostedProvider {
+	if base == nil {
+		base = &DefaultConfigProvider{}
+	}
+	return &HostedProvider{ConfigProvider: base, Lookup: lookup}
+}
+
+// IsHostedDomain reports whether domain is hosted; the name is compared
+// case-insensitively with any trailing dot removed. A nil Lookup hosts nothing.
+func (p *HostedProvider) IsHostedDomain(domain string) bool {
+	domain = strings.TrimRight(strings.ToLower(strings.TrimSpace(domain)), ".")
+	if domain == "" || p.Lookup == nil {
+		return false
+	}
+	return p.Lookup(domain)
+}
+
+// hosted applies the optional hosted-domain check.
+func (h *Handler) hosted(domain string) bool {
+	if c, ok := h.provider.(HostedDomainChecker); ok {
+		return c.IsHostedDomain(domain)
+	}
+	return true
+}
+
 // DefaultConfigProvider provides default configuration
 type DefaultConfigProvider struct{}
 
@@ -99,6 +139,11 @@ func (h *Handler) HandleAutoconfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.hosted(domain) {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
 	config := h.buildAutoconfig(domain)
 
 	w.Header().Set("Content-Type", "application/xml")
@@ -159,6 +204,11 @@ func (h *Handler) HandleAutodiscover(w http.ResponseWriter, r *http.Request) {
 	domain := h.validator.ExtractDomain(email)
 	if domain == "" || !h.validator.IsValidDomain(domain) {
 		http.Error(w, "Invalid email domain", http.StatusBadRequest)
+		return
+	}
+
+	if !h.hosted(domain) {
+		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 

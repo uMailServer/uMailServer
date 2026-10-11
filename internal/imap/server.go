@@ -461,6 +461,11 @@ type Session struct {
 	user     string
 	selected *Mailbox
 
+	// F6600: per-session sequence snapshot (see seqview.go).
+	snap      []uint32
+	snapOn    bool
+	syncOnTag bool
+
 	// TLS
 	tlsConn   *tls.Conn
 	tlsActive bool
@@ -657,6 +662,10 @@ func (s *Session) setWriteDeadline() {
 // WriteResponse writes an IMAP response
 func (s *Session) WriteResponse(tag string, response string) {
 	s.setWriteDeadline()
+	if s.syncOnTag && tag == s.tag {
+		s.syncOnTag = false
+		s.syncSelected()
+	}
 	line := fmt.Sprintf("%s %s\r\n", tag, response)
 	_, _ = s.writer.WriteString(line) // Best-effort write
 	_ = s.writer.Flush()              // Best-effort flush

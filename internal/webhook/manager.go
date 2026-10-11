@@ -48,6 +48,8 @@ type Manager struct {
 	delivered   atomic.Uint64
 	backoffBase time.Duration
 	backoffMax  time.Duration
+	maxTotal    time.Duration // total delivery budget (all attempts + backoffs)
+	secretMu    sync.RWMutex  // guards secret (rotation)
 }
 
 const (
@@ -56,6 +58,10 @@ const (
 	// registryFile is the persisted registry name inside the data directory.
 	registryFile = "webhooks.json"
 	maxAttempts  = 3
+	// MaxPayloadBytes caps one event body; larger events are dropped (F6634).
+	MaxPayloadBytes = 256 << 10
+	// defaultMaxTotal bounds all attempts and backoffs of one delivery.
+	defaultMaxTotal = 90 * time.Second
 )
 
 // Stop aborts pending retry backoffs and refuses new deliveries. It is
@@ -249,6 +255,10 @@ type Webhook struct {
 
 // Event represents a webhook event
 type Event struct {
+	// ID is stable across retries of one delivery and is sent as the
+	// Idempotency-Key / X-Webhook-Event-ID header: receivers dedupe on it, so a
+	// retry after a lost 2xx ack (at-least-once delivery) is detectable (F6635).
+	ID        string      `json:"id,omitempty"`
 	Type      string      `json:"type"`
 	Timestamp time.Time   `json:"timestamp"`
 	Data      interface{} `json:"data"`
@@ -277,6 +287,7 @@ func NewManager(database *db.DB, secret string) *Manager {
 		stopCh:         make(chan struct{}),
 		backoffBase:    time.Second,
 		backoffMax:     30 * time.Second,
+		maxTotal:       defaultMaxTotal,
 	}
 	// The SSRF guard is enforced again on the address actually dialed
 	// (F5175/F5176): isValidWebhookURL resolves the host once, but the
@@ -319,6 +330,7 @@ func (m *Manager) SetAllowPrivateIP(allow bool) {
 // Trigger sends event to matching webhooks
 func (m *Manager) Trigger(eventType string, data interface{}) {
 	event := Event{
+		ID:        newEventID(),
 		Type:      eventType,
 		Timestamp: time.Now(),
 		Data:      data,
@@ -420,12 +432,24 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		return
 	}
 
+	if event.ID == "" {
+		event.ID = newEventID()
+	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		cb.RecordFailure()
 		*finalErr = err
 		return
 	}
+	// An oversized event is a local fault, not an endpoint failure: drop it
+	// without touching the circuit breaker (F6634).
+	if len(payload) > MaxPayloadBytes {
+		m.failed.Add(1)
+		fmt.Printf("webhook: event %s dropped: payload %d bytes exceeds %d\n", event.Type, len(payload), MaxPayloadBytes)
+		*finalErr = fmt.Errorf("payload too large")
+		return
+	}
+	deadline := time.Now().Add(m.maxTotal)
 
 	// Retry logic: maxAttempts attempts with exponential backoff + jitter.
 	var lastErr error
@@ -434,7 +458,12 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		*attempts = attempt + 1
 		if attempt > 0 {
-			t := time.NewTimer(m.backoffDelay(attempt))
+			delay := m.backoffDelay(attempt)
+			if m.maxTotal > 0 && time.Now().Add(delay).After(deadline) {
+				lastErr = fmt.Errorf("retry budget exhausted")
+				break
+			}
+			t := time.NewTimer(delay)
 			select {
 			case <-t.C:
 			case <-m.stopCh:
@@ -445,11 +474,15 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 			}
 		}
 
-		req, err := http.NewRequest("POST", hook.URL, bytes.NewReader(payload))
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		req, err := http.NewRequestWithContext(ctx, "POST", hook.URL, bytes.NewReader(payload))
 		if err != nil {
+			cancel()
 			lastErr = err
 			continue
 		}
+		req.Header.Set("Idempotency-Key", event.ID)
+		req.Header.Set("X-Webhook-Event-ID", event.ID)
 
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "uMailServer-Webhook/1.0")
@@ -459,7 +492,7 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		req.Header.Set("X-Webhook-Attempt", fmt.Sprintf("%d", attempt+1))
 
 		// Sign payload if secret configured
-		if m.secret != "" {
+		if m.getSecret() != "" {
 			sig := m.sign(payload)
 			// Legacy header: bare hex HMAC of the body only (unchanged).
 			req.Header.Set("X-Webhook-Signature", sig)
@@ -472,6 +505,7 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 
 		resp, err := m.client.Do(req)
 		if err != nil {
+			cancel()
 			lastErr = err
 			continue
 		}
@@ -479,11 +513,13 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 		// Success: 2xx status code
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			_ = resp.Body.Close()
+			cancel()
 			delivered = true
 			break
 		}
 
 		_ = resp.Body.Close()
+		cancel()
 		lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 
 		// Don't retry on 4xx errors (client errors), except 408/429 which
@@ -633,7 +669,7 @@ func DeriveSigningKey(master string) string {
 
 // sign creates HMAC signature
 func (m *Manager) sign(payload []byte) string {
-	h := hmac.New(sha256.New, []byte(m.secret))
+	h := hmac.New(sha256.New, []byte(m.getSecret()))
 	h.Write(payload)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -642,7 +678,7 @@ func (m *Manager) sign(payload []byte) string {
 // with the key from DeriveSigningKey, compare in constant time, and reject
 // timestamps older than their tolerance (e.g. 5 minutes).
 func (m *Manager) signTimestamped(ts string, payload []byte) string {
-	h := hmac.New(sha256.New, []byte(m.secret))
+	h := hmac.New(sha256.New, []byte(m.getSecret()))
 	h.Write([]byte(ts))
 	h.Write([]byte("."))
 	h.Write(payload)
@@ -750,6 +786,28 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(hook); err != nil {
 		log.Printf("webhook: failed to encode response: %v", err)
 	}
+}
+
+func newEventID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("evt_%d", time.Now().UnixNano())
+	}
+	return "evt_" + hex.EncodeToString(b)
+}
+
+// SetSecret rotates the signing secret; deliveries started afterwards (and
+// retries of in-flight ones) use the new key (F6636).
+func (m *Manager) SetSecret(secret string) {
+	m.secretMu.Lock()
+	m.secret = secret
+	m.secretMu.Unlock()
+}
+
+func (m *Manager) getSecret() string {
+	m.secretMu.RLock()
+	defer m.secretMu.RUnlock()
+	return m.secret
 }
 
 // newHookID returns a collision-free webhook ID. A second-resolution

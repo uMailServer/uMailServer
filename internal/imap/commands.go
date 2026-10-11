@@ -50,7 +50,10 @@ func (s *Session) handleCommand(line string) error {
 	case StateAuthenticated:
 		return s.handleAuthenticated(command, args, line)
 	case StateSelected:
-		return s.handleSelected(command, args, line)
+		s.syncOnTag = s.snapOn && syncAllowed(command, args)
+		err := s.handleSelected(command, args, line)
+		s.syncOnTag = false
+		return err
 	case StateLoggedOut:
 		return nil
 	}
@@ -655,6 +658,7 @@ func (s *Session) handleSelect(args []string) error {
 	}
 
 	s.selected = mailbox
+	s.snapInit()
 	s.stateMu.Lock()
 	s.state = StateSelected
 	s.stateMu.Unlock()
@@ -717,6 +721,7 @@ func (s *Session) handleExamine(args []string) error {
 	// RFC 3501 §6.3.2: EXAMINE selects the mailbox read-only (F5068).
 	mailbox.ReadOnly = true
 	s.selected = mailbox
+	s.snapInit()
 	s.stateMu.Lock()
 	s.state = StateSelected
 	s.stateMu.Unlock()
@@ -770,6 +775,7 @@ func (s *Session) deselect() {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	s.selected = nil
+	s.snap, s.snapOn, s.syncOnTag = nil, false, false
 	if s.state == StateSelected {
 		s.state = StateAuthenticated
 	}
@@ -1912,27 +1918,37 @@ func (s *Session) handleIdle() error {
 	// Send continuation response
 	s.WriteContinuation("idling")
 
-	// Channel for DONE command
-	doneChan := make(chan bool, 1)
+	// F6601: RFC 2177 - the client's next line must be DONE. Anything else
+	// used to be swallowed while IDLE kept running; now it ends IDLE with BAD.
+	type idleEnd struct {
+		err error
+		bad bool
+	}
+	doneChan := make(chan idleEnd, 1)
 
 	// Start goroutine to wait for DONE
 	go func() {
-		for {
-			line, err := s.readLine()
-			if err != nil {
-				doneChan <- true
-				return
-			}
-			if strings.ToUpper(strings.TrimSpace(line)) == "DONE" {
-				doneChan <- true
-				return
-			}
+		line, err := s.readLine()
+		switch {
+		case err != nil:
+			doneChan <- idleEnd{err: err}
+		case strings.ToUpper(strings.TrimSpace(line)) == "DONE":
+			doneChan <- idleEnd{}
+		default:
+			doneChan <- idleEnd{bad: true}
 		}
 	}()
 
 	// idleCleanup ensures the DONE-reading goroutine exits by forcing
 	// a read deadline on the connection, then waits for it to finish.
+	// F6602: the reader goroutine has already reported (and exited) when the
+	// loop got its result from doneChan; waiting on doneChan again stalled the
+	// session for the full 5 s after every DONE.
+	readerDone := false
 	idleCleanup := func() {
+		if readerDone {
+			return
+		}
 		select {
 		case <-s.idleStop:
 		default:
@@ -1946,18 +1962,27 @@ func (s *Session) handleIdle() error {
 		}
 	}
 
-	// Wait for either DONE or notifications
-	var idleTimer <-chan time.Time
-	if s.server.idleTimeout > 0 {
-		t := time.NewTimer(s.server.idleTimeout)
-		defer t.Stop()
-		idleTimer = t.C
+	// Wait for either DONE or notifications. F6601: IDLE is always bounded
+	// (RFC 2177 suggests 30 minutes) even with no idleTimeout configured.
+	idleLimit := s.server.idleTimeout
+	if idleLimit <= 0 {
+		idleLimit = maxIdleDefault
 	}
+	t := time.NewTimer(idleLimit)
+	defer t.Stop()
+	idleTimer := t.C
+
+	s.syncSelected() // F6600: report changes made before IDLE began
 
 	for {
 		select {
-		case <-doneChan:
-			s.WriteResponse(s.tag, "OK IDLE terminated")
+		case end := <-doneChan:
+			readerDone = true
+			if end.bad {
+				s.WriteResponse(s.tag, "BAD Expected DONE")
+			} else {
+				s.WriteResponse(s.tag, "OK IDLE terminated")
+			}
 			idleCleanup()
 			return nil
 
@@ -1984,6 +2009,18 @@ func (s *Session) handleIdle() error {
 
 			// Only notify about changes to the selected mailbox
 			if notification.Mailbox != s.selected.Name {
+				continue
+			}
+
+			if s.snapOn {
+				// F6600: numbers come from the session's own view.
+				if notification.Type == NotificationFlagsChanged {
+					if sq, known := s.snapSeq(notification.MessageUID); known {
+						s.WriteData(fmt.Sprintf("%d FETCH (UID %d FLAGS (%s))", sq, notification.MessageUID, strings.Join(notification.Flags, " ")))
+					}
+				} else {
+					s.syncSelected()
+				}
 				continue
 			}
 
@@ -2029,6 +2066,9 @@ func (s *Session) handleIdle() error {
 		}
 	}
 }
+
+// maxIdleDefault bounds IDLE when no idle timeout is configured.
+const maxIdleDefault = 30 * time.Minute
 
 // ENABLE command (RFC 5161)
 func (s *Session) handleEnable(args []string) error {
@@ -2090,6 +2130,7 @@ func (s *Session) handleClose() error {
 		_ = s.server.mailstore.Expunge(s.user, s.selected.Name)
 	}
 	s.selected = nil
+	s.snapInit()
 	s.stateMu.Lock()
 	s.state = StateAuthenticated
 	s.stateMu.Unlock()
@@ -2100,6 +2141,7 @@ func (s *Session) handleClose() error {
 // UNSELECT command (RFC 3691): like CLOSE but never expunges (F5842).
 func (s *Session) handleUnselect() error {
 	s.selected = nil
+	s.snapInit()
 	s.stateMu.Lock()
 	s.state = StateAuthenticated
 	s.stateMu.Unlock()
@@ -2211,7 +2253,9 @@ func (s *Session) handleExpunge() error {
 
 	// Send untagged EXPUNGE responses in reverse order (highest seq first)
 	// so that subsequent sequence numbers remain valid during output.
-	for i := len(deletedSeqs) - 1; i >= 0; i-- {
+	// F6600: with a session snapshot the numbers come from the snapshot (own
+	// and other sessions' removals together) when the tagged reply is sent.
+	for i := len(deletedSeqs) - 1; i >= 0 && !s.snapOn; i-- {
 		s.WriteData(fmt.Sprintf("%d EXPUNGE", deletedSeqs[i]))
 	}
 
@@ -2294,8 +2338,15 @@ func (s *Session) handleSearchWithUIDs(args []string, line string, uidResults bo
 		}
 		uids = uids[:0]
 		for _, msg := range messages {
+			if s.snapOn {
+				if _, known := s.snapSeq(msg.UID); !known {
+					continue // delivered after this session's last sync
+				}
+			}
 			uids = append(uids, msg.UID)
 		}
+	} else if !uidResults {
+		uids = s.liveSeqsToSession(uids)
 	}
 
 	if retOpts != nil {
@@ -2424,8 +2475,16 @@ func (s *Session) sortCmd(args []string, line string, uidResults bool) error {
 
 	result := "SORT"
 	for _, seq := range sortMessagesByKeys(metas, ccs, criteria, seqNums) {
+		uid := uidOf[seq]
+		if s.snapOn {
+			sq, known := s.snapSeq(uid)
+			if !known {
+				continue
+			}
+			seq = sq
+		}
 		if uidResults {
-			seq = uidOf[seq]
+			seq = uid
 		}
 		result += fmt.Sprintf(" %d", seq)
 	}
@@ -2511,6 +2570,13 @@ func (s *Session) threadCmd(args []string, line string, uidResults bool) error {
 		}
 		if !want[seq] {
 			continue
+		}
+		if s.snapOn {
+			sq, known := s.snapSeq(msg.UID)
+			if !known {
+				continue
+			}
+			seq = sq
 		}
 		tm := &threadMsg{num: seq, seq: seq, subject: msg.Subject}
 		if uidResults {
@@ -2615,7 +2681,7 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 	if hasFetchItem(fetchItems, "BODYSTRUCTURE") && !hasFetchItem(fetchItems, "BODY") {
 		storeItems = append(append([]string{}, fetchItems...), "BODY")
 	}
-	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, storeItems)
+	messages, err := s.fetchSel(seqSet, storeItems)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		if span != nil {
@@ -2641,11 +2707,13 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 			setsSeen = true
 		}
 	}
+	seenSet := false
 	if setsSeen && !s.selected.ReadOnly {
 		for _, msg := range messages {
 			if !hasFlag(msg.Flags, "\\Seen") {
-				if err := s.server.mailstore.StoreFlags(s.user, s.selected.Name, strconv.FormatUint(uint64(msg.SeqNum), 10), []string{"\\Seen"}, FlagAdd); err == nil {
+				if err := s.storeSel(strconv.FormatUint(uint64(msg.SeqNum), 10), []string{"\\Seen"}, FlagAdd); err == nil {
 					msg.Flags = append(msg.Flags, "\\Seen")
+					seenSet = true
 				}
 			}
 		}
@@ -2662,6 +2730,11 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 	}
 
 	respItems := fetchItems
+	// F6606: RFC 3501 §6.4.5 - when the fetch itself sets \Seen the server
+	// SHOULD report the new flags in the same response.
+	if seenSet && !hasFetchItem(fetchItems, "FLAGS") {
+		respItems = append(append([]string{}, fetchItems...), "FLAGS")
+	}
 	if uidCmd && !hasFetchItem(fetchItems, "UID") {
 		respItems = append([]string{"UID"}, fetchItems...)
 	}
@@ -2800,7 +2873,7 @@ func (s *Session) store(args []string, uidCmd bool) error {
 		return nil
 	}
 
-	err := s.server.mailstore.StoreFlags(s.user, s.selected.Name, seqSet, flags, op)
+	err := s.storeSel(seqSet, flags, op)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
 		if span != nil {
@@ -2812,7 +2885,7 @@ func (s *Session) store(args []string, uidCmd bool) error {
 
 	// If not silent, fetch updated messages and output FLAGS responses
 	if !strings.HasSuffix(operation, ".SILENT") {
-		messages, fetchErr := s.server.mailstore.FetchMessages(s.user, s.selected.Name, seqSet, []string{"FLAGS"})
+		messages, fetchErr := s.fetchSel(seqSet, []string{"FLAGS"})
 		if fetchErr == nil {
 			for _, msg := range messages {
 				uidItem := ""
@@ -2844,7 +2917,11 @@ func (s *Session) handleCopy(args []string) error {
 		return nil
 	}
 
-	seqSet := args[0]
+	seqSet, serr := s.seqToLive(args[0])
+	if serr != nil {
+		s.WriteResponse(s.tag, "BAD Invalid sequence set")
+		return nil
+	}
 	destMailbox, ok := s.copyDestination(args[1])
 	if !ok {
 		return nil
@@ -2944,7 +3021,11 @@ func (s *Session) handleMove(args []string) error {
 		return nil
 	}
 
-	seqSet := args[0]
+	seqSet, serr := s.seqToLive(args[0])
+	if serr != nil {
+		s.WriteResponse(s.tag, "BAD Invalid sequence set")
+		return nil
+	}
 	destMailbox, ok := s.copyDestination(args[1])
 	if !ok {
 		return nil
@@ -3038,6 +3119,28 @@ func (s *Session) handleUID(args []string, line string) error {
 // primitives address by sequence number, so the UID variants resolve UIDs to
 // positions here, at the command layer where that distinction is known.
 func (s *Session) uidSetToSeqSet(uidSet string) (string, error) {
+	if s.snapOn {
+		// F6600: resolve against the session snapshot, so the numbers are
+		// the ones this session has been told about.
+		ranges, err := ParseSequenceSet(uidSet)
+		if err != nil {
+			return "", err
+		}
+		var maxUID uint32
+		if n := len(s.snap); n > 0 {
+			maxUID = s.snap[n-1]
+		}
+		var out []string
+		for i, uid := range s.snap {
+			for _, r := range ranges {
+				if r.Contains(uid, maxUID) {
+					out = append(out, strconv.Itoa(i+1))
+					break
+				}
+			}
+		}
+		return strings.Join(out, ","), nil
+	}
 	messages, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, "1:*", nil)
 	if err != nil {
 		return "", err
@@ -3183,7 +3286,9 @@ func (s *Session) expungeUIDSubset(ux uidExpunger, want func(uid uint32) bool) e
 	}
 	sort.Slice(seqs, func(i, j int) bool { return seqs[i] > seqs[j] })
 	for _, seq := range seqs {
-		s.WriteData(fmt.Sprintf("%d EXPUNGE", seq))
+		if !s.snapOn { // F6600: announced from the snapshot at completion
+			s.WriteData(fmt.Sprintf("%d EXPUNGE", seq))
+		}
 	}
 	return nil
 }
@@ -3660,14 +3765,14 @@ func parseSearchKey(criteria *SearchCriteria, args []string, i int) int {
 	case "LARGER":
 		if i+1 < len(args) {
 			if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
-				criteria.Larger = size
+				criteria.Larger, criteria.LargerSet = size, true
 			}
 			i++
 		}
 	case "SMALLER":
 		if i+1 < len(args) {
 			if size, err := strconv.ParseInt(args[i+1], 10, 64); err == nil {
-				criteria.Smaller = size
+				criteria.Smaller, criteria.SmallerSet = size, true
 			}
 			i++
 		}
@@ -3755,6 +3860,29 @@ type searchTerm struct {
 	or  [2]*searchExpr
 	sub *searchExpr
 }
+
+// F6603: every NOT / OR / group costs a full mailbox scan at evaluation, and a
+// 64 KiB command line can hold ~16000 of them; the nesting depth and the total
+// number of such nodes are capped.
+const (
+	maxSearchDepth = 64
+	maxSearchNodes = 256
+)
+
+type searchLimits struct{ depth, nodes int }
+
+func (l *searchLimits) enter() error {
+	l.depth++
+	l.nodes++
+	if l.depth > maxSearchDepth || l.nodes > maxSearchNodes {
+		return errSearchTooComplex
+	}
+	return nil
+}
+
+func (l *searchLimits) leave() { l.depth-- }
+
+var errSearchTooComplex = errors.New("search expression too complex")
 
 // errBadCharset reports a SEARCH CHARSET other than US-ASCII / UTF-8.
 var errBadCharset = errors.New("unsupported charset")
@@ -3848,7 +3976,7 @@ func parseSearchProgram(toks []imapToken) (*searchExpr, error) {
 		}
 		toks = toks[2:]
 	}
-	e, next, err := parseSearchSeq(toks, 0, false)
+	e, next, err := parseSearchSeq(toks, 0, false, &searchLimits{})
 	if err == nil && next != len(toks) {
 		err = fmt.Errorf("unexpected %q", toks[next].val)
 	}
@@ -3856,7 +3984,11 @@ func parseSearchProgram(toks []imapToken) (*searchExpr, error) {
 }
 
 // parseSearchSeq parses keys until the end or, inside a group, ")".
-func parseSearchSeq(toks []imapToken, i int, inGroup bool) (*searchExpr, int, error) {
+func parseSearchSeq(toks []imapToken, i int, inGroup bool, lim *searchLimits) (*searchExpr, int, error) {
+	if err := lim.enter(); err != nil {
+		return nil, i, err
+	}
+	defer lim.leave()
 	e := &searchExpr{flat: SearchCriteria{All: true}}
 	used := map[string]bool{}
 	for i < len(toks) {
@@ -3868,7 +4000,7 @@ func parseSearchSeq(toks []imapToken, i int, inGroup bool) (*searchExpr, int, er
 			return e, i + 1, nil
 		}
 		if !t.quoted && (t.val == "(" || strings.EqualFold(t.val, "NOT") || strings.EqualFold(t.val, "OR")) {
-			sub, next, err := parseSearchOne(toks, i)
+			sub, next, err := parseSearchOne(toks, i, lim)
 			if err != nil {
 				return nil, next, err
 			}
@@ -3898,26 +4030,30 @@ func parseSearchSeq(toks []imapToken, i int, inGroup bool) (*searchExpr, int, er
 }
 
 // parseSearchOne parses exactly one search key starting at toks[i].
-func parseSearchOne(toks []imapToken, i int) (*searchExpr, int, error) {
+func parseSearchOne(toks []imapToken, i int, lim *searchLimits) (*searchExpr, int, error) {
+	if err := lim.enter(); err != nil {
+		return nil, i, err
+	}
+	defer lim.leave()
 	if i >= len(toks) {
 		return nil, i, fmt.Errorf("missing search key")
 	}
 	t := toks[i]
 	switch {
 	case !t.quoted && t.val == "(":
-		return parseSearchSeq(toks, i+1, true)
+		return parseSearchSeq(toks, i+1, true, lim)
 	case !t.quoted && strings.EqualFold(t.val, "NOT"):
-		x, next, err := parseSearchOne(toks, i+1)
+		x, next, err := parseSearchOne(toks, i+1, lim)
 		if err != nil {
 			return nil, next, err
 		}
 		return &searchExpr{flat: SearchCriteria{All: true}, terms: []searchTerm{{not: x}}}, next, nil
 	case !t.quoted && strings.EqualFold(t.val, "OR"):
-		a, next, err := parseSearchOne(toks, i+1)
+		a, next, err := parseSearchOne(toks, i+1, lim)
 		if err != nil {
 			return nil, next, err
 		}
-		b, next, err := parseSearchOne(toks, next)
+		b, next, err := parseSearchOne(toks, next, lim)
 		if err != nil {
 			return nil, next, err
 		}
@@ -3950,7 +4086,19 @@ func plainKeyArgs(toks []imapToken, i int) []string {
 
 // evalSearch returns the ascending sequence numbers matching e.
 func (s *Session) evalSearch(e *searchExpr) ([]uint32, error) {
-	base, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, e.flat)
+	flat := e.flat
+	if s.snapOn && flat.SeqSet != "" {
+		// F6600: the sequence-set key is in session numbering.
+		live, err := s.seqToLive(flat.SeqSet)
+		if err != nil {
+			return nil, err
+		}
+		if live == "" {
+			return nil, nil
+		}
+		flat.SeqSet = live
+	}
+	base, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, flat)
 	if err != nil {
 		return nil, err
 	}

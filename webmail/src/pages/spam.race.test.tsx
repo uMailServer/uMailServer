@@ -6,7 +6,7 @@ import { SpamPage } from './spam'
 import { InboxPage } from './inbox'
 import { EmailDetailPage } from './email-detail'
 import { Routes, Route } from 'react-router-dom'
-import API, { Mail } from '@/utils/api'
+import API, { Mail, ApiError } from '@/utils/api'
 
 function mail(id: string, subject: string, body = 'body', folder = 'Inbox'): Mail {
   return { id, from: 'a@b.c', fromName: 'A', to: ['me@x.y'], subject, body, preview: body,
@@ -55,8 +55,8 @@ it('inbox ignores a stale response after folder switch', async () => {
 })
 
 it('detail page loads the message by id and sanitises HTML', async () => {
-  vi.spyOn(API, 'getMail').mockImplementation(async (f) =>
-    f === 'inbox' ? { emails: [mail('m9', 'Real subject', '<p>hi</p><img src="x" onerror="alert(1)"><script>alert(2)</script>')] } : { emails: [] })
+  vi.spyOn(API, 'setFlags').mockResolvedValue([])
+  vi.spyOn(API, 'getMessage').mockResolvedValue(mail('m9', 'Real subject', '<p>hi</p><img src="x" onerror="alert(1)"><script>alert(2)</script>'))
   const { container, root } = await mount(
     createElement(Routes, null, createElement(Route, { path: '/email/:id', element: createElement(EmailDetailPage) })),
     ['/email/m9'])
@@ -68,7 +68,7 @@ it('detail page loads the message by id and sanitises HTML', async () => {
 })
 
 it('detail page shows not-found when no folder has the id', async () => {
-  vi.spyOn(API, 'getMail').mockResolvedValue({ emails: [] })
+  vi.spyOn(API, 'getMessage').mockRejectedValue(new ApiError(404, 'Email not found'))
   const { container, root } = await mount(
     createElement(Routes, null, createElement(Route, { path: '/email/:id', element: createElement(EmailDetailPage) })),
     ['/email/nope'])

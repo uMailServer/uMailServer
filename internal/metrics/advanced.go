@@ -43,7 +43,9 @@ func (h *Histogram) Observe(value float64) {
 	// An infinite observation would make sum +/-Inf forever and Snapshot
 	// unencodable as JSON; it is still counted in the overflow bucket (F5978).
 	if !math.IsInf(value, 0) {
-		h.sum += value
+		if ns := h.sum + value; !math.IsInf(ns, 0) { // F6631: keep sum finite
+			h.sum = ns
+		}
 	}
 
 	for i, bound := range h.bounds {
@@ -69,24 +71,42 @@ func (h *Histogram) Snapshot() map[string]interface{} {
 	}
 }
 
-// Gauge tracks a value that can go up and down
+// Gauge tracks a value that can go up and down. The value is stored as float64
+// bits so NaN/Inf/huge inputs never go through an undefined float->int
+// conversion (F6631). NaN/Inf updates are ignored (a gauge stays finite and
+// JSON-encodable).
 type Gauge struct {
-	value int64
+	bits uint64
 }
 
 // Set sets the gauge value
 func (g *Gauge) Set(value float64) {
-	atomic.StoreInt64(&g.value, int64(value*1000)) // Store as fixed-point
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return
+	}
+	atomic.StoreUint64(&g.bits, math.Float64bits(value))
 }
 
 // Add adds to the gauge value
 func (g *Gauge) Add(delta float64) {
-	atomic.AddInt64(&g.value, int64(delta*1000))
+	if math.IsNaN(delta) || math.IsInf(delta, 0) {
+		return
+	}
+	for {
+		old := atomic.LoadUint64(&g.bits)
+		nv := math.Float64frombits(old) + delta
+		if math.IsInf(nv, 0) { // overflow: clamp to the finite range
+			nv = math.Copysign(math.MaxFloat64, nv)
+		}
+		if atomic.CompareAndSwapUint64(&g.bits, old, math.Float64bits(nv)) {
+			return
+		}
+	}
 }
 
 // Get returns current value
 func (g *Gauge) Get() float64 {
-	return float64(atomic.LoadInt64(&g.value)) / 1000
+	return math.Float64frombits(atomic.LoadUint64(&g.bits))
 }
 
 // Counter tracks increasing values

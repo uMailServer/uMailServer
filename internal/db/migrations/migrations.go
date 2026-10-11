@@ -2,7 +2,9 @@ package migrations
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -55,34 +57,97 @@ func NewMigrator(db *bbolt.DB, registry *Registry) *Migrator {
 	}
 }
 
-// Migrate runs all pending migrations
-func (m *Migrator) Migrate() error {
-	// Ensure migration bucket exists
-	if err := m.db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte(migrationBucket))
-		return err
-	}); err != nil {
-		return fmt.Errorf("failed to create migration bucket: %w", err)
-	}
+// ErrSchemaTooNew is returned when the database records a migration this
+// binary does not know about: it was written by a newer release. Running
+// (or opening) it with this binary could corrupt data, and migrations never
+// downgrade, so the caller must upgrade the binary instead (F6620).
+var ErrSchemaTooNew = errors.New("database schema is newer than this binary supports")
 
-	// Get applied migrations
+// unknownApplied returns applied versions absent from the registry, sorted.
+func (m *Migrator) unknownApplied(applied map[string]migrationRecord) []string {
+	known := make(map[string]struct{}, len(m.registry.migrations))
+	for _, mg := range m.registry.migrations {
+		known[mg.Version] = struct{}{}
+	}
+	var unknown []string
+	for v := range applied {
+		if _, ok := known[v]; !ok {
+			unknown = append(unknown, v)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+func tooNewError(unknown []string) error {
+	return fmt.Errorf("%w: unknown applied migration(s) %v; upgrade uMailServer", ErrSchemaTooNew, unknown)
+}
+
+// CheckCompatible returns ErrSchemaTooNew (wrapped) if the database holds
+// migrations unknown to the registry. It is read-only and tolerates a
+// database that has never been migrated.
+func (m *Migrator) CheckCompatible() error {
 	applied, err := m.getAppliedMigrations()
 	if err != nil {
 		return fmt.Errorf("failed to get applied migrations: %w", err)
 	}
-
-	// Run pending migrations
-	for _, migration := range m.registry.migrations {
-		if _, ok := applied[migration.Version]; ok {
-			continue // Already applied
-		}
-
-		if err := m.runMigration(migration); err != nil {
-			return fmt.Errorf("failed to run migration %s: %w", migration.Version, err)
-		}
+	if unknown := m.unknownApplied(applied); len(unknown) > 0 {
+		return tooNewError(unknown)
 	}
-
 	return nil
+}
+
+// Migrate runs all pending migrations. Every pending migration and its
+// version record run inside ONE write transaction: any failure rolls the
+// whole batch back and leaves the database unchanged (F6621). Already
+// applied versions are skipped, so re-running is idempotent.
+func (m *Migrator) Migrate() error {
+	return m.db.Update(func(tx *bbolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(migrationBucket))
+		if err != nil {
+			return fmt.Errorf("failed to create migration bucket: %w", err)
+		}
+
+		applied := make(map[string]migrationRecord)
+		if err := bucket.ForEach(func(k, v []byte) error {
+			var record migrationRecord
+			if err := json.Unmarshal(v, &record); err != nil {
+				return err
+			}
+			applied[string(k)] = record
+			return nil
+		}); err != nil {
+			return fmt.Errorf("failed to get applied migrations: %w", err)
+		}
+		if unknown := m.unknownApplied(applied); len(unknown) > 0 {
+			return tooNewError(unknown)
+		}
+
+		for _, migration := range m.registry.migrations {
+			if _, ok := applied[migration.Version]; ok {
+				continue
+			}
+			if err := applyMigration(tx, bucket, migration); err != nil {
+				return fmt.Errorf("failed to run migration %s: %w", migration.Version, err)
+			}
+			applied[migration.Version] = migrationRecord{Version: migration.Version}
+		}
+		return nil
+	})
+}
+
+func applyMigration(tx *bbolt.Tx, bucket *bbolt.Bucket, migration Migration) error {
+	if migration.Up == nil {
+		return fmt.Errorf("migration %s has no up function", migration.Version)
+	}
+	if err := migration.Up(tx); err != nil {
+		return fmt.Errorf("migration failed: %w", err)
+	}
+	data, err := json.Marshal(migrationRecord{Version: migration.Version, AppliedAt: time.Now()})
+	if err != nil {
+		return err
+	}
+	return bucket.Put([]byte(migration.Version), data)
 }
 
 // Rollback rolls back the last migration
@@ -97,13 +162,16 @@ func (m *Migrator) Rollback() error {
 		return fmt.Errorf("no migrations to rollback")
 	}
 
-	// Find last applied migration
+	if unknown := m.unknownApplied(applied); len(unknown) > 0 {
+		return tooNewError(unknown)
+	}
+
+	// Find last applied migration: the highest in registry order (F6621:
+	// AppliedAt ties inside one batch made the old choice nondeterministic).
 	var lastVersion string
-	var lastTime time.Time
-	for version, record := range applied {
-		if record.AppliedAt.After(lastTime) {
-			lastVersion = version
-			lastTime = record.AppliedAt
+	for _, mg := range m.registry.migrations {
+		if _, ok := applied[mg.Version]; ok {
+			lastVersion = mg.Version
 		}
 	}
 
@@ -184,35 +252,6 @@ func (m *Migrator) getAppliedMigrations() (map[string]migrationRecord, error) {
 	})
 
 	return applied, err
-}
-
-func (m *Migrator) runMigration(migration Migration) error {
-	return m.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(migrationBucket))
-		if bucket.Get([]byte(migration.Version)) != nil {
-			return nil
-		}
-		if migration.Up == nil {
-			return fmt.Errorf("migration %s has no up function", migration.Version)
-		}
-
-		if err := migration.Up(tx); err != nil {
-			return fmt.Errorf("migration failed: %w", err)
-		}
-
-		// Record migration
-		record := migrationRecord{
-			Version:   migration.Version,
-			AppliedAt: time.Now(),
-		}
-
-		data, err := json.Marshal(record)
-		if err != nil {
-			return err
-		}
-
-		return bucket.Put([]byte(migration.Version), data)
-	})
 }
 
 // InitMigrations registers all built-in migrations

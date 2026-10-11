@@ -1238,10 +1238,10 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	}
 
 	// Check size criteria
-	if criteria.Larger > 0 && meta.Size <= criteria.Larger {
+	if (criteria.Larger > 0 || criteria.LargerSet) && meta.Size <= criteria.Larger {
 		return false
 	}
-	if criteria.Smaller > 0 && meta.Size >= criteria.Smaller {
+	if (criteria.Smaller > 0 || criteria.SmallerSet) && meta.Size >= criteria.Smaller {
 		return false
 	}
 

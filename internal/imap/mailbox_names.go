@@ -146,6 +146,11 @@ func checkNewMailboxName(name string) (string, error) {
 		if seg == "" {
 			return "", fmt.Errorf("Invalid mailbox name: empty hierarchy level")
 		}
+		// F6605: "." / ".." levels are path-traversal syntax for any store
+		// or export that maps names onto directories.
+		if seg == "." || seg == ".." {
+			return "", fmt.Errorf("Invalid mailbox name: relative hierarchy level")
+		}
 	}
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {

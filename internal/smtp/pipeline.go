@@ -559,8 +559,9 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 	// (addresses are case-insensitive for greylisting purposes).
 	deferred := false
 	from := strings.ToLower(ctx.From)
+	client := greylistClient(ctx.RemoteIP)
 	for _, recipient := range ctx.To {
-		key := fmt.Sprintf("%s:%s:%s", ctx.RemoteIP.String(), from, strings.ToLower(recipient))
+		key := client + "|" + from + "|" + strings.ToLower(recipient)
 
 		entry, exists := s.greylist[key]
 		if exists && greylistExpired(entry, now) {
@@ -593,6 +594,19 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 	}
 
 	return ResultAccept
+}
+
+// greylistClient names the sending network for a triplet: the /24 of an IPv4
+// client or the /64 of an IPv6 one, so that retries from another host of the
+// same sending farm are recognised (F6613).
+func greylistClient(ip net.IP) string {
+	if v4 := ip.To4(); v4 != nil {
+		return v4.Mask(net.CIDRMask(24, 32)).String() + "/24"
+	}
+	if v6 := ip.To16(); v6 != nil {
+		return v6.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	}
+	return "unknown"
 }
 
 func greylistExpired(e *greylistEntry, now time.Time) bool {

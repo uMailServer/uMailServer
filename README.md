@@ -164,7 +164,7 @@ http:
 
 admin:
   enabled: true
-  # port: 8443  # Note: Not currently used, admin served on HTTP port
+  port: 8443  # separate admin listener (internal/server/server_api.go)
   bind: 127.0.0.1
 
 spam:
@@ -266,7 +266,7 @@ umailserver version
 ├───────────────────────┼───────────────────┼──────────────────┤
 │  Message Pipeline     │  Mailstore        │  REST API        │
 │  - SPF/DKIM/DMARC     │  - Maildir++      │  - Auth (JWT)    │
-│  - ARC Validation     │  - bbolt          │  - WebSocket     │
+│  - ARC Validation     │  - bbolt          │  - SSE           │
 │  - Greylisting        │  - Search Index   │  - MCP           │
 │  - RBL Checks         │                   │                  │
 │  - Bayesian Filter    │                   │                  │
