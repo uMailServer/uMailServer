@@ -162,7 +162,7 @@ func (m *Monitor) Check(ctx context.Context) Report {
 					}()
 					defer func() {
 						if r := recover(); r != nil {
-							fl.check = Check{Status: StatusUnhealthy, Message: fmt.Sprintf("health check panicked: %v", r)}
+							fl.check = Check{Status: StatusUnhealthy, Message: "health check panicked"}
 						}
 					}()
 					fl.check = c(checkCtx)
@@ -366,7 +366,7 @@ func DatabaseCheck(ping func() error) Checker {
 		case err := <-done:
 			if err != nil {
 				check.Status = StatusUnhealthy
-				check.Message = fmt.Sprintf("database ping failed: %v", err)
+				check.Message = "database ping failed"
 			} else {
 				check.Message = "database connection healthy"
 			}

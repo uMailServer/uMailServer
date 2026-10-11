@@ -52,6 +52,9 @@ type MailHandler struct {
 	mailDB   *storage.Database
 	queueMgr *queue.Manager
 	moveMu   sync.Mutex // serialises folder moves (F6253)
+
+	// quotaAdjust mirrors blob bytes into the account quota counter (F6680).
+	quotaAdjust func(user string, delta int64) error
 }
 
 // SetQueueManager wires the outbound delivery queue so sent messages are
@@ -221,11 +224,26 @@ func (h *MailHandler) getEmailsPage(userEmail, mailbox string, limit, offset int
 		uids = uids[start:end]
 	}
 
+	// F6645: copies of identical bytes get copy-qualified ids.
+	pageMeta := make(map[uint32]*storage.MessageMetadata, len(uids))
+	wantHashes := make(map[string]bool, len(uids))
+	for _, uid := range uids {
+		if meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid); err == nil && meta != nil {
+			pageMeta[uid] = meta
+			wantHashes[meta.MessageID] = true
+		}
+	}
+	dupHashes := h.duplicatedHashes(userEmail, wantHashes)
+
 	emails := make([]Mail, 0, len(uids))
 	for _, uid := range uids {
-		meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
-		if err != nil {
+		meta := pageMeta[uid]
+		if meta == nil {
 			continue
+		}
+		mailID := meta.MessageID
+		if dupHashes[meta.MessageID] {
+			mailID = qualifiedMailID(meta.MessageID, mailbox, uid)
 		}
 
 		// Read message body
@@ -254,7 +272,7 @@ func (h *MailHandler) getEmailsPage(userEmail, mailbox string, limit, offset int
 		}
 
 		email := Mail{
-			ID:      meta.MessageID,
+			ID:      mailID,
 			From:    meta.From,
 			To:      strings.Split(meta.To, ","),
 			Subject: meta.Subject,
@@ -347,47 +365,35 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 		return nil, fmt.Errorf("storage not available")
 	}
 
-	uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
+	_, meta, found := h.findUIDByMessageID(userEmail, mailbox, messageID)
+	if !found {
+		return nil, fmt.Errorf("email not found")
+	}
+	// Read message body
+	data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errMailBodyRead, err)
+	}
+	body := h.extractBody(string(data))
+
+	folderName := reverseFolderMap[mailbox]
+	if folderName == "" {
+		folderName = mailbox
 	}
 
-	for _, uid := range uids {
-		meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
-		if err != nil {
-			continue
-		}
-
-		if meta.MessageID == messageID {
-			// Read message body
-			data, err := h.msgStore.ReadMessage(userEmail, meta.MessageID)
-			if err != nil {
-				return nil, fmt.Errorf("%w: %w", errMailBodyRead, err)
-			}
-			body := h.extractBody(string(data))
-
-			folderName := reverseFolderMap[mailbox]
-			if folderName == "" {
-				folderName = mailbox
-			}
-
-			return &Mail{
-				ID:      meta.MessageID,
-				From:    meta.From,
-				To:      strings.Split(meta.To, ","),
-				Subject: meta.Subject,
-				Body:    body,
-				Preview: body,
-				Date:    meta.InternalDate.Format(time.RFC1123Z),
-				Read:    hasFlag(meta.Flags, "\\Seen"),
-				Starred: hasFlag(meta.Flags, "\\Flagged"),
-				Folder:  folderName,
-				Size:    meta.Size,
-			}, nil
-		}
-	}
-
-	return nil, fmt.Errorf("email not found")
+	return &Mail{
+		ID:      messageID, // F6645: echo the (possibly copy-qualified) id asked for
+		From:    meta.From,
+		To:      strings.Split(meta.To, ","),
+		Subject: meta.Subject,
+		Body:    body,
+		Preview: body,
+		Date:    meta.InternalDate.Format(time.RFC1123Z),
+		Read:    hasFlag(meta.Flags, "\\Seen"),
+		Starred: hasFlag(meta.Flags, "\\Flagged"),
+		Folder:  folderName,
+		Size:    meta.Size,
+	}, nil
 }
 
 // markAsRead marks a message as read
@@ -396,26 +402,19 @@ func (h *MailHandler) markAsRead(userEmail, mailbox, messageID string) {
 		return
 	}
 
-	uids, _ := h.mailDB.GetMessageUIDs(userEmail, mailbox)
-	for _, uid := range uids {
-		meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
-		if err != nil {
-			continue
-		}
-
-		if meta.MessageID == messageID {
-			// Atomic read-modify-write: the flag check and write happen in
-			// one storage transaction, so a concurrent flag change (an IMAP
-			// keyword, another session) can never be clobbered by a stale copy.
-			_ = h.mailDB.UpdateMessageMetadataFunc(userEmail, mailbox, uid, func(m *storage.MessageMetadata) error {
-				if !hasFlag(m.Flags, "\\Seen") {
-					m.Flags = append(m.Flags, "\\Seen")
-				}
-				return nil
-			})
-			break
-		}
+	uid, _, found := h.findUIDByMessageID(userEmail, mailbox, messageID)
+	if !found {
+		return
 	}
+	// Atomic read-modify-write: the flag check and write happen in
+	// one storage transaction, so a concurrent flag change (an IMAP
+	// keyword, another session) can never be clobbered by a stale copy.
+	_ = h.mailDB.UpdateMessageMetadataFunc(userEmail, mailbox, uid, func(m *storage.MessageMetadata) error {
+		if !hasFlag(m.Flags, "\\Seen") {
+			m.Flags = append(m.Flags, "\\Seen")
+		}
+		return nil
+	})
 }
 
 // isBareAddress reports whether s is exactly one RFC 5322 addr-spec with no
@@ -563,6 +562,10 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		msgID = storedMsgID
+		if err := h.chargeNewBlob(userEmail, storedMsgID, int64(len(rawEmail))); err != nil {
+			h.sendError(w, http.StatusInsufficientStorage, "Quota exceeded")
+			return
+		}
 
 		// Get next UID for Sent mailbox
 		uid, err := h.mailDB.GetNextUID(userEmail, "Sent")
@@ -645,6 +648,20 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F6645: a copy-qualified id removes exactly that (mailbox, uid) entry;
+	// the blob goes only once no other entry uses it.
+	if hash, mb, uid, ok := parseQualifiedMailID(messageID); ok && h.mailDB != nil {
+		if meta, err := h.mailDB.GetMessageMetadata(userEmail, mb, uid); err == nil && meta != nil && meta.MessageID == hash {
+			_ = h.mailDB.DeleteMessage(userEmail, mb, uid)
+			if h.msgStore != nil && !h.blobStillReferenced(userEmail, hash) {
+				h.removeBlob(userEmail, hash)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Email deleted", "id": messageID})
+		return
+	}
+
 	// Drop the metadata rows first: the blob delete is reference-aware and
 	// only removes the file once no row (or pending upload) still uses it.
 	if h.mailDB != nil {
@@ -654,10 +671,7 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 
 	// Delete from message store (actual file)
 	if h.msgStore != nil {
-		if err := h.msgStore.DeleteMessage(userEmail, messageID); err != nil {
-			// Log but don't fail - message might already be deleted
-			fmt.Printf("Warning: failed to delete message file: %v\n", err)
-		}
+		h.removeBlob(userEmail, messageID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

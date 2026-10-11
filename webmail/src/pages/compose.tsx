@@ -105,9 +105,11 @@ export function ComposePage() {
     api.getMessage(draftId, "drafts").then((d) => {
       if (cancelled) return
       if (!d) { toast.error("Draft not found"); return }
-      const next = { to: d.to || [], cc: [] as string[], bcc: [] as string[], subject: d.subject || "", body: d.body || "" }
+      const next = { to: d.to || [], cc: d.cc || [], bcc: d.bcc || [], subject: d.subject || "", body: d.body || "" }
       savedSnapshot.current = JSON.stringify(next)
       setTo(next.to)
+      setCc(next.cc)
+      setBcc(next.bcc)
       setSubject(next.subject)
       setBody(next.body)
       loadingDraftRef.current = false

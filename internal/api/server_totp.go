@@ -59,9 +59,25 @@ func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request, email s
 	}
 
 	// Store secret but don't enable yet — user must verify first
-	account.TOTPSecret = encryptedSecret
-	account.UpdatedAt = time.Now()
-	if err := s.db.UpdateAccount(account); err != nil {
+	if beforeCredentialWrite != nil {
+		beforeCredentialWrite()
+	}
+	// F6706: write only the secret, and re-check enrolment inside the
+	// transaction; the snapshot above is stale by now and a whole-row
+	// UpdateAccount reverted concurrent password/role/disable changes (or
+	// replaced a secret a concurrent verify had just enabled).
+	errEnabled := errors.New("totp already enabled")
+	if _, err := s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+		if a.TOTPEnabled {
+			return errEnabled
+		}
+		a.TOTPSecret = encryptedSecret
+		return nil
+	}); err != nil {
+		if errors.Is(err, errEnabled) {
+			s.sendError(w, http.StatusConflict, "TOTP already enabled — disable it before setting up again")
+			return
+		}
 		s.sendError(w, http.StatusInternalServerError, "failed to save TOTP secret")
 		return
 	}

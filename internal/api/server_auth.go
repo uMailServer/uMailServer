@@ -161,6 +161,13 @@ func newJTI() (string, error) {
 // concurrent change deterministically. Nil in production.
 var beforeCredentialWrite func()
 
+// beforeRefreshRevoke is a test seam between the refresh revocation check
+// and the revocation itself (F6705).
+var beforeRefreshRevoke func()
+
+// refreshMu serialises the revocation check and revocation of /auth/refresh.
+var refreshMu sync.Mutex
+
 // beforeTOTPConsume is a test seam invoked right before ConsumeTOTPStep.
 var beforeTOTPConsume func()
 
@@ -582,6 +589,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F6647: addresses are case-insensitive system-wide (SMTP/IMAP/POP3
+	// already fold); fold here so the lookup, rate-limit keys and TOTP
+	// lockout all see one canonical spelling.
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+
 	// Normalize email for rate limiting
 	emailKey := accountLoginKey(ip, req.Email)
 
@@ -788,6 +800,22 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		s.RevokeToken(tokenHash, expiry)
 	}
 
+	// F6704: the middleware authenticated the cookie in preference to the
+	// Bearer header; when both are sent, the Bearer token of the same
+	// subject must be ended too (refresh rotates both).
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		if parts := strings.SplitN(authHeader, " ", 2); len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" && parts[1] != tokenStr {
+			if tk, err := jwt.Parse(parts[1], s.jwtKey, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()); err == nil && tk.Valid {
+				if claims, ok := tk.Claims.(jwt.MapClaims); ok {
+					sub, _ := claims["sub"].(string)
+					if ctxUser, _ := r.Context().Value("user").(string); sub != "" && sub == ctxUser {
+						s.RevokeToken(fmt.Sprintf("%x", sha256.Sum256([]byte(parts[1]))), s.tokenExpiryFromString(parts[1]))
+					}
+				}
+			}
+		}
+	}
+
 	// Clear the cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "jwt",
@@ -829,6 +857,10 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Revoke the old token(s) by adding them to the blacklist. F4937:
 	// authMiddleware authenticates the "jwt" cookie in preference to the
 	// Bearer header, so the cookie token must be rotated out too.
+	// F6705: check-then-revoke must be atomic or one token can be spent on
+	// two concurrent refreshes (two live successors).
+	refreshMu.Lock()
+	defer refreshMu.Unlock()
 	var oldTokens []string
 	fromCookie := false
 	if cookie, err := r.Cookie("jwt"); err == nil && cookie.Value != "" {
@@ -849,6 +881,9 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 			s.sendError(w, http.StatusUnauthorized, "token has been revoked")
 			return
 		}
+	}
+	if beforeRefreshRevoke != nil {
+		beforeRefreshRevoke()
 	}
 	for _, oldTokenStr := range oldTokens {
 		oldTokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(oldTokenStr)))

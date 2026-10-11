@@ -116,12 +116,20 @@ func TestR146ImportQuotaChargedOncePerBlob(t *testing.T) {
 	body := []byte("Subject: q\r\n\r\n0123456789\r\n")
 	id := r146Upload(t, srv, body)
 	r146Import(srv, id, "inbox", "archive")
-	r146Import(srv, id, "inbox")
+	dup := r146Import(srv, id, "inbox").Args["created"].(map[string]Email)["k"].ID
 	if used != int64(len(body)) {
 		t.Fatalf("charged %d, want %d", used, len(body))
 	}
+	// F6645: the repeated import is its own Email; destroying the first
+	// leaves the blob (and its charge) in place until the duplicate is gone.
 	srv.handleEmailSet(r146User, MethodCall{Name: "Email/set", ID: "s", Args: map[string]interface{}{
 		"accountId": r146User, "destroy": []interface{}{id},
+	}})
+	if used != int64(len(body)) {
+		t.Fatalf("quota released while duplicate remains: %d", used)
+	}
+	srv.handleEmailSet(r146User, MethodCall{Name: "Email/set", ID: "s2", Args: map[string]interface{}{
+		"accountId": r146User, "destroy": []interface{}{dup},
 	}})
 	if used != 0 {
 		t.Fatalf("quota leaked after destroy: %d", used)

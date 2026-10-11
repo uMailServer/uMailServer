@@ -59,6 +59,14 @@ type Server struct {
 	pushSvc      PushService
 	rateLimitMgr RateLimitManager
 
+	// accountPurger removes per-user data the api package cannot reach
+	// itself (sieve scripts, push subscriptions, ...); see SetAccountPurger.
+	accountPurger AccountPurger
+
+	// quotaAdjust mirrors REST-stored/deleted blob bytes into the account
+	// quota counter; see SetQuotaAdjustFunc.
+	quotaAdjust func(user string, delta int64) error
+
 	// File system abstraction for embed.FS
 	webmailFS FileSystem
 	adminFS   FileSystem
@@ -380,7 +388,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.router == nil {
 		s.initRouter()
 	}
-	s.traceRequest(s.router).ServeHTTP(w, r)
+	s.traceRequest(s.methodMiddleware(s.router)).ServeHTTP(w, r)
 }
 
 // initRouter sets up the HTTP routes (called once on first request)
@@ -504,6 +512,9 @@ func (s *Server) initRouter() {
 	if s.mailHandler == nil {
 		s.mailHandler = NewMailHandler()
 		s.mailHandler.SetStorage(s.msgStore, s.mailDB)
+	}
+	if s.quotaAdjust != nil {
+		s.mailHandler.SetQuotaAdjustFunc(s.quotaAdjust)
 	}
 
 	api.HandleFunc("/api/v1/mail/inbox", s.mailHandler.handleMailList)
@@ -1115,6 +1126,9 @@ func (s *Server) initMailHandler() {
 	}
 	if s.mailHandler != nil && s.queueMgr != nil {
 		s.mailHandler.SetQueueManager(s.queueMgr)
+	}
+	if s.mailHandler != nil && s.quotaAdjust != nil {
+		s.mailHandler.SetQuotaAdjustFunc(s.quotaAdjust)
 	}
 }
 

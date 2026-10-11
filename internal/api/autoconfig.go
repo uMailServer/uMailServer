@@ -48,6 +48,13 @@ func (s *Server) handleAutoconfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F6701: answer only for domains this server hosts; reflecting any
+	// well-formed domain turns the endpoint into a config oracle/phishing aid.
+	if !s.isHostedDomain(domain) {
+		s.sendAutoconfigError(w, http.StatusNotFound, "Unknown domain")
+		return
+	}
+
 	// Build autoconfig response
 	config := s.buildAutoconfig(domain)
 
@@ -60,6 +67,16 @@ func (s *Server) handleAutoconfig(w http.ResponseWriter, r *http.Request) {
 		// nolint:staticcheck // SA9003: encoder error intentionally discarded — response is already being written with headers sent, no recovery possible.
 		_ = err
 	}
+}
+
+// isHostedDomain reports whether domain is registered on this server. A
+// server without a database has no registry to consult and does not restrict.
+func (s *Server) isHostedDomain(domain string) bool {
+	if s.db == nil {
+		return true
+	}
+	d, err := s.db.GetDomain(strings.TrimRight(strings.ToLower(domain), "."))
+	return err == nil && d != nil
 }
 
 // buildAutoconfig builds the autoconfig for a domain

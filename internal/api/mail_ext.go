@@ -141,7 +141,7 @@ func (h *MailHandler) handleMailMessage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(w, email)
+	h.writeJSON(w, h.draftResponse(user, mb, email))
 }
 
 // handleMailFlags sets or clears system flags on messages of the caller.
@@ -384,6 +384,13 @@ func (h *MailHandler) handleMailDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if newID != req.ID {
+		if err := h.chargeNewBlob(user, newID, int64(len(raw))); err != nil {
+			h.sendError(w, http.StatusInsufficientStorage, "Quota exceeded")
+			return
+		}
+	}
+
 	if newID == req.ID {
 		// Identical content: nothing to replace.
 		h.writeJSON(w, map[string]interface{}{"id": newID, "folder": "Drafts", "saved": true})
@@ -416,7 +423,7 @@ func (h *MailHandler) handleMailDraft(w http.ResponseWriter, r *http.Request) {
 		// New row is durable first; removing the superseded one last means a
 		// crash leaves a duplicate draft rather than losing it.
 		if err := h.mailDB.DeleteMessage(user, "Drafts", oldUID); err == nil {
-			_ = h.msgStore.DeleteMessage(user, req.ID) // reference-aware
+			h.removeBlob(user, req.ID) // reference-aware, releases quota
 		}
 	}
 	h.writeJSON(w, map[string]interface{}{"id": newID, "folder": "Drafts", "saved": true})

@@ -80,6 +80,17 @@ func (h *MailHandler) mailboxExists(user, internal string) bool {
 
 // findUIDByMessageID returns the UID of messageID in mailbox.
 func (h *MailHandler) findUIDByMessageID(user, mailbox, messageID string) (uint32, *storage.MessageMetadata, bool) {
+	if hash, mb, uid, ok := parseQualifiedMailID(messageID); ok {
+		// F6645: a copy-qualified id names exactly one (mailbox, uid).
+		if mb != mailbox {
+			return 0, nil, false
+		}
+		meta, err := h.mailDB.GetMessageMetadata(user, mailbox, uid)
+		if err != nil || meta == nil || meta.MessageID != hash {
+			return 0, nil, false
+		}
+		return uid, meta, true
+	}
 	uids, err := h.mailDB.GetMessageUIDs(user, mailbox)
 	if err != nil {
 		return 0, nil, false
@@ -189,7 +200,8 @@ func (h *MailHandler) handleMailMove(w http.ResponseWriter, r *http.Request) {
 			h.sendError(w, http.StatusNotFound, "Email not found")
 			return
 		}
-		if _, _, dup := h.findUIDByMessageID(userEmail, to, id); dup {
+		_, _, qualified := splitQualified(id)
+		if _, _, dup := h.findUIDByMessageID(userEmail, to, id); dup && !qualified {
 			h.sendError(w, http.StatusConflict, "Email already exists in destination folder")
 			return
 		}

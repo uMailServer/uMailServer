@@ -511,26 +511,11 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		s.auditLogger.LogAccountUpdate(authUser, email, ip, []string{"admin_status_" + action})
 	}
 
-	// F6650: never leave the system without an active administrator.
+	// F6650/F6710: never leave the system without an active administrator;
+	// the authoritative check is db.MutateAccountKeepAdmin below, inside the
+	// write transaction. The mutex only serialises with deleteAccount.
 	adminGuardMu.Lock()
 	defer adminGuardMu.Unlock()
-	if account.IsAdmin && account.IsActive {
-		stillAdmin, stillActive := wantAdmin, account.IsActive
-		if req.IsActive != nil {
-			stillActive = *req.IsActive
-		}
-		if !stillAdmin || !stillActive {
-			others, err := s.otherActiveAdmins(func(d, l string) bool { return d == domain && l == user })
-			if err != nil {
-				s.sendError(w, http.StatusInternalServerError, "failed to update account")
-				return
-			}
-			if !others {
-				s.sendError(w, http.StatusConflict, "cannot demote or deactivate the last active administrator")
-				return
-			}
-		}
-	}
 
 	var newHash, newAPOP string
 	if req.Password != "" {
@@ -560,7 +545,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	// role change or password change. F6250/F6252: a password reset, a
 	// disable or an admin demotion also revokes the account's sessions, so
 	// re-enabling or re-promoting cannot revive old tokens.
-	updated, err := s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+	updated, err := s.db.MutateAccountKeepAdmin(domain, user, func(a *db.AccountData) error {
 		revoke := false
 		if newHash != "" {
 			a.PasswordHash = newHash
@@ -596,6 +581,10 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 		}
 		return nil
 	})
+	if errors.Is(err, db.ErrLastActiveAdmin) {
+		s.sendError(w, http.StatusConflict, "cannot demote or deactivate the last active administrator")
+		return
+	}
 	if err != nil {
 		status, msg := dbErrStatus(err, "failed to update account")
 		s.sendError(w, status, msg)
@@ -618,12 +607,40 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 		return
 	}
 
+	// F6702: a non-admin deleting their own account must re-authenticate with
+	// the current password (shares the password-change guess budget).
+	if authUser != "" && !isAdmin {
+		var req struct {
+			Password string `json:"password"`
+		}
+		if err := decodeJSON(r, &req); err != nil || req.Password == "" {
+			s.sendError(w, http.StatusBadRequest, "password is required to delete your own account")
+			return
+		}
+		self, gerr := s.db.GetAccount(domain, user)
+		if gerr != nil || self == nil {
+			s.sendError(w, http.StatusNotFound, "account not found")
+			return
+		}
+		emailKey := accountLoginKey(getClientIP(r, s.config.TrustedProxies), authUser)
+		if !s.checkAccountLoginRateLimit(emailKey) {
+			s.sendError(w, http.StatusTooManyRequests, "too many password attempts for this account")
+			return
+		}
+		if matches, _ := s.verifyPassword(req.Password, self.PasswordHash); !matches {
+			s.recordAccountLoginFailure(emailKey)
+			s.auditLogger.LogLoginFailure(authUser, audit.ExtractIP(r), "account_delete_wrong_password")
+			s.sendError(w, http.StatusForbidden, "password is incorrect")
+			return
+		}
+		s.clearAccountLoginFailures(emailKey)
+	}
+
 	// F6130: deleting a missing account is a 404, not a 204 with an audit
 	// entry for a deletion that never happened.
 	adminGuardMu.Lock() // F6650
 	defer adminGuardMu.Unlock()
-	target, err := s.db.GetAccount(domain, user)
-	if err != nil {
+	if _, err := s.db.GetAccount(domain, user); err != nil {
 		if isKeyNotFound(err) {
 			s.sendError(w, http.StatusNotFound, "account not found")
 		} else {
@@ -631,19 +648,26 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 		}
 		return
 	}
-	if target.IsAdmin && target.IsActive {
-		others, err := s.otherActiveAdmins(func(d, l string) bool { return d == domain && l == user })
-		if err != nil {
-			s.sendError(w, http.StatusInternalServerError, "failed to delete account")
-			return
-		}
-		if !others {
+	// F6710: the last-admin check is a db-level invariant (same transaction
+	// as the delete), not only this process's mutex.
+	// F6649c: the row goes first so no login or delivery can start, then the
+	// mailbox data is purged.
+	if err := s.db.DeleteAccountKeepAdmin(domain, user); err != nil {
+		switch {
+		case errors.Is(err, db.ErrLastActiveAdmin):
 			s.sendError(w, http.StatusConflict, "cannot delete the last active administrator")
-			return
+		case isKeyNotFound(err):
+			s.sendError(w, http.StatusNotFound, "account not found")
+		default:
+			s.sendError(w, http.StatusInternalServerError, "failed to delete account")
 		}
+		return
 	}
-	if err := s.db.DeleteAccount(domain, user); err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to delete account")
+	if err := s.purgeAccountData(user + "@" + domain); err != nil {
+		if s.logger != nil {
+			s.logger.Error("account data purge failed", "account", email, "error", err)
+		}
+		s.sendError(w, http.StatusInternalServerError, "account removed but mailbox data purge failed")
 		return
 	}
 

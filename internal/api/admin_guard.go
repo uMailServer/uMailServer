@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -13,6 +14,52 @@ import (
 // adminGuardMu serialises the check-then-write sequences that must keep at
 // least one active administrator (F6650).
 var adminGuardMu sync.Mutex
+
+// AccountPurger removes the data of a deleted mailbox that lives outside the
+// packages the api server holds directly (sieve scripts, push subscriptions,
+// ...). It is wired by the server so this package does not import it.
+type AccountPurger interface {
+	PurgeAccount(email string) error
+}
+
+// SetAccountPurger installs the cascade hook run on account/domain deletion.
+func (s *Server) SetAccountPurger(p AccountPurger) { s.accountPurger = p }
+
+// SetQuotaAdjustFunc installs the quota counter hook for REST mail (F6680).
+func (s *Server) SetQuotaAdjustFunc(f func(user string, delta int64) error) {
+	s.quotaAdjust = f
+	s.initMailHandler()
+}
+
+// purgeAccountData deletes everything stored for the mailbox so a later
+// account created under the same address starts empty (F6649c): blob files,
+// IMAP/JMAP metadata, search index, vacation config, plus whatever the
+// installed AccountPurger owns.
+func (s *Server) purgeAccountData(email string) error {
+	var errs []error
+	if s.mailDB != nil {
+		if err := s.mailDB.PurgeUser(email); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if s.msgStore != nil {
+		if err := s.msgStore.PurgeUser(email); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if s.searchSvc != nil {
+		s.searchSvc.ClearIndex(email)
+	}
+	if s.vacationMgr != nil {
+		_ = s.vacationMgr.DeleteConfig(email)
+	}
+	if s.accountPurger != nil {
+		if err := s.accountPurger.PurgeAccount(email); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
 
 // retryAfterSeconds is advertised on every 429 (F6654).
 const retryAfterSeconds = "60"
