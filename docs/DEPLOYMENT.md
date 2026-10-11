@@ -76,9 +76,9 @@ services:
       - "587:587"    # Submission
       - "143:143"    # IMAP
       - "993:993"    # IMAPS
-      - "110:110"    # POP3
-      - "995:995"    # POP3S
-      - "8080:8080"  # HTTP API
+      - "995:995"    # POP3S (implicit TLS; disabled unless pop3.enabled: true)
+      - "4190:4190"  # ManageSieve
+      - "443:443"    # Webmail + REST API (admin panel is also served here)
     volumes:
       - ./data:/var/lib/umailserver
       - ./config:/etc/umailserver
@@ -137,19 +137,20 @@ imap:
   max_connections: 100
 
 pop3:
-  enabled: true
+  enabled: true               # off by default
   port: 995
   bind: 0.0.0.0
   max_connections: 100
 
 http:
   enabled: true
-  port: 8080
+  port: 443
   bind: 0.0.0.0
+  trusted_proxies: []         # reverse proxies allowed to set X-Forwarded-For (see SECURITY.md)
 
 admin:
   enabled: true
-  port: 8081
+  port: 8443                  # admin panel only; keep on loopback
   bind: 127.0.0.1
 
 security:
@@ -167,15 +168,16 @@ logging:
 
 metrics:
   enabled: true
-  port: 9090
+  port: 8080                  # Prometheus text format (+ /healthz); loopback by default
   bind: 127.0.0.1
   path: /metrics
-
-domains:
-  - name: example.com
-    max_accounts: 100
-    max_mailbox_size: 1GB
 EOF
+
+# Domains and accounts live in the database, not in the YAML file. These
+# commands find the config via $UMAILSERVER_CONFIG, ./umailserver.yaml or
+# /etc/umailserver/umailserver.yaml (they have no --config flag)
+umailserver domain add example.com
+umailserver account add admin@example.com
 ```
 
 ### Security Hardening
@@ -199,12 +201,13 @@ sudo ufw allow 465/tcp
 sudo ufw allow 587/tcp
 sudo ufw allow 143/tcp
 sudo ufw allow 993/tcp
-sudo ufw allow 110/tcp
-sudo ufw allow 995/tcp
-sudo ufw allow 8080/tcp
+sudo ufw allow 995/tcp    # only when pop3.enabled: true
+sudo ufw allow 4190/tcp   # ManageSieve
+sudo ufw allow 443/tcp    # Webmail + REST API (this port is your TLS-terminating proxy)
 
-# Restrict admin panel to localhost
-sudo ufw deny 8081/tcp
+# Admin panel (8443), metrics (8080) and MCP (3000) bind to 127.0.0.1 by
+# default: do not open them
+sudo ufw deny 8443/tcp
 ```
 
 ## Running the Server
@@ -222,7 +225,7 @@ After=network.target
 Type=simple
 User=umailserver
 Group=umailserver
-ExecStart=/usr/local/bin/umailserver --config /etc/umailserver/umailserver.yaml
+ExecStart=/usr/local/bin/umailserver serve --config /etc/umailserver/umailserver.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
@@ -256,7 +259,7 @@ You can override config values using environment variables:
 
 ```bash
 export UMAILSERVER_SERVER_HOSTNAME=mail.example.com
-export UMAILSERVER_SECURITY_JWTSECRET="your-secret-key"
+export UMAILSERVER_SECURITY_JWT_SECRET="your-secret-key"
 export UMAILSERVER_LOGGING_LEVEL=debug
 ```
 
@@ -266,10 +269,22 @@ export UMAILSERVER_LOGGING_LEVEL=debug
 
 uMailServer provides health endpoints:
 
-- `GET /health` - Full health check
-- `GET /health/live` - Liveness probe
-- `GET /health/ready` - Readiness probe
-- `GET /metrics` - Prometheus metrics
+On the web listener (`http.port`, default 443; plain HTTP, unauthenticated, exempt
+from rate limiting):
+
+- `GET /health` - Full health check (503 when unhealthy)
+- `GET /health/ready` - Readiness probe (503 while shutting down)
+
+There is no `/health/live` route on that listener. The web, API and admin listeners do not terminate TLS themselves (the `tls` section covers SMTP, IMAP, POP3 and ManageSieve); run a reverse proxy in front for HTTPS (see SECURITY_HARDENING.md). On the separate metrics
+listener (`metrics.bind:port`, default `127.0.0.1:8080`, unauthenticated):
+
+- `GET /metrics` (`metrics.path`) - Prometheus text format
+- `GET /healthz` - Liveness probe (always `200 ok`)
+
+`GET /metrics` and `GET /api/v1/metrics` on the web listener are admin-only
+JSON, not the Prometheus format. Point a container health check at
+`http://localhost:443/health` or at the
+`/healthz` URL above, not at `http://localhost:8080/health`.
 
 ### Prometheus Configuration
 
@@ -277,7 +292,7 @@ uMailServer provides health endpoints:
 scrape_configs:
   - job_name: 'umailserver'
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ['localhost:8080']
     metrics_path: /metrics
 ```
 
@@ -468,7 +483,7 @@ example paths assume `server.data_dir: /var/lib/umailserver`.
 
 1. Check queue: `umailserver queue list`
 2. Review connections: `netstat -an | grep :25 | wc -l`
-3. Enable pprof: Access `/debug/pprof/` on admin port
+3. Check process memory with `ps -o rss -p $(pgrep -x umailserver)` and the metrics on `127.0.0.1:8080/metrics`
 
 ### Log Locations
 

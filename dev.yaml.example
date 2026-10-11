@@ -5,7 +5,6 @@
 server:
   hostname: localhost
   data_dir: ./data
-  max_message_size: 10MB
 
 tls:
   # Development mode - self-signed certificates
@@ -44,36 +43,18 @@ pop3:
 http:
   enabled: true
   bind: "0.0.0.0"
-  port: 8080
+  port: 8088                 # plain HTTP (webmail + API); 8080 is the metrics listener
 
 admin:
   enabled: true
   bind: "127.0.0.1"
   port: 8082
 
-webmail:
-  enabled: true
-  bind: "0.0.0.0"
-  port: 8081
-
-sieve:
-  enabled: true
-  port: 4190
-
-autoconfig:
-  enabled: true
-
-autodiscover:
-  enabled: true
-
 spam:
   enabled: true
-  threshold: 5.0
   bayesian:
     enabled: true
   greylisting:
-    enabled: false    # Disable for local dev
-  rbl:
     enabled: false    # Disable for local dev
 
 security:
@@ -82,13 +63,6 @@ security:
     smtp_per_minute: 1000
     smtp_per_hour: 10000
     http_requests_per_minute: 1000
-
-queue:
-  max_retries: 3
-  retry_delays:
-    - 1m
-    - 5m
-    - 15m
 
 domains:
   - name: localhost

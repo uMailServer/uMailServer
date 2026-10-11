@@ -328,23 +328,19 @@ imapsync --host1 localhost --user1 user@example.com \
   --password2 secret --usecache --nofoldersize
 
 # HTTP API load test
-wrk -t12 -c400 -d30s https://localhost/health
+wrk -t12 -c400 -d30s http://localhost:443/health
 ```
 
 ### Profiling
 
 ```bash
-# Enable CPU profiling
-export UMAILSERVER_PROFILE_CPU=true
-export UMAILSERVER_PROFILE_MEM=true
+# The released binary does not serve /debug/pprof and has no profiling
+# switches (no UMAILSERVER_PROFILE_* variables). To profile, build a binary that
+# mounts net/http/pprof, or sample from outside the process:
+perf top -p "$(pgrep -x umailserver)"
 
-# Generate profiles
-curl http://localhost:8081/debug/pprof/profile > cpu.pprof
-curl http://localhost:8081/debug/pprof/heap > heap.pprof
-
-# Analyze
-go tool pprof cpu.pprof
-go tool pprof heap.pprof
+# Prometheus metrics (loopback listener, metrics.port default 8080)
+curl -s http://localhost:8080/metrics | head -50
 ```
 
 ## Troubleshooting
@@ -352,21 +348,18 @@ go tool pprof heap.pprof
 ### High Memory Usage
 
 ```bash
-# Check goroutine count
-curl -s http://localhost:8081/debug/pprof/goroutine?debug=1
-
-# Check heap profile
-curl -s http://localhost:8081/debug/pprof/heap?debug=1 | head -20
+# Resident memory of the server process
+ps -o rss,cmd -p "$(pgrep -x umailserver)"
 ```
 
 ### Slow SMTP Delivery
 
 ```bash
 # Check queue depth
-curl https://localhost/api/v1/admin/queue | jq '.length'
+curl http://localhost:443/api/v1/admin/queue | jq '.length'
 
 # Check rate limits
-curl https://localhost/api/v1/admin/ratelimits/config | jq
+curl http://localhost:443/api/v1/admin/ratelimits/config | jq
 
 # Review logs
 journalctl -u umailserver -f | grep -i "slow\|timeout"
@@ -375,14 +368,12 @@ journalctl -u umailserver -f | grep -i "slow\|timeout"
 ### Database Performance
 
 ```bash
-# Monitor bbolt stats
-curl http://localhost:8081/metrics | grep umailserver_db
-
 # Check database size
 ls -lh /var/lib/umailserver/*.db
 
-# Compact database
-umailserver compact-db
+# There is no compaction command; to shrink a bbolt file, stop the server and
+# rewrite it with the bbolt CLI (go install go.etcd.io/bbolt/cmd/bbolt@latest):
+#   bbolt compact -o umailserver.db.new umailserver.db
 ```
 
 ### Network Issues

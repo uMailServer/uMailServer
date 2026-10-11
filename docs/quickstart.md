@@ -96,7 +96,7 @@ umailserver check tls mail.yourdomain.com
 
 ## First Login
 
-1. Access the admin panel: `https://<your-server-ip>/`
+1. Access the admin panel: `http://127.0.0.1:8443/` on the server itself (loopback-only by default; the same panel is served at `/admin/` on the web port `http.port`, 443). The web listeners speak plain HTTP, so put a TLS-terminating reverse proxy in front for remote access
 2. Login with: `admin@yourdomain.com` and your password
 3. Create additional email accounts
 

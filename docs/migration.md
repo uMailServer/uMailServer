@@ -6,13 +6,14 @@ Migrate from existing mail servers to uMailServer.
 
 | Source | Method | Notes |
 |--------|--------|-------|
-| Dovecot | Maildir direct copy | Fast, preserves all metadata |
-| Postfix + Dovecot | Maildir copy | Standard setup |
-| cPanel | Backup restore | Use cPanel backup format |
-| Gmail | MBOX export | Via Google Takeout |
-| Any IMAP | IMAP sync | Universal migration |
-| Thunderbird | MBOX import | Export folders |
-| Outlook | PST export | Convert to MBOX first |
+| Dovecot | `migrate --type dovecot` | Imports the Maildir messages and (optionally) accounts from a passwd file |
+| Postfix + Dovecot | `migrate --type dovecot` | Standard setup |
+| Any IMAP (incl. Gmail with an app password) | `migrate --type imap` | Universal migration |
+| Thunderbird, Gmail Takeout | `migrate --type mbox` | One file per destination account (see below) |
+| cPanel, Outlook (PST) | Convert to Maildir or MBOX first | No dedicated importer |
+
+`--type` accepts only `imap`, `dovecot` and `mbox`. The `migrate` command opens
+the database directly, so **stop the server while it runs**.
 
 ## Pre-Migration Checklist
 
@@ -49,29 +50,18 @@ umailserver migrate --type dovecot \
   --passwd-file /etc/dovecot/users
 ```
 
-### 3. Copy Maildir
+### 3. Do not copy the Maildir by hand
 
-Direct filesystem copy (fastest):
-
-```bash
-# Copy maildir structure
-rsync -avz --progress \
-  /var/mail/example.com/ \
-  /var/lib/umailserver/mail/example.com/
-
-# Fix ownership
-chown -R umailserver:umailserver /var/lib/umailserver/mail/
-```
+uMailServer does not use a plain Maildir tree as its live store: messages are
+content-addressed blobs under `mail/messages` with their metadata in
+`mail/mail.db`. Copying a Maildir into the data directory (rsync) is **not**
+picked up by IMAP/POP3. Use `migrate --type dovecot` as shown above, which
+stores each message through the message store.
 
 ### 4. Verify Migration
 
-```bash
-# Check maildir structure
-ls -la /var/lib/umailserver/mail/example.com/user1/Maildir/
-
-# Count messages
-find /var/lib/umailserver/mail/example.com/user1/Maildir/cur -type f | wc -l
-```
+Log in with an IMAP client (or `curl -u user:pass imaps://mail.example.com/INBOX`)
+and compare message counts with the old server.
 
 ## Migration via IMAP
 
@@ -100,7 +90,7 @@ for USER in "${USERS[@]}"; do
   umailserver migrate --type imap \
     --source imaps://oldmail.example.com \
     --username "$USER" \
-    --password-file /path/to/passwords.txt \
+    --password "$(lookup_password "$USER")" \
     --target "$USER"
 done
 ```
@@ -130,67 +120,27 @@ Import from MBOX files (Thunderbird, Gmail export, etc.).
 
 ### 2. Import to uMailServer
 
-```bash
-# Import single MBOX file
-umailserver migrate --type mbox \
-  --source /path/to/Inbox.mbox \
-  --target user@example.com
+`migrate --type mbox` takes the destination account from the **file name**:
+`user@example.com.mbox` is imported into the account `user@example.com`
+(the `.mbox` suffix is stripped). `--target` is ignored for MBOX imports and
+there is no per-folder option, so rename each export to the account address
+first:
 
-# Import multiple files
-umailserver migrate --type mbox \
-  --source "/path/to/mboxes/*.mbox" \
-  --target user@example.com
+```bash
+cp /path/to/Inbox.mbox /tmp/user@example.com.mbox
+
+# Import one file
+umailserver migrate --type mbox --source /tmp/user@example.com.mbox
+
+# Import several files (quote the glob; the CLI expands it)
+umailserver migrate --type mbox --source "/tmp/*@example.com.mbox"
 ```
 
 ### 3. Gmail Takeout Import
 
-```bash
-# Extract Google Takeout archive
-tar -xzf takeout-20240101T000000Z-001.tgz
-
-# Import all MBOX files
-cd Takeout/Mail
-for mbox in *.mbox; do
-  folder=$(basename "$mbox" .mbox)
-  echo "Importing $folder..."
-  umailserver migrate --type mbox \
-    --source "$mbox" \
-    --target user@example.com \
-    --folder "$folder"
-done
-```
-
-## Gmail API Migration
-
-For large Gmail migrations, use the Gmail API:
-
-```bash
-# Requires Gmail API credentials
-umailserver migrate --type gmail \
-  --source "gmail://user@gmail.com" \
-  --credentials /path/to/credentials.json \
-  --target user@example.com
-```
-
-## cPanel Migration
-
-### 1. Create cPanel Backup
-
-1. Log into cPanel
-2. Go to "Backup" → "Download a Full Website Backup"
-3. Download the backup file
-
-### 2. Extract and Import
-
-```bash
-# Extract cPanel backup
-tar -xzf backup-*.tar.gz
-
-# Import accounts
-umailserver migrate --type cpanel \
-  --source extracted_backup/ \
-  --domain example.com
-```
+Takeout produces one `.mbox` per label. Rename or merge the files per account
+as above before importing. There is no Gmail API importer; to pull a live Gmail
+mailbox use the IMAP importer with an app password, or `imapsync`.
 
 ## Migration with Imapsync
 

@@ -265,14 +265,20 @@ type Server struct {
 | IDLE | RFC 2177 | ✅ Push notifications |
 | NAMESPACE | RFC 2342 | ✅ Personal/shared/public |
 | MOVE | RFC 6851 | ✅ Server-side move |
-| CONDSTORE | RFC 7162 | ✅ Efficient resync |
-| QRESYNC | RFC 7162 | ✅ Quick resync |
 | SORT | RFC 5256 | ✅ Server-side sorting |
-| THREAD | RFC 5256 | ✅ Message threading |
-| COMPRESS | RFC 4978 | ✅ DEFLATE compression |
+| THREAD | RFC 5256 | ✅ `THREAD=REFERENCES`, `THREAD=ORDEREDSUBJECT` |
+| COMPRESS | RFC 4978 | ✅ `COMPRESS=DEFLATE` (offered until activated) |
 | SPECIAL-USE | RFC 6154 | ✅ \Sent, \Drafts, etc. |
 | UIDPLUS | RFC 4315 | ✅ UID expansion |
-| ENABLE | RFC 5161 | ✅ Capability enabling |
+| ENABLE | RFC 5161 | ✅ Capability enabling (accepted, nothing to enable) |
+| ESEARCH, MULTIAPPEND, UNSELECT, LIST-EXTENDED, ACL, ID, SASL-IR, LITERAL+, CHILDREN | various | ✅ Advertised |
+
+CONDSTORE and QRESYNC are **not** advertised: their STORE/FETCH/SEARCH/SELECT
+modifiers are not implemented, so `ENABLE CONDSTORE` is ignored. Authentication
+mechanisms (`AUTH=PLAIN`, `AUTH=LOGIN`) and `STARTTLS` are offered according to
+the transport: on a cleartext connection without TLS the server advertises
+`LOGINDISABLED` instead. The authoritative list is `defaultCapabilities()` in
+`internal/imap/server.go`.
 
 ### 3.4 Storage Architecture (`internal/storage/`)
 
@@ -870,7 +876,7 @@ Hello World!
 | RFC 5034 | POP3 SASL | ✅ Full | Same as SMTP |
 | RFC 8314 | Implicit TLS | ✅ Full | Ports 465, 993, 995 |
 | RFC 3501 | IMAP4rev1 | ✅ Full | `internal/imap/` |
-| RFC 9051 | IMAP4rev2 | ✅ Full | Via ENABLE extension |
+| RFC 9051 | IMAP4rev2 | ❌ Not advertised | UNSELECT/LIST-STATUS/SEARCHRES etc. incomplete |
 | RFC 4791 | CalDAV | ✅ Full | `internal/caldav/` |
 | RFC 6352 | CardDAV | ✅ Full | `internal/carddav/` |
 | RFC 8620 | JMAP | ✅ Full | `internal/jmap/` |
@@ -883,10 +889,10 @@ Hello World!
 | RFC 6376 | DKIM | ✅ Full | `internal/auth/dkim.go` |
 | RFC 7489 | DMARC | ✅ Full | `internal/auth/dmarc.go` |
 | RFC 8617 | ARC | ✅ Full | `internal/auth/arc.go` |
-| RFC 6698 | DANE/TLSA | ✅ Full | `internal/auth/dane.go` |
-| RFC 7671 | DANE | ✅ Full | `internal/auth/dane.go` |
-| RFC 7672 | DANE for SMTP | ✅ Full | TLSA record verification |
-| RFC 6711 | MTA-STS | ✅ Full | SMTP TLS policy |
+| RFC 6698 | DANE/TLSA | ⚠️ Outbound, advisory | `internal/auth/dane.go`; TLSA data counts only when DNSSEC-authenticated (AD bit) and the stock server installs no validation hook, so it is skipped with a warning |
+| RFC 7671 | DANE | ⚠️ Outbound, advisory | see above |
+| RFC 7672 | DANE for SMTP | ⚠️ Outbound, advisory | `SetDANESecureHook` is never called, so TLSA records are logged and not enforced (RFC 7672 §8.1) |
+| RFC 8461 | MTA-STS | ✅ Outbound enforcement | `enforce` policies of recipient domains never fall back to plaintext; the server does not host an inbound policy |
 | RFC 4422 | SASL | ✅ Full | PLAIN, LOGIN, SCRAM-SHA-256 |
 | RFC 7616 | SCRAM-SHA-256 | ✅ Full | Modern SASL mechanism |
 

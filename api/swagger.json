@@ -1,612 +1,6269 @@
 {
-    "swagger": "2.0",
-    "info": {
-        "contact": {}
+  "swagger": "2.0",
+  "info": {
+    "title": "uMailServer API",
+    "description": "REST API of uMailServer (source of truth: `internal/api/server.go`, `internal/api/admin.go`).\n\n**Base path.** Everything JSON lives under `/api/v1` on the main HTTP listener (`http.port`, default 443; the process itself speaks plain HTTP on that listener and TLS is expected to be provided in front of it, cookies are marked `Secure` when the request arrived over TLS). A second, admin-only listener (default `127.0.0.1:8443`, `admin.*`) serves the admin SPA plus a subset of the admin routes (domains, accounts, queue, rate limits, metrics, stats, vacations list, push stats) and `/health`.\n\n**Authentication.** `POST /api/v1/auth/login` returns a JWT (HS256) in the body (non-browser clients) and sets an HttpOnly `jwt` cookie. Send it as `Authorization: Bearer <token>` or let the browser send the cookie (cookie wins when both are present). Public endpoints are marked `security: []`. Admin-only operations are labelled and answer 403 `{\"error\":\"admin access required\"}` to ordinary users. The admin listener accepts Bearer tokens only (no cookie) and reports auth failures as `{\"error\",\"message\",\"code\"}`.\n\n**Request rules (all unsafe methods under `/api/v1/` except login, logout and `/api/v1/account/*`).** `Content-Type: application/json` is mandatory even for body-less DELETE/POST (400 `Content-Type must be application/json`). Cookie-authenticated requests with an Origin/Referer from another host are 403. JSON bodies reject unknown fields (400). Default body cap 4 MB (26 MB for mail send/draft); oversize bodies surface as 400, not 413.\n\n**Errors.** `{\"error\": \"<message>\"}` with the HTTP status. Methods other than those documented answer 405 with an `Allow` header; HEAD is answered for GET routes.\n\n**Rate limiting.** Per client IP, 1-minute window, `security.rate_limit.http_requests_per_minute` (default 120, 0 disables), applied to the protected `/api/v1/` routes and logout; exceeded -> 429 with `Retry-After: 60`. Login has its own failure lockouts (see the operation). `/health`, `/health/ready`, `/api/v1/events`, `/mcp`, `/metrics`, `/api/v1/account/*` and login are outside this limiter.\n\n**Lists** (`/domains`, `/accounts`, `/aliases`) return plain JSON arrays with the unpaginated size in the `X-Total-Count` header; `limit` 1-1000 (default 100) and `offset` are validated (400).\n\n**Message ids.** The REST message id is the blob content hash. When byte-identical copies exist (same mail in two folders or twice in one), list results report each copy as `<hash>_<uid>_<base64url(mailbox)>`, which addresses exactly one (folder, uid) entry for delete/flags/move/get; a hash held once keeps its plain id.\n\nGenerated from `openapi.yaml` (OpenAPI 3.0.3, the primary spec); the admin-only listener (`http://127.0.0.1:8443`) serves the admin routes with the same paths. Cookie auth (`jwt`) cannot be expressed in Swagger 2.0 and is described in prose only; use `openapi.yaml` for the full model.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "uMailServer",
+      "url": "https://github.com/umailserver/umailserver/issues"
     },
-    "paths": {
-        "/api/v1/accounts": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    },
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a list of all accounts for a domain\nCreates a new email account",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json",
-                    "application/json"
-                ],
-                "tags": [
-                    "Accounts",
-                    "Accounts"
-                ],
-                "summary": "Create account",
-                "responses": {
-                    "200": {
-                        "description": "List of accounts",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
-                            }
-                        }
-                    },
-                    "201": {
-                        "description": "Account created",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            },
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    },
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a list of all accounts for a domain\nCreates a new email account",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json",
-                    "application/json"
-                ],
-                "tags": [
-                    "Accounts",
-                    "Accounts"
-                ],
-                "summary": "Create account",
-                "responses": {
-                    "200": {
-                        "description": "List of accounts",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
-                            }
-                        }
-                    },
-                    "201": {
-                        "description": "Account created",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/aliases": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    },
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a list of all email aliases\nCreates a new email alias",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json",
-                    "application/json"
-                ],
-                "tags": [
-                    "Aliases",
-                    "Aliases"
-                ],
-                "summary": "Create alias",
-                "responses": {
-                    "200": {
-                        "description": "List of aliases",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
-                            }
-                        }
-                    },
-                    "201": {
-                        "description": "Alias created",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            },
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    },
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a list of all email aliases\nCreates a new email alias",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json",
-                    "application/json"
-                ],
-                "tags": [
-                    "Aliases",
-                    "Aliases"
-                ],
-                "summary": "Create alias",
-                "responses": {
-                    "200": {
-                        "description": "List of aliases",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
-                            }
-                        }
-                    },
-                    "201": {
-                        "description": "Alias created",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/domains": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    },
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a list of all domains\nCreates a new domain",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json",
-                    "application/json"
-                ],
-                "tags": [
-                    "Domains",
-                    "Domains"
-                ],
-                "summary": "Create domain",
-                "responses": {
-                    "200": {
-                        "description": "List of domains",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
-                            }
-                        }
-                    },
-                    "201": {
-                        "description": "Domain created",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            },
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    },
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a list of all domains\nCreates a new domain",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json",
-                    "application/json"
-                ],
-                "tags": [
-                    "Domains",
-                    "Domains"
-                ],
-                "summary": "Create domain",
-                "responses": {
-                    "200": {
-                        "description": "List of domains",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": true
-                            }
-                        }
-                    },
-                    "201": {
-                        "description": "Domain created",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/login": {
-            "post": {
-                "description": "Authenticates a user with email and password, returns JWT token",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Auth"
-                ],
-                "summary": "User login",
-                "parameters": [
-                    {
-                        "description": "User email",
-                        "name": "email",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "User password",
-                        "name": "password",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "TOTP code if MFA is enabled",
-                        "name": "totp_code",
-                        "in": "body",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Login successful",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "401": {
-                        "description": "Invalid credentials",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "429": {
-                        "description": "Too many login attempts",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/mail": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a list of emails from the specified mailbox folder",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Mail"
-                ],
-                "summary": "List emails in folder",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Folder name (default INBOX)",
-                        "name": "folder",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "List of emails",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/api.Mail"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/mail/delete": {
-            "delete": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Moves an email to the Trash folder",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Mail"
-                ],
-                "summary": "Delete email",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Message ID",
-                        "name": "id",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Email deleted",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/mail/send": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Sends an email and stores it in the Sent folder",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Mail"
-                ],
-                "summary": "Send email",
-                "parameters": [
-                    {
-                        "description": "Email data",
-                        "name": "email",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Email sent",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/refresh": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Returns a new JWT token with extended expiry",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Auth"
-                ],
-                "summary": "Refresh token",
-                "responses": {
-                    "200": {
-                        "description": "Token refreshed",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/health": {
-            "get": {
-                "description": "Returns the current health status of the server including database, queue, and storage checks",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Health"
-                ],
-                "summary": "Get server health",
-                "responses": {
-                    "200": {
-                        "description": "Server is healthy",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "503": {
-                        "description": "Server is unhealthy",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/health/ready": {
-            "get": {
-                "description": "Returns whether the server is ready to accept traffic. Used for kubernetes readiness probes.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Health"
-                ],
-                "summary": "Get server readiness for zero-downtime deployment",
-                "responses": {
-                    "200": {
-                        "description": "Server is ready",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "503": {
-                        "description": "Server is not ready",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "host": "mail.example.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Login, logout, token refresh"
+    },
+    {
+      "name": "Account",
+      "description": "Self-service for the authenticated account"
+    },
+    {
+      "name": "Admin",
+      "description": "Administrator operations (domains, accounts, aliases, queue, limits, keys)"
+    },
+    {
+      "name": "Cluster",
+      "description": "HA cluster operations (admin)"
+    },
+    {
+      "name": "Mail",
+      "description": "Webmail endpoints operating on the caller's own mailboxes"
+    },
+    {
+      "name": "Threads",
+      "description": "Conversation threads"
+    },
+    {
+      "name": "Settings",
+      "description": "Vacation, filters, push"
+    },
+    {
+      "name": "Realtime",
+      "description": "SSE and MCP"
+    },
+    {
+      "name": "Operations",
+      "description": "Health and metrics"
+    },
+    {
+      "name": "Client configuration",
+      "description": "Mail client autoconfiguration"
+    }
+  ],
+  "securityDefinitions": {
+    "bearerAuth": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "Authorization",
+      "description": "`Bearer <JWT>` from POST /api/v1/auth/login. An HttpOnly `jwt` cookie is accepted as an alternative (not expressible in Swagger 2.0)."
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "definitions": {
+    "Error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string",
+          "description": "Human-readable message"
         }
+      },
+      "required": [
+        "error"
+      ],
+      "description": "Error body used by every JSON handler of the main API. Some cluster/health/SSE paths answer with plain text instead (noted per operation)."
     },
-    "definitions": {
-        "api.Mail": {
+    "AdminListenerError": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "code": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "error",
+        "message",
+        "code"
+      ],
+      "description": "Error body of the authentication / admin-guard layer of the admin-only listener (port 8443)."
+    },
+    "LoginRequest": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "password": {
+          "type": "string"
+        },
+        "totp_code": {
+          "type": "string",
+          "description": "Required when the account has TOTP enabled."
+        }
+      },
+      "required": [
+        "email",
+        "password"
+      ]
+    },
+    "TokenResponse": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "description": "JWT (HS256). Returned in the body only for non-browser clients (User-Agent without Mozilla/Chrome/Firefox/Safari/Edge) or when an Authorization header was sent; browsers receive it solely via the HttpOnly `jwt` cookie."
+        },
+        "expiresIn": {
+          "type": "integer",
+          "description": "Token lifetime in seconds."
+        }
+      },
+      "required": [
+        "expiresIn"
+      ]
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "Status": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "Domain": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "max_accounts": {
+          "type": "integer"
+        },
+        "is_active": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "dkim_selector": {
+          "type": "string",
+          "description": "Present once a DKIM key exists (always \"default\" for API-created domains)."
+        },
+        "dkim_public_key": {
+          "type": "string",
+          "description": "DNS TXT public key value."
+        }
+      },
+      "required": [
+        "name",
+        "max_accounts",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "DomainCreate": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Lower-cased; validated as a domain name."
+        },
+        "max_accounts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000,
+          "description": "0 = unlimited."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "DomainUpdate": {
+      "type": "object",
+      "properties": {
+        "max_accounts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "is_active": {
+          "type": "boolean"
+        }
+      },
+      "description": "Omitted fields keep their stored value."
+    },
+    "Account": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "is_admin": {
+          "type": "boolean"
+        },
+        "is_active": {
+          "type": "boolean"
+        },
+        "quota_used": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "quota_limit": {
+          "type": "integer",
+          "format": "int64",
+          "description": "0 = unlimited."
+        },
+        "forward_to": {
+          "type": "string"
+        },
+        "forward_keep_copy": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_login": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "vacation_settings": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "is_admin",
+        "is_active"
+      ]
+    },
+    "AccountCreate": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Domain must already exist."
+        },
+        "password": {
+          "type": "string",
+          "description": "Must satisfy the password policy (max 128 characters)."
+        },
+        "is_admin": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "email",
+        "password"
+      ]
+    },
+    "AccountUpdate": {
+      "type": "object",
+      "properties": {
+        "password": {
+          "type": "string",
+          "description": "Admin reset of ANOTHER account's password (403 for your own: use /api/v1/account/password). Revokes that account's sessions."
+        },
+        "is_admin": {
+          "type": "boolean",
+          "description": "Changing it requires current_admin_password; an admin cannot change their own admin flag."
+        },
+        "is_active": {
+          "type": "boolean"
+        },
+        "forward_to": {
+          "type": "string"
+        },
+        "forward_keep_copy": {
+          "type": "boolean"
+        },
+        "quota_limit": {
+          "type": "integer",
+          "format": "int64",
+          "minimum": 0
+        },
+        "vacation_settings": {
+          "type": "string"
+        },
+        "current_admin_password": {
+          "type": "string",
+          "description": "Acting admin's password; required when is_admin changes."
+        }
+      },
+      "description": "Omitted fields keep their stored value; unknown fields are rejected (400)."
+    },
+    "PasswordDelete": {
+      "type": "object",
+      "properties": {
+        "password": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "password"
+      ]
+    },
+    "Alias": {
+      "type": "object",
+      "properties": {
+        "alias": {
+          "type": "string",
+          "description": "Full alias address."
+        },
+        "target": {
+          "type": "string"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "is_active": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "alias",
+        "target",
+        "domain",
+        "is_active"
+      ]
+    },
+    "AliasCreate": {
+      "type": "object",
+      "properties": {
+        "alias": {
+          "type": "string",
+          "format": "email"
+        },
+        "target": {
+          "type": "string",
+          "format": "email",
+          "description": "Must be an existing account."
+        },
+        "is_active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "alias",
+        "target"
+      ]
+    },
+    "AliasUpdate": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "format": "email"
+        },
+        "is_active": {
+          "type": "boolean"
+        }
+      }
+    },
+    "QueueEntry": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "type": "string",
+          "description": "pending, sending, failed (delivered/bounced entries are never listed; they can still be fetched by id)."
+        },
+        "retry_count": {
+          "type": "integer"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "next_retry": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Stats": {
+      "type": "object",
+      "properties": {
+        "domains": {
+          "type": "integer"
+        },
+        "accounts": {
+          "type": "integer"
+        },
+        "messages": {
+          "type": "integer",
+          "description": "Currently always 0."
+        },
+        "queue_size": {
+          "type": "integer",
+          "description": "pending + sending + failed"
+        }
+      }
+    },
+    "RateLimitConfig": {
+      "type": "object",
+      "properties": {
+        "ip_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "ip_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "ip_per_day": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "ip_connections": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "user_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "user_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "user_per_day": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "user_max_recipients": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "global_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        },
+        "global_per_hour": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000000
+        }
+      },
+      "required": [
+        "ip_per_minute",
+        "ip_per_hour",
+        "ip_per_day",
+        "ip_connections",
+        "user_per_minute",
+        "user_per_hour",
+        "user_per_day",
+        "user_max_recipients",
+        "global_per_minute",
+        "global_per_hour"
+      ],
+      "description": "Mail-protocol (SMTP/IMAP) rate limits managed at runtime; unrelated to the HTTP API limiter. All fields are required on PUT."
+    },
+    "Mail": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Message id. Plain content hash, or `<hash>_<uid>_<base64url(mailbox)>` when identical bytes exist more than once for the account (see tag description)."
+        },
+        "from": {
+          "type": "string"
+        },
+        "fromName": {
+          "type": "string"
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "preview": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "read": {
+          "type": "boolean"
+        },
+        "starred": {
+          "type": "boolean"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "hasAttachments": {
+          "type": "boolean"
+        },
+        "messageId": {
+          "type": "string",
+          "description": "RFC 5322 Message-ID header, when present."
+        },
+        "size": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "`cc`/`bcc` are only present on single-message reads of the Drafts folder."
+    },
+    "MailList": {
+      "type": "object",
+      "properties": {
+        "emails": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Mail"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "description": "Messages matching the filter."
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "folder": {
+          "type": "string"
+        },
+        "unreadTotal": {
+          "type": "integer",
+          "description": "Folder-wide, ignores filters."
+        },
+        "starredTotal": {
+          "type": "integer",
+          "description": "Folder-wide, ignores filters."
+        }
+      }
+    },
+    "SendMailRequest": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 998
+        },
+        "body": {
+          "type": "string",
+          "description": "Plain text, max 25 MB."
+        },
+        "inReplyTo": {
+          "type": "string",
+          "description": "Message-ID in angle brackets."
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "to"
+      ],
+      "description": "to+cc+bcc <= 100 addresses, each a bare addr-spec. Unknown fields are rejected (400). No attachment support."
+    },
+    "FlagsRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "folder": {
+          "type": "string",
+          "description": "Optional; all mailboxes searched when omitted."
+        },
+        "add": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "\\Seen",
+              "\\Flagged",
+              "\\Answered",
+              "\\Draft"
+            ]
+          }
+        },
+        "remove": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "\\Seen",
+              "\\Flagged",
+              "\\Answered",
+              "\\Draft"
+            ]
+          }
+        }
+      },
+      "description": "id + ids up to 1000 distinct ids; add + remove between 1 and 16 entries (flag names case-insensitive, leading backslash optional)."
+    },
+    "DraftRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Existing draft to replace (required for PUT)."
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 998
+        },
+        "body": {
+          "type": "string"
+        }
+      },
+      "description": "to+cc+bcc <= 100 addresses, body <= 25 MB."
+    },
+    "MoveRequest": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "from": {
+          "type": "string",
+          "description": "Source folder (inbox, sent, drafts, trash, spam or a mailbox name)."
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "description": "id + ids up to 1000 distinct ids. Unknown fields are ignored."
+    },
+    "Thread": {
+      "type": "object",
+      "properties": {
+        "thread_id": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "participants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "message_count": {
+          "type": "integer"
+        },
+        "unread_count": {
+          "type": "integer"
+        },
+        "last_activity": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "ThreadMessage": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "integer"
+        },
+        "mailbox": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "is_read": {
+          "type": "boolean"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Vacation": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "start_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339. An unparsable value is silently ignored."
+        },
+        "end_date": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339; must not be before start_date."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Required when enabled."
+        },
+        "message": {
+          "type": "string",
+          "description": "Required when enabled."
+        },
+        "html_message": {
+          "type": "string"
+        },
+        "send_interval": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8760,
+          "description": "Hours between replies to the same sender. Required on PUT (0/omitted is rejected)."
+        },
+        "exclude_addresses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ignore_lists": {
+          "type": "boolean"
+        },
+        "ignore_bulk": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "subject",
+        "message"
+      ]
+    },
+    "FilterCondition": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "from, to, subject, body or header"
+        },
+        "operator": {
+          "type": "string",
+          "description": "contains, equals, startsWith, endsWith, matches"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "headerName": {
+          "type": "string",
+          "description": "Required when field is header."
+        }
+      },
+      "required": [
+        "field",
+        "operator",
+        "value"
+      ]
+    },
+    "FilterAction": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "move, copy, delete, markRead, markSpam, forward, flag"
+        },
+        "target": {
+          "type": "string",
+          "description": "Folder for move/copy."
+        },
+        "forwardTo": {
+          "type": "string",
+          "description": "Address for forward."
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "Filter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "user_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "matchAll": {
+          "type": "boolean"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FilterCondition"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FilterAction"
+          }
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "FilterCreate": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "matchAll": {
+          "type": "boolean"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FilterCondition"
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FilterAction"
+          },
+          "minItems": 1,
+          "maxItems": 20
+        }
+      },
+      "required": [
+        "name",
+        "conditions",
+        "actions"
+      ]
+    },
+    "FilterUpdate": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 255
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "matchAll": {
+          "type": "boolean"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FilterCondition"
+          },
+          "maxItems": 50
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FilterAction"
+          },
+          "maxItems": 20
+        }
+      },
+      "description": "Omitted/empty fields keep their stored value."
+    },
+    "PushSubscribe": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "description": "Must be an https URL."
+        },
+        "p256dh": {
+          "type": "string"
+        },
+        "auth": {
+          "type": "string"
+        },
+        "deviceType": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "browser": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint",
+        "p256dh",
+        "auth"
+      ]
+    },
+    "Health": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "healthy",
+            "degraded",
+            "unhealthy",
+            "draining"
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "version": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
             "type": "object",
             "properties": {
-                "body": {
-                    "type": "string"
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "response_time_ms": {
+                "type": "number"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "system": {
+          "type": "object",
+          "properties": {
+            "go_version": {
+              "type": "string"
+            },
+            "goroutines": {
+              "type": "integer"
+            },
+            "memory_mb": {
+              "type": "integer"
+            },
+            "memory_used_mb": {
+              "type": "integer"
+            },
+            "uptime": {
+              "type": "string"
+            }
+          }
+        },
+        "database": {
+          "type": "string"
+        },
+        "queue": {
+          "type": "string"
+        },
+        "storage": {
+          "type": "string"
+        },
+        "draining": {
+          "type": "boolean"
+        }
+      },
+      "description": "Shape depends on wiring. With the health monitor (normal server start): status/timestamp/version/checks/system. Without it: status plus database/queue/storage strings. 503 when unhealthy."
+    }
+  },
+  "responses": {
+    "BadRequest": {
+      "description": "Invalid input",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
+    "Unauthorized": {
+      "description": "Missing/invalid/expired/revoked token, or account disabled",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
+    "Forbidden": {
+      "description": "Not permitted (e.g. `admin access required`)",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
+    "NotFound": {
+      "description": "Resource not found",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
+    "Conflict": {
+      "description": "Conflicts with current state",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
+    "TooManyRequests": {
+      "description": "Rate limit or lockout",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      },
+      "headers": {
+        "Retry-After": {
+          "type": "string",
+          "description": "Always `60` (seconds), also for longer lockouts."
+        }
+      }
+    },
+    "MethodNotAllowed": {
+      "description": "Method not supported on this path; `Allow` lists the supported ones",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      },
+      "headers": {
+        "Allow": {
+          "type": "string"
+        }
+      }
+    },
+    "Unavailable": {
+      "description": "Service or backing store unavailable",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
+    "ServerError": {
+      "description": "Internal error",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    },
+    "QuotaExceeded": {
+      "description": "Mailbox quota exceeded (`Quota exceeded`)",
+      "schema": {
+        "$ref": "#/definitions/Error"
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Log in",
+        "description": "Rate limited per IP (failure lockout, default 5 failures, 5 min doubling to 60 min; `security.max_login_attempts`) and per (IP, account) (5 failures / 5 min). Failed TOTP attempts per account lock after 5 failures for 5 minutes. Sets the `jwt` cookie.",
+        "operationId": "login",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/LoginRequest"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged in",
+            "schema": {
+              "$ref": "#/definitions/TokenResponse"
+            },
+            "headers": {
+              "Set-Cookie": {
+                "type": "string",
+                "description": "jwt cookie (HttpOnly, SameSite=Strict)"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "description": "`invalid credentials` (bad password, unknown or disabled account), `TOTP code required`, `invalid TOTP code` or `TOTP code already used`",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Log out",
+        "description": "Revokes the presented token(s) and clears the cookie. `DELETE` is accepted as an alias of POST.",
+        "operationId": "logout",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "schema": {
+              "$ref": "#/definitions/Message"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Log out (DELETE alias)",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Logged out",
+            "schema": {
+              "$ref": "#/definitions/Message"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Refresh token",
+        "description": "Revokes the presented token(s) and issues a new one (also replaces the cookie for cookie sessions). The request must still carry `Content-Type: application/json` (CSRF layer), body is ignored.",
+        "operationId": "refresh",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "New token",
+            "schema": {
+              "$ref": "#/definitions/TokenResponse"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/account/password": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Change own password",
+        "description": "Shares the per-(IP, account) failed-password budget with login (5 failures / 5 min). Revokes all existing sessions of the account and returns a replacement (cookie, plus `token`/`expiresIn` for non-browser clients).",
+        "operationId": "changeOwnPassword",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "current_password": {
+                  "type": "string"
                 },
-                "date": {
-                    "type": "string"
+                "new_password": {
+                  "type": "string",
+                  "minLength": 8,
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "current_password",
+                "new_password"
+              ]
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Changed",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
                 },
-                "folder": {
-                    "type": "string"
+                "token": {
+                  "type": "string"
                 },
-                "from": {
-                    "type": "string"
+                "expiresIn": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "description": "`current password is incorrect`",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/account/totp": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Own TOTP state",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
                 },
-                "fromName": {
-                    "type": "string"
+                "pending_setup": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/account/totp/setup": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Start TOTP enrolment",
+        "description": "Generates and stores (encrypted) a new secret; not active until verified.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "uri": {
+                  "type": "string",
+                  "description": "otpauth:// URI"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/account/totp/verify": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Confirm TOTP enrolment",
+        "description": "Enables TOTP; each time step can be used once. Revokes sessions and returns a replacement session like a password change.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
                 },
-                "hasAttachments": {
-                    "type": "boolean"
+                "token": {
+                  "type": "string"
+                },
+                "expiresIn": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "description": "`invalid TOTP code` or `TOTP code already used`",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/account/totp/disable": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Disable TOTP",
+        "description": "When TOTP is enabled the body must carry a current valid `code` (400 `current TOTP code required to disable 2FA`, 401 invalid/used, 429 after 5 failures).",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/account/forwarding": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Get own forwarding",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "forward_to": {
+                  "type": "string"
+                },
+                "keep_copy": {
+                  "type": "boolean"
+                },
+                "forwarding_on": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Account"
+        ],
+        "summary": "Set own forwarding",
+        "description": "Empty `forward_to` disables forwarding and clears keep_copy. `forward_copy` is accepted as a legacy alias of `keep_copy`.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "forward_to": {
+                  "type": "string"
+                },
+                "keep_copy": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored configuration",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "forward_to": {
+                  "type": "string"
+                },
+                "keep_copy": {
+                  "type": "boolean"
+                },
+                "forwarding_on": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/domains": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List domains",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Sorted by name.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Plain array",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Domain"
+              }
+            },
+            "headers": {
+              "X-Total-Count": {
+                "type": "integer",
+                "description": "Unpaginated number of items"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create domain",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Generates a 2048-bit DKIM key (selector `default`).",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/DomainCreate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "$ref": "#/definitions/Domain"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/domains/{domain}": {
+      "parameters": [
+        {
+          "name": "domain",
+          "in": "path",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get domain",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Domain"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update domain",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Deactivating a domain that still has accounts is a 409.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/DomainUpdate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "schema": {
+              "$ref": "#/definitions/Domain"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete domain",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Cascades to the domain's accounts and mailbox data. 409 when it holds the last active administrator; 500 if mailbox purge partly failed (retry DELETE per account).",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/accounts": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List accounts",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Sorted by address.",
+        "parameters": [
+          {
+            "name": "domain",
+            "in": "query",
+            "required": false,
+            "description": "Restrict to a domain",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Plain array",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Account"
+              }
+            },
+            "headers": {
+              "X-Total-Count": {
+                "type": "integer",
+                "description": "Unpaginated number of items"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create account",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). 400 for a bad address, weak password or unknown domain; 409 for a duplicate account or when the domain's `max_accounts` is reached.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/AccountCreate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "$ref": "#/definitions/Account"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{email}": {
+      "parameters": [
+        {
+          "name": "email",
+          "in": "path",
+          "required": true,
+          "description": "Account address (case-insensitive)",
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get account",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Account"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update account",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Partial update. 409 `cannot demote or deactivate the last active administrator`. A password reset, disable or demotion revokes the account's sessions.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/AccountUpdate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "schema": {
+              "$ref": "#/definitions/Account"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete account",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Removes the account and purges its mailbox data. 409 `cannot delete the last active administrator` (also when an admin deletes their own account). Admin callers need no password. The handler also contains a branch for a non-admin deleting their own account with `{\"password\": ...}` in the body (400 `password is required...`, 403 `password is incorrect`, 429 shared password budget), but the route is wrapped in the admin guard, so non-admins always receive 403 before reaching it.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "description": "Only consulted for non-admin callers (unreachable through the router).",
+            "schema": {
+              "$ref": "#/definitions/PasswordDelete"
+            }
+          }
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{email}/totp/setup": {
+      "parameters": [
+        {
+          "name": "email",
+          "in": "path",
+          "required": true,
+          "description": "Account address (case-insensitive)",
+          "type": "string"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Start TOTP enrolment for an account",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). An admin may act on non-admin accounts only; acting on an admin account (other than your own) is 403.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{email}/totp/verify": {
+      "parameters": [
+        {
+          "name": "email",
+          "in": "path",
+          "required": true,
+          "description": "Account address (case-insensitive)",
+          "type": "string"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Confirm TOTP enrolment for an account",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). An admin may act on non-admin accounts only; acting on an admin account (other than your own) is 403.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/accounts/{email}/totp/disable": {
+      "parameters": [
+        {
+          "name": "email",
+          "in": "path",
+          "required": true,
+          "description": "Account address (case-insensitive)",
+          "type": "string"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Disable TOTP for an account",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). An admin may act on non-admin accounts only; acting on an admin account (other than your own) is 403.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "uri": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "429": {
+            "$ref": "#/responses/TooManyRequests"
+          }
+        }
+      }
+    },
+    "/api/v1/aliases": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List aliases",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Plain array",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Alias"
+              }
+            },
+            "headers": {
+              "X-Total-Count": {
+                "type": "integer",
+                "description": "Unpaginated number of items"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create alias",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). 400 for unknown alias domain or unknown target account; 409 for a duplicate or an alias that clashes with a mailbox.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/AliasCreate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "$ref": "#/definitions/Alias"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/api/v1/aliases/{alias}": {
+      "parameters": [
+        {
+          "name": "alias",
+          "in": "path",
+          "required": true,
+          "description": "Alias address",
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get alias",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Alias"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update alias",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/AliasUpdate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "schema": {
+              "$ref": "#/definitions/Alias"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete alias",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/queue": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List queue entries",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Oldest first; delivered and bounced entries are omitted. Equivalent to `/api/v1/queue`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "pending",
+              "sending",
+              "failed"
+            ]
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Plain array",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/QueueEntry"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/queue/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Queue entry id",
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get queue entry",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/QueueEntry"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Retry queue entry now",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). POST on the entry itself (there is no /retry suffix). 409 when the entry is sending, delivered or bounced.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Re-queued",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "retrying"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Drop queue entry",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "responses": {
+          "204": {
+            "description": "Dropped"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/queue": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List queue entries",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Oldest first; delivered and bounced entries are omitted. Equivalent to `/api/v1/admin/queue`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "pending",
+              "sending",
+              "failed"
+            ]
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Plain array",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/QueueEntry"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/queue/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Queue entry id",
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get queue entry",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/QueueEntry"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Retry queue entry now",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). POST on the entry itself (there is no /retry suffix). 409 when the entry is sending, delivered or bounced.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Re-queued",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "retrying"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Drop queue entry",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "responses": {
+          "204": {
+            "description": "Dropped"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/stats": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Server statistics",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Stats"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Metrics snapshot (JSON)",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Counters grouped by subsystem (smtp, imap, delivery, spam, api, caches, ...) plus a `queue` object with pending/sending/failed/delivered/bounced/total. Free-form.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ratelimits/config": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get mail rate-limit config",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/RateLimitConfig"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Replace mail rate-limit config",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/RateLimitConfig"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Applied",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ratelimits/ip/{ip}": {
+      "parameters": [
+        {
+          "name": "ip",
+          "in": "path",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Rate-limit counters for an IP",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "ip": {
+                  "type": "string"
+                },
+                "stats": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ratelimits/user/{user}": {
+      "parameters": [
+        {
+          "name": "user",
+          "in": "path",
+          "required": true,
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Rate-limit counters for a user",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "user": {
+                  "type": "string"
+                },
+                "stats": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/vacations": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List accounts with active vacation replies",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "active_vacations": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "count": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/push/stats": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Push subscription statistics",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "e.g. totalSubscriptions, totalUsers, deviceTypes, osTypes"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/jwt/rotate": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Rotate the JWT signing key",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Old tokens stay valid until they expire (at most 5 key versions are kept).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Rotated",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "newKid": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "activeKids": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/jwt/status": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "JWT key status",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise).",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "currentKid": {
+                  "type": "string"
+                },
+                "activeKeys": {
+                  "type": "integer"
+                },
+                "activeKids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/cluster/status": {
+      "get": {
+        "tags": [
+          "Cluster"
+        ],
+        "summary": "Cluster status",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Cluster endpoints answer errors as plain text (`text/plain`), not the JSON error body. When clustering is off returns `{enabled:false,status:\"disabled\",instances:[]}`.",
+        "produces": [
+          "application/json",
+          "text/plain"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "is_leader": {
+                  "type": "boolean"
+                },
+                "instance_id": {
+                  "type": "string"
+                },
+                "instances": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "description": "Failed to get cluster health",
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cluster/instances": {
+      "get": {
+        "tags": [
+          "Cluster"
+        ],
+        "summary": "Cluster instance health",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Cluster endpoints answer errors as plain text (`text/plain`), not the JSON error body.",
+        "produces": [
+          "application/json",
+          "text/plain"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "instances": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "description": "Failed",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "503": {
+            "description": "Cluster not enabled",
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cluster/failover": {
+      "post": {
+        "tags": [
+          "Cluster"
+        ],
+        "summary": "Release leadership to a healthy peer",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Cluster endpoints answer errors as plain text (`text/plain`), not the JSON error body.",
+        "produces": [
+          "application/json",
+          "text/plain"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "new_leader": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Not the leader",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "description": "Failed",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "503": {
+            "description": "Cluster not enabled / no suitable target",
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cluster/heartbeat": {
+      "post": {
+        "tags": [
+          "Cluster"
+        ],
+        "summary": "Record a heartbeat",
+        "description": "**Admin only** (403 `{\"error\":\"admin access required\"}` otherwise). Cluster endpoints answer errors as plain text (`text/plain`), not the JSON error body.",
+        "produces": [
+          "application/json",
+          "text/plain"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "success": {
+                  "type": "boolean"
+                },
+                "instance_id": {
+                  "type": "string"
+                },
+                "timestamp": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "description": "Failed",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "503": {
+            "description": "Cluster not enabled",
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/mail/inbox": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List inbox",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List inbox (POST alias)",
+        "description": "Accepted and handled identically to GET (query parameters still apply).",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/sent": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List sent",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List sent (POST alias)",
+        "description": "Accepted and handled identically to GET (query parameters still apply).",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/drafts": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List drafts",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List drafts (POST alias)",
+        "description": "Accepted and handled identically to GET (query parameters still apply).",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/trash": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List trash",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List trash (POST alias)",
+        "description": "Accepted and handled identically to GET (query parameters still apply).",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/spam": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List spam",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "List spam (POST alias)",
+        "description": "Accepted and handled identically to GET (query parameters still apply).",
+        "parameters": [
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Overrides the path folder; a standard name (inbox, sent, drafts, trash, spam) or a mailbox name. Default INBOX.",
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 100
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Number of newest messages to skip; each page is returned in ascending UID order.",
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "description": "Only flagged messages.",
+            "type": "string",
+            "enum": [
+              "flagged",
+              "starred"
+            ]
+          },
+          {
+            "name": "unread",
+            "in": "query",
+            "required": false,
+            "description": "`1`/`true` = only unread.",
+            "type": "string",
+            "enum": [
+              "1",
+              "true",
+              "0",
+              "false"
+            ]
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/MailList"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/message": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Get one message",
+        "description": "Read-only; does not set \\Seen (use /mail/flags).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Message id (plain or copy-qualified)",
+            "type": "string"
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "description": "Restrict the search to a folder; all mailboxes when omitted",
+            "type": "string"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Mail"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/send": {
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Send a message",
+        "description": "Queues for delivery (when the queue is wired) and stores in Sent. Body limit about 26 MB; an oversized request fails JSON decoding (400).",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/SendMailRequest"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Sent",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
                 },
                 "id": {
+                  "type": "string",
+                  "description": "Id of the stored Sent copy"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          },
+          "507": {
+            "$ref": "#/responses/QuotaExceeded"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/delete": {
+      "delete": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Delete a message",
+        "description": "Permanently removes the message (not a move to Trash). No error is returned when the id matches nothing. A copy-qualified id removes exactly that copy. The id may also be sent as a form value with POST.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Message id",
+            "type": "string"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Delete a message (POST alias)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Message id",
+            "type": "string"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/flags": {
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Add/remove flags",
+        "description": "Failures after the plan stage (404/500) include the ids already updated in an `updated` array next to `error`.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/FlagsRequest"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "updated": {
+                  "type": "array",
+                  "items": {
                     "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/draft": {
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Create or replace a draft",
+        "description": "The id changes whenever content changes (ids are content hashes).",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/DraftRequest"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
                 },
-                "preview": {
+                "folder": {
+                  "type": "string",
+                  "enum": [
+                    "Drafts"
+                  ]
+                },
+                "saved": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          },
+          "507": {
+            "$ref": "#/responses/QuotaExceeded"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Update a draft",
+        "description": "`id` is required.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/DraftRequest"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "folder": {
+                  "type": "string",
+                  "enum": [
+                    "Drafts"
+                  ]
+                },
+                "saved": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          },
+          "507": {
+            "$ref": "#/responses/QuotaExceeded"
+          }
+        }
+      }
+    },
+    "/api/v1/mail/move": {
+      "post": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Move messages between folders",
+        "description": "Keeps flags (IMAP MOVE semantics). 409 when a plain-id message already exists in the destination. A mid-way failure answers 500 with `{error, moved}`.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/MoveRequest"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Moved",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "moved": {
+                  "type": "array",
+                  "items": {
                     "type": "string"
+                  }
                 },
-                "read": {
-                    "type": "boolean"
-                },
-                "size": {
-                    "type": "integer"
-                },
-                "starred": {
-                    "type": "boolean"
-                },
-                "subject": {
-                    "type": "string"
+                "from": {
+                  "type": "string"
                 },
                 "to": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
+                  "type": "string"
+                },
+                "uids": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "description": "id -> new UID in the destination"
                 }
+              }
             }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
         }
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "tags": [
+          "Mail"
+        ],
+        "summary": "Full-text search",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "Query (max 500 characters)",
+            "type": "string",
+            "maxLength": 500
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Values above 100 are capped; invalid values fall back to the default",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "required": false,
+            "description": "Invalid dates are rejected with 400",
+            "type": "string"
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "has_attachment",
+            "in": "query",
+            "required": false,
+            "description": "Only the literal `true` enables the filter",
+            "type": "boolean"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "folder": {
+                  "type": "string"
+                },
+                "emails": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "total": {
+                  "type": "integer"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "offset": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/threads": {
+      "get": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "List threads",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Invalid values fall back to the default",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          {
+            "name": "mailbox",
+            "in": "query",
+            "required": false,
+            "description": "Accepted but currently not used to filter the list",
+            "type": "string"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "threads": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Thread"
+                  }
+                },
+                "total": {
+                  "type": "integer"
+                },
+                "limit": {
+                  "type": "integer"
+                },
+                "offset": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/threads/search": {
+      "get": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Search threads",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "threads": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Thread"
+                  }
+                },
+                "query": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/threads/{threadId}": {
+      "parameters": [
+        {
+          "name": "threadId",
+          "in": "path",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "mailbox",
+          "in": "query",
+          "required": false,
+          "type": "string",
+          "default": "INBOX"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Messages of a thread",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ThreadMessage"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Delete a thread's messages in a mailbox",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/threads/{threadId}/read": {
+      "parameters": [
+        {
+          "name": "threadId",
+          "in": "path",
+          "required": true,
+          "type": "string"
+        },
+        {
+          "name": "mailbox",
+          "in": "query",
+          "required": false,
+          "type": "string",
+          "default": "INBOX"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Mark a thread read",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/vacation": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get own vacation reply",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Vacation"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Set own vacation reply",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/Vacation"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Remove own vacation reply",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/filters": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "List own filters",
+        "description": "Ordered by priority.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "filters": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Filter"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Create filter",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/FilterCreate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "$ref": "#/definitions/Filter"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/filters/reorder": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Reorder filters",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "Filter ids in the new order; unknown ids are skipped.",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "filterIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "filterIds"
+              ]
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/filters/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Filter id",
+          "type": "string"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Get filter",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Filter"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Update filter",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/FilterUpdate"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Filter"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Delete filter",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/filters/{id}/toggle": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Filter id",
+          "type": "string"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Toggle enabled flag",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Filter"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/push/vapid-public-key": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "VAPID public key",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "publicKey": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "503": {
+            "$ref": "#/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/push/subscribe": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Register a Web Push subscription",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/PushSubscribe"
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "201": {
+            "description": "Subscribed",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "subscriptionId": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "409": {
+            "$ref": "#/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/push/unsubscribe": {
+      "delete": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Remove a subscription",
+        "description": "Identify it with `?id=` or a JSON body `{\"endpoint\": ...}`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "description": "Subscription id",
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "endpoint": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "400": {
+            "$ref": "#/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/push/subscriptions": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "List own subscriptions",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "subscriptions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "updatedAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "deviceInfo": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          }
+        }
+      }
+    },
+    "/api/v1/push/test": {
+      "post": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "Send a test notification",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/Status"
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/responses/MethodNotAllowed"
+          },
+          "500": {
+            "$ref": "#/responses/ServerError"
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "Realtime"
+        ],
+        "summary": "Server-Sent Events stream",
+        "description": "Authenticated with the cookie or `Authorization: Bearer` (also `X-Auth-Token`). Not subject to the API rate limit. Events: `connected`, `heartbeat` (every 30 s; the token is re-validated on each beat and the stream is closed once invalid), `new_mail`, `expunge`, `flags_changed`, `folder_update`. At most 5 concurrent streams per user (the oldest is dropped). Errors are plain text.",
+        "produces": [
+          "text/event-stream",
+          "text/plain"
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE stream",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "503": {
+            "description": "Server shutting down"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/mcp": {
+      "post": {
+        "tags": [
+          "Realtime"
+        ],
+        "summary": "Model Context Protocol (JSON-RPC 2.0)",
+        "description": "Requires a valid API JWT (cookie or Bearer). Methods: initialize, tools/list, tools/call, resources/list, resources/read, prompts/list, prompts/get. Protocol errors are JSON-RPC error objects; additionally, when MCP-specific tokens are configured they are checked against the same Authorization header.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "description": "",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON-RPC response",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "400": {
+            "description": "Parse / invalid request / unknown method (JSON-RPC error)"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Origin not allowed"
+          },
+          "405": {
+            "description": "Only POST (and OPTIONS) are supported"
+          },
+          "413": {
+            "description": "Request body too large"
+          },
+          "429": {
+            "description": "MCP per-IP rate limit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Health",
+        "description": "Public, exempt from rate limiting. Also served (simplified) on the admin listener.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Healthy or degraded",
+            "schema": {
+              "$ref": "#/definitions/Health"
+            }
+          },
+          "503": {
+            "description": "Unhealthy",
+            "schema": {
+              "$ref": "#/definitions/Health"
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Readiness",
+        "description": "Public, exempt from rate limiting. `/health/live` is NOT routed on this listener.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ready"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Draining or database unavailable",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "not ready"
+                  ]
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Metrics snapshot (JSON, admin)",
+        "description": "Admin-authenticated JSON, same data as /api/v1/metrics. Prometheus text exposition and `/healthz` are served on the separate metrics listener (default 127.0.0.1:8080, path `metrics.path`, default `/metrics`), not on this port.",
+        "produces": [
+          "application/json"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "401": {
+            "$ref": "#/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/responses/Forbidden"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/.well-known/autoconfig/mail/config-v1.1.xml": {
+      "get": {
+        "tags": [
+          "Client configuration"
+        ],
+        "summary": "Thunderbird autoconfig",
+        "description": "Domain comes from `?emailaddress=` or an `autoconfig.<domain>` Host. Advertises IMAP 993 and SMTP 465 (SSL) on `mail.<domain>`.",
+        "parameters": [
+          {
+            "name": "emailaddress",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "format": "email"
+          }
+        ],
+        "produces": [
+          "application/xml"
+        ],
+        "responses": {
+          "200": {
+            "description": "clientConfig XML",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Domain required",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "404": {
+            "description": "Unknown domain",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "405": {
+            "description": "Method not allowed",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/autodiscover/autodiscover.xml": {
+      "get": {
+        "tags": [
+          "Client configuration"
+        ],
+        "summary": "Outlook autodiscover (query)",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "required": false,
+            "description": "Falls back to an `autodiscover.<domain>` Host",
+            "type": "string",
+            "format": "email"
+          }
+        ],
+        "produces": [
+          "application/xml"
+        ],
+        "responses": {
+          "200": {
+            "description": "Autodiscover XML",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Email required/invalid",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "404": {
+            "description": "Unknown domain",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "security": []
+      },
+      "post": {
+        "tags": [
+          "Client configuration"
+        ],
+        "summary": "Outlook autodiscover (XML request)",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "required": false,
+            "description": "Falls back to an `autodiscover.<domain>` Host",
+            "type": "string",
+            "format": "email"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": false,
+            "description": "",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "produces": [
+          "application/xml"
+        ],
+        "consumes": [
+          "application/xml"
+        ],
+        "responses": {
+          "200": {
+            "description": "Autodiscover XML",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Email required/invalid",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "404": {
+            "description": "Unknown domain",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "security": []
+      }
     }
+  }
 }

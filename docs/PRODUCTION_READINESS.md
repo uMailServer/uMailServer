@@ -49,7 +49,7 @@ This document tracks the production readiness status of uMailServer.
 | DKIM Verification | ✅ Complete | 94.9% | RFC 6376 |
 | DMARC Evaluation | ✅ Complete | 94.9% | RFC 7489 |
 | ARC Support | ✅ Complete | 94.9% | RFC 8617 |
-| DANE Support | ✅ Complete | 94.9% | RFC 6698 |
+| DANE Support | ⚠️ Advisory | 94.9% | RFC 6698; outbound TLSA records are looked up but not enforced (no DNSSEC-validation hook installed) |
 | Greylisting | ✅ Complete | 91.0% | Anti-spam |
 | RBL Checks | ✅ Complete | 91.0% | DNS blacklists |
 | Spam Scoring | ✅ Complete | 97.9% | TF-IDF based |

@@ -46,7 +46,7 @@ Each finding below was re-checked against the code on 2026-10-07. Totals: 43 ✅
 | 1.6 | Medium | Weak password policy | ✅ Fixed | 8–128 chars with upper/lower/digit/special (`internal/api/validators.go`) | b8a52b3 |
 | 1.7 | Medium | Rate-limit config PUT lacks bounds validation | ✅ Fixed | Every field bounded 1–10,000,000 | 61c8511 |
 | 1.8 | Medium | Login rate limit is IP-only and bypassable | ✅ Fixed | Per-account limit plus IP exponential backoff | b8a52b3 |
-| 1.9 | Medium | API rate limit skipped for auth endpoints | ✅ Fixed | Only `/health` skips the API rate limit | ba899ce |
+| 1.9 | Medium | API rate limit skipped for auth endpoints | ✅ Fixed | Only `/health` and `/health/ready` skip the API rate limit | ba899ce |
 | 1.10 | High | SMTP inbound allows AUTH over plaintext if `AllowInsecure` is set | ✅ Fixed | AUTH without TLS refused; port 25 never allows it | 89d9cc2 |
 | 1.11 | High | POP3 USER/PASS allowed over plaintext | ✅ Fixed | POP3 requires TLS; USER/PASS rejected otherwise | 89d9cc2 |
 | 1.12 | Medium | APOP uses MD5 and is vulnerable to offline cracking | 🟡 Partial | APOP removed, but unsalted SHA-256(password) is still stored as `APOPHash` | f69702d |
@@ -55,7 +55,7 @@ Each finding below was re-checked against the code on 2026-10-07. Totals: 43 ✅
 | 1.15 | Low | TOTP replay within time window | ✅ Fixed | Last-used step check plus atomic `ConsumeTOTPStep` | 8f0c09d |
 | 1.16 | Medium | JWT secret rotation never prunes old secrets | ✅ Fixed | At most 5 JWT secret versions kept | b8a52b3 |
 | 1.17 | High | Token blacklist is in-memory only | 🟡 Partial | Revocations persisted to bbolt; but if the DB write fails the in-memory fallback is never consulted | b8a52b3 |
-| 1.18 | High | Refresh token endpoint does not validate old token before revocation | 🟡 Partial | Refresh authenticated and revokes the old header token; cookie tokens not revoked; no absolute session lifetime | d11c08e |
+| 1.18 | High | Refresh token endpoint does not validate old token before revocation | 🟡 Partial | Refresh authenticated and revokes the old header and cookie tokens (re-checked 2026-10-12); no absolute session lifetime | d11c08e |
 | 1.19 | High | LDAP anonymous bind possible when `BindDN` is empty | ✅ Fixed | Empty `bind_dn` rejected when LDAP is enabled | 61c8511 |
 | 1.20 | Medium | LDAP credentials exposed in config | 🟡 Partial | `json:"-"` on `auth.LDAPConfig` but not on `config.LDAPConfig`; no code path serializes it today | 61c8511 |
 | 1.21 | Medium | LDAP user filter injection risk via configuration | ✅ Fixed | `validateUserFilter` enforces one `%s` and balanced parentheses | 61c8511 |
@@ -407,7 +407,7 @@ Each finding below was re-checked against the code on 2026-10-07. Totals: 43 ✅
 - SMTP (25, 587, 465) — `internal/smtp/`
 - IMAP (143, 993) — `internal/imap/`
 - POP3 (995) — `internal/pop3/`
-- HTTP API (443/HTTPS, 8443 admin) — `internal/api/`
+- HTTP API (443 and 8443 admin; both plain HTTP, TLS is terminated by a reverse proxy) — `internal/api/`
 - ManageSieve (4190/4191) — `internal/sieve/`
 - MCP (3000) — `internal/mcp/`
 - CalDAV / CardDAV / JMAP — `internal/caldav/`, `internal/carddav/`, `internal/jmap/`

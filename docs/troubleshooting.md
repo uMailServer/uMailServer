@@ -182,7 +182,7 @@ sudo ss -tlnp | grep :443
 tail -f /var/log/umailserver.log
 
 # Test locally
-curl -k https://localhost:443/
+curl http://localhost:443/
 ```
 
 **Solutions:**
@@ -222,15 +222,15 @@ http:
 umailserver queue list
 
 # Check queue status
-curl https://localhost/api/v1/admin/queue
+curl http://localhost:443/api/v1/admin/queue
 ```
 
 **Solutions:**
 ```bash
 # Retry specific message
-umailserver queue retry <message-id>
+umailserver queue retry <id>
 
-# Retry all failed
+# Re-queue all failed entries
 umailserver queue flush
 
 # Check DNS for recipient domain
@@ -244,8 +244,9 @@ telnet recipient-mx.com 25
 
 **Check:**
 ```bash
-# View message details
-umailserver queue show <message-id>
+# View entries (status, retry count, last error); one entry via the REST API
+umailserver queue list
+curl -H "Authorization: Bearer <token>" http://localhost:443/api/v1/admin/queue/<id>
 
 # Check logs
 grep "queue" /var/log/umailserver.log
@@ -307,12 +308,13 @@ sudo restorecon -Rv /var/lib/umailserver/mail
 ps aux | grep umailserver
 free -h
 
-# Check goroutines
-curl http://localhost:8080/debug/pprof/goroutine?debug=1
+# The running server does not expose a pprof endpoint; check the Prometheus
+# metrics (loopback listener, metrics.port default 8080) and the process RSS
+curl -s http://localhost:8080/metrics | head -50
 ```
 
 **Solutions:**
-- Reduce `max_workers` in config
+- Lower connection limits (`imap.max_connections`, `smtp.inbound.max_connections`, `smtp.max_connections_per_ip`)
 - Limit concurrent connections
 - Enable connection timeouts
 
@@ -396,9 +398,9 @@ journalctl -u umailserver | grep acme
 # Check for stuck processes
 lsof /var/lib/umailserver/umailserver.db
 
-# Restart server
-umailserver stop
-umailserver start
+# Restart server (the queue/account/domain/backup CLI commands open the
+# database directly and fail with "file is locked" while the server runs)
+umailserver restart
 ```
 
 ### "Database corruption"
@@ -408,11 +410,11 @@ umailserver start
 # Backup first
 cp /var/lib/umailserver/umailserver.db /var/lib/umailserver/umailserver.db.bak
 
-# Check integrity
-umailserver db check
+# Check the schema version / pending migrations
+umailserver db status
 
-# Repair
-umailserver db repair
+# There is no `db check` or `db repair`; restore from a backup
+# (see docs/RUNBOOK.md) if the file itself is damaged
 ```
 
 ## Logging & Debugging
@@ -420,8 +422,8 @@ umailserver db repair
 ### Enable debug logging
 
 ```yaml
-server:
-  log_level: debug
+logging:
+  level: debug
 ```
 
 ### View logs
@@ -442,14 +444,14 @@ grep "queue" /var/log/umailserver.log
 ### Get system status
 
 ```bash
-# Full status
-umailserver status --verbose
+# Server status (running/not running + PID; exit code 3 when not running)
+umailserver status
 
 # Health check
-curl https://localhost/health
+curl http://localhost:443/health
 
-# Metrics
-curl http://localhost:9090/metrics
+# Prometheus metrics (loopback listener, metrics.port default 8080)
+curl http://localhost:8080/metrics
 ```
 
 ## Getting Help

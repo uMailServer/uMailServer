@@ -59,9 +59,11 @@
 
 ## Known Limitations
 
-- **Webmail:** login, search, and trash use the API; the inbox, folders, message view, compose, and contacts pages still render mock data.
-- **Admin panel:** the Settings page does not persist changes yet.
-- **Account portal:** the Profile page is a placeholder.
+- **Webmail:** login, inbox and other folders, message view, flags, drafts, compose, trash and search use the REST API. The Contacts page is a stub (use a CardDAV client).
+- **Admin panel:** the Settings page is read-only (edit `umailserver.yaml` and restart).
+- **Account portal:** the Profile page is a read-only placeholder.
+- **Config reload:** `SIGHUP` only re-checks manually configured TLS certificates; every other config change needs `umailserver restart`.
+- **CLI and the running server:** `account`, `domain`, `queue`, `backup`, `restore` (read), and `migrate` open the bbolt databases directly and fail with "file is locked" while the server runs. `backup` explicitly refuses a live server; use the REST API for live administration.
 - **S/MIME and OpenPGP:** not supported. Messages pass through unmodified and unverified.
 - **Single node only:** all state lives in local bbolt files and directories; running more than one replica against the same data is not supported.
 
@@ -121,10 +123,12 @@ docker run -d \
 | 993 | IMAP | IMAP (Implicit TLS) |
 | 995 | POP3 | POP3 (Implicit TLS) |
 | 4190 | ManageSieve | Sieve script management |
-| 443 | HTTPS | Webmail + Admin Panel + REST API |
-| 8443 | HTTPS | Admin Panel only (localhost:8443) |
-| 8080 | HTTP | Prometheus Metrics |
-| 3000 | HTTP | MCP Server (Model Context Protocol) |
+| 443 | HTTP | Webmail + Admin Panel + REST API (plain HTTP: terminate TLS in a reverse proxy) |
+| 8443 | HTTP | Admin Panel only (localhost-only bind by default; plain HTTP) |
+| 8080 | HTTP | Prometheus metrics (`/metrics`) and `/healthz`; `127.0.0.1` by default |
+| 3000 | HTTP | MCP Server (loopback by default; a non-loopback bind requires `mcp.auth_token`) |
+
+Health checks for orchestrators are `GET /health` and `GET /health/ready` on the web port (443, plain HTTP); there is no `/health/live` there. The web/API/admin listeners do not terminate TLS themselves (`tls.*` applies to SMTP, IMAP, POP3 and ManageSieve): put Nginx, Caddy or Traefik in front for HTTPS and list it in `http.trusted_proxies`. A `docker run -p 8080:8080` mapping only reaches the metrics listener if `metrics.bind` is set to `0.0.0.0`.
 
 ## Configuration
 
@@ -202,7 +206,7 @@ Access the webmail at `https://mail.example.com/`
 
 ## Admin Panel
 
-Access the admin panel at `https://localhost:8443/` (localhost only, port 8443)
+Access the admin panel at `http://localhost:8443/` (localhost only, port 8443; plain HTTP, see the port table)
 
 Features:
 - Dashboard with real-time stats
@@ -217,23 +221,29 @@ Features:
 
 ```bash
 # Server commands
-umailserver serve                          # Start server
-umailserver serve --config /path/to/config.yaml
+umailserver serve --config /path/to/config.yaml   # Start server (config is required)
+umailserver status                         # running / not running (+ PID)
+umailserver stop                           # Graceful stop
+umailserver restart
+umailserver config check --config /path/to/config.yaml   # Validate config (also flags unknown keys)
 
 # Account management
 umailserver account add user@example.com
+umailserver account password user@example.com
 umailserver account delete user@example.com
 umailserver account list example.com
 
 # Domain management
 umailserver domain add example.com
+umailserver domain dns example.com         # Print DNS records (MX, SPF, DKIM, DMARC)
 umailserver domain delete example.com
 umailserver domain list
 
 # Queue management
 umailserver queue list
 umailserver queue retry <id>
-umailserver queue flush
+umailserver queue flush                    # Re-queue all failed entries
+umailserver queue drop <id>
 
 # Diagnostics
 umailserver check dns example.com
@@ -243,14 +253,21 @@ umailserver check deliverability example.com
 # Testing
 umailserver test send from@example.com to@example.com "Test Subject"
 
-# Backup & restore
-umailserver backup /backups/
-umailserver restore /backups/backup-2024-01-01.tar.gz
+# Backup & restore (stop the server first; backup refuses while the databases are locked)
+# <dir> receives umailserver_backup_<timestamp>.tar.gz (.tar.gz.enc with a password)
+umailserver backup /backups/ --config /etc/umailserver/umailserver.yaml
+UMAILSERVER_BACKUP_PASSWORD=... umailserver backup /backups/ --config /etc/umailserver/umailserver.yaml
+# restore verifies the archive and extracts it to restore_temp/ next to data_dir;
+# copy restore_temp/database and restore_temp/messages into data_dir yourself
+umailserver restore /backups/umailserver_backup_<timestamp>.tar.gz --config /etc/umailserver/umailserver.yaml
+
+# Database schema
+umailserver db status                      # also: db migrate, db rollback
 
 # Migration
 umailserver migrate --type imap --source imaps://old-server.com --username user@old.com --target user@new.com
 umailserver migrate --type dovecot --source /var/mail --passwd-file /etc/dovecot/users
-umailserver migrate --type mbox --source /path/to/mail/*.mbox
+umailserver migrate --type mbox --source "/path/to/mail/*@example.com.mbox"   # file name = destination account
 
 # Get version
 umailserver version

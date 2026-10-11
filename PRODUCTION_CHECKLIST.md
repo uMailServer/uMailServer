@@ -8,9 +8,9 @@
 | IMAP (Port 143, 993) | ✅ | Full STARTTLS/TLS support |
 | POP3 (Port 995) | ✅ | TLS support |
 | ManageSieve (Port 4190) | ✅ | Script management |
-| HTTP API (Port 443) | ✅ | REST API + Web UIs |
+| HTTP API (Port 443) | ✅ | REST API + Web UIs (plain HTTP: terminate TLS in a reverse proxy) |
 | Admin Panel (Port 8443) | ✅ | Localhost-only by default |
-| MCP Server (Port 3000) | ✅ | AI assistant integration |
+| MCP Server (Port 3000) | ✅ | Loopback by default; non-loopback bind requires an explicit `mcp.auth_token` |
 | CalDAV/CardDAV | ✅ | Calendar/contacts sync |
 | JMAP | ✅ | Modern email API |
 
@@ -18,10 +18,10 @@
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Argon2id Password Hashing | ✅ | OWASP recommended |
+| Password Hashing | ✅ | bcrypt by default; Argon2id supported |
 | TOTP 2FA | ✅ | Time-based OTP |
-| JWT Authentication | ✅ | Refresh tokens + blacklist |
-| Rate Limiting | ✅ | Per-IP and per-user |
+| JWT Authentication | ✅ | HttpOnly cookie or Bearer token, token refresh/rotation, revocation list |
+| Rate Limiting | ✅ | Per-IP and per-user; per-account login lockouts |
 | SPF/DKIM/DMARC | ✅ | Full email auth stack |
 | ARC | ✅ | Authentication chain |
 | Input Validation | ✅ | All endpoints validated |
@@ -58,11 +58,11 @@
 | Feature | Status |
 |---------|--------|
 | Docker Support | ✅ Multi-stage Dockerfile |
-| Health Checks | ✅ /health endpoint |
-| Prometheus Metrics | ✅ /metrics endpoint |
+| Health Checks | ✅ `/health`, `/health/ready` (web port); `/healthz` (metrics port) |
+| Prometheus Metrics | ✅ `/metrics` on the metrics listener (127.0.0.1:8080 by default) |
 | OpenTelemetry Tracing | ✅ OTLP/stdout/noop |
 | Queue Management | ✅ Retry + backoff |
-| Backup/Restore | ✅ CLI commands |
+| Backup/Restore | ✅ CLI commands (stop the server for `backup`; `restore` extracts to `restore_temp/`) |
 | Log Rotation | ✅ Built-in |
 | Graceful Shutdown | ✅ Signal handling |
 
@@ -99,12 +99,16 @@
 - [ ] Let's Encrypt (automatic) OR
 - [ ] Manual certificates configured
 - [ ] TLS 1.2+ enforced
+- [ ] HTTPS for webmail/REST API terminated by a reverse proxy (the web/admin listeners speak plain HTTP)
+- [ ] Reverse proxy address listed in `http.trusted_proxies` (client IP for rate limits and audit log)
 
 ### Configuration
 - [ ] Strong JWT secret (32+ chars)
 - [ ] SMTP auth credentials configured
 - [ ] Rate limits tuned for your traffic
 - [ ] Spam filter thresholds set
+- [ ] MCP kept on loopback, or `mcp.auth_token` set explicitly for a non-loopback bind
+- [ ] Do not rely on DANE: outbound TLSA records are logged but not enforced by the stock server (MTA-STS `enforce` policies of recipient domains are honoured)
 - [ ] Admin account created
 - [ ] First domain added
 
@@ -117,7 +121,12 @@
 ### Backup
 - [ ] Automated backup schedule
 - [ ] Backup storage configured
-- [ ] Restore procedure tested
+- [ ] Restore procedure tested (`umailserver restore` extracts to `restore_temp/`; copy into `data_dir` with the server stopped)
+- [ ] Backups taken with the server stopped (`umailserver backup` refuses a live server)
+
+### Upgrades
+- [ ] Back up before upgrading; a database written by a newer binary is refused ("upgrade the binary"), so downgrades need a restore
+- [ ] `umailserver db status` after upgrading; `SIGHUP` reloads only manual TLS certificates, all other config changes need `umailserver restart`
 
 ## 🚀 Deployment Commands
 

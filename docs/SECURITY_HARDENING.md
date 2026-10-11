@@ -38,7 +38,7 @@ Never pass secrets via command line. Use environment variables or secure secret 
 
 ```bash
 # Set in /etc/umailserver/umailserver.yaml or environment
-export UMAILSERVER_SECURITY_JWTSECRET="$(openssl rand -base64 32)"
+export UMAILSERVER_SECURITY_JWT_SECRET="$(openssl rand -base64 32)"
 ```
 
 ## Network Security
@@ -53,18 +53,28 @@ ufw allow 587/tcp     # Submission
 ufw allow 993/tcp     # IMAPS
 ufw allow 995/tcp     # POP3S
 
-# HTTP API - restrict if not using reverse proxy
-ufw allow 8080/tcp
+# Webmail + REST API (HTTPS)
+ufw allow 443/tcp
+# 8080 (Prometheus metrics) binds to 127.0.0.1 by default: do not open it
 
-# Admin panel - localhost/VPN only
-ufw deny 8081/tcp
-ufw allow from 10.0.0.0/8 to any port 8081
-ufw allow from 127.0.0.1 to any port 8081
+# Admin panel (8443), metrics (8080) and MCP (3000) are loopback-only by
+# default; keep them closed to the network
+ufw deny 8443/tcp
+ufw allow from 10.0.0.0/8 to any port 8443   # only if admin.bind is widened
 ```
 
 ### Reverse Proxy (Recommended)
 
-Use Nginx or Traefik as reverse proxy for TLS termination:
+Use Nginx or Traefik as reverse proxy for TLS termination. Move the
+uMailServer HTTPS listener off the public port (for example `http.port: 8444`
+with `http.bind: 127.0.0.1`) because the proxy takes 443. The web, API and admin
+listeners speak plain HTTP and do not terminate TLS themselves, so TLS for
+webmail and the REST API must be terminated by the proxy (the `tls` section
+only covers SMTP, IMAP, POP3 and ManageSieve).
+
+Add the proxy's address to `http.trusted_proxies`; otherwise `X-Forwarded-For`
+is ignored and every request, rate-limit entry and audit record shows the
+proxy's IP.
 
 ```nginx
 server {
@@ -83,7 +93,7 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
     location / {
-        proxy_pass http://localhost:8080;
+        proxy_pass http://127.0.0.1:8444;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -96,13 +106,14 @@ server {
 
 ### Password Policy
 
-Configure strong password requirements:
+Password strength is enforced by the server, not configured: accounts created
+or changed through the API need 8-128 characters with at least one uppercase
+letter, lowercase letter, digit and special character. Only the lockout
+settings are configurable (there are no `min_password_length`,
+`require_password_complexity` or `password_expiry_days` keys):
 
 ```yaml
 security:
-  min_password_length: 12
-  require_password_complexity: true
-  password_expiry_days: 90
   max_login_attempts: 5
   lockout_duration: 15m
 ```
@@ -113,11 +124,11 @@ Enable TOTP 2FA for all admin accounts:
 
 ```bash
 # User enables 2FA via API
-curl -X POST https://localhost/api/v1/account/totp/setup \
+curl -X POST http://localhost:443/api/v1/account/totp/setup \
   -H "Authorization: Bearer <token>"
 
 # Verify with TOTP code
-curl -X POST https://localhost/api/v1/account/totp/verify \
+curl -X POST http://localhost:443/api/v1/account/totp/verify \
   -H "Authorization: Bearer <token>" \
   -d '{"code": "123456"}'
 ```
@@ -283,10 +294,11 @@ Encrypt backups and secure backup storage:
 
 ```bash
 # Encrypt backups
-umailserver backup --encrypt --output backup.tar.gz.gpg
+# (the server must be stopped: backup refuses while the databases are locked)
+UMAILSERVER_BACKUP_PASSWORD="strong-password" umailserver backup /backups --config /etc/umailserver/umailserver.yaml
 
-# Secure file permissions
-chmod 600 backup.tar.gz.gpg
+# Secure file permissions (the archive is written as umailserver_backup_<TS>.tar.gz.enc)
+chmod 600 /backups/umailserver_backup_*.tar.gz.enc
 ```
 
 ## Security Checklist
