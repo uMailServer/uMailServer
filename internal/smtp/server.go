@@ -40,6 +40,10 @@ type Server struct {
 	stopOnce    sync.Once
 	logger      *slog.Logger
 
+	// active tracks registered sessions so Stop can drain in-flight ones.
+	active       sync.WaitGroup
+	drainTimeout time.Duration // 0 selects DefaultShutdownDrainTimeout
+
 	// Hooks for message processing
 	onAuth              func(username, password string) (bool, error)
 	onValidate          func(from string, to []string) error
@@ -74,6 +78,21 @@ type Server struct {
 // ConnectionRateLimiter checks if a connection is allowed
 type ConnectionRateLimiter interface {
 	Allow(key string, limitType string) bool
+}
+
+// DefaultShutdownDrainTimeout bounds how long Stop lets in-flight sessions
+// (mid-command, e.g. inside DATA/BDAT) finish before force-closing them.
+const DefaultShutdownDrainTimeout = 10 * time.Second
+
+// tlsHandshakeTimeout bounds the implicit-TLS handshake when neither
+// ReadTimeout nor WriteTimeout bounds it. Variable so tests can shorten it.
+var tlsHandshakeTimeout = 30 * time.Second
+
+// SetShutdownDrainTimeout sets how long Stop waits for in-flight sessions.
+func (s *Server) SetShutdownDrainTimeout(d time.Duration) {
+	s.connMu.Lock()
+	s.drainTimeout = d
+	s.connMu.Unlock()
 }
 
 // SetRateLimiter sets the rate limiter for the server
@@ -531,7 +550,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 		return
 	default:
 	}
+	// Re-check the global cap under the write lock: the early check above is
+	// not atomic with registration, so concurrent accepts could overshoot.
+	if s.config.MaxConnections > 0 && len(s.connections) >= s.config.MaxConnections {
+		s.connMu.Unlock()
+		_, _ = conn.Write([]byte("421 4.7.0 Too many connections, try again later\r\n"))
+		_ = conn.Close()
+		return
+	}
 	s.connections[session.ID()] = session
+	s.active.Add(1)
 	s.connMu.Unlock()
 
 	s.logger.Debug("SMTP connection established",
@@ -545,12 +573,27 @@ func (s *Server) handleConnection(conn net.Conn) {
 		s.connMu.Unlock()
 
 		_ = conn.Close()
+		s.active.Done()
 
 		s.logger.Debug("SMTP connection closed",
 			slog.String("remote_addr", conn.RemoteAddr().String()),
 			slog.String("session_id", session.ID()),
 		)
 	}()
+
+	// Implicit-TLS: bound the handshake so a silent peer cannot hold a slot.
+	if tc, ok := conn.(*tls.Conn); ok {
+		d := tlsHandshakeTimeout
+		if s.config.ReadTimeout > 0 && s.config.ReadTimeout < d {
+			d = s.config.ReadTimeout
+		}
+		_ = conn.SetDeadline(time.Now().Add(d))
+		if err := tc.Handshake(); err != nil {
+			s.logger.Debug("TLS handshake failed", slog.Any("error", err))
+			return
+		}
+		_ = conn.SetDeadline(time.Time{})
+	}
 
 	// Send greeting
 	_ = session.WriteResponse(220, fmt.Sprintf("%s ESMTP uMailServer", s.config.Hostname))
@@ -559,6 +602,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 	reader := bufio.NewReader(&countingReader{r: conn, n: &session.bytesIn})
 	session.reader = reader
 	for {
+		// Graceful shutdown: mark the session idle, then re-check shutdown.
+		// Stop closes shutdown before scanning for idle sessions, so at least
+		// one side observes the other and no session blocks in read forever.
+		session.idle.Store(true)
+		select {
+		case <-s.shutdown:
+			return
+		default:
+		}
 		if s.config.ReadTimeout > 0 {
 			_ = conn.SetReadDeadline(time.Now().Add(s.config.ReadTimeout))
 		}
@@ -567,6 +619,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		// without limit (F5671). RFC 5321 §4.5.3.1.4 minimum is 512 octets;
 		// extensions (SMTPUTF8, parameters) need more, so allow 2048.
 		raw, total, _, err := readBoundedLine(reader, maxCommandLine+1)
+		session.idle.Store(false)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				s.logger.Debug("read error", slog.Any("error", err))
@@ -651,12 +704,42 @@ func (s *Server) Stop() error {
 	}
 	s.listenersMu.Unlock()
 
-	// Close all connections
+	// Close idle sessions now; sessions inside a command (DATA/BDAT, AUTH...)
+	// finish and reply, then exit at the top of their loop. Bounded by the
+	// drain timeout, after which the rest are force-closed.
 	s.connMu.Lock()
+	drain := s.drainTimeout
 	for _, session := range s.connections {
-		_ = session.Close()
+		if session.idle.Load() {
+			_ = session.Close()
+		}
 	}
 	s.connMu.Unlock()
+	if drain <= 0 {
+		drain = DefaultShutdownDrainTimeout
+	}
+
+	done := make(chan struct{})
+	go func() { s.active.Wait(); close(done) }()
+	timer := time.NewTimer(drain)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		s.connMu.Lock()
+		for _, session := range s.connections {
+			_ = session.Close()
+		}
+		s.connMu.Unlock()
+		// A handler stuck outside the connection (e.g. a delivery hook)
+		// cannot be interrupted; do not let it hang Stop forever.
+		grace := time.NewTimer(5 * time.Second)
+		defer grace.Stop()
+		select {
+		case <-done:
+		case <-grace.C:
+		}
+	}
 
 	return nil
 }
