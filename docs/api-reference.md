@@ -24,19 +24,19 @@ Content-Type: application/json
 }
 ```
 
-**Response:**
+**Response** (`200`):
 ```json
 {
   "token": "eyJhbGciOiJIUzI1NiIs...",
-  "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
-  "expires_at": "2024-01-15T10:30:00Z",
-  "user": {
-    "id": "user-123",
-    "email": "user@example.com",
-    "is_admin": false
-  }
+  "expiresIn": 86400
 }
 ```
+
+The session is also set as an HttpOnly `jwt` cookie (`SameSite=Strict`).
+Requests with a browser User-Agent (`Mozilla/`, `Chrome/`, `Firefox/`,
+`Safari/`, `Edge/`) get only `expiresIn` in the body and rely on the cookie;
+other clients also receive `token`. `expiresIn` is in seconds. Wrong
+credentials return `401`; repeated failures return `429` with `Retry-After`.
 
 ### Using the Token
 
@@ -66,14 +66,11 @@ Invalidate the current token.
 
 ### POST /api/v1/auth/refresh
 
-Refresh an expired access token.
-
-**Request:**
-```json
-{
-  "refresh_token": "eyJhbGciOiJIUzI1NiIs..."
-}
-```
+Exchange the current (still valid) session for a new one. The request needs
+no body; it is authenticated by the existing cookie or bearer token, which is
+revoked on success. Response: `{"token": "...", "expiresIn": <seconds>}` (a
+cookie session also receives the replacement cookie). A revoked token returns
+`401`. There are no separate refresh tokens.
 
 Two-factor authentication is managed through the `/api/v1/account/totp*`
 endpoints (see Account endpoints below); there are no `/auth/2fa/*` routes.
@@ -82,23 +79,24 @@ endpoints (see Account endpoints below); there are no `/auth/2fa/*` routes.
 
 ### GET /api/v1/domains
 
-List all domains.
+List all domains, sorted by name.
 
-**Response:**
+**Query Parameters:** `limit` (1-1000, default 100), `offset` (default 0).
+The total is returned in the `X-Total-Count` header.
+
+**Response:** a JSON array:
 ```json
-{
-  "domains": [
-    {
-      "id": "domain-123",
-      "name": "example.com",
-      "max_accounts": 100,
-      "account_count": 25,
-      "is_active": true,
-      "created_at": "2024-01-01T00:00:00Z"
-    }
-  ],
-  "total": 1
-}
+[
+  {
+    "name": "example.com",
+    "max_accounts": 100,
+    "is_active": true,
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z",
+    "dkim_selector": "default",
+    "dkim_public_key": "..."
+  }
+]
 ```
 
 ### POST /api/v1/domains
@@ -109,8 +107,7 @@ Create a new domain.
 ```json
 {
   "name": "newdomain.com",
-  "max_accounts": 100,
-  "max_mailbox_size": 5368709120
+  "max_accounts": 100
 }
 ```
 
@@ -120,38 +117,33 @@ Get domain details.
 
 ### PUT /api/v1/domains/{domain}
 
-Update domain settings.
+Update domain settings (`max_accounts`, `is_active`).
 
 ### DELETE /api/v1/domains/{domain}
 
-Delete a domain and all accounts.
+Delete a domain and its accounts (their mailbox data is purged too). `409` when the domain holds the last active administrator.
 
 ### GET /api/v1/domains/{domain}/dns
 
-Get required DNS records for the domain.
-
-**Response:**
-```json
-{
-  "records": {
-    "mx": "example.com. IN MX 10 mail.example.com.",
-    "spf": "example.com. IN TXT \"v=spf1 mx ~all\"",
-    "dkim": "default._domainkey.example.com. IN TXT \"v=DKIM1; k=rsa; p=...\"",
-    "dmarc": "_dmarc.example.com. IN TXT \"v=DMARC1; p=quarantine; rua=mailto:dmarc@example.com\""
-  }
-}
-```
+**Not implemented.** The route is not registered. The domain's DKIM selector
+and public key are returned by `GET /api/v1/domains/{domain}`; the full record
+set is printed by the CLI: `umailserver domain dns <domain>`.
 
 ## Account Management (Admin)
 
 ### GET /api/v1/accounts
 
-List accounts (admin can filter by domain).
+List accounts, sorted by address. The response is a JSON array; the total is
+in the `X-Total-Count` header.
 
 **Query Parameters:**
 - `domain` - Filter by domain
-- `page` - Page number (default: 1)
-- `per_page` - Items per page (default: 20)
+- `limit` - Page size, 1-1000 (default 100)
+- `offset` - Entries to skip (default 0)
+
+Each entry has `email`, `is_admin`, `is_active`, `quota_used`, `quota_limit`,
+`forward_to`, `forward_keep_copy`, `created_at`, `updated_at`, `last_login` and,
+when set, `vacation_settings`.
 
 ### POST /api/v1/accounts
 
@@ -162,8 +154,7 @@ Create a new account.
 {
   "email": "newuser@example.com",
   "password": "securepassword123",
-  "is_admin": false,
-  "quota": 1073741824
+  "is_admin": false
 }
 ```
 
@@ -180,13 +171,27 @@ Update account.
 {
   "password": "newpassword",
   "is_active": true,
-  "quota": 2147483648
+  "quota_limit": 2147483648
 }
 ```
 
+Every field is optional; omitted fields keep their stored value. Also
+accepted: `is_admin`, `forward_to`, `forward_keep_copy`, `vacation_settings`.
+Changing `is_admin` requires the acting admin's password in
+`current_admin_password` (`403` otherwise). Demoting or deactivating the last
+active administrator is refused with `409`.
+
 ### DELETE /api/v1/accounts/{email}
 
-Delete an account.
+Delete an account (admin only; `403` for everyone else). `409` when it is the
+last active administrator, `404` when it does not exist, `204` on success. The
+account's mailboxes, search index and vacation settings are purged too.
+
+The handler also contains a re-authentication branch for a non-admin deleting
+their *own* account (body `{"password": "..."}`, `400` when missing, `403` when
+wrong, `429` after repeated failures), but the route sits behind the admin check,
+so non-admins never reach it: self-service account deletion is not available
+through the API today.
 
 ### POST /api/v1/accounts/{email}/password
 
@@ -208,7 +213,7 @@ re-supplied.
 | Field | Type | Description |
 |---|---|---|
 | `current_password` | string | The account's current password. |
-| `new_password` | string | The new password (at least 8 characters). |
+| `new_password` | string | The new password: 8-128 characters with at least one uppercase letter, lowercase letter, digit and special character (the same policy as account creation). |
 
 **Response (200):**
 ```json
@@ -217,9 +222,14 @@ re-supplied.
 }
 ```
 
-**Errors:** `400` invalid body / new password shorter than 8 characters or
-missing fields · `401` missing authentication · `403` wrong
-`current_password` · `404` account not found.
+Every existing session of the account is revoked. The acting session is
+replaced: cookie sessions receive a new `jwt` cookie, and non-browser clients
+also get `token` and `expiresIn` in the response body.
+
+**Errors:** `400` invalid body, missing fields or a password that fails the
+policy · `401` missing authentication · `403` wrong `current_password` ·
+`404` account not found · `429` too many wrong-password attempts (shared with
+login and account self-delete).
 
 ### GET /api/v1/account/totp
 
@@ -236,7 +246,8 @@ Report the authenticated account's TOTP (2FA) state.
 ### POST /api/v1/account/totp/setup
 
 Generate a new TOTP secret (stored encrypted, not yet enabled) and return
-the `otpauth://` URI for the authenticator app.
+the `otpauth://` URI for the authenticator app. `409` when TOTP is already
+enabled (disable it first).
 
 **Response (200):**
 ```json
@@ -265,12 +276,19 @@ cannot be reused.
 }
 ```
 
+Enabling revokes the account's other sessions (the acting session is replaced
+as for a password change).
+
 **Errors:** `400` TOTP not set up (call `/setup` first) or invalid body ·
-`401` invalid or already-used code.
+`401` invalid or already-used code · `429` too many failed attempts (5
+failures lock TOTP checks for 5 minutes).
 
 ### POST /api/v1/account/totp/disable
 
-Disable TOTP and clear the stored secret.
+Disable TOTP and clear the stored secret. Disabling your own enabled 2FA
+requires a current code: send `{"code": "123456"}` (`400` when missing, `401`
+for a wrong or already-used code, `429` after repeated failures). Sessions are
+revoked as for enabling.
 
 **Response (200):**
 ```json
@@ -343,6 +361,12 @@ List messages in a folder. The folder is taken from the path segment, or from
 - `folder` - Folder name
 - `limit` - Page size, 1-500 (default 100)
 - `offset` - Number of newest messages to skip (default 0)
+- `flag=flagged` - Only starred (`\\Flagged`) messages (`starred` is accepted as a synonym; any other value is `400`)
+- `unread=1` - Only unread messages (`1`/`true`; `0`/`false` or omitted = no filter; any other value is `400`)
+
+The filters combine, e.g. `/api/v1/mail/inbox?flag=flagged&unread=1`. With a
+filter, `total` counts the matching messages; `unreadTotal` and `starredTotal`
+are always folder-wide counts.
 
 **Response:**
 ```json
@@ -366,9 +390,18 @@ List messages in a folder. The folder is taken from the path segment, or from
   "total": 150,
   "limit": 100,
   "offset": 0,
-  "folder": "INBOX"
+  "folder": "INBOX",
+  "unreadTotal": 12,
+  "starredTotal": 3
 }
 ```
+
+**Message ids.** An id is the content hash of the stored message. When the
+same hash is held by more than one message of the account (two copies in one
+folder, or the same mail in INBOX and Sent), the list reports each copy under a
+qualified id `<hash>_<uid>_<base64url(mailbox)>` that addresses exactly one
+(folder, uid) entry. A hash held once keeps its plain id. Pass the id exactly as
+listed to `message`, `flags`, `move` and `delete`.
 
 ### GET /api/v1/mail/message
 
@@ -392,7 +425,8 @@ Send a new message (`Content-Type: application/json`).
 ```
 
 Subject is limited to 998 characters and the body to 25 MB. Attachments are
-not part of the request body.
+not part of the request body. `507 Insufficient Storage` is returned when the
+stored copy would exceed the sender's quota.
 
 ### POST /api/v1/mail/flags
 
@@ -410,8 +444,8 @@ Add or remove system flags (`\Seen`, `\Flagged`, `\Answered`, `\Draft`).
 
 `id`/`ids` accept up to 1000 messages in total; `folder` is optional.
 Response: `{"updated": ["msg-123", "msg-124"]}`. `400` for unsupported flags
-or a flag both added and removed, `404` when a message is not found,
-`415` when the body is not JSON.
+or a flag both added and removed, `404` when a message is not found. Send
+`Content-Type: application/json`; another content type is rejected with `400`.
 
 ### POST /api/v1/mail/draft, PUT /api/v1/mail/draft
 
@@ -431,7 +465,8 @@ update); `POST` creates a draft, or replaces one when `id` is given.
 
 Response: `{"id": "<current id>", "folder": "Drafts", "saved": true}`. The
 id changes when the draft content changes (bodies are content-addressed).
-At most 100 recipients.
+At most 100 recipients. `507 Insufficient Storage` when saving the changed draft
+would exceed the account's quota.
 
 ### POST /api/v1/mail/move
 
@@ -472,36 +507,44 @@ There are no `/api/v1/folders` endpoints; folders are selected with the
 
 ### GET /api/v1/admin/queue
 
-List queue entries.
+List undelivered queue entries (pending, sending, failed), oldest first. The
+same handler is also mounted at `/api/v1/queue`.
 
 **Query Parameters:**
-- `status` - pending, deferred, failed
-- `domain` - Filter by destination domain
+- `status` - `pending`, `sending` or `failed` (anything else is `400`)
+- `limit` - 1-1000 (default 100)
+- `offset` - Entries to skip (default 0)
 
-**Response:**
+**Response:** a JSON array:
 ```json
-{
-  "entries": [
-    {
-      "id": "queue-123",
-      "from": "user@example.com",
-      "to": ["recipient@other.com"],
-      "status": "deferred",
-      "next_retry": "2024-01-15T11:00:00Z",
-      "attempts": 3,
-      "last_error": "Connection refused"
-    }
-  ]
-}
+[
+  {
+    "id": "queue-123",
+    "from": "user@example.com",
+    "to": ["recipient@other.com"],
+    "status": "pending",
+    "retry_count": 3,
+    "last_error": "Connection refused",
+    "created_at": "2024-01-15T10:00:00Z",
+    "next_retry": "2024-01-15T11:00:00Z"
+  }
+]
 ```
 
-### POST /api/v1/admin/queue/{id}/retry
+### GET /api/v1/admin/queue/{id}
 
-Retry a queued message.
+One entry (same fields); `404` when it does not exist.
+
+### POST /api/v1/admin/queue/{id}
+
+Retry a queued message (there is no `/retry` suffix). The retry counter is
+reset and the entry becomes `pending` immediately. Returns `{"status":
+"retrying"}`; `404` when it does not exist and `409` when the entry is
+`sending`, `delivered` or `bounced`.
 
 ### DELETE /api/v1/admin/queue/{id}
 
-Remove message from queue.
+Remove a message from the queue.
 
 ## Statistics (Admin)
 
@@ -524,45 +567,37 @@ limits are managed under `/api/v1/admin/ratelimits/*`.
 
 ## Error Responses
 
-All errors follow this format:
+Errors are a JSON object with a human-readable message string
+(`sendError` in `internal/api/server.go` and `mail.go`); there are no error
+codes or `details` object:
 
 ```json
-{
-  "error": {
-    "code": "invalid_request",
-    "message": "The request body is invalid",
-    "details": {
-      "field": "email",
-      "issue": "must be a valid email address"
-    }
-  }
-}
+{ "error": "access denied" }
 ```
 
-### Common Error Codes
+### Common Status Codes
 
-| Code | HTTP Status | Description |
-|------|-------------|-------------|
-| `unauthorized` | 401 | Invalid or missing token |
-| `forbidden` | 403 | Insufficient permissions |
-| `not_found` | 404 | Resource not found |
-| `invalid_request` | 400 | Invalid request parameters |
-| `rate_limited` | 429 | Too many requests |
-| `server_error` | 500 | Internal server error |
+| HTTP Status | Meaning |
+|-------------|---------|
+| 400 | Invalid request parameters or body |
+| 401 | Invalid or missing credentials |
+| 403 | Insufficient permissions (non-admin on an admin route, wrong current password) |
+| 404 | Resource not found |
+| 405 | Method not allowed; an `Allow` header lists the permitted methods |
+| 409 | Conflict (duplicate resource, message already in the move destination, deleting the last active administrator) |
+| 429 | Too many requests or failed attempts; carries `Retry-After: 60` |
+| 507 | Quota exceeded while storing a sent message or draft |
+| 500 | Internal server error |
 
 ## Rate Limiting
 
-API requests are rate limited per IP and per account:
-
-- Authenticated: 1000 requests per hour
-- Unauthenticated: 100 requests per hour
-
-Rate limit headers:
-```http
-X-RateLimit-Limit: 1000
-X-RateLimit-Remaining: 999
-X-RateLimit-Reset: 1642243200
-```
+API requests are rate limited per client IP in a one-minute window. The
+limit is `security.rate_limit.http_requests_per_minute` (default 120; 0 disables it).
+`/health` and `/health/ready` are exempt. An exceeded limit returns `429` with
+`Retry-After: 60`; no `X-RateLimit-*` headers are sent. Client IPs behind a
+reverse proxy are taken from `X-Forwarded-For` only for peers listed in
+`http.trusted_proxies`. Login and password-guess lockouts are tracked
+separately per account and also answer `429`.
 
 ## Server-Sent Events (Real-time)
 

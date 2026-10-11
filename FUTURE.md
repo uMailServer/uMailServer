@@ -14,8 +14,8 @@
 | Test Coverage | ✅ | Tüm paketlerde %77-99 arası coverage, 35+ paket test ediliyor |
 | Build | ✅ | `go build ./...` başarılı, tüm testler geçiyor |
 | Security | ✅ | Kritik bulgular kapatıldı, CORS wildcard yasak, CSRF koruması var — bulgu bazında durum `SECURITY-REPORT.md`'de |
-| Health Checks | ✅ | `/health`, `/health/live`, `/health/ready` endpoint'leri mevcut |
-| Backup/Restore | ✅ | Şifreli AES-256-GCM backup sistemi mevcut (`internal/cli/backup.go`) |
+| Health Checks | ✅ | Web portunda `/health` ve `/health/ready`; metrics portunda (127.0.0.1:8080) `/healthz`. Web portunda `/health/live` rotası yok |
+| Backup/Restore | ✅ | Şifreli AES-256-GCM backup sistemi mevcut (`internal/cli/backup.go`); `backup` canlı sunucuyu reddeder (önce sunucuyu durdurun), `restore` arşivi `restore_temp/` altına açar |
 | CI/CD | ✅ | 5 GitHub workflow var: CI, backup-restore, docker, fuzz, release |
 | Monitoring | ✅ | Prometheus metrics, OpenTelemetry tracing mevcut |
 | TLS | ✅ | ACME/Let's Encrypt otomatik yenileme |

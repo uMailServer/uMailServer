@@ -100,7 +100,7 @@ Maps your IP address back to your hostname. Set this at your hosting provider, n
 
 ### 7. MTA-STS (Recommended)
 
-Enforces TLS encryption for incoming email.
+Asks sending servers to use TLS (and a valid certificate) when delivering to you. uMailServer only **enforces** MTA-STS for its own *outbound* mail (an `enforce` policy of the recipient domain never falls back to plaintext); it does **not** serve the policy file for your domain, so host `https://mta-sts.example.com/.well-known/mta-sts.txt` on a separate web server.
 
 ```
 _mta-sts.example.com.    IN    TXT    "v=STSv1; id=20240101T000000;"
@@ -125,7 +125,7 @@ _smtp._tls.example.com.    IN    TXT    "v=TLSRPTv1; rua=mailto:tls-reports@exam
 
 ### 9. DANE/TLSA (Advanced)
 
-Certificate pinning via DNSSEC.
+Certificate pinning via DNSSEC. The DANE code is **outbound only** and is currently *advisory*: TLSA records of recipient MX hosts are looked up, but the queue's DNSSEC-validation hook is not installed in the stock server, so they are logged ("DNSSEC unavailable, skipping DANE validation") and never enforced. Do not rely on DANE for inbound or outbound protection; it does not publish TLSA records for you either.
 
 ```
 _25._tcp.mail.example.com.    IN    TLSA    3 1 1 a3c7c18e83e9b7708c0c7b8c5d9e8f3a2b1c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1

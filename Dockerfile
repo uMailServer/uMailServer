@@ -43,7 +43,7 @@ USER umailserver
 EXPOSE 25 465 587 143 993 995 4190 443 8443 8080 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/healthz || exit 1
 
 ENTRYPOINT ["umailserver"]
 CMD ["serve", "--config", "/etc/umailserver/umailserver.yaml"]
