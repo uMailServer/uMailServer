@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,6 +226,36 @@ func (s *Server) handleSieveVacation(sender, recipient string, va sieve.Vacation
 
 // sendVacationReply generates and enqueues an auto-reply message.
 func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON string) {
+	s.sendVacationReplyCtx(recipientEmail, senderEmail, "", vacationMsgInfo{}, settingsJSON)
+}
+
+// vacationMsgInfo is what a reply needs from the message it answers.
+type vacationMsgInfo struct {
+	MessageID  string
+	Subject    string
+	References []string
+}
+
+// vacationInfoFromMessage extracts the Message-ID, Subject and References of
+// the original message for threading the reply (RFC 5322 §3.6.4).
+func vacationInfoFromMessage(data []byte) vacationMsgInfo {
+	msg, err := mail.ReadMessage(bytes.NewReader(data))
+	if err != nil {
+		return vacationMsgInfo{}
+	}
+	_, refs := parseThreadHeaders(data)
+	return vacationMsgInfo{
+		MessageID:  sanitizeHeaderValue(strings.TrimSpace(msg.Header.Get("Message-ID"))),
+		Subject:    sanitizeHeaderValue(strings.TrimSpace(msg.Header.Get("Subject"))),
+		References: refs,
+	}
+}
+
+// sendVacationReplyCtx is sendVacationReply with the address the sender wrote
+// to (origRcpt, possibly an alias or plus address) and the original message's
+// identity. The reply is From origRcpt when it is a valid address, and carries
+// In-Reply-To/References (F6510).
+func (s *Server) sendVacationReplyCtx(recipientEmail, senderEmail, origRcpt string, info vacationMsgInfo, settingsJSON string) {
 	var settings struct {
 		Enabled          bool          `json:"enabled"`
 		Subject          string        `json:"subject"`
@@ -271,6 +303,13 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 	if !ok {
 		return
 	}
+	// Never answer ourselves through an alias, on either side.
+	if origRcpt != "" && strings.EqualFold(strings.Trim(senderEmail, "<> "), strings.Trim(origRcpt, "<> ")) {
+		return
+	}
+	if s.routesToMailbox(senderEmail, recipientEmail) {
+		return
+	}
 
 	// F4825: record dedup state only once a reply is eligible.
 	if !s.claimVacationReply(vacationDedupKey(recipientEmail, senderEmail), now, eff.SendInterval) {
@@ -284,7 +323,23 @@ func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON str
 	if subject == "" {
 		subject = "Auto: Out of Office"
 	}
-	autoReply := autoReplyHeaders(recipientEmail, senderEmail, subject, now, mailHost(recipientEmail)) +
+	if strings.TrimSpace(settings.Subject) == "" && info.Subject != "" {
+		subject = "Auto: " + info.Subject
+	}
+	fromAddr := recipientEmail
+	if a, perr := mail.ParseAddress(strings.TrimSpace(origRcpt)); perr == nil && origRcpt != "" && s.routesToMailbox(a.Address, recipientEmail) {
+		fromAddr = a.Address
+	}
+	extra := ""
+	if info.MessageID != "" {
+		extra = "In-Reply-To: " + info.MessageID + "\r\n"
+		refs := append(append([]string{}, info.References...), info.MessageID)
+		if len(refs) > 20 {
+			refs = append(refs[:1:1], refs[len(refs)-19:]...)
+		}
+		extra += "References: " + sanitizeHeaderValue(strings.Join(refs, " ")) + "\r\n"
+	}
+	autoReply := autoReplyHeaders(fromAddr, senderEmail, subject, now, mailHost(recipientEmail)) + extra +
 		"\r\n" + vacationBody(settings.Message)
 
 	// RFC 5230 / RFC 3834 §4: null envelope sender.
@@ -343,4 +398,18 @@ func (s *Server) startVacationCleanup() {
 			}
 		}
 	}()
+}
+
+// routesToMailbox reports whether addr (the mailbox itself, an alias or a
+// plus address) delivers to the local mailbox.
+func (s *Server) routesToMailbox(addr, mailbox string) bool {
+	addr, mailbox = strings.Trim(addr, "<> "), strings.Trim(mailbox, "<> ")
+	if strings.EqualFold(addr, mailbox) {
+		return true
+	}
+	if s.database == nil || s.logger == nil {
+		return false
+	}
+	u, d, ext, err := s.routeRecipient(addr)
+	return err == nil && ext == "" && strings.EqualFold(u+"@"+d, mailbox)
 }

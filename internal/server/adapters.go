@@ -130,12 +130,20 @@ type indexJob struct {
 // runIndexWorker processes search indexing jobs.
 func (s *Server) runIndexWorker() {
 	defer s.wg.Done()
+	for job := range s.indexWork {
+		s.indexOne(job)
+	}
+}
+
+// indexOne indexes one job; a panic is contained to that job so the worker
+// keeps serving the queue (F6514).
+func (s *Server) indexOne(job indexJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.Error("Index worker panic", "recover", r)
+			s.logger.Error("Index worker panic", "recover", r, "email", job.email, "uid", job.uid)
 		}
 	}()
-	for job := range s.indexWork {
+	{
 		// UIDs are per folder: indexing a Junk or Sieve-filed UID as INBOX
 		// re-indexed an unrelated INBOX message and left the delivered one
 		// unsearchable (F5118).

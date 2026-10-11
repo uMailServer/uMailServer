@@ -32,6 +32,9 @@ func (s *Server) Stop() error {
 	s.deliveryClosed = true
 	s.deliveryMu.Unlock()
 	s.deliveries.Wait()
+	// Push/vacation goroutines started by those deliveries use the queue and
+	// databases closed below; wait for them (bounded, push may hit the network).
+	s.waitBackground(10 * time.Second)
 
 	// Close search indexing work queue to drain workers (once only)
 	s.stopOnce.Do(func() { close(s.indexWork) })
@@ -195,4 +198,15 @@ func (s *Server) Wait() error {
 	s.logger.Info("Received signal", "signal", sig)
 
 	return s.Stop()
+}
+
+// waitBackground waits up to d for the delivery-spawned background goroutines.
+func (s *Server) waitBackground(d time.Duration) {
+	done := make(chan struct{})
+	go func() { s.bgWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
+		s.logger.Warn("Background tasks still running at shutdown")
+	}
 }

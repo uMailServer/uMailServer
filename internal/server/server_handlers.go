@@ -158,8 +158,12 @@ func (s *Server) deliverMessageToFolder(from string, to []string, notify []strin
 		defer span.End()
 	}
 
+	if err := checkHopCount(data); err != nil {
+		return err
+	}
 	var failed []rcptFailure
 	delivered := 0
+	seenRcpt := map[string]bool{}
 	for i, recipient := range to {
 		rcptNotify := ""
 		if i < len(notify) {
@@ -171,6 +175,11 @@ func (s *Server) deliverMessageToFolder(from string, to []string, notify []strin
 			s.logger.Error("Recipient routing failed", "to", recipient, "error", routeErr)
 			failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("route %s: %w", recipient, routeErr), local: routeErr})
 			continue
+		}
+		if k := rcptDedupKey(user, domain, external); seenRcpt[k] {
+			continue // same mailbox or remote address named twice (F6511)
+		} else {
+			seenRcpt[k] = true
 		}
 		if external != "" {
 			if relayErr := s.relayMessageWithNotify(from, external, []string{rcptNotify}, data); relayErr != nil {
@@ -253,6 +262,38 @@ func hasSpamVerdict(data []byte) bool {
 		found = len(value) >= 3 && strings.EqualFold(value[:3], "yes")
 	})
 	return found
+}
+
+// maxReceivedHops is the Received-field count past which a message is
+// considered to be looping (RFC 5321 §6.3 suggests a limit of at least 100).
+const maxReceivedHops = 100
+
+// errTooManyHops is returned for a message that has passed through too many
+// relays; it is a permanent failure, retrying cannot help.
+var errTooManyHops = errors.New("554 5.4.6 too many hops, mail loop detected")
+
+// checkHopCount refuses a message whose header block carries more than
+// maxReceivedHops Received fields (F6512).
+func checkHopCount(data []byte) error {
+	n := 0
+	forEachHeaderField(data, func(name string, _, _ int) {
+		if strings.EqualFold(name, "Received") {
+			n++
+		}
+	})
+	if n > maxReceivedHops {
+		return errTooManyHops
+	}
+	return nil
+}
+
+// rcptDedupKey identifies the final destination of a routed recipient so a
+// mailbox (or remote address) named twice is served once.
+func rcptDedupKey(user, domain, external string) string {
+	if external != "" {
+		return "x:" + strings.ToLower(external)
+	}
+	return "l:" + strings.ToLower(user) + "@" + strings.ToLower(domain)
 }
 
 // errServerStopping is returned for a delivery attempted while the server is
@@ -424,14 +465,23 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 		}
 	}
 
+	if err := checkHopCount(data); err != nil {
+		return err
+	}
 	var failed []rcptFailure
 	delivered := 0
+	seenRcpt := map[string]bool{}
 	for _, recipient := range to {
 		user, domain, external, routeErr := s.routeRecipient(recipient)
 		if routeErr != nil {
 			s.logger.Error("Recipient routing failed", "to", recipient, "error", routeErr)
 			failed = append(failed, rcptFailure{rcpt: recipient, err: fmt.Errorf("route %s: %w", recipient, routeErr), local: routeErr})
 			continue
+		}
+		if k := rcptDedupKey(user, domain, external); seenRcpt[k] {
+			continue // F6511
+		} else {
+			seenRcpt[k] = true
 		}
 		if external != "" {
 			if relayErr := s.relayMessage(from, external, data); relayErr != nil {
@@ -444,7 +494,7 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 		}
 
 		// Deliver with optional target folder from sieve
-		if err := s.deliverLocal(user, domain, from, data, targetFolder); err != nil {
+		if err := s.deliverLocalFor(recipient, user, domain, from, data, targetFolder); err != nil {
 			s.logger.Error("Failed to deliver locally", "user", user, "domain", domain, "error", err)
 			failed = append(failed, rcptFailure{rcpt: recipient, err: fmt.Errorf("deliver %s: %w", recipient, err), local: err})
 		} else {
@@ -549,13 +599,20 @@ func addReturnPath(data []byte, from string) []byte {
 
 // deliverLocal delivers a message to a local mailbox
 func (s *Server) deliverLocal(user, domain, from string, data []byte, targetFolders ...string) error {
-	return s.deliverLocalHop(user, domain, from, data, true, targetFolders...)
+	return s.deliverLocalHop("", user, domain, from, data, true, targetFolders...)
+}
+
+// deliverLocalFor is deliverLocal that also knows the recipient address the
+// sender wrote to (an alias or plus address), so an auto-reply can come from
+// that address (F6510).
+func (s *Server) deliverLocalFor(origRcpt, user, domain, from string, data []byte, targetFolders ...string) error {
+	return s.deliverLocalHop(origRcpt, user, domain, from, data, true, targetFolders...)
 }
 
 // deliverLocalHop is deliverLocal with the catch-all redirect allowed at most
 // once: the catch-all target itself is delivered with allowCatchAll=false, so
 // a target that is missing or inactive fails instead of recursing (F4877).
-func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCatchAll bool, targetFolders ...string) error {
+func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byte, allowCatchAll bool, targetFolders ...string) error {
 	user, domain = strings.ToLower(user), strings.TrimRight(strings.ToLower(domain), ".")
 	email := user + "@" + domain
 
@@ -574,7 +631,7 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 			if domainData, derr := s.database.GetDomain(domain); derr == nil && domainData != nil && domainData.CatchAllTarget != "" {
 				tUser, tDomain := normalizeRcpt(domainData.CatchAllTarget)
 				if tUser != "" && tDomain != "" {
-					return s.deliverLocalHop(tUser, tDomain, from, data, false, targetFolders...)
+					return s.deliverLocalHop(origRcpt, tUser, tDomain, from, data, false, targetFolders...)
 				}
 			}
 		}
@@ -742,9 +799,11 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 	if s.pushSvc != nil {
 		select {
 		case s.bgSem <- struct{}{}:
+			s.bgWG.Add(1) // F6513: Stop waits for these before closing stores
 			go func() {
 				defer func() {
 					<-s.bgSem
+					s.bgWG.Done()
 					if r := recover(); r != nil {
 						s.logger.Error("Panic in push notification", "error", r)
 					}
@@ -771,14 +830,16 @@ func (s *Server) deliverLocalHop(user, domain, from string, data []byte, allowCa
 	if account.VacationSettings != "" && s.queue != nil && folder != "Junk" && autoReplyAllowed(from, data) {
 		select {
 		case s.bgSem <- struct{}{}:
+			s.bgWG.Add(1) // F6513: Stop waits for these before closing stores
 			go func() {
 				defer func() {
 					<-s.bgSem
+					s.bgWG.Done()
 					if r := recover(); r != nil {
 						s.logger.Error("Panic in vacation reply", "error", r)
 					}
 				}()
-				s.sendVacationReply(email, from, account.VacationSettings)
+				s.sendVacationReplyCtx(email, from, origRcpt, vacationInfoFromMessage(data), account.VacationSettings)
 			}()
 		default:
 			s.logger.Warn("Background task semaphore full, dropping vacation reply", "email", email)

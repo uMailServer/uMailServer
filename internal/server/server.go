@@ -87,6 +87,7 @@ type Server struct {
 
 	// Background task semaphore to limit concurrent goroutines spawned per delivery
 	bgSem chan struct{}
+	bgWG  sync.WaitGroup // tracks goroutines holding bgSem
 
 	ctx      context.Context
 	cancel   context.CancelFunc
