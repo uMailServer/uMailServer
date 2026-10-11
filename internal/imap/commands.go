@@ -76,8 +76,25 @@ func validTag(tag string) bool {
 	return true
 }
 
+// maxPreAuthIdleCommands bounds NOOP + CAPABILITY commands on a connection
+// that has not authenticated (F6900).
+const maxPreAuthIdleCommands = 20
+
 // handleNotAuthenticated handles commands in the Not Authenticated state
 func (s *Session) handleNotAuthenticated(command string, args []string, line string) error {
+	// F6900: NOOP / CAPABILITY cost the client nothing yet keep the
+	// connection alive; cap them before authentication.
+	if command == "NOOP" || command == "CAPABILITY" {
+		s.preAuthIdleCmds++
+		if s.preAuthIdleCmds > maxPreAuthIdleCommands {
+			s.WriteData("BYE Too many commands before authentication")
+			s.stateMu.Lock()
+			s.state = StateLoggedOut
+			s.stateMu.Unlock()
+			s.Close()
+			return nil
+		}
+	}
 	switch command {
 	case "CAPABILITY":
 		return s.handleCapability()
@@ -416,10 +433,16 @@ func (s *Session) handleAuthPlain(args []string) error {
 	}
 
 	// PLAIN format: authzid\0authcid\0passwd
-	// We ignore authzid and use authcid as the username.
+	// F6901: acting as another identity (authzid != authcid) is not
+	// supported; silently ignoring it would let a client believe it
+	// authenticated as the authzid.
 	parts := strings.SplitN(string(credentials), "\x00", 3)
 	if len(parts) < 3 {
 		s.WriteResponse(s.tag, "NO Invalid PLAIN credentials")
+		return nil
+	}
+	if parts[0] != "" && !strings.EqualFold(parts[0], parts[1]) {
+		s.WriteResponse(s.tag, "NO Authorization identity not permitted")
 		return nil
 	}
 
@@ -1505,8 +1528,9 @@ func (s *Session) handleStatus(args []string) error {
 	}
 	for _, it := range items {
 		switch it {
-		case "MESSAGES", "RECENT", "UIDNEXT", "UIDVALIDITY", "UNSEEN", "HIGHESTMODSEQ":
+		case "MESSAGES", "RECENT", "UIDNEXT", "UIDVALIDITY", "UNSEEN":
 		default:
+			// F6902: HIGHESTMODSEQ needs CONDSTORE, which is not advertised.
 			s.WriteResponse(s.tag, "BAD Unknown status item "+it)
 			return nil
 		}
@@ -2728,6 +2752,10 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 	if hasFetchItem(fetchItems, "BODYSTRUCTURE") && !hasFetchItem(fetchItems, "BODY") {
 		storeItems = append(append([]string{}, fetchItems...), "BODY")
 	}
+	if !uidCmd && !s.seqSetInRange(seqSet) {
+		s.WriteResponse(s.tag, "NO Invalid message sequence number")
+		return nil
+	}
 	messages, err := s.fetchSel(seqSet, storeItems)
 	if err != nil {
 		s.WriteResponse(s.tag, fmt.Sprintf("NO %s", err))
@@ -2917,6 +2945,11 @@ func (s *Session) store(args []string, uidCmd bool) error {
 		if span != nil {
 			tracing.SetStatus(span, tracing.StatusError, "invalid operation")
 		}
+		return nil
+	}
+
+	if !uidCmd && !s.seqSetInRange(seqSet) {
+		s.WriteResponse(s.tag, "NO Invalid message sequence number")
 		return nil
 	}
 

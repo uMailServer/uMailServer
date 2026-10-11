@@ -181,6 +181,11 @@ func (s *Session) syncSelected() {
 	for _, u := range kept {
 		have[u] = true
 	}
+	// F6905: \Recent messages that other sessions expunged no longer count;
+	// RECENT can never exceed the messages that remain.
+	if s.selected.Recent > len(kept) {
+		s.selected.Recent = len(kept)
+	}
 	added := 0
 	for _, u := range live {
 		if !have[u] {
@@ -210,6 +215,35 @@ func syncAllowed(command string, args []string) bool {
 			case "FETCH", "STORE", "SEARCH", "SORT", "THREAD":
 				return false
 			}
+		}
+	}
+	return true
+}
+
+// seqSetInRange reports whether every message sequence number named in a
+// (non-UID) sequence-set refers to an existing message (RFC 3501 §6.4.8:
+// a message sequence number out of range is an error). Range ends beyond the
+// count are clamped like "*"; a lone number or range start above the count,
+// or 0, is not in range. An empty mailbox accepts only "*" forms.
+func (s *Session) seqSetInRange(set string) bool {
+	ranges, err := ParseSequenceSet(set)
+	if err != nil {
+		return true // reported by the normal path
+	}
+	if !s.snapOn {
+		return true // no authoritative message count for this store
+	}
+	total := uint32(len(s.snap))
+	for _, r := range ranges {
+		if r.Start == 0 || r.End == 0 {
+			continue // "*" form: clamps to the last message
+		}
+		lo := r.Start
+		if r.End < lo {
+			lo = r.End
+		}
+		if lo > total {
+			return false
 		}
 	}
 	return true
