@@ -877,6 +877,12 @@ func TestMigrationManagerImportDovecotUsers(t *testing.T) {
 	}
 	defer database.Close()
 
+	if err := database.CreateDomain(&db.DomainData{Name: "example.com", IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateDomain(&db.DomainData{Name: "test.com", IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
 	mm := NewMigrationManager(database, nil, nil)
 
 	// Create a test passwd file
