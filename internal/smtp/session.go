@@ -615,16 +615,7 @@ func (s *Session) handleDATA() error {
 		ctx.Username = s.username
 
 		// Parse message headers for pipeline stages
-		if idx := bytes.Index(data, []byte("\r\n\r\n")); idx > 0 {
-			headerBlock := string(data[:idx])
-			for _, line := range strings.Split(headerBlock, "\r\n") {
-				if colonIdx := strings.Index(line, ":"); colonIdx > 0 {
-					key := strings.TrimSpace(line[:colonIdx])
-					value := strings.TrimSpace(line[colonIdx+1:])
-					ctx.Headers[key] = append(ctx.Headers[key], value)
-				}
-			}
-		}
+		parseHeaderBlock(data, ctx.Headers)
 
 		result, err := s.server.pipeline.ProcessWithTimeout(ctx, s.server.config.StageTimeout)
 		if errors.Is(err, errStageTimeout) {
@@ -641,6 +632,11 @@ func (s *Session) handleDATA() error {
 
 		// Store sieve actions for delivery processing
 		s.sieveActions = ctx.SpamResult.Reasons
+
+		// Scanner/spam verdict fields the sender supplied are forgeries; the
+		// ones this server adds come after this point (F6611).
+		data = stripVerdictHeaders(data)
+		s.data = data
 
 		switch result {
 		case ResultReject:
@@ -666,6 +662,9 @@ func (s *Session) handleDATA() error {
 
 	// Trace and result headers are added the same way for DATA and BDAT,
 	// with or without a pipeline. (F5055)
+	if pctx == nil {
+		data = stripVerdictHeaders(data)
+	}
 	data = s.addTraceHeaders(pctx, data)
 	s.data = data
 
@@ -920,17 +919,70 @@ func arcSafe(v string) string {
 // aligns against and which Authentication-Results header.from must name,
 // falling back to the envelope sender's domain.
 func authorDomain(ctx *MessageContext, envFrom string) string {
-	for name, values := range ctx.Headers {
-		if strings.EqualFold(name, "From") && len(values) > 0 {
-			if a, err := mail.ParseAddress(values[0]); err == nil {
-				if i := strings.LastIndex(a.Address, "@"); i > 0 {
-					return strings.ToLower(a.Address[i+1:])
-				}
+	froms := fromHeaderValues(ctx.Headers)
+	switch len(froms) {
+	case 0:
+		return strings.ToLower(extractDomain(envFrom))
+	case 1:
+		if a, err := mail.ParseAddress(froms[0]); err == nil {
+			if i := strings.LastIndex(a.Address, "@"); i > 0 {
+				return strings.ToLower(a.Address[i+1:])
 			}
-			return ""
 		}
 	}
-	return strings.ToLower(extractDomain(envFrom))
+	// Unparsable or multiple (ambiguous) From fields: no author domain.
+	return ""
+}
+
+// fromHeaderValues returns every From field value whatever the case of the
+// field name, so that an attacker cannot pick the DMARC identity through map
+// iteration order (F6612).
+func fromHeaderValues(h map[string][]string) []string {
+	var out []string
+	for name, values := range h {
+		if strings.EqualFold(name, "From") {
+			out = append(out, values...)
+		}
+	}
+	return out
+}
+
+// parseHeaderBlock fills h from the header block of data. Folded
+// continuation lines belong to the preceding field: a continuation that
+// looks like "From: x" is part of another header's value, never a field of
+// its own (RFC 5322 §2.2.3, F6610).
+func parseHeaderBlock(data []byte, h map[string][]string) {
+	idx := bytes.Index(data, []byte("\r\n\r\n"))
+	if idx <= 0 {
+		return
+	}
+	lastKey := ""
+	for _, line := range strings.Split(string(data[:idx]), "\r\n") {
+		if line != "" && (line[0] == ' ' || line[0] == '\t') {
+			if lastKey != "" {
+				vs := h[lastKey]
+				vs[len(vs)-1] += " " + strings.TrimSpace(line)
+			}
+			continue
+		}
+		if colonIdx := strings.Index(line, ":"); colonIdx > 0 {
+			key := strings.TrimSpace(line[:colonIdx])
+			value := strings.TrimSpace(line[colonIdx+1:])
+			h[key] = append(h[key], value)
+			lastKey = key
+		} else {
+			lastKey = ""
+		}
+	}
+}
+
+// stripVerdictHeaders removes spam and virus verdict fields from an inbound
+// message: only this server may assert them (F6611).
+func stripVerdictHeaders(data []byte) []byte {
+	for _, n := range []string{"x-spam-status", "x-spam-score", "x-spam-flag", "x-spam-level", "x-spam-result", "x-virus-scan", "x-virus", "x-virus-status"} {
+		data = stripHeaderFields(data, n)
+	}
+	return data
 }
 
 // authResultsValue renders the resinfo part of the Authentication-Results
@@ -1318,16 +1370,7 @@ func (s *Session) handleBDAT(arg string) error {
 			ctx.Authenticated = s.isAuth
 			ctx.Username = s.username
 
-			if idx := bytes.Index(data, []byte("\r\n\r\n")); idx > 0 {
-				headerBlock := string(data[:idx])
-				for _, line := range strings.Split(headerBlock, "\r\n") {
-					if colonIdx := strings.Index(line, ":"); colonIdx > 0 {
-						key := strings.TrimSpace(line[:colonIdx])
-						value := strings.TrimSpace(line[colonIdx+1:])
-						ctx.Headers[key] = append(ctx.Headers[key], value)
-					}
-				}
-			}
+			parseHeaderBlock(data, ctx.Headers)
 
 			result, err := s.server.pipeline.ProcessWithTimeout(ctx, s.server.config.StageTimeout)
 			if errors.Is(err, errStageTimeout) {
@@ -1340,6 +1383,9 @@ func (s *Session) handleBDAT(arg string) error {
 			}
 
 			s.sieveActions = ctx.SpamResult.Reasons
+
+			data = stripVerdictHeaders(data)
+			s.data = data
 
 			switch result {
 			case ResultReject:
@@ -1363,6 +1409,9 @@ func (s *Session) handleBDAT(arg string) error {
 		}
 
 		// BDAT gets the same trace and result headers as DATA. (F5055)
+		if pctx == nil {
+			data = stripVerdictHeaders(data)
+		}
 		data = s.addTraceHeaders(pctx, data)
 		s.data = data
 

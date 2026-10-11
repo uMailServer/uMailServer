@@ -166,15 +166,18 @@ func (s *AuthDMARCStage) Name() string { return "DMARC" }
 func (s *AuthDMARCStage) Process(ctx *MessageContext) PipelineResult {
 	fromDomain := extractDomain(ctx.From)
 	// DMARC aligns against the message author, not the envelope sender.
-	for name, values := range ctx.Headers {
-		if strings.EqualFold(name, "From") && len(values) > 0 {
-			fromDomain = ""
-			if address, err := mail.ParseAddress(values[0]); err == nil {
-				if idx := strings.LastIndex(address.Address, "@"); idx > 0 {
-					fromDomain = strings.ToLower(address.Address[idx+1:])
-				}
+	if froms := fromHeaderValues(ctx.Headers); len(froms) > 1 {
+		// Several From fields let the sender dodge the author's policy (F6612).
+		ctx.Rejected = true
+		ctx.RejectionCode = 550
+		ctx.RejectionMessage = "5.6.0 Multiple From header fields"
+		return ResultReject
+	} else if len(froms) == 1 {
+		fromDomain = ""
+		if address, err := mail.ParseAddress(froms[0]); err == nil {
+			if idx := strings.LastIndex(address.Address, "@"); idx > 0 {
+				fromDomain = strings.ToLower(address.Address[idx+1:])
 			}
-			break
 		}
 	}
 	if fromDomain == "" {
