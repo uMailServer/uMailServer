@@ -5,6 +5,7 @@ package alert
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -165,8 +167,18 @@ func NewManager(config Config, logger Logger) *Manager {
 	// Every redirect hop is re-checked with the SSRF guard (F6295): the guard
 	// otherwise only saw the configured URL, so a public endpoint could
 	// redirect the alert payload to an internal host.
+	// The dialer re-checks the address actually connected to (F6500), so a
+	// hostname resolving to a blocked range (or rebinding between validation
+	// and connect) cannot reach internal services. No proxy: it would hide
+	// the real target.
+	dialer := &net.Dialer{Timeout: 10 * time.Second, Control: m.dialControl}
 	m.httpClient = &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext:         dialer.DialContext,
+			TLSHandshakeTimeout: 10 * time.Second,
+			IdleConnTimeout:     90 * time.Second,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
@@ -259,6 +271,15 @@ func (m *Manager) shouldSend(name string) bool {
 		return false
 	}
 
+	// Drop expired cooldown entries so the map stays bounded (F6502).
+	if len(m.lastAlert) > 256 {
+		for k, t := range m.lastAlert {
+			if time.Since(t) >= m.config.MinInterval {
+				delete(m.lastAlert, k)
+			}
+		}
+	}
+
 	// Check min interval for same alert type
 	if lastSent, ok := m.lastAlert[name]; ok {
 		if time.Since(lastSent) < m.config.MinInterval {
@@ -325,6 +346,48 @@ func (m *Manager) sendWebhook(alert Alert) error {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
 	}
 
+	return nil
+}
+
+// blockedNets lists non-routable ranges net.IP's helpers do not cover.
+var blockedNets = func() []*net.IPNet {
+	var nets []*net.IPNet
+	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4"} {
+		_, n, _ := net.ParseCIDR(c)
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
+func isBlockedIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return true
+	}
+	for _, n := range blockedNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// dialControl runs after DNS resolution with the concrete address (F6500).
+func (m *Manager) dialControl(_, address string, _ syscall.RawConn) error {
+	m.mu.RLock()
+	allowPrivate := m.allowPrivateIP
+	m.mu.RUnlock()
+	if allowPrivate {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("alert: bad dial address: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || isBlockedIP(ip) {
+		return fmt.Errorf("alert: dial to %s rejected by SSRF check", address)
+	}
 	return nil
 }
 
@@ -402,7 +465,7 @@ func (m *Manager) sendEmail(alert Alert) error {
 		auth = smtp.PlainAuth("", m.config.SMTPUsername, string(m.config.SMTPPassword), m.config.SMTPServer)
 	}
 
-	err := smtp.SendMail(addr, auth, m.config.FromAddress, m.config.ToAddresses, []byte(body.String()))
+	err := sendMailTimeout(addr, m.config.SMTPServer, auth, m.config.FromAddress, m.config.ToAddresses, []byte(body.String()))
 	if err != nil {
 		return fmt.Errorf("failed to send email: %w", err)
 	}
@@ -557,4 +620,55 @@ var alertSeq atomic.Uint64
 func generateAlertID() string {
 	now := time.Now()
 	return fmt.Sprintf("%d-%d-%d", now.Unix(), now.Nanosecond(), alertSeq.Add(1))
+}
+
+// smtpTimeout bounds the whole SMTP exchange (F6501); net/smtp.SendMail has
+// no timeout, so an unresponsive server hung the alert checker forever.
+var smtpTimeout = 30 * time.Second
+
+// sendMailTimeout mirrors smtp.SendMail (opportunistic STARTTLS) under a
+// connection deadline.
+func sendMailTimeout(addr, host string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	conn, err := (&net.Dialer{Timeout: smtpTimeout}).Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(smtpTimeout))
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+			return err
+		}
+	}
+	if auth != nil {
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err := c.Auth(auth); err != nil {
+				return err
+			}
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+	for _, r := range to {
+		if err := c.Rcpt(r); err != nil {
+			return err
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }

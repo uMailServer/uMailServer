@@ -158,6 +158,9 @@ func validateEndpoint(raw string) error {
 	return nil
 }
 
+// MaxSubscriptionsPerUser caps the push subscriptions one user may hold.
+const MaxSubscriptionsPerUser = 20
+
 var validIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // Service manages push notifications
@@ -273,6 +276,12 @@ func (s *Service) Subscribe(userID string, sub *Subscription) error {
 		if existing.Endpoint == sub.Endpoint {
 			s.removeLocked(id)
 		}
+	}
+
+	// Bound per-user subscriptions: each one is a file on disk and a
+	// server-side POST to a subscriber-chosen URL per notification (F6504).
+	if len(s.userSubs[userID]) >= MaxSubscriptionsPerUser {
+		return fmt.Errorf("too many push subscriptions for user")
 	}
 
 	stored := *sub
@@ -396,8 +405,14 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 
 	// Check for expired subscriptions
 	if resp.StatusCode == 410 || resp.StatusCode == 404 {
-		// Subscription is no longer valid, remove it
-		_ = s.Unsubscribe(sub.UserID, sub.ID)
+		// Subscription is no longer valid, remove it - but only if the stored
+		// record still has the endpoint that answered 404/410; a concurrent
+		// re-registration under the same ID must not be deleted (F6505).
+		s.mu.Lock()
+		if cur, ok := s.subscriptions[sub.ID]; ok && cur.UserID == sub.UserID && cur.Endpoint == sub.Endpoint {
+			s.removeLocked(sub.ID)
+		}
+		s.mu.Unlock()
 		return fmt.Errorf("subscription expired")
 	}
 
