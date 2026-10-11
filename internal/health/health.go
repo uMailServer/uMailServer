@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -70,8 +71,18 @@ type Monitor struct {
 	// checker that ignores its context cannot accumulate one leaked goroutine
 	// per probe (F6503).
 	inflightMu sync.Mutex
-	inflight   map[string]bool
+	inflight   map[string]*flight
 }
+
+// flight is one running execution of a checker; concurrent probes join it
+// instead of failing (F6632).
+type flight struct {
+	done  chan struct{}
+	check Check
+}
+
+// testHookJoin, when set, is called when a probe joins an in-flight run.
+var testHookJoin func()
 
 // NewMonitor creates a new health monitor
 func NewMonitor(version string) *Monitor {
@@ -79,7 +90,7 @@ func NewMonitor(version string) *Monitor {
 		checkers:  make(map[string]Checker),
 		startTime: time.Now(),
 		version:   version,
-		inflight:  make(map[string]bool),
+		inflight:  make(map[string]*flight),
 	}
 }
 
@@ -127,44 +138,46 @@ func (m *Monitor) Check(ctx context.Context) Report {
 
 			start := time.Now()
 			m.inflightMu.Lock()
-			busy := m.inflight[n]
-			if !busy {
-				m.inflight[n] = true
+			fl, joined := m.inflight[n]
+			if !joined {
+				fl = &flight{done: make(chan struct{})}
+				m.inflight[n] = fl
 			}
 			m.inflightMu.Unlock()
-			if busy {
-				checkCh <- Check{
-					Name:         n,
-					Status:       StatusUnhealthy,
-					Message:      "health check still running from a previous probe",
-					ResponseTime: time.Since(start),
-				}
-				return
+
+			// A previous probe's run is still going: join it and share its
+			// result rather than reporting a healthy-but-slow component as
+			// unhealthy to every concurrent probe (F6632). A truly hung
+			// checker still times out via checkCtx, and a new run is only
+			// started once the old one has returned (no goroutine pile-up).
+			if !joined {
+				// The checker runs in its own goroutine so one that ignores
+				// its context cannot block the report (F5189).
+				go func() {
+					defer func() {
+						m.inflightMu.Lock()
+						delete(m.inflight, n)
+						m.inflightMu.Unlock()
+						close(fl.done)
+					}()
+					defer func() {
+						if r := recover(); r != nil {
+							fl.check = Check{Status: StatusUnhealthy, Message: fmt.Sprintf("health check panicked: %v", r)}
+						}
+					}()
+					fl.check = c(checkCtx)
+				}()
+			} else if testHookJoin != nil {
+				testHookJoin()
 			}
-			// Run the checker in its own goroutine so one that ignores its
-			// context (e.g. a syscall on a hung mount) cannot block the whole
-			// report (F5189). The buffered channel lets it exit when it
-			// eventually returns.
-			result := make(chan Check, 1)
-			go func() {
-				defer func() {
-					m.inflightMu.Lock()
-					delete(m.inflight, n)
-					m.inflightMu.Unlock()
-				}()
-				defer func() {
-					if r := recover(); r != nil {
-						result <- Check{Status: StatusUnhealthy, Message: fmt.Sprintf("health check panicked: %v", r)}
-					}
-				}()
-				result <- c(checkCtx)
-			}()
 			var check Check
 			select {
-			case check = <-result:
+			case <-fl.done:
+				check = fl.check
 			case <-checkCtx.Done():
 				select {
-				case check = <-result: // finished at the deadline: keep its result
+				case <-fl.done: // finished at the deadline: keep its result
+					check = fl.check
 				default:
 					check = Check{
 						Status:  StatusUnhealthy,
@@ -329,14 +342,23 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 
 // DatabaseCheck creates a database health checker
 func DatabaseCheck(ping func() error) Checker {
+	// A ping that hangs must not leak one goroutine per probe (F6633): only
+	// one ping runs at a time and later probes report it as still pending.
+	var running atomic.Bool
 	return func(ctx context.Context) Check {
 		check := Check{
 			Status:  StatusHealthy,
 			Details: make(map[string]interface{}),
 		}
 
+		if !running.CompareAndSwap(false, true) {
+			check.Status = StatusUnhealthy
+			check.Message = "database ping still pending from a previous probe"
+			return check
+		}
 		done := make(chan error, 1)
 		go func() {
+			defer running.Store(false)
 			done <- ping()
 		}()
 

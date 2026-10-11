@@ -257,11 +257,8 @@ func (s *Service) Subscribe(userID string, sub *Subscription) error {
 		return fmt.Errorf("invalid subscription ID")
 	}
 	// A client-chosen ID must not overwrite another user's subscription (F5762).
-	if existing, ok := s.subscriptions[sub.ID]; ok {
-		if existing.UserID != userID {
-			return fmt.Errorf("subscription ID already in use")
-		}
-		s.removeLocked(sub.ID)
+	if existing, ok := s.subscriptions[sub.ID]; ok && existing.UserID != userID {
+		return fmt.Errorf("subscription ID already in use")
 	}
 
 	sub.UserID = userID
@@ -272,15 +269,23 @@ func (s *Service) Subscribe(userID string, sub *Subscription) error {
 	// so a re-registration replaces the previous record instead of adding a
 	// duplicate that would deliver every notification again (F5181). The
 	// endpoint now belongs to userID, even if another user registered it.
+	// Victims are only collected here: nothing is removed until the cap check
+	// and the write have succeeded, so a rejected request destroys nobody's
+	// subscription (F6637).
+	var victims []string
+	ownVictims := 0
 	for id, existing := range s.subscriptions {
-		if existing.Endpoint == sub.Endpoint {
-			s.removeLocked(id)
+		if id == sub.ID || existing.Endpoint == sub.Endpoint {
+			victims = append(victims, id)
+			if existing.UserID == userID {
+				ownVictims++
+			}
 		}
 	}
 
 	// Bound per-user subscriptions: each one is a file on disk and a
 	// server-side POST to a subscriber-chosen URL per notification (F6504).
-	if len(s.userSubs[userID]) >= MaxSubscriptionsPerUser {
+	if len(s.userSubs[userID])-ownVictims >= MaxSubscriptionsPerUser {
 		return fmt.Errorf("too many push subscriptions for user")
 	}
 
@@ -288,6 +293,9 @@ func (s *Service) Subscribe(userID string, sub *Subscription) error {
 	// Persist first so a failed write leaves no phantom in-memory record (F5763).
 	if err := s.saveSubscription(&stored); err != nil {
 		return fmt.Errorf("failed to save subscription: %w", err)
+	}
+	for _, id := range victims {
+		s.removeLockedOpt(id, id != stored.ID) // same-ID file was just rewritten
 	}
 	s.subscriptions[stored.ID] = &stored
 	s.userSubs[userID] = append(s.userSubs[userID], stored.ID)
@@ -323,6 +331,10 @@ func (s *Service) Unsubscribe(userID, subscriptionID string) error {
 
 // removeLocked deletes a subscription from memory and disk. s.mu must be held.
 func (s *Service) removeLocked(subscriptionID string) {
+	s.removeLockedOpt(subscriptionID, true)
+}
+
+func (s *Service) removeLockedOpt(subscriptionID string, deleteFile bool) {
 	sub, exists := s.subscriptions[subscriptionID]
 	if !exists {
 		return
@@ -340,6 +352,9 @@ func (s *Service) removeLocked(subscriptionID string) {
 		delete(s.userSubs, sub.UserID)
 	}
 
+	if !deleteFile {
+		return
+	}
 	if err := s.deleteSubscriptionFile(subscriptionID); err != nil {
 		s.logger.Warn("Failed to delete subscription file", "error", err)
 	}

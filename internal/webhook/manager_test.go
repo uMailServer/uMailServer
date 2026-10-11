@@ -109,7 +109,7 @@ func TestNewManager(t *testing.T) {
 	if manager.db != database {
 		t.Error("expected database to be set")
 	}
-	if manager.secret != "secret" {
+	if manager.getSecret() != "secret" {
 		t.Error("expected secret to be set")
 	}
 	if manager.client == nil {

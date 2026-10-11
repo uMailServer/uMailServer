@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,60 @@ type RateLimiter struct {
 	globalMu     sync.RWMutex
 	stopCh       chan struct{}
 	stopOnce     sync.Once
+	nowFn        func() time.Time // injectable clock (tests); nil = time.Now
+	maxEntries   int              // hard cap per counter map (0 = defaultMaxEntries)
+}
+
+// defaultMaxEntries bounds each of ipCounters/userCounters/connLimits between
+// cleanup ticks so a flood of distinct keys cannot exhaust memory (F6630).
+const defaultMaxEntries = 100000
+
+func (rl *RateLimiter) now() time.Time {
+	if rl.nowFn != nil {
+		return rl.nowFn()
+	}
+	return time.Now()
+}
+
+func (rl *RateLimiter) capEntries() int {
+	if rl.maxEntries > 0 {
+		return rl.maxEntries
+	}
+	return defaultMaxEntries
+}
+
+type evictCand struct {
+	key  string
+	busy bool
+	at   time.Time
+}
+
+// evictKeys picks keys to drop so a map at its cap has room: expired entries
+// first, then idle ones, then the oldest, freeing ~10% so eviction cost is
+// amortised. Fresh legitimate keys are admitted, never rejected.
+func evictKeys(cands []evictCand, now time.Time, max int) []string {
+	free := max / 10
+	if free < 1 {
+		free = 1
+	}
+	sort.Slice(cands, func(i, j int) bool {
+		ei, ej := cands[i].at.Before(now), cands[j].at.Before(now)
+		if ei != ej {
+			return ei
+		}
+		if cands[i].busy != cands[j].busy {
+			return !cands[i].busy
+		}
+		return cands[i].at.Before(cands[j].at)
+	})
+	if free > len(cands) {
+		free = len(cands)
+	}
+	out := make([]string, free)
+	for i := range out {
+		out[i] = cands[i].key
+	}
+	return out
 }
 
 // globalBucket tracks global rate limit state
@@ -204,7 +259,7 @@ func (rl *RateLimiter) CheckIP(ip string) Result {
 	rl.ipMu.Lock()
 	defer rl.ipMu.Unlock()
 
-	bucket := rl.ipBucketLocked(ipKey(ip), time.Now())
+	bucket := rl.ipBucketLocked(ipKey(ip), rl.now())
 	result := rl.ipLimit(bucket)
 	if result.Allowed {
 		bucket.commit()
@@ -217,6 +272,15 @@ func (rl *RateLimiter) CheckIP(ip string) Result {
 func (rl *RateLimiter) ipBucketLocked(key string, now time.Time) *ipBucket {
 	bucket, exists := rl.ipCounters[key]
 	if !exists {
+		if len(rl.ipCounters) >= rl.capEntries() {
+			cands := make([]evictCand, 0, len(rl.ipCounters))
+			for k, b := range rl.ipCounters {
+				cands = append(cands, evictCand{k, false, b.dayReset})
+			}
+			for _, k := range evictKeys(cands, now, rl.capEntries()) {
+				delete(rl.ipCounters, k)
+			}
+		}
 		bucket = &ipBucket{
 			minuteReset: now.Add(time.Minute),
 			hourReset:   now.Add(time.Hour),
@@ -303,7 +367,7 @@ func (rl *RateLimiter) CheckUser(user string) Result {
 	rl.userMu.Lock()
 	defer rl.userMu.Unlock()
 
-	bucket := rl.userBucketLocked(user, time.Now())
+	bucket := rl.userBucketLocked(user, rl.now())
 	result := rl.userLimit(bucket)
 	if result.Allowed {
 		rl.commitUser(user, bucket)
@@ -317,6 +381,15 @@ func (rl *RateLimiter) CheckUser(user string) Result {
 func (rl *RateLimiter) userBucketLocked(user string, now time.Time) *userBucket {
 	bucket, exists := rl.userCounters[user]
 	if !exists {
+		if len(rl.userCounters) >= rl.capEntries() {
+			cands := make([]evictCand, 0, len(rl.userCounters))
+			for k, b := range rl.userCounters {
+				cands = append(cands, evictCand{k, false, b.dayReset})
+			}
+			for _, k := range evictKeys(cands, now, rl.capEntries()) {
+				delete(rl.userCounters, k)
+			}
+		}
 		bucket = &userBucket{
 			minuteReset: now.Add(time.Minute),
 			hourReset:   now.Add(time.Hour),
@@ -416,7 +489,7 @@ func (rl *RateLimiter) CheckGlobal() Result {
 	rl.globalMu.Lock()
 	defer rl.globalMu.Unlock()
 
-	rl.resetGlobalLocked(time.Now())
+	rl.resetGlobalLocked(rl.now())
 	result := rl.globalLimit()
 	if result.Allowed {
 		rl.commitGlobal()
@@ -481,7 +554,7 @@ func (rl *RateLimiter) commitGlobal() {
 // first refusal is returned.
 func (rl *RateLimiter) CheckMessage(user, ip string) Result {
 	user = userKey(user)
-	now := time.Now()
+	now := rl.now()
 
 	// Lock order: userMu → ipMu → globalMu (configMu is taken innermost by
 	// the limit helpers). No other path holds two of these at once.
@@ -545,9 +618,18 @@ func (rl *RateLimiter) CheckConnection(ip string) Result {
 	rl.connMu.Lock()
 	defer rl.connMu.Unlock()
 
-	now := time.Now()
+	now := rl.now()
 	counter, exists := rl.connLimits[ip]
 	if !exists {
+		if len(rl.connLimits) >= rl.capEntries() {
+			cands := make([]evictCand, 0, len(rl.connLimits))
+			for k, c := range rl.connLimits {
+				cands = append(cands, evictCand{k, c.count > 0, c.until})
+			}
+			for _, k := range evictKeys(cands, now, rl.capEntries()) {
+				delete(rl.connLimits, k)
+			}
+		}
 		counter = &connCounter{until: now.Add(time.Minute)}
 		rl.connLimits[ip] = counter
 		counter.count = 1
@@ -673,7 +755,7 @@ func (rl *RateLimiter) Stop() {
 }
 
 func (rl *RateLimiter) cleanup() {
-	now := time.Now()
+	now := rl.now()
 
 	// Cleanup IP counters
 	rl.ipMu.Lock()
