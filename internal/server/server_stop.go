@@ -2,6 +2,11 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"fmt"
+	"strings"
+
+	"github.com/umailserver/umailserver/internal/autoconfig"
 	"os"
 	"os/signal"
 	"syscall"
@@ -25,20 +30,10 @@ func (s *Server) Stop() error {
 	// Signal cancellation
 	s.cancel()
 
-	// Refuse new deliveries and wait for those in flight (F4976): SMTP
-	// sessions outlive smtp.Server.Stop, and a delivery finishing after
-	// indexWork or the databases are closed panics or loses the message.
-	s.deliveryMu.Lock()
-	s.deliveryClosed = true
-	s.deliveryMu.Unlock()
-	s.deliveries.Wait()
-	// Push/vacation goroutines started by those deliveries use the queue and
-	// databases closed below; wait for them (bounded, push may hit the network).
-	s.waitBackground(10 * time.Second)
-
-	// Close search indexing work queue to drain workers (once only)
-	s.stopOnce.Do(func() { close(s.indexWork) })
-
+	// F6592: stop accepting first, so sessions that are already past the
+	// pipeline can still register their delivery before the gate closes
+	// (otherwise they were answered 451 by a gate that closed ahead of the
+	// listeners). The gate then fences stragglers and drains in-flight ones.
 	// Stop SMTP server
 	if s.smtpServer != nil {
 		if err := s.smtpServer.Stop(); err != nil {
@@ -57,6 +52,20 @@ func (s *Server) Stop() error {
 			s.logger.Error("Failed to stop submission TLS server", "error", err)
 		}
 	}
+
+	// Refuse new deliveries and wait for those in flight (F4976): SMTP
+	// sessions outlive smtp.Server.Stop, and a delivery finishing after
+	// indexWork or the databases are closed panics or loses the message.
+	s.deliveryMu.Lock()
+	s.deliveryClosed = true
+	s.deliveryMu.Unlock()
+	s.deliveries.Wait()
+	// Push/vacation goroutines started by those deliveries use the queue and
+	// databases closed below; wait for them (bounded, push may hit the network).
+	s.waitBackground(10 * time.Second)
+
+	// Close search indexing work queue to drain workers (once only)
+	s.stopOnce.Do(func() { close(s.indexWork) })
 
 	// Stop JMAP background work (upload GC) and webhook retries (F6280, F6294).
 	if s.jmapServer != nil {
@@ -209,4 +218,44 @@ func (s *Server) waitBackground(d time.Duration) {
 	case <-time.After(d):
 		s.logger.Warn("Background tasks still running at shutdown")
 	}
+}
+
+// ReloadTLS is the SIGHUP hook (F6594). It re-reads the configured manual
+// certificate/key pair and reports an error if it is unusable, leaving the
+// served certificate untouched in that case. The TLS manager already swaps a
+// changed cert/key file on the next handshake (it stamps the files), so a
+// valid pair takes effect without restarting listeners. Nothing else (config,
+// listeners, ACME issuance) is reloaded.
+func (s *Server) ReloadTLS() error {
+	if s.tlsManager == nil || s.config == nil {
+		return nil
+	}
+	certFile, keyFile := s.config.TLS.CertFile, s.config.TLS.KeyFile
+	if certFile == "" || keyFile == "" {
+		s.logger.Info("TLS reload: no manual certificate configured; nothing to reload")
+		return nil
+	}
+	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+		s.logger.Error("TLS reload: certificate pair is invalid; keeping the previous one", "error", err)
+		return fmt.Errorf("tls reload: %w", err)
+	}
+	s.logger.Info("TLS reload: certificate pair valid; new handshakes use it", "cert", certFile)
+	return nil
+}
+
+// IsHostedDomain reports whether domain is one of the domains in the accounts
+// database (case-insensitive, trailing dot ignored) (F6590).
+func (s *Server) IsHostedDomain(domain string) bool {
+	domain = strings.TrimRight(strings.ToLower(strings.TrimSpace(domain)), ".")
+	if domain == "" || s.database == nil {
+		return false
+	}
+	d, err := s.database.GetDomain(domain)
+	return err == nil && d != nil
+}
+
+// AutoconfigProvider returns the Autoconfig/Autodiscover provider restricted
+// to hosted domains; wire it into autoconfig.NewHandler (F6590).
+func (s *Server) AutoconfigProvider() autoconfig.ConfigProvider {
+	return autoconfig.NewHostedProvider(nil, s.IsHostedDomain)
 }

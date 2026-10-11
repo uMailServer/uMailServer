@@ -6,6 +6,7 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -174,5 +175,34 @@ func TestSieveDeliveryNoScript(t *testing.T) {
 	sieveDTSend(t, srv, "", []string{"alice@test.com"}, junkRTClean)
 	if in := sieveDTCount(t, srv, "alice@test.com", "INBOX"); in != 1 {
 		t.Fatalf("no script: INBOX=%d, want 1", in)
+	}
+}
+
+// F6591: a later fileinto folder failing must not fail the recipient after an
+// earlier copy was stored (sender retry would duplicate it).
+func TestSieveMultiFolderPartialFailureNoDuplicateRetry(t *testing.T) {
+	srv := junkRTServer(t, true)
+	sieveDTScript(t, srv, "alice@test.com", "require \"fileinto\";\nfileinto \"Work\";\nfileinto \"Bad\";\n")
+	srv.sieveFolderFaultHook = func(f string) error {
+		if f == "Bad" {
+			return errors.New("injected folder failure")
+		}
+		return nil
+	}
+	err := srv.deliverLocalFiltered("alice", "test.com", "alice@test.com", "", "", []byte(junkRTClean), "")
+	if err != nil {
+		t.Fatalf("F6591: recipient reported failed although a copy was stored: %v", err)
+	}
+	if w, in := sieveDTCount(t, srv, "alice@test.com", "Work"), sieveDTCount(t, srv, "alice@test.com", "INBOX"); w != 1 || in != 1 {
+		t.Fatalf("Work=%d INBOX=%d, want 1/1 (INBOX keep fallback)", w, in)
+	}
+}
+
+func TestSieveMultiFolderAllFailReturnsError(t *testing.T) {
+	srv := junkRTServer(t, true)
+	sieveDTScript(t, srv, "alice@test.com", "require \"fileinto\";\nfileinto \"Bad\";\n")
+	srv.sieveFolderFaultHook = func(string) error { return errors.New("injected") }
+	if err := srv.deliverLocalFiltered("alice", "test.com", "alice@test.com", "", "", []byte(junkRTClean), ""); err == nil {
+		t.Fatal("expected error when nothing was stored")
 	}
 }
