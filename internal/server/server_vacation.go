@@ -3,11 +3,160 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/umailserver/umailserver/internal/sieve"
+	"github.com/umailserver/umailserver/internal/vacation"
 )
+
+// defaultVacationInterval is the reply-once window when none (or a
+// non-positive one) is configured; it matches vacation.Manager (F6442).
+const defaultVacationInterval = 7 * 24 * time.Hour
+
+// vacationDedupKey is the case-insensitive, pipe-safe key for a
+// (mailbox, sender) pair; angle brackets are ignored.
+func vacationDedupKey(recipient, sender string) string {
+	norm := func(a string) string {
+		a = strings.TrimSpace(a)
+		a = strings.TrimSuffix(strings.TrimPrefix(a, "<"), ">")
+		return strings.ToLower(strings.ReplaceAll(a, "|", "__"))
+	}
+	return norm(recipient) + "|" + norm(sender)
+}
+
+// vacationStorePath is the persisted dedup log, or "" when no data dir is set.
+func (s *Server) vacationStorePath() string {
+	if s.config == nil || s.config.Server.DataDir == "" {
+		return ""
+	}
+	return filepath.Join(s.config.Server.DataDir, "vacation_replies.jsonl")
+}
+
+type vacationRecord struct {
+	Key   string    `json:"key"`
+	Until time.Time `json:"until"`
+}
+
+// loadVacationRepliesLocked restores unexpired suppression deadlines so a
+// restart does not re-answer every sender (F6443). Caller holds the mutex.
+func (s *Server) loadVacationRepliesLocked() {
+	s.vacationReplies = make(map[string]time.Time)
+	path := s.vacationStorePath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path) // #nosec G304 -- server-owned path
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, ln := range strings.Split(string(data), "\n") {
+		var rec vacationRecord
+		if ln == "" || json.Unmarshal([]byte(ln), &rec) != nil || !now.Before(rec.Until) {
+			continue
+		}
+		if rec.Until.After(s.vacationReplies[rec.Key]) {
+			s.vacationReplies[rec.Key] = rec.Until
+		}
+	}
+}
+
+// persistVacationReplyLocked appends one deadline to the log. Caller holds the mutex.
+func (s *Server) persistVacationReplyLocked(key string, until time.Time) {
+	path := s.vacationStorePath()
+	if path == "" {
+		return
+	}
+	line, err := json.Marshal(vacationRecord{Key: key, Until: until})
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(append(line, '\n'))
+	_ = f.Close()
+}
+
+// rewriteVacationRepliesLocked compacts the log to the live map. Caller holds the mutex.
+func (s *Server) rewriteVacationRepliesLocked() {
+	path := s.vacationStorePath()
+	if path == "" {
+		return
+	}
+	var buf []byte
+	for k, u := range s.vacationReplies {
+		if line, err := json.Marshal(vacationRecord{Key: k, Until: u}); err == nil {
+			buf = append(append(buf, line...), '\n')
+		}
+	}
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, buf, 0o600) == nil {
+		_ = os.Rename(tmp, path)
+	}
+}
+
+// claimVacationReply atomically checks and records the reply-once window.
+// It reports whether a reply may be sent now.
+func (s *Server) claimVacationReply(key string, now time.Time, interval time.Duration) bool {
+	if interval <= 0 {
+		interval = defaultVacationInterval
+	}
+	s.vacationRepliesMu.Lock()
+	defer s.vacationRepliesMu.Unlock()
+	if s.vacationReplies == nil {
+		s.loadVacationRepliesLocked()
+	}
+	if until, ok := s.vacationReplies[key]; ok && now.Before(until) {
+		return false
+	}
+	until := now.Add(interval) // F4826: suppression deadline
+	s.vacationReplies[key] = until
+	s.persistVacationReplyLocked(key, until)
+	if len(s.vacationReplies) > 100 {
+		s.cleanupVacationRepliesLocked()
+	}
+	return true
+}
+
+// parseVacationDate accepts a plain date or RFC 3339. dateOnly reports the
+// plain form, whose end date covers the whole day.
+func parseVacationDate(v string) (t time.Time, dateOnly, ok bool) {
+	if d, err := time.Parse("2006-01-02", v); err == nil {
+		return d, true, true
+	}
+	if d, err := time.Parse(time.RFC3339, v); err == nil {
+		return d, false, true
+	}
+	return time.Time{}, false, false
+}
+
+// autoReplyHeaders builds the common auto-reply header block. Envelope sender
+// is null; the From header is shown to the recipient only (RFC 5230 §4.?).
+func autoReplyHeaders(from, to, subject string, now time.Time, host string) string {
+	return "From: " + sanitizeHeaderValue(from) + "\r\n" +
+		"To: " + sanitizeHeaderValue(to) + "\r\n" +
+		"Subject: " + sanitizeHeaderValue(subject) + "\r\n" +
+		"Date: " + now.Format(time.RFC1123Z) + "\r\n" +
+		fmt.Sprintf("Message-ID: <vacation.%d@%s>\r\n", now.UnixNano(), host) +
+		"MIME-Version: 1.0\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"Content-Transfer-Encoding: 8bit\r\n" +
+		"Auto-Submitted: auto-replied\r\n" +
+		"Precedence: bulk\r\n" +
+		"X-Auto-Response-Suppress: All\r\n"
+}
+
+func mailHost(addr string) string {
+	if at := strings.LastIndex(addr, "@"); at >= 0 && at+1 < len(addr) {
+		return sanitizeHeaderValue(strings.Trim(addr[at+1:], "<> "))
+	}
+	return "localhost"
+}
 
 // sanitizeHeaderValue removes CR/LF characters to prevent SMTP header injection.
 func sanitizeHeaderValue(s string) string {
@@ -27,70 +176,46 @@ func vacationBody(s string) string {
 }
 
 // handleSieveVacation handles Sieve vacation action by sending a vacation auto-reply
-func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.VacationAction) {
+func (s *Server) handleSieveVacation(sender, recipient string, va sieve.VacationAction) {
 	if s.queue == nil {
 		return
 	}
 
-	// Don't send vacation to mailing lists or bounces
-	senderLower := strings.ToLower(sender)
-	for _, prefix := range []string{"mailer-daemon@", "postmaster@", "noreply@", "no-reply@", "bounce@"} {
-		if strings.HasPrefix(senderLower, prefix) {
-			return
-		}
-	}
-
-	// Deduplicate: don't spam the same sender with multiple replies.
-	// Use the same key format and pipe-delimiter safety as sendVacationReply.
-	safeRecipient := strings.ToLower(strings.ReplaceAll(recipient, "|", "__"))
-	safeSender := strings.ToLower(strings.ReplaceAll(sender, "|", "__"))
-	key := safeRecipient + "|" + safeSender
-
-	// Use the :seconds interval from the Sieve vacation action, with a 24h floor
-	// RFC 5230 §4.1: minimum interval is 1 second. No artificial floor.
-	sendInterval := time.Duration(vacation.Seconds) * time.Second
-
-	s.vacationRepliesMu.Lock()
-	if s.vacationReplies == nil {
-		s.vacationReplies = make(map[string]time.Time)
-	}
-	// F4826: entries hold the suppression deadline (send time + interval), so
-	// cleanup cannot drop an entry whose interval is longer than its cutoff.
-	if until, ok := s.vacationReplies[key]; ok && time.Now().Before(until) {
-		s.vacationRepliesMu.Unlock()
+	// Never answer the null path, mailer daemons, list/no-reply addresses
+	// or ourselves (RFC 3834 §2).
+	if vacation.IsAutomatedSender(sender) || strings.EqualFold(strings.Trim(sender, "<> "), recipient) {
 		return
 	}
-	s.vacationReplies[key] = time.Now().Add(sendInterval)
-	s.vacationRepliesMu.Unlock()
+
+	// RFC 5230 §4.1: minimum interval is 1 second; zero means every message
+	// (explicit :seconds 0), handled by the caller's window.
+	sendInterval := time.Duration(va.Seconds) * time.Second
+	now := time.Now()
+	if sendInterval > 0 && !s.claimVacationReply(vacationDedupKey(recipient, sender), now, sendInterval) {
+		return
+	}
 
 	// Build vacation message content
-	subject := vacation.Subject
+	subject := va.Subject
 	if subject == "" {
 		subject = "Automated reply"
 	}
-	body := vacation.Body
+	body := va.Body
 	if body == "" {
 		body = "I'm currently on vacation and will reply when I return."
 	}
 
 	// Create vacation message - From is the recipient (who's on vacation)
 	fromAddr := recipient
-	if vacation.From != "" {
-		fromAddr = vacation.From
+	if va.From != "" {
+		fromAddr = va.From
 	}
-	safeSubject := sanitizeHeaderValue(subject)
-	safeBody := vacationBody(body)
-	safeFrom := sanitizeHeaderValue(fromAddr)
-	// F4827: RFC 3834 §5 / RFC 5230 §5 auto-reply marker and RFC 5322 mandatory Date.
-	vacationMsg := fmt.Sprintf("From: %s\r\nSubject: %s\r\nDate: %s\r\nAuto-Submitted: auto-replied\r\nX-Mail-Loop: <%s>\r\n\r\n%s",
-		safeFrom,
-		safeSubject,
-		time.Now().Format(time.RFC1123Z),
-		recipient,
-		safeBody)
+	vacationMsg := autoReplyHeaders(fromAddr, sender, subject, now, mailHost(recipient)) +
+		"X-Mail-Loop: <" + sanitizeHeaderValue(recipient) + ">\r\n\r\n" + vacationBody(body)
 
-	// Enqueue vacation reply TO the sender FROM the recipient
-	if _, err := s.queue.Enqueue(fromAddr, []string{sender}, []byte(vacationMsg)); err != nil {
+	// RFC 5230 §4.? / RFC 3834 §4: the envelope sender of an auto-reply is
+	// null; :from only changes the visible header (F6444).
+	if _, err := s.queue.Enqueue("", []string{sender}, []byte(vacationMsg)); err != nil {
 		s.logger.Error("Failed to enqueue vacation reply", "to", sender, "from", fromAddr, "error", err)
 	} else {
 		s.logger.Debug("Vacation reply enqueued", "to", sender, "from", fromAddr)
@@ -99,89 +224,71 @@ func (s *Server) handleSieveVacation(sender, recipient string, vacation sieve.Va
 
 // sendVacationReply generates and enqueues an auto-reply message.
 func (s *Server) sendVacationReply(recipientEmail, senderEmail, settingsJSON string) {
-	if senderEmail == "" { // null sender: never auto-reply to a bounce (F5711)
-		return
-	}
-	if senderEmail == "" { // null sender: never auto-reply to a bounce (F5711)
-		return
-	}
-	senderLower := strings.ToLower(senderEmail)
-	for _, prefix := range []string{"mailer-daemon@", "postmaster@", "noreply@", "no-reply@", "bounce@"} {
-		if strings.HasPrefix(senderLower, prefix) {
-			return
-		}
-	}
-
-	// Parse settings first to get SendInterval for deduplication
 	var settings struct {
-		Enabled      bool          `json:"enabled"`
-		Message      string        `json:"message"`
-		StartDate    string        `json:"start_date"`
-		EndDate      string        `json:"end_date"`
-		SendInterval time.Duration `json:"send_interval"`
+		Enabled          bool          `json:"enabled"`
+		Subject          string        `json:"subject"`
+		Message          string        `json:"message"`
+		StartDate        string        `json:"start_date"`
+		EndDate          string        `json:"end_date"`
+		SendInterval     time.Duration `json:"send_interval"`
+		ExcludeAddresses []string      `json:"exclude_addresses"`
+		IgnoreLists      bool          `json:"ignore_lists"`
+		IgnoreBulk       bool          `json:"ignore_bulk"`
 	}
 	if err := json.Unmarshal([]byte(settingsJSON), &settings); err != nil || !settings.Enabled {
 		return
 	}
 
-	// Use SendInterval from settings, default to 24h if not set or too small
-	sendInterval := settings.SendInterval
-	if sendInterval < 24*time.Hour {
-		sendInterval = 24 * time.Hour
+	// Share the Manager's rules (null/automated sender, own address,
+	// excludes, window, default interval) instead of duplicating them.
+	cfg := &vacation.Config{
+		Enabled:          true,
+		Subject:          settings.Subject,
+		Message:          settings.Message,
+		SendInterval:     settings.SendInterval,
+		ExcludeAddresses: settings.ExcludeAddresses,
+		IgnoreLists:      settings.IgnoreLists,
+		IgnoreBulk:       settings.IgnoreBulk,
 	}
-
-	// F4825: decide whether a reply will be sent before recording dedup state,
-	// so a message outside the vacation window cannot suppress a later reply.
-	now := time.Now()
 	if settings.StartDate != "" {
-		if start, err := time.Parse("2006-01-02", settings.StartDate); err == nil && now.Before(start) {
-			return
+		if t, _, ok := parseVacationDate(settings.StartDate); ok {
+			cfg.StartDate = t
 		}
 	}
 	if settings.EndDate != "" {
-		if end, err := time.Parse("2006-01-02", settings.EndDate); err == nil && !now.Before(end.Add(24*time.Hour)) {
-			return
+		if t, dateOnly, ok := parseVacationDate(settings.EndDate); ok {
+			if dateOnly {
+				t = t.Add(24*time.Hour - time.Nanosecond) // the whole end day
+			}
+			cfg.EndDate = t
 		}
 	}
-
-	// sanitizeForDedup replaces the pipe delimiter with a double-underscore
-	// to prevent key collisions when email addresses contain '|'.
-	safeRecipient := strings.ToLower(strings.ReplaceAll(recipientEmail, "|", "__"))
-	safeSender := strings.ToLower(strings.ReplaceAll(senderEmail, "|", "__"))
-	key := safeRecipient + "|" + safeSender
-	s.vacationRepliesMu.Lock()
-	if s.vacationReplies == nil {
-		s.vacationReplies = make(map[string]time.Time)
-	}
-	if until, ok := s.vacationReplies[key]; ok && now.Before(until) {
-		s.vacationRepliesMu.Unlock()
+	now := time.Now()
+	if vacation.IsAutomatedSender(senderEmail) {
 		return
 	}
-	s.vacationReplies[key] = now.Add(sendInterval) // F4826: suppression deadline
-
-	// Cleanup old entries every 100 entries to prevent unbounded growth
-	if len(s.vacationReplies) > 100 {
-		// cleanupVacationRepliesLocked does not lock; it requires vacationRepliesMu held.
-		s.cleanupVacationRepliesLocked()
+	eff, ok := vacation.Eligible(cfg, recipientEmail, senderEmail, nil, now)
+	if !ok {
+		return
 	}
 
-	s.vacationRepliesMu.Unlock()
-
-	// Guard against nil queue
+	// F4825: record dedup state only once a reply is eligible.
+	if !s.claimVacationReply(vacationDedupKey(recipientEmail, senderEmail), now, eff.SendInterval) {
+		return
+	}
 	if s.queue == nil {
 		return
 	}
 
-	autoReply := "From: " + sanitizeHeaderValue(recipientEmail) + "\r\n" +
-		"To: " + sanitizeHeaderValue(senderEmail) + "\r\n" +
-		"Subject: Auto: Out of Office\r\n" +
-		"Auto-Submitted: auto-replied\r\n" +
-		"Precedence: bulk\r\n" +
-		"Date: " + now.Format(time.RFC1123Z) + "\r\n" +
-		"\r\n" +
-		vacationBody(settings.Message)
+	subject := strings.TrimSpace(sanitizeHeaderValue(settings.Subject))
+	if subject == "" {
+		subject = "Auto: Out of Office"
+	}
+	autoReply := autoReplyHeaders(recipientEmail, senderEmail, subject, now, mailHost(recipientEmail)) +
+		"\r\n" + vacationBody(settings.Message)
 
-	if _, err := s.queue.Enqueue(recipientEmail, []string{senderEmail}, []byte(autoReply)); err != nil {
+	// RFC 5230 / RFC 3834 §4: null envelope sender.
+	if _, err := s.queue.Enqueue("", []string{senderEmail}, []byte(autoReply)); err != nil {
 		s.logger.Error("Failed to enqueue vacation reply", "error", err)
 	}
 }
@@ -202,6 +309,7 @@ func (s *Server) cleanupVacationReplies() {
 			delete(s.vacationReplies, key)
 		}
 	}
+	s.rewriteVacationRepliesLocked()
 }
 
 // cleanupVacationRepliesLocked removes entries whose suppression deadline passed
@@ -214,6 +322,7 @@ func (s *Server) cleanupVacationRepliesLocked() {
 			delete(s.vacationReplies, key)
 		}
 	}
+	s.rewriteVacationRepliesLocked()
 }
 
 // startVacationCleanup runs a hourly goroutine that removes vacation reply entries

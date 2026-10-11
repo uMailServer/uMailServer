@@ -262,12 +262,22 @@ func (m *Manager) eligibleConfig(user, sender string, headers map[string]string)
 	config, ok := m.configs[user]
 	m.mu.RUnlock()
 
-	if !ok || !config.Enabled {
+	if !ok {
+		return nil, false
+	}
+	return Eligible(config, user, sender, headers, time.Now())
+}
+
+// Eligible applies every reply rule other than the per-sender interval to
+// config for a message from sender to user at time now, and returns the
+// config with SendInterval defaulted (7 days when <= 0). It is shared by the
+// Manager and by the live delivery path so both follow one rule set (F6440).
+func Eligible(config *Config, user, sender string, headers map[string]string, now time.Time) (*Config, bool) {
+	if config == nil || !config.Enabled {
 		return nil, false
 	}
 
 	// Check date range
-	now := time.Now()
 	if !config.StartDate.IsZero() && now.Before(config.StartDate) {
 		return nil, false
 	}
@@ -279,6 +289,11 @@ func (m *Manager) eligibleConfig(user, sender string, headers map[string]string)
 	// mailer daemons or list owner/request addresses (F5206).
 	addr := normalizeAddress(sender)
 	if isAutomatedSender(addr) {
+		return nil, false
+	}
+
+	// Never answer yourself (own address, any case): that would loop (F6441).
+	if addr == normalizeAddress(user) {
 		return nil, false
 	}
 
@@ -363,6 +378,24 @@ func normalizeAddress(sender string) string {
 		addr = strings.TrimSpace(addr[1 : len(addr)-1])
 	}
 	return strings.ToLower(addr)
+}
+
+// IsAutomatedSender reports whether sender (any form, with or without angle
+// brackets) is the null path or an address that must not get an automatic reply.
+func IsAutomatedSender(sender string) bool {
+	addr := normalizeAddress(sender)
+	if isAutomatedSender(addr) {
+		return true
+	}
+	local := addr
+	if at := strings.LastIndex(addr, "@"); at >= 0 {
+		local = addr[:at]
+	}
+	switch local {
+	case "postmaster", "noreply", "no-reply", "donotreply", "do-not-reply", "bounce", "bounces":
+		return true
+	}
+	return false
 }
 
 // isAutomatedSender reports whether a normalized address is one RFC 3834 §2
