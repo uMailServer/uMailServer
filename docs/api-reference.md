@@ -41,7 +41,7 @@ Content-Type: application/json
 ### Using the Token
 
 ```http
-GET /api/v1/mail/messages
+GET /api/v1/mail/inbox
 Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
 ```
 
@@ -75,29 +75,8 @@ Refresh an expired access token.
 }
 ```
 
-### POST /api/v1/auth/2fa/setup
-
-Setup two-factor authentication.
-
-**Response:**
-```json
-{
-  "secret": "JBSWY3DPEHPK3PXP",
-  "qr_code": "data:image/png;base64,...",
-  "backup_codes": ["12345678", "87654321"]
-}
-```
-
-### POST /api/v1/auth/2fa/verify
-
-Verify TOTP code and enable 2FA.
-
-**Request:**
-```json
-{
-  "code": "123456"
-}
-```
+Two-factor authentication is managed through the `/api/v1/account/totp*`
+endpoints (see Account endpoints below); there are no `/auth/2fa/*` routes.
 
 ## Domain Management (Admin)
 
@@ -341,218 +320,153 @@ address · `401` missing authentication · `404` account not found.
 
 ## Mail Endpoints
 
-### GET /api/v1/mail/messages
+Routes are registered in `internal/api/server.go` (`/api/v1/mail/*`); handlers
+live in `internal/api/mail.go`, `mail_ext.go` and `mail_move.go`. All of them
+operate on the authenticated user's own mailboxes only.
 
-List messages in a folder.
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET/POST | `/api/v1/mail/inbox`, `/sent`, `/drafts`, `/trash`, `/spam` | List a folder (or `?folder=<name>`) |
+| GET | `/api/v1/mail/message?id=&folder=` | Fetch one message |
+| POST | `/api/v1/mail/send` | Send a message |
+| POST | `/api/v1/mail/flags` | Add/remove flags on messages |
+| POST / PUT | `/api/v1/mail/draft` | Save / update a draft |
+| POST | `/api/v1/mail/move` | Move messages between folders |
+| DELETE / POST | `/api/v1/mail/delete?id=` | Delete a message |
+
+### GET /api/v1/mail/inbox (also sent, drafts, trash, spam)
+
+List messages in a folder. The folder is taken from the path segment, or from
+`?folder=` (default INBOX).
 
 **Query Parameters:**
-- `folder` - Folder name (default: INBOX)
-- `page` - Page number
-- `per_page` - Items per page
-- `sort` - Sort field (date, from, subject)
-- `order` - asc or desc
+- `folder` - Folder name
+- `limit` - Page size, 1-500 (default 100)
+- `offset` - Number of newest messages to skip (default 0)
 
 **Response:**
 ```json
 {
-  "messages": [
+  "emails": [
     {
       "id": "msg-123",
-      "uid": 456,
-      "folder": "INBOX",
-      "flags": ["\\Seen"],
       "from": "sender@example.com",
+      "fromName": "Sender",
       "to": ["user@example.com"],
       "subject": "Hello World",
+      "preview": "This is a preview of the message...",
       "date": "2024-01-15T10:30:00Z",
-      "size": 2048,
-      "has_attachments": false,
-      "preview": "This is a preview of the message..."
+      "read": true,
+      "starred": false,
+      "folder": "INBOX",
+      "hasAttachments": false,
+      "size": 2048
     }
   ],
   "total": 150,
-  "unread": 23
+  "limit": 100,
+  "offset": 0,
+  "folder": "INBOX"
 }
 ```
 
-### GET /api/v1/mail/messages/{id}
+### GET /api/v1/mail/message
 
-Get full message details.
+Get one message. Query: `id` (required), `folder` (optional; when omitted all
+of the caller's mailboxes are searched). Read-only: it does not set `\Seen`
+(use `/mail/flags`). Returns the same object as a list entry, including
+`body`. `400` invalid id/folder, `404` not found.
 
-**Response:**
-```json
-{
-  "id": "msg-123",
-  "uid": 456,
-  "folder": "INBOX",
-  "flags": ["\\Seen", "\\Answered"],
-  "from": {
-    "name": "John Doe",
-    "email": "john@example.com"
-  },
-  "to": [
-    {
-      "name": "",
-      "email": "user@example.com"
-    }
-  ],
-  "cc": [],
-  "bcc": [],
-  "subject": "Hello World",
-  "date": "2024-01-15T10:30:00Z",
-  "size": 2048,
-  "body_html": "<html><body>...</body></html>",
-  "body_text": "Plain text version...",
-  "attachments": [
-    {
-      "filename": "document.pdf",
-      "size": 1048576,
-      "content_type": "application/pdf"
-    }
-  ],
-  "headers": {
-    "Message-ID": "<msg123@example.com>"
-  }
-}
-```
+### POST /api/v1/mail/send
 
-### POST /api/v1/mail/messages
+Send a new message (`Content-Type: application/json`).
 
-Send a new message.
-
-**Request:**
 ```json
 {
   "to": ["recipient@example.com"],
   "cc": ["cc@example.com"],
   "bcc": ["bcc@example.com"],
   "subject": "Hello",
-  "body_html": "<p>HTML content</p>",
-  "body_text": "Plain text content",
-  "attachments": [
-    {
-      "filename": "file.pdf",
-      "content": "base64encoded...",
-      "content_type": "application/pdf"
-    }
-  ]
+  "body": "Plain text content"
 }
 ```
 
-### PUT /api/v1/mail/messages/{id}/flags
+Subject is limited to 998 characters and the body to 25 MB. Attachments are
+not part of the request body.
 
-Update message flags.
+### POST /api/v1/mail/flags
 
-**Request:**
+Add or remove system flags (`\Seen`, `\Flagged`, `\Answered`, `\Draft`).
+
 ```json
 {
-  "flags": ["\\Seen", "\\Flagged"],
-  "action": "set"  // set, add, remove
+  "id": "msg-123",
+  "ids": ["msg-124"],
+  "folder": "",
+  "add": ["\\Seen"],
+  "remove": ["\\Flagged"]
 }
 ```
 
-### PUT /api/v1/mail/messages/{id}/move
+`id`/`ids` accept up to 1000 messages in total; `folder` is optional.
+Response: `{"updated": ["msg-123", "msg-124"]}`. `400` for unsupported flags
+or a flag both added and removed, `404` when a message is not found,
+`415` when the body is not JSON.
 
-Move message to another folder.
+### POST /api/v1/mail/draft, PUT /api/v1/mail/draft
 
-**Request:**
+Save a draft into the Drafts folder. `PUT` requires `id` (the draft to
+update); `POST` creates a draft, or replaces one when `id` is given.
+
 ```json
 {
-  "folder": "Archive"
+  "id": "",
+  "to": ["recipient@example.com"],
+  "cc": [],
+  "bcc": [],
+  "subject": "Draft",
+  "body": "Text"
 }
 ```
 
-### DELETE /api/v1/mail/messages/{id}
+Response: `{"id": "<current id>", "folder": "Drafts", "saved": true}`. The
+id changes when the draft content changes (bodies are content-addressed).
+At most 100 recipients.
 
-Delete a message (moves to Trash or permanent delete).
+### POST /api/v1/mail/move
 
-### GET /api/v1/mail/messages/{id}/raw
+Move messages between folders, keeping flags (like IMAP MOVE).
 
-Get raw RFC 822 message.
-
-### GET /api/v1/mail/messages/{id}/attachments/{filename}
-
-Download attachment.
-
-## Folders
-
-### GET /api/v1/folders
-
-List all folders.
-
-**Response:**
 ```json
 {
-  "folders": [
-    {
-      "name": "INBOX",
-      "display_name": "Inbox",
-      "total": 150,
-      "unread": 23,
-      "special_use": "\\Inbox"
-    },
-    {
-      "name": "Sent",
-      "display_name": "Sent",
-      "total": 45,
-      "unread": 0,
-      "special_use": "\\Sent"
-    }
-  ]
+  "id": "msg-123",
+  "ids": ["msg-124"],
+  "from": "INBOX",
+  "to": "Archive"
 }
 ```
 
-### POST /api/v1/folders
+`404` folder or message not found, `409` message already exists in the
+destination, `400` when `from` equals `to`.
 
-Create a new folder.
+### DELETE /api/v1/mail/delete?id=msg-123
 
-**Request:**
-```json
-{
-  "name": "Projects",
-  "parent": null
-}
-```
-
-### PUT /api/v1/folders/{name}
-
-Rename a folder.
-
-### DELETE /api/v1/folders/{name}
-
-Delete a folder.
+Delete a message by id (query `id`, or form value `id` with `POST`).
 
 ## Search
 
-### GET /api/v1/mail/search
+### GET /api/v1/search
 
-Search messages.
+Full-text search over the caller's messages (`internal/api/server_search.go`).
 
 **Query Parameters:**
-- `q` - Search query
-- `folder` - Search in specific folder
-- `from` - From address
-- `to` - To address
-- `subject` - Subject contains
-- `after` - After date (ISO 8601)
-- `before` - Before date (ISO 8601)
-- `has_attachments` - boolean
+- `q` - Search query (required, max 500 characters)
+- `folder` - Restrict to a folder (inbox, sent, drafts, trash, spam or a mailbox name)
+- `limit` - Page size (default 20, max 100)
+- `offset` - Results to skip
 
-**Response:**
-```json
-{
-  "results": [
-    {
-      "id": "msg-123",
-      "score": 0.95,
-      "highlights": {
-        "subject": "...<mark>search</mark>...",
-        "body": "...<mark>search</mark> term found..."
-      }
-    }
-  ]
-}
-```
+There are no `/api/v1/folders` endpoints; folders are selected with the
+`folder` parameter or the `/api/v1/mail/<folder>` list routes.
 
 ## Queue Management (Admin)
 
@@ -585,73 +499,28 @@ List queue entries.
 
 Retry a queued message.
 
-### POST /api/v1/admin/queue/retry-all
-
-Retry all failed messages.
-
 ### DELETE /api/v1/admin/queue/{id}
 
 Remove message from queue.
 
-## Blocklist (Admin)
-
-### GET /api/v1/admin/blocklist
-
-List blocked IPs.
-
-### POST /api/v1/admin/blocklist
-
-Block an IP.
-
-**Request:**
-```json
-{
-  "ip": "192.168.1.1",
-  "reason": "Spam source",
-  "duration": "24h"
-}
-```
-
-### DELETE /api/v1/admin/blocklist/{ip}
-
-Unblock an IP.
-
 ## Statistics (Admin)
 
-### GET /api/v1/admin/stats
+### GET /api/v1/stats
 
-Get server statistics.
+Server statistics (admin only, `internal/api/server_stats.go`).
 
 **Response:**
 ```json
 {
-  "uptime": 86400,
-  "version": "1.0.0",
-  "connections": {
-    "smtp": 25,
-    "imap": 150,
-    "http": 45
-  },
-  "messages": {
-    "received": 10000,
-    "sent": 8500,
-    "queued": 23
-  },
-  "storage": {
-    "used": 10737418240,
-    "total": 53687091200
-  },
   "domains": 5,
-  "accounts": 125
+  "accounts": 125,
+  "messages": 0,
+  "queue_size": 23
 }
 ```
 
-### GET /api/v1/admin/stats/mail-volume
-
-Get mail volume over time.
-
-**Query Parameters:**
-- `period` - 24h, 7d, 30d
+`messages` is currently always `0`. There is no IP blocklist API; IP rate
+limits are managed under `/api/v1/admin/ratelimits/*`.
 
 ## Error Responses
 
@@ -695,26 +564,15 @@ X-RateLimit-Remaining: 999
 X-RateLimit-Reset: 1642243200
 ```
 
-## WebSocket (Real-time)
+## Server-Sent Events (Real-time)
 
-Connect to WebSocket for real-time updates:
+Real-time updates use Server-Sent Events (not WebSocket) at
+`GET /api/v1/events` (`internal/api/server.go`, `internal/websocket/sse.go`).
 
 ```javascript
-const ws = new WebSocket('wss://mail.example.com/api/v1/ws');
-ws.onopen = () => {
-  ws.send(JSON.stringify({
-    type: 'auth',
-    token: 'eyJhbGciOiJIUzI1NiIs...'
-  }));
-};
-
-ws.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  console.log('New message:', message);
-};
+const es = new EventSource('/api/v1/events');
+es.addEventListener('new_mail', (e) => console.log(JSON.parse(e.data)));
 ```
 
-Event types:
-- `new_mail` - New message received
-- `flags_changed` - Message flags updated
-- `folder_update` - Folder counts changed
+Event types: `connected`, `heartbeat`, `new_mail`, `expunge`,
+`flags_changed`, `folder_update`.

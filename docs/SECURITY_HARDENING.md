@@ -113,11 +113,11 @@ Enable TOTP 2FA for all admin accounts:
 
 ```bash
 # User enables 2FA via API
-curl -X POST http://localhost:8080/api/auth/totp/setup \
+curl -X POST https://localhost/api/v1/account/totp/setup \
   -H "Authorization: Bearer <token>"
 
 # Verify with TOTP code
-curl -X POST http://localhost:8080/api/auth/totp/verify \
+curl -X POST https://localhost/api/v1/account/totp/verify \
   -H "Authorization: Bearer <token>" \
   -d '{"code": "123456"}'
 ```

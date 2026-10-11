@@ -94,8 +94,8 @@ docker-compose up -d
 ### Initial Setup
 
 ```bash
-# Generate initial config
-umailserver setup --config /etc/umailserver/umailserver.yaml
+# Generate initial config and first domain/account
+umailserver quickstart you@example.com
 
 # Or manually create config
 cat > /etc/umailserver/umailserver.yaml << 'EOF'

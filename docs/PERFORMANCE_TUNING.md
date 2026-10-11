@@ -328,7 +328,7 @@ imapsync --host1 localhost --user1 user@example.com \
   --password2 secret --usecache --nofoldersize
 
 # HTTP API load test
-wrk -t12 -c400 -d30s http://localhost:8080/api/v1/health
+wrk -t12 -c400 -d30s https://localhost/health
 ```
 
 ### Profiling
@@ -363,10 +363,10 @@ curl -s http://localhost:8081/debug/pprof/heap?debug=1 | head -20
 
 ```bash
 # Check queue depth
-curl http://localhost:8080/api/v1/admin/queue | jq '.length'
+curl https://localhost/api/v1/admin/queue | jq '.length'
 
 # Check rate limits
-curl http://localhost:8080/api/v1/admin/ratelimit | jq
+curl https://localhost/api/v1/admin/ratelimits/config | jq
 
 # Review logs
 journalctl -u umailserver -f | grep -i "slow\|timeout"

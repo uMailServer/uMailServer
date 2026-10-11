@@ -2,6 +2,17 @@
 
 > OpenAPI 3.0.3 specification for uMailServer REST API
 > Version: 1.0.0
+>
+> **Status: design draft, not generated from the code.** Several paths below are
+> not implemented (verified against the route table in `internal/api/server.go`):
+> `/auth/me`, `/mail/{id}` and its `/read`, `/star`, `/move` and attachment
+> sub-routes, all `/folders*`, `/admin/domains*`, `/admin/accounts*`,
+> `/admin/aliases*`, `/admin/queue/entries*`, `/admin/queue/flush` and
+> `/admin/webhooks*` (the implemented routes are `/domains`, `/accounts`,
+> `/aliases/`, `/admin/queue[/{id}]`). The mail routes actually served are
+> `/mail/inbox|sent|drafts|trash|spam`, `/mail/message`, `/mail/send`,
+> `/mail/flags`, `/mail/draft`, `/mail/move` and `/mail/delete`.
+> `docs/api-reference.md` is the maintained reference.
 
 ```yaml
 openapi: 3.0.3

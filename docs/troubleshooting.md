@@ -222,7 +222,7 @@ http:
 umailserver queue list
 
 # Check queue status
-curl http://localhost:8080/api/v1/admin/queue
+curl https://localhost/api/v1/admin/queue
 ```
 
 **Solutions:**
@@ -380,8 +380,8 @@ auth:
 
 **Solutions:**
 ```bash
-# Force certificate renewal
-umailserver tls renew --force
+# Check the served certificate
+umailserver check tls mail.example.com
 
 # Check ACME logs
 journalctl -u umailserver | grep acme
@@ -446,7 +446,7 @@ grep "queue" /var/log/umailserver.log
 umailserver status --verbose
 
 # Health check
-curl http://localhost:8080/health
+curl https://localhost/health
 
 # Metrics
 curl http://localhost:9090/metrics

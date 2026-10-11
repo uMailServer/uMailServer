@@ -643,6 +643,9 @@ func (c *Config) Validate() error {
 	if c.Server.Hostname == "" {
 		return fmt.Errorf("server.hostname is required")
 	}
+	if err := validateHostname(c.Server.Hostname); err != nil {
+		return fmt.Errorf("server.hostname %q is invalid: %w", c.Server.Hostname, err)
+	}
 	if c.Server.DataDir == "" {
 		return fmt.Errorf("server.data_dir is required")
 	}
@@ -867,6 +870,11 @@ func (c *Config) Validate() error {
 		if domain.Name == "" {
 			return fmt.Errorf("domains[%d].name is required", i)
 		}
+		if sel := domain.DKIM.Selector; sel != "" {
+			if err := validateHostname(sel); err != nil {
+				return fmt.Errorf("domains[%d].dkim.selector %q is invalid: %w", i, sel, err)
+			}
+		}
 		if domainNames[domain.Name] {
 			return fmt.Errorf("duplicate domain: %s", domain.Name)
 		}
@@ -1001,6 +1009,32 @@ func (c *Config) checkPortConflicts() error {
 		ports[l.port] = l.name
 	}
 
+	return nil
+}
+
+// validateHostname rejects hostnames that cannot be used in SMTP greetings,
+// HELO and Message-ID: whitespace, control characters, "@", "/" and other
+// characters outside letters, digits, '-', '_' and '.'. IPv6 literals are
+// not accepted; use a DNS name. Also used for DKIM selectors (dot-separated
+// labels, RFC 6376 section 3.1).
+func validateHostname(h string) error {
+	if len(h) > 253 {
+		return fmt.Errorf("longer than 253 characters")
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(h, "."), ".") {
+		if label == "" {
+			return fmt.Errorf("empty label")
+		}
+		if len(label) > 63 {
+			return fmt.Errorf("label %q longer than 63 characters", label)
+		}
+		for _, r := range label {
+			ok := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+			if !ok {
+				return fmt.Errorf("character %q is not allowed", r)
+			}
+		}
+	}
 	return nil
 }
 
