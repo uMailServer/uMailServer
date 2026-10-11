@@ -193,8 +193,17 @@ func (s *Server) startCommandSpan(ctx context.Context, command, sessionID, ip st
 	)
 }
 
-// isAuthLockedOut returns true if the given IP is temporarily locked out
-func (s *Server) isAuthLockedOut(ip string) bool {
+// maxTrackedAuthKeys bounds authFailures (F6340).
+const maxTrackedAuthKeys = 50000
+
+// userAuthLimitFactor scales the per-account budget vs. the per-IP budget.
+const userAuthLimitFactor = 3
+
+func authUserKey(username string) string {
+	return "user:" + strings.ToLower(strings.TrimSpace(username))
+}
+
+func (s *Server) lockedKey(key string, limit int) bool {
 	if s.maxLoginAttempts <= 0 {
 		return false
 	}
@@ -203,35 +212,68 @@ func (s *Server) isAuthLockedOut(ip string) bool {
 
 	cutoff := time.Now().Add(-s.lockoutDuration)
 	var recent []time.Time
-	for _, t := range s.authFailures[ip] {
+	for _, t := range s.authFailures[key] {
 		if t.After(cutoff) {
 			recent = append(recent, t)
 		}
 	}
 	if len(recent) == 0 {
-		delete(s.authFailures, ip) // F5853: do not retain idle IPs
+		delete(s.authFailures, key) // F5853: do not retain idle keys
 	} else {
-		s.authFailures[ip] = recent
+		s.authFailures[key] = recent
 	}
-	return len(recent) >= s.maxLoginAttempts
+	return len(recent) >= limit
 }
 
-// recordAuthFailure records a failed authentication attempt from the given IP
-func (s *Server) recordAuthFailure(ip string) {
+func (s *Server) recordKey(key string) {
 	if s.maxLoginAttempts <= 0 {
 		return
 	}
 	s.authFailuresMu.Lock()
 	defer s.authFailuresMu.Unlock()
-	s.authFailures[ip] = append(s.authFailures[ip], time.Now())
+	now := time.Now()
+	if s.authFailures == nil {
+		s.authFailures = make(map[string][]time.Time)
+	}
+	if _, ok := s.authFailures[key]; !ok && len(s.authFailures) >= maxTrackedAuthKeys {
+		cutoff := now.Add(-s.lockoutDuration)
+		for k, v := range s.authFailures {
+			if len(v) == 0 || !v[len(v)-1].After(cutoff) {
+				delete(s.authFailures, k)
+			}
+		}
+		for k := range s.authFailures {
+			if len(s.authFailures) < maxTrackedAuthKeys {
+				break
+			}
+			delete(s.authFailures, k)
+		}
+	}
+	s.authFailures[key] = append(s.authFailures[key], now)
 }
 
-// clearAuthFailures removes recorded failures for the given IP
-func (s *Server) clearAuthFailures(ip string) {
+func (s *Server) clearKey(key string) {
 	s.authFailuresMu.Lock()
 	defer s.authFailuresMu.Unlock()
-	delete(s.authFailures, ip)
+	delete(s.authFailures, key)
 }
+
+// isAuthLockedOut returns true if the given IP is temporarily locked out
+func (s *Server) isAuthLockedOut(ip string) bool {
+	return s.lockedKey(ip, s.maxLoginAttempts)
+}
+
+// recordAuthFailure records a failed authentication attempt from the given IP
+func (s *Server) recordAuthFailure(ip string) { s.recordKey(ip) }
+
+// clearAuthFailures removes recorded failures for the given IP
+func (s *Server) clearAuthFailures(ip string) { s.clearKey(ip) }
+
+func (s *Server) isUserLockedOut(username string) bool {
+	return s.lockedKey(authUserKey(username), s.maxLoginAttempts*userAuthLimitFactor)
+}
+func (s *Server) recordUserFailure(username string) { s.recordKey(authUserKey(username)) }
+func (s *Server) clearUserFailures(username string) { s.clearKey(authUserKey(username)) }
 
 // SetReadTimeout sets the read timeout for POP3 connections.
 func (s *Server) SetReadTimeout(d time.Duration) {
@@ -688,7 +730,7 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		if span != nil && s.server.tracingProvider != nil && s.server.tracingProvider.IsEnabled() {
 			tracing.SetStringAttribute(span, "user", s.user)
 		}
-		if s.server.isAuthLockedOut(host) {
+		if s.server.isAuthLockedOut(host) || s.server.isUserLockedOut(s.user) {
 			s.WriteResponse("-ERR Too many failed authentication attempts")
 			if cb := s.server.onLoginResult.Load(); cb != nil {
 				(*cb)(s.user, false, host, "lockout")
@@ -715,6 +757,7 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 
 		if !authenticated {
 			s.server.recordAuthFailure(host)
+			s.server.recordUserFailure(s.user)
 			s.WriteResponse("-ERR Authentication failed")
 			if cb := s.server.onLoginResult.Load(); cb != nil {
 				(*cb)(s.user, false, host, "invalid_credentials")
@@ -726,6 +769,7 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		}
 
 		s.server.clearAuthFailures(host)
+		s.server.clearUserFailures(s.user)
 
 		// Load messages
 		messages, err := s.server.mailstore.ListMessages(s.user)
