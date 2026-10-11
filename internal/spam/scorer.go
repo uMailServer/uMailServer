@@ -54,7 +54,7 @@ func (fe *FeatureExtractor) addSpecialFeatures(headers map[string][]string, body
 	}
 
 	// Exclamation-heavy subject
-	if subjects, ok := headers["Subject"]; ok && len(subjects) > 0 {
+	if subjects := headerValues(headers, "Subject"); len(subjects) > 0 {
 		subject := subjects[0]
 		if strings.Count(subject, "!") > 2 {
 			features = append(features, "excessive_exclamation")
@@ -65,8 +65,8 @@ func (fe *FeatureExtractor) addSpecialFeatures(headers map[string][]string, body
 	}
 
 	// HTML-only email
-	if contentType, ok := headers["Content-Type"]; ok {
-		if len(contentType) > 0 {
+	if contentType := headerValues(headers, "Content-Type"); len(contentType) > 0 {
+		{
 			mediaType, _, err := mime.ParseMediaType(contentType[0])
 			if err == nil && mediaType == "text/html" {
 				features = append(features, "html_only_email")
@@ -75,4 +75,18 @@ func (fe *FeatureExtractor) addSpecialFeatures(headers map[string][]string, body
 	}
 
 	return features
+}
+
+// headerValues looks a header up case-insensitively: header maps built by
+// other packages use lowercase keys (F6923).
+func headerValues(headers map[string][]string, name string) []string {
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	for k, v := range headers {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return nil
 }
