@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"net/smtp"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -127,6 +129,9 @@ type Manager struct {
 
 	// HTTP client for webhooks
 	httpClient *http.Client
+
+	// statePath, when set, persists lastAlert so cooldowns survive restarts.
+	statePath string
 
 	// Security: allowPrivateIP permits localhost/private IPs (for testing only)
 	allowPrivateIP bool
@@ -289,7 +294,65 @@ func (m *Manager) shouldSend(name string) bool {
 
 	m.lastAlert[name] = time.Now()
 	m.hourlyCount++
+	m.saveStateLocked()
 	return true
+}
+
+// SetStateFile enables persistence of alert cooldown times at path. Existing
+// state is loaded so a restart does not re-send alerts still in cooldown. A
+// missing or corrupt file is treated as empty state. Call before first use.
+func (m *Manager) SetStateFile(path string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statePath = path
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var saved map[string]time.Time
+	if err := json.Unmarshal(data, &saved); err != nil {
+		return fmt.Errorf("alert state %s: %w", path, err)
+	}
+	now := time.Now()
+	for k, t := range saved {
+		// Ignore expired and future (clock-skewed) timestamps.
+		if t.After(now) || now.Sub(t) >= m.config.MinInterval {
+			continue
+		}
+		if cur, ok := m.lastAlert[k]; !ok || t.After(cur) {
+			m.lastAlert[k] = t
+		}
+	}
+	return nil
+}
+
+// saveStateLocked writes unexpired cooldowns atomically. Caller holds m.mu.
+// Failures are logged, never fatal: alerting must not depend on disk state.
+func (m *Manager) saveStateLocked() {
+	if m.statePath == "" {
+		return
+	}
+	live := make(map[string]time.Time, len(m.lastAlert))
+	for k, t := range m.lastAlert {
+		if time.Since(t) < m.config.MinInterval {
+			live[k] = t
+		}
+	}
+	data, err := json.Marshal(live)
+	if err == nil {
+		tmp := m.statePath + ".tmp"
+		if err = os.WriteFile(tmp, data, 0o600); err == nil {
+			if err = os.Rename(tmp, m.statePath); err != nil {
+				_ = os.Remove(tmp)
+			}
+		}
+	}
+	if err != nil {
+		m.logger.Warn("failed to persist alert state", "path", filepath.Base(m.statePath), "error", err)
+	}
 }
 
 // recordAlert records that an alert was sent
@@ -434,6 +497,11 @@ func (m *Manager) isValidWebhookURL(rawURL string) bool {
 	return true
 }
 
+// headerSafe strips CR/LF so an alert name can never inject mail headers (F6872).
+func headerSafe(v string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(v)
+}
+
 // sendEmail sends alert via SMTP
 func (m *Manager) sendEmail(alert Alert) error {
 	// Build email body
@@ -442,7 +510,7 @@ func (m *Manager) sendEmail(alert Alert) error {
 	fmt.Fprintf(&body, "Date: %s\r\n", alert.Timestamp.Format(time.RFC1123Z))
 	fmt.Fprintf(&body, "From: %s\r\n", m.config.FromAddress)
 	fmt.Fprintf(&body, "To: %s\r\n", strings.Join(m.config.ToAddresses, ", "))
-	fmt.Fprintf(&body, "Subject: [%s] uMailServer Alert: %s\r\n", strings.ToUpper(string(alert.Severity)), alert.Name)
+	fmt.Fprintf(&body, "Subject: [%s] uMailServer Alert: %s\r\n", strings.ToUpper(string(alert.Severity)), headerSafe(alert.Name))
 	body.WriteString("MIME-Version: 1.0\r\n")
 	body.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
 	body.WriteString("\r\n")

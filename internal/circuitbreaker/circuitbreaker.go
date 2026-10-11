@@ -62,6 +62,22 @@ type CircuitBreaker struct {
 
 // New creates a new circuit breaker
 func New(config Config) *CircuitBreaker {
+	// F6848: a zero/negative threshold is unset, not literal. MaxFailures 0
+	// opened on the first failure and SuccessThreshold 0 admitted no
+	// half-open probe beyond the transition request.
+	def := DefaultConfig()
+	if config.MaxFailures <= 0 {
+		config.MaxFailures = def.MaxFailures
+	}
+	if config.Timeout <= 0 {
+		config.Timeout = def.Timeout
+	}
+	if config.SuccessThreshold <= 0 {
+		config.SuccessThreshold = def.SuccessThreshold
+	}
+	if config.FailureThreshold <= 0 {
+		config.FailureThreshold = def.FailureThreshold
+	}
 	return &CircuitBreaker{
 		config: config,
 		state:  StateClosed,
@@ -82,9 +98,21 @@ func (cb *CircuitBreaker) State() State {
 
 // Allow returns true if the request should be allowed
 func (cb *CircuitBreaker) Allow() bool {
+	ok, _ := cb.allow()
+	return ok
+}
+
+// allow is Allow that also returns the half-open round id the admission
+// belongs to, read under the same lock (F6847: Execute used to read the id in
+// a second critical section, so a round change in between made a probe claim
+// a slot of a round that never admitted it).
+func (cb *CircuitBreaker) allow() (bool, uint64) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
+	return cb.allowLocked(), cb.halfOpenGen
+}
 
+func (cb *CircuitBreaker) allowLocked() bool {
 	switch cb.state {
 	case StateClosed:
 		return true
@@ -227,15 +255,14 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 	if fn == nil {
 		return errors.New("circuit breaker: nil function")
 	}
-	if !cb.Allow() {
+	// The round this request was admitted in is captured atomically with the
+	// admission. If the breaker re-opens and starts a new round while fn is
+	// still running, the completion below will not match halfOpenGen and will
+	// correctly decline to release a slot belonging to the new round.
+	ok, gen := cb.allow()
+	if !ok {
 		return ErrCircuitOpen
 	}
-
-	// Capture the half-open round this request was admitted in. If the
-	// breaker re-opens and starts a new round while fn is still running, the
-	// completion below will not match halfOpenGen and will correctly decline
-	// to release a slot belonging to the new round.
-	gen := cb.currentHalfOpenGen()
 
 	completed := false
 	defer func() {

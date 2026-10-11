@@ -43,7 +43,23 @@ export function Login({ onLogin }: LoginProps) {
           setError("Enter the 6-digit code from your authenticator app");
           return;
         }
-        throw new Error(data.error || "Login failed");
+        const retryAfter = response.headers?.get?.("Retry-After");
+        const wait = retryAfter && /^\d+$/.test(retryAfter) ? ` Try again in ${retryAfter} seconds.` : "";
+        throw new Error((data.error || "Login failed") + (response.status === 429 ? wait : ""));
+      }
+
+      // The panel is admin-only: a valid non-admin session would land in a
+      // shell where every call answers 403. Refuse it and drop the session.
+      let forbidden = false;
+      try {
+        const probe = await fetch("/api/v1/accounts?limit=1", { credentials: "include" });
+        forbidden = probe.status === 403;
+      } catch {
+        // network/stub failure: let the panel's own calls report it
+      }
+      if (forbidden) {
+        void fetch("/api/v1/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
+        throw new Error("This account is not an administrator and cannot use the admin panel");
       }
 
       onLogin({ email });

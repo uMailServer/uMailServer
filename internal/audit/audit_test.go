@@ -83,6 +83,8 @@ func TestLogger_LogLoginFailure(t *testing.T) {
 }
 
 func TestExtractIP(t *testing.T) {
+	SetTrustedProxies([]string{"10.0.0.1"})
+	t.Cleanup(func() { SetTrustedProxies(nil) })
 	tests := []struct {
 		name     string
 		remote   string

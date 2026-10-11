@@ -93,8 +93,8 @@ func TestHandleAuthLogin_CancelledUsername(t *testing.T) {
 	client.Write([]byte("*\r\n"))
 
 	resp2 := drainConn(client, 200*time.Millisecond)
-	if !strings.Contains(resp2, "NO") || !strings.Contains(resp2, "cancelled") {
-		t.Errorf("Expected NO cancelled, got: %s", resp2)
+	if !strings.Contains(resp2, "BAD") || !strings.Contains(resp2, "cancelled") {
+		t.Errorf("Expected BAD cancelled, got: %s", resp2)
 	}
 	<-done
 }
@@ -129,8 +129,8 @@ func TestHandleAuthLogin_CancelledPassword(t *testing.T) {
 	client.Write([]byte("*\r\n"))
 
 	resp3 := drainConn(client, 200*time.Millisecond)
-	if !strings.Contains(resp3, "NO") || !strings.Contains(resp3, "cancelled") {
-		t.Errorf("Expected NO cancelled, got: %s", resp3)
+	if !strings.Contains(resp3, "BAD") || !strings.Contains(resp3, "cancelled") {
+		t.Errorf("Expected BAD cancelled, got: %s", resp3)
 	}
 	<-done
 }

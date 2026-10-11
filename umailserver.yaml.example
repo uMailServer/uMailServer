@@ -5,8 +5,8 @@
 server:
   hostname: mail.example.com
   data_dir: /var/lib/umailserver
-  graceful_timeout: 30        # Seconds to wait for connections to drain on shutdown
-  force_close_after: 60       # Seconds after which remaining connections are force-closed
+  graceful_timeout: 30        # [not yet enforced] Seconds to wait for connections to drain on shutdown
+  force_close_after: 60       # [not yet enforced] Seconds after which remaining connections are force-closed
 
 # TLS Configuration
 tls:
@@ -17,8 +17,8 @@ tls:
     enabled: true
     email: admin@example.com
     provider: letsencrypt     # letsencrypt or letsencrypt-staging
-    challenge: http-01        # http-01 or dns-01
-    # dns_provider: cloudflare  # Only for dns-01
+    challenge: http-01        # http-01 or dns-01 [validated only; http-01 is always used]
+    # dns_provider: cloudflare  # [not yet enforced] Only for dns-01
   client_auth:                # Client certificate (mTLS) authentication
     enabled: false
     require_cert: false
@@ -27,11 +27,12 @@ tls:
 
 # SMTP Server Configuration
 smtp:
+  max_connections_per_ip: 50  # Concurrent connections per client IP on every SMTP listener (0 = default 50, negative = disabled)
   inbound:
     enabled: true
     bind: "0.0.0.0"
     port: 25
-    max_connections: 100
+    max_connections: 100      # Max concurrent connections on this listener
     max_recipients: 100
     max_message_size: 50MB    # Applies to every SMTP listener
     read_timeout: 5m
@@ -64,7 +65,7 @@ http:
   enabled: true
   bind: "0.0.0.0"
   port: 443
-  http_port: 80
+  http_port: 80               # [not yet enforced] only checked for port conflicts; no plain-HTTP listener is started from it
   cors_origins: []
   trusted_proxies: []         # IPs allowed to set X-Forwarded-For
 
@@ -79,13 +80,13 @@ spam:
   enabled: true
   reject_threshold: 9.0       # Score at/above which mail is rejected
   junk_threshold: 3.0         # Score at/above which mail goes to Junk
-  quarantine_threshold: 6.0   # Must lie between junk_threshold and reject_threshold
+  quarantine_threshold: 6.0   # [not yet enforced] validated (must lie between junk_threshold and reject_threshold) but no quarantine action exists
   bayesian:
     enabled: true
-    auto_train: true
+    auto_train: true      # [not yet enforced]
   greylisting:
     enabled: true
-    delay: 5m
+    delay: 5m              # [not yet enforced] greylist delay is built in
   rbl_servers:
     - zen.spamhaus.org
 
@@ -113,9 +114,9 @@ security:
     user_max_recipients: 100  # Recipients per message
     global_per_minute: 10000
     global_per_hour: 100000
-    smtp_per_minute: 30       # SMTP auth attempts per minute per IP
-    smtp_per_hour: 500        # SMTP connections per hour per IP
-    imap_connections: 50      # Max concurrent IMAP connections per IP
+    smtp_per_minute: 30       # [not yet enforced] SMTP auth attempts per minute per IP
+    smtp_per_hour: 500        # [not yet enforced] SMTP connections per hour per IP
+    imap_connections: 50      # [not yet enforced] Max concurrent IMAP connections per IP
     http_requests_per_minute: 120  # API requests per minute per IP
 
 # Antivirus (ClamAV)
@@ -132,7 +133,7 @@ database:
 # Storage
 storage:
   sync: true                  # fsync message files
-  shared_folders: false
+  shared_folders: false       # [not yet enforced]
 
 # DMARC aggregate reporting
 dmarc:
@@ -217,6 +218,8 @@ alert:
   queue_threshold: 1000           # Pending queue items that trigger a warning
 
 # Domains
+# [not yet enforced] The whole domains: list is validated but never read at runtime;
+# create domains with the CLI / admin API instead.
 domains:
   - name: example.com
     max_accounts: 100

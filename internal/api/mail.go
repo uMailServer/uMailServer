@@ -169,7 +169,29 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 		offset = n
 	}
 
-	emails, total, err := h.getEmailsPage(userEmail, internalFolder, limit, offset)
+	// F6761: server-side filters so Starred/Unread views page the whole
+	// folder instead of only the already-loaded pages. total then counts the
+	// matching messages; unreadTotal/starredTotal are always folder-wide.
+	q := r.URL.Query()
+	filter := mailListFilter{}
+	switch strings.ToLower(q.Get("flag")) {
+	case "":
+	case "flagged", "starred":
+		filter.flagged = true
+	default:
+		h.sendError(w, http.StatusBadRequest, "flag must be flagged")
+		return
+	}
+	switch strings.ToLower(q.Get("unread")) {
+	case "", "0", "false":
+	case "1", "true":
+		filter.unread = true
+	default:
+		h.sendError(w, http.StatusBadRequest, "unread must be 1 or 0")
+		return
+	}
+
+	emails, total, counts, err := h.getEmailsPageFiltered(userEmail, internalFolder, limit, offset, filter)
 	if err != nil {
 		h.sendError(w, http.StatusInternalServerError, "Failed to list emails")
 		return
@@ -182,6 +204,9 @@ func (h *MailHandler) handleMailList(w http.ResponseWriter, r *http.Request) {
 		"limit":  limit,
 		"offset": offset,
 		"folder": folder,
+
+		"unreadTotal":  counts.unread,
+		"starredTotal": counts.starred,
 	}); err != nil {
 		fmt.Printf("ERROR: failed to encode mail list response: %v\n", err)
 	}
@@ -196,20 +221,56 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 // getEmailsPage returns up to limit emails (0 = all), skipping the offset
 // newest messages, plus the mailbox's total message count.
 func (h *MailHandler) getEmailsPage(userEmail, mailbox string, limit, offset int) ([]Mail, int, error) {
+	emails, total, _, err := h.getEmailsPageFiltered(userEmail, mailbox, limit, offset, mailListFilter{})
+	return emails, total, err
+}
+
+// mailListFilter restricts a listing to flagged and/or unread messages.
+type mailListFilter struct{ flagged, unread bool }
+
+func (f mailListFilter) active() bool { return f.flagged || f.unread }
+
+type mailListCounts struct{ unread, starred int }
+
+func (h *MailHandler) getEmailsPageFiltered(userEmail, mailbox string, limit, offset int, filter mailListFilter) ([]Mail, int, mailListCounts, error) {
+	var counts mailListCounts
 	if h.mailDB == nil || h.msgStore == nil {
-		return []Mail{}, 0, nil
+		return []Mail{}, 0, counts, nil
 	}
 
 	// Ensure mailbox exists - try to get it
 	_, err := h.mailDB.GetMailbox(userEmail, mailbox)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, counts, err
 	}
 
 	// Get message UIDs
 	uids, err := h.mailDB.GetMessageUIDs(userEmail, mailbox)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, counts, err
+	}
+	// Metadata-only pass: folder-wide counts and, when filtering, the
+	// matching uid set (order preserved, so pagination stays newest-first).
+	matched := uids[:0:0]
+	for _, uid := range uids {
+		meta, err := h.mailDB.GetMessageMetadata(userEmail, mailbox, uid)
+		if err != nil || meta == nil {
+			continue
+		}
+		seen, flagged := hasFlag(meta.Flags, "\\Seen"), hasFlag(meta.Flags, "\\Flagged")
+		if !seen {
+			counts.unread++
+		}
+		if flagged {
+			counts.starred++
+		}
+		if (filter.flagged && !flagged) || (filter.unread && seen) {
+			continue
+		}
+		matched = append(matched, uid)
+	}
+	if filter.active() {
+		uids = matched
 	}
 	total := len(uids)
 	if limit > 0 {
@@ -287,7 +348,7 @@ func (h *MailHandler) getEmailsPage(userEmail, mailbox string, limit, offset int
 		emails = append(emails, email)
 	}
 
-	return emails, total, nil
+	return emails, total, counts, nil
 }
 
 // extractBody extracts the body from a raw email message

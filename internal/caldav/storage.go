@@ -517,3 +517,42 @@ func (s *Storage) GetCalendarCTag(username, calendarID string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
+
+// PurgeUser removes every calendar and event of a user, including directories
+// that only differ in letter case (data written before usernames were
+// canonicalised). A user with no data is not an error, so the call is safe to
+// retry (F6810).
+func (s *Storage) PurgeUser(username string) error {
+	if username == "" || username == "." || strings.ContainsAny(username, "/\\\x00") || strings.Contains(username, "..") {
+		return fmt.Errorf("%w: %q", errInvalidID, username)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names := []string{userKey(username)}
+	if legacy := legacyUserKey(username); legacy != names[0] && strings.ReplaceAll(legacy, "_at_", "@") == username {
+		names = append(names, legacy)
+	}
+	entries, err := os.ReadDir(s.dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("purge caldav user: %w", err)
+	}
+	var errs []error
+	for _, e := range entries {
+		for _, n := range names {
+			if strings.EqualFold(e.Name(), n) {
+				if err := os.RemoveAll(filepath.Join(s.dataDir, e.Name())); err != nil {
+					errs = append(errs, err)
+				}
+				break
+			}
+		}
+	}
+	s.migrated.Delete(username)
+	return errors.Join(errs...)
+}
+
+// PurgeUser removes all CalDAV data of the user (F6810).
+func (s *Server) PurgeUser(username string) error { return s.storage.PurgeUser(username) }

@@ -115,6 +115,8 @@ func TestLogger_CleanupWithOldFiles(t *testing.T) {
 // --- ExtractIP coverage ---
 
 func TestExtractIP_WithXForwardedForMultiple(t *testing.T) {
+	SetTrustedProxies([]string{"10.0.0.1"})
+	t.Cleanup(func() { SetTrustedProxies(nil) })
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "10.0.0.1:8080"
 	req.Header.Set("X-Forwarded-For", "203.0.113.1, 10.0.0.1, 192.168.1.1")
@@ -138,6 +140,8 @@ func TestExtractIP_WithInvalidXForwardedFor(t *testing.T) {
 }
 
 func TestExtractIP_WithXRealIP(t *testing.T) {
+	SetTrustedProxies([]string{"10.0.0.1"})
+	t.Cleanup(func() { SetTrustedProxies(nil) })
 	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = "10.0.0.1:8080"
 	req.Header.Set("X-Real-IP", "203.0.113.2")

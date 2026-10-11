@@ -53,6 +53,7 @@ function App() {
 
   // WebSocket connection for realtime updates
   const { isConnected } = useWebSocket({
+    enabled: isAuthenticated,
     onMetrics: (newMetrics) => {
       setMetrics(newMetrics);
     },

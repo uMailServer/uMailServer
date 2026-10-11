@@ -91,6 +91,18 @@ export function Accounts() {
     a.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Every open of the create dialog starts from a clean form and no stale
+  // error left by an earlier edit/delete/create failure.
+  const handleAddOpenChange = (open: boolean) => {
+    if (open) {
+      setFormError("");
+      setNewAccountEmail("");
+      setNewAccountPassword("");
+      setNewAccountIsAdmin(false);
+    }
+    setIsAddDialogOpen(open);
+  };
+
   const handleCreateAccount = () => guarded(async () => {
     setFormError("");
     if (!newAccountEmail || !newAccountPassword) {
@@ -179,7 +191,7 @@ export function Accounts() {
             Manage email accounts and permissions
           </p>
         </div>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <Dialog open={isAddDialogOpen} onOpenChange={handleAddOpenChange}>
           {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
           <DialogTrigger asChild>
             <Button>
@@ -284,7 +296,7 @@ export function Accounts() {
                 : "Get started by adding your first account"}
             </p>
             {!searchQuery && (
-              <Button className="mt-4" onClick={() => setIsAddDialogOpen(true)}>
+              <Button className="mt-4" onClick={() => handleAddOpenChange(true)}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Account
               </Button>

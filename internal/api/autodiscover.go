@@ -81,6 +81,13 @@ func (s *Server) handleAutodiscover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F6800: answer only for domains this server hosts (same rule as
+	// autoconfig); otherwise the endpoint reflects any address back.
+	if !s.isHostedDomain(domain) {
+		s.sendAutodiscoverError(w, http.StatusNotFound, "Unknown domain")
+		return
+	}
+
 	// Build response
 	resp := s.buildAutodiscoverResponse(email, domain)
 
@@ -92,10 +99,19 @@ func (s *Server) handleAutodiscover(w http.ResponseWriter, r *http.Request) {
 	_ = xml.NewEncoder(w).Encode(resp)
 }
 
-// parseAutodiscoverPOST parses the POST body for email address
+// parseAutodiscoverPOST extracts the address from the POST XML body (what
+// Outlook actually sends, F6801), falling back to the query/Host forms.
 func (s *Server) parseAutodiscoverPOST(r *http.Request) string {
-	// For POST requests, we would normally parse the XML body
-	// For now, extract email from request
+	if r.Body != nil {
+		var req AutodiscoverRequest
+		if err := xml.NewDecoder(http.MaxBytesReader(nil, r.Body, 64<<10)).Decode(&req); err == nil {
+			for _, rq := range req.Requests {
+				if e := strings.ToLower(strings.TrimSpace(rq.EMailAddress)); e != "" {
+					return e
+				}
+			}
+		}
+	}
 	email := r.URL.Query().Get("email")
 	if email == "" {
 		email = extractEmailFromHost(r.Host)

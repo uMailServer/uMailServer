@@ -20,7 +20,14 @@ type SSEServer struct {
 	authFunc   func(token string) (user string, isAdmin bool, err error)
 	corsOrigin string
 	shutdown   bool // protected by clientsMu
+
+	// heartbeat is the keep-alive period; each beat also re-validates the
+	// connection's token (F6802). Zero means the 30s default.
+	heartbeat time.Duration
 }
+
+// SetHeartbeatInterval overrides the heartbeat/re-validation period.
+func (s *SSEServer) SetHeartbeatInterval(d time.Duration) { s.heartbeat = d }
 
 // Close stops every connected client's handler goroutine and makes the
 // handler refuse new connections (F6506). Long-lived SSE requests otherwise
@@ -193,7 +200,11 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 		})
 
 		// Keep connection alive and send events
-		ticker := time.NewTicker(30 * time.Second) // Heartbeat
+		hb := s.heartbeat
+		if hb <= 0 {
+			hb = 30 * time.Second
+		}
+		ticker := time.NewTicker(hb) // Heartbeat
 		defer ticker.Stop()
 
 		for {
@@ -211,6 +222,14 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 				s.handleNotification(client, notification)
 
 			case <-ticker.C:
+				// F6802: a stream must not outlive its token. Re-run the
+				// auth check (expiry, logout revocation, disabled account,
+				// tokens_valid_after) and drop the stream once it fails.
+				if _, _, err := s.authFunc(token); err != nil {
+					s.removeClient(user, client)
+					s.logger.Info("SSE client token no longer valid", "user", user)
+					return
+				}
 				s.sendEvent(client, "heartbeat", map[string]interface{}{
 					"timestamp": time.Now().Unix(),
 				})

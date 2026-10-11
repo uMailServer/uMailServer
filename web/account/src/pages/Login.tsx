@@ -21,7 +21,12 @@ async function loginApi(email: string, password: string, totpCode: string) {
 
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new LoginError(body?.error ?? 'Invalid credentials', response.status)
+    let message = body?.error ?? 'Invalid credentials'
+    const retryAfter = response.headers?.get?.('Retry-After')
+    if (response.status === 429 && retryAfter && /^\d+$/.test(retryAfter)) {
+      message += ` Try again in ${retryAfter} seconds.`
+    }
+    throw new LoginError(message, response.status)
   }
 
   const data = await response.json()

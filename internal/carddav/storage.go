@@ -354,3 +354,34 @@ func (s *Storage) GetAddressbookETag(username, addressbookID string) string {
 	}
 	return fmt.Sprintf("\"%d\"", info.ModTime().UnixNano())
 }
+
+// PurgeUser removes every address book and contact of a user, including
+// directories that only differ in letter case. A user with no data is not an
+// error, so the call is safe to retry (F6810).
+func (s *Storage) PurgeUser(username string) error {
+	if username == "" || username == "." || strings.ContainsAny(username, "/\\\x00") || strings.Contains(username, "..") {
+		return fmt.Errorf("%w: %q", errInvalidID, username)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := filepath.Base(s.userDir(username))
+	entries, err := os.ReadDir(s.dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("purge carddav user: %w", err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if strings.EqualFold(e.Name(), key) {
+			if err := os.RemoveAll(filepath.Join(s.dataDir, e.Name())); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// PurgeUser removes all CardDAV data of the user (F6810).
+func (s *Server) PurgeUser(username string) error { return s.storage.PurgeUser(username) }

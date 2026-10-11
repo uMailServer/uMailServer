@@ -29,7 +29,7 @@ func (db *Database) PurgeUser(user string) error {
 				doomed = append(doomed, append([]byte(nil), k...))
 			}
 		}
-		for _, name := range []string{subscribedBucket(user), threadBucket(user), changesBucket(user), querySnapshotsBucket(user)} {
+		for _, name := range []string{subscribedBucket(user), threadBucket(user), changesBucket(user), querySnapshotsBucket(user), threadReservationBucket(user)} {
 			if tx.Bucket([]byte(name)) != nil {
 				doomed = append(doomed, []byte(name))
 			}

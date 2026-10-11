@@ -82,13 +82,14 @@ func (s *Server) serveSMTP(name string, srv *smtp.Server, addr string, tlsConfig
 func (s *Server) startInboundSMTP() error {
 	smtpAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Inbound.Bind, s.config.SMTP.Inbound.Port)
 	smtpCfg := &smtp.Config{
-		Hostname:       s.config.Server.Hostname,
-		MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
-		MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
-		MaxConnections: s.config.SMTP.Inbound.MaxConnections,
-		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
-		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-		TLSConfig:      s.smtpTLSConfig(),
+		Hostname:            s.config.Server.Hostname,
+		MaxMessageSize:      int64(s.config.SMTP.Inbound.MaxMessageSize),
+		MaxRecipients:       s.config.SMTP.Inbound.MaxRecipients,
+		MaxConnections:      s.config.SMTP.Inbound.MaxConnections,
+		MaxConnectionsPerIP: s.config.SMTP.MaxConnectionsPerIP,
+		ReadTimeout:         s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
+		WriteTimeout:        s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+		TLSConfig:           s.smtpTLSConfig(),
 		// ClamAV and DNS-bound stages can legitimately take a while on
 		// large messages; the 30s default is too tight (F6272).
 		StageTimeout: 2 * time.Minute,
@@ -261,18 +262,19 @@ func (s *Server) isLocalDomain(domain string) bool {
 func (s *Server) startSubmissionSMTP() error {
 	submissionAddr := fmt.Sprintf("%s:%d", s.config.SMTP.Submission.Bind, s.config.SMTP.Submission.Port)
 	submissionCfg := &smtp.Config{
-		Hostname:       s.config.Server.Hostname,
-		MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
-		MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
-		MaxConnections: s.config.SMTP.Submission.MaxConnections,
-		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
-		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-		TLSConfig:      s.smtpTLSConfig(),
+		Hostname:            s.config.Server.Hostname,
+		MaxMessageSize:      int64(s.config.SMTP.Inbound.MaxMessageSize),
+		MaxRecipients:       s.config.SMTP.Inbound.MaxRecipients,
+		MaxConnections:      s.config.SMTP.Submission.MaxConnections,
+		MaxConnectionsPerIP: s.config.SMTP.MaxConnectionsPerIP,
+		ReadTimeout:         s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
+		WriteTimeout:        s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+		TLSConfig:           s.smtpTLSConfig(),
 		// ClamAV and DNS-bound stages can legitimately take a while on
 		// large messages; the 30s default is too tight (F6272).
 		StageTimeout: 2 * time.Minute,
 		RequireAuth:  true,
-		RequireTLS:   true,
+		RequireTLS:   s.config.SMTP.Submission.RequireTLS,
 		IsSubmission: true,
 	}
 
@@ -303,16 +305,17 @@ func (s *Server) startSubmissionTLSSMTP() error {
 		return nil
 	}
 	submissionTLSCfg := &smtp.Config{
-		Hostname:       s.config.Server.Hostname,
-		MaxMessageSize: int64(s.config.SMTP.Inbound.MaxMessageSize),
-		MaxRecipients:  s.config.SMTP.Inbound.MaxRecipients,
-		MaxConnections: s.config.SMTP.SubmissionTLS.MaxConnections,
-		ReadTimeout:    s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
-		WriteTimeout:   s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
-		TLSConfig:      tlsCfg,
-		RequireAuth:    true,
-		RequireTLS:     false, // Already on TLS
-		IsSubmission:   true,
+		Hostname:            s.config.Server.Hostname,
+		MaxMessageSize:      int64(s.config.SMTP.Inbound.MaxMessageSize),
+		MaxRecipients:       s.config.SMTP.Inbound.MaxRecipients,
+		MaxConnections:      s.config.SMTP.SubmissionTLS.MaxConnections,
+		MaxConnectionsPerIP: s.config.SMTP.MaxConnectionsPerIP,
+		ReadTimeout:         s.config.SMTP.Inbound.ReadTimeout.ToDuration(),
+		WriteTimeout:        s.config.SMTP.Inbound.WriteTimeout.ToDuration(),
+		TLSConfig:           tlsCfg,
+		RequireAuth:         true,
+		RequireTLS:          false, // Already on TLS
+		IsSubmission:        true,
 	}
 
 	submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)

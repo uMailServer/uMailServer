@@ -134,12 +134,26 @@ func (v *ARCValidator) Validate(ctx context.Context, headers map[string][]string
 
 	chainOK := structOK && len(instances) <= arcMaxInstance
 	for idx, i := range instances {
-		arcSet := arcSets[i]
-		arcSet.Instance = i
-		// Instances must be exactly 1..N.
 		if i != idx+1 || i > arcMaxInstance {
 			chainOK = false
 		}
+	}
+	if !chainOK {
+		// F6840: RFC 8617 §5.2 — a malformed or over-long chain fails
+		// without validating signatures; verifying every set cost a DNS
+		// lookup and an RSA operation per attacker-supplied header set.
+		for _, i := range instances {
+			arcSet := arcSets[i]
+			arcSet.Instance = i
+			chain.Sets = append(chain.Sets, arcSet)
+		}
+		chain.CV = "fail"
+		return chain, nil
+	}
+
+	for _, i := range instances {
+		arcSet := arcSets[i]
+		arcSet.Instance = i
 
 		amsValid, err := v.validateAMS(ctx, arcSet.AMS, headers, body)
 		if err != nil && i == highest {
@@ -503,7 +517,7 @@ func (v *ARCValidator) validateAMS(ctx context.Context, ams string, headers map[
 		return false, nil
 	}
 
-	pubKey, err := fetchARCPublicKey(v.resolver, domain, selector)
+	pubKey, err := fetchARCPublicKeyCtx(ctx, v.resolver, domain, selector)
 	if err != nil {
 		return false, err
 	}
@@ -540,7 +554,7 @@ func (v *ARCValidator) validateAS(ctx context.Context, as string, headers map[st
 		}
 	}
 
-	pubKey, err := fetchARCPublicKey(v.resolver, domain, selector)
+	pubKey, err := fetchARCPublicKeyCtx(ctx, v.resolver, domain, selector)
 	if err != nil {
 		return false, err
 	}
@@ -552,10 +566,21 @@ func (v *ARCValidator) validateAS(ctx context.Context, as string, headers map[st
 
 // fetchARCPublicKey fetches the ARC public key from DNS
 func fetchARCPublicKey(resolver DNSResolver, domain, selector string) (*rsa.PublicKey, error) {
+	return fetchARCPublicKeyCtx(context.Background(), resolver, domain, selector)
+}
+
+// fetchARCPublicKeyCtx is fetchARCPublicKey bounded by the caller's context
+// and dkimDNSTimeout (F6840: the lookup used to ignore both).
+func fetchARCPublicKeyCtx(ctx context.Context, resolver DNSResolver, domain, selector string) (*rsa.PublicKey, error) {
+	if resolver == nil {
+		return nil, errors.New("no DNS resolver configured")
+	}
+	ctx, cancel := context.WithTimeout(ctx, dkimDNSTimeout)
+	defer cancel()
 	// Use same DNS query format as DKIM: selector._domainkey.domain
 	query := fmt.Sprintf("%s._domainkey.%s", selector, domain)
 
-	txtRecords, err := resolver.LookupTXT(context.Background(), query)
+	txtRecords, err := resolver.LookupTXT(ctx, query)
 	if err != nil {
 		return nil, err
 	}

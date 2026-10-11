@@ -306,9 +306,17 @@ func bodyStructureDepth(entity []byte, ext bool, depth int) string {
 		mediaType, params = "text/plain", map[string]string{"charset": "us-ascii"}
 	}
 	typ, sub, _ := strings.Cut(mediaType, "/")
+	if typ == "multipart" && (params["boundary"] == "" || depth >= maxBodyStructureDepth) {
+		// A multipart without a boundary (or past the depth bound) cannot be
+		// split into the 1*body the RFC 3501 grammar requires for a
+		// multipart; describe it as the opaque text it is instead of the
+		// grammar-invalid leaf "MULTIPART MIXED ... size" (F6822).
+		typ, sub, mediaType = "text", "plain", "text/plain"
+		params = map[string]string{"charset": "us-ascii"}
+	}
 	var b strings.Builder
 	b.WriteByte('(')
-	if typ == "multipart" && params["boundary"] != "" && depth < maxBodyStructureDepth {
+	if typ == "multipart" {
 		parts := splitMultipart(body, params["boundary"])
 		if len(parts) == 0 {
 			parts = [][]byte{[]byte("\r\n")} // RFC 3501 requires at least one part

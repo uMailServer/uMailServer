@@ -1,8 +1,12 @@
 package server
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
 
+	"github.com/umailserver/umailserver/internal/caldav"
+	"github.com/umailserver/umailserver/internal/carddav"
 	"github.com/umailserver/umailserver/internal/imap"
 	"github.com/umailserver/umailserver/internal/pop3"
 	"github.com/umailserver/umailserver/internal/storage"
@@ -163,6 +167,7 @@ type accountPurger struct{ srv *Server }
 
 func (p accountPurger) PurgeAccount(email string) error {
 	s := p.srv
+	var errs []error
 	if s.sieveManager != nil {
 		for _, name := range s.sieveManager.ListScripts(email) {
 			s.sieveManager.DeleteScript(email, name)
@@ -173,5 +178,25 @@ func (p accountPurger) PurgeAccount(email string) error {
 			_ = s.pushSvc.Unsubscribe(email, sub.ID)
 		}
 	}
-	return nil
+	// F6810: calendars and address books live on disk under the DAV data
+	// directories, whether or not the DAV listeners are running now.
+	if s.caldavServer != nil {
+		if err := s.caldavServer.PurgeUser(email); err != nil {
+			errs = append(errs, err)
+		}
+	} else if s.config != nil {
+		if err := caldav.NewStorage(filepath.Join(s.config.Server.DataDir, "caldav")).PurgeUser(email); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if s.carddavServer != nil {
+		if err := s.carddavServer.PurgeUser(email); err != nil {
+			errs = append(errs, err)
+		}
+	} else if s.config != nil {
+		if err := carddav.NewStorage(filepath.Join(s.config.Server.DataDir, "carddav")).PurgeUser(email); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

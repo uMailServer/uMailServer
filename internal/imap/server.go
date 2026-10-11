@@ -51,9 +51,12 @@ type Server struct {
 	auth             *AuthTracker
 
 	// Connection timeouts
-	readTimeout  time.Duration
-	writeTimeout time.Duration
-	idleTimeout  time.Duration
+	readTimeout time.Duration
+	// readTimeoutExplicit is set when the operator chose readTimeout; the
+	// default 30s only guards the pre-auth state (F6821).
+	readTimeoutExplicit bool
+	writeTimeout        time.Duration
+	idleTimeout         time.Duration
 
 	// Connection limits
 	maxConnections int
@@ -125,6 +128,7 @@ func NewServer(config *Config, mailstore Mailstore) *Server {
 		config.Logger = slog.Default()
 	}
 	readTimeout := config.ReadTimeout
+	explicit := readTimeout != 0
 	if readTimeout == 0 {
 		readTimeout = 30 * time.Second
 	}
@@ -143,6 +147,8 @@ func NewServer(config *Config, mailstore Mailstore) *Server {
 		auth:         NewAuthTracker(),
 		readTimeout:  readTimeout,
 		writeTimeout: writeTimeout,
+
+		readTimeoutExplicit: explicit,
 	}
 }
 
@@ -171,6 +177,7 @@ func (s *Server) SetAuthLimits(maxAttempts int, lockoutDuration time.Duration) {
 // SetReadTimeout sets the read timeout for IMAP connections (except during IDLE).
 func (s *Server) SetReadTimeout(d time.Duration) {
 	s.readTimeout = d
+	s.readTimeoutExplicit = true
 }
 
 // SetWriteTimeout sets the write timeout for IMAP connections.
@@ -584,7 +591,7 @@ func (s *Session) Handle() {
 			return
 		}
 		if s.server.readTimeout > 0 && !s.idleActive {
-			_ = s.conn.SetReadDeadline(time.Now().Add(s.server.readTimeout)) // Best-effort deadline
+			_ = s.conn.SetReadDeadline(time.Now().Add(s.readDeadlineWindow())) // Best-effort deadline
 		}
 		line, err := s.readLine()
 		if errors.Is(err, errLineTooLong) {
@@ -623,6 +630,24 @@ func (s *Session) Handle() {
 			s.server.logger.Error("Command error", "error", err)
 		}
 	}
+}
+
+// minAutologout is the RFC 3501 §5.4 floor for the inactivity timer of an
+// authenticated session: "MUST be at least 30 minutes".
+const minAutologout = 30 * time.Minute
+
+// readDeadlineWindow returns how long the session may stay silent. Before
+// authentication the (short) readTimeout applies; once authenticated an
+// unconfigured server uses the RFC 3501 §5.4 30-minute autologout instead of
+// dropping every idle client after 30 seconds (F6821).
+func (s *Session) readDeadlineWindow() time.Duration {
+	s.stateMu.RLock()
+	st := s.state
+	s.stateMu.RUnlock()
+	if st != StateNotAuthenticated && !s.server.readTimeoutExplicit {
+		return minAutologout
+	}
+	return s.server.readTimeout
 }
 
 // maxCommandLineLength bounds one command line (CRLF included); literals are

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -71,13 +72,40 @@ func NewMTASTSValidator(resolver DNSResolver) *MTASTSValidator {
 		resolver: resolver,
 		cache:    make(map[string]*MTASTSCacheEntry),
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:   30 * time.Second,
+			Transport: newPolicyTransport(),
 			// F5311: RFC 8461 §3.3 — 3xx redirects MUST NOT be followed; a
 			// redirect would also skip the SSRF check in fetchPolicyFile.
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		},
+	}
+}
+
+// newPolicyTransport returns a transport whose dialer re-checks the address it
+// is actually about to connect to (F6846). The resolver pre-check in
+// fetchPolicyFile resolves separately from the HTTP dial, so a rebinding DNS
+// server could answer "public" first and "127.0.0.1" second.
+func newPolicyTransport() *http.Transport {
+	d := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(_, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return err
+			}
+			if ip := net.ParseIP(host); ip == nil || isBlockedPolicyIP(ip) {
+				return fmt.Errorf("SSRF blocked: dial address %s is private/local/link-local", host)
+			}
+			return nil
+		},
+	}
+	return &http.Transport{
+		DialContext:         d.DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        10,
+		IdleConnTimeout:     30 * time.Second,
 	}
 }
 
@@ -246,14 +274,21 @@ func (v *MTASTSValidator) lookupMTASTSRecord(ctx context.Context, domain string)
 		return nil, nil // No record found
 	}
 
+	// F6845: RFC 8461 §3.1 — if the TXT set holds more than one STS record
+	// the domain is treated as having no policy.
+	var found *MTASTSRecord
+	n := 0
 	for _, record := range txtRecords {
 		mtastsRecord, err := parseMTASTSRecord(record)
 		if err == nil && mtastsRecord != nil {
-			return mtastsRecord, nil
+			found = mtastsRecord
+			n++
 		}
 	}
-
-	return nil, nil
+	if n != 1 {
+		return nil, nil
+	}
+	return found, nil
 }
 
 // parseMTASTSRecord parses an MTA-STS TXT record

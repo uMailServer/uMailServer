@@ -389,6 +389,15 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 		case "c":
 			sig.Canonicalize = value
 			parts := strings.Split(value, "/")
+			// F6843: RFC 6376 §3.5 — only simple|relaxed, at most two parts.
+			if len(parts) > 2 {
+				return nil, fmt.Errorf("invalid c= tag %q", value)
+			}
+			for _, p := range parts {
+				if p != "simple" && p != "relaxed" {
+					return nil, fmt.Errorf("invalid c= tag %q", value)
+				}
+			}
 			if len(parts) >= 1 {
 				sig.HeaderCanon = parts[0]
 			}
@@ -399,6 +408,17 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 			}
 		case "q":
 			sig.QueryMethod = value
+			// F6843: RFC 6376 §3.5 — dns/txt is the only defined method; a
+			// list with no usable method cannot be verified.
+			usable := false
+			for _, m := range strings.Split(value, ":") {
+				if strings.TrimSpace(m) == "dns/txt" {
+					usable = true
+				}
+			}
+			if !usable {
+				return nil, fmt.Errorf("unsupported q= method %q", value)
+			}
 		case "t":
 			n, err := parseStrictUint(value)
 			if err != nil {

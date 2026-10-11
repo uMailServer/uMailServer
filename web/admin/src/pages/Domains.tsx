@@ -58,7 +58,7 @@ export function Domains() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null);
   const [newDomainName, setNewDomainName] = useState("");
-  const [newDomainMaxAccounts, setNewDomainMaxAccounts] = useState(100);
+  const [newDomainMaxAccounts, setNewDomainMaxAccounts] = useState("100");
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -83,6 +83,16 @@ export function Domains() {
     d.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Every open of the add dialog starts from a clean form and no stale error.
+  const handleAddOpenChange = (open: boolean) => {
+    if (open) {
+      setFormError("");
+      setNewDomainName("");
+      setNewDomainMaxAccounts("100");
+    }
+    setIsAddDialogOpen(open);
+  };
+
   const handleCreateDomain = () => guarded(async () => {
     setFormError("");
     const nameErr = domainError(newDomainName.trim());
@@ -91,11 +101,18 @@ export function Domains() {
       return;
     }
 
+    // 0 = unlimited on the server; only whole numbers 0..1000000 are valid.
+    const maxAccounts = Number(newDomainMaxAccounts.trim());
+    if (newDomainMaxAccounts.trim() === "" || !Number.isInteger(maxAccounts) || maxAccounts < 0 || maxAccounts > 1000000) {
+      setFormError("Max accounts must be a whole number between 0 (unlimited) and 1000000");
+      return;
+    }
+
     try {
-      await createDomain(newDomainName.trim(), newDomainMaxAccounts);
+      await createDomain(newDomainName.trim(), maxAccounts);
       setIsAddDialogOpen(false);
       setNewDomainName("");
-      setNewDomainMaxAccounts(100);
+      setNewDomainMaxAccounts("100");
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create domain");
     }
@@ -152,7 +169,7 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
             Manage your email domains and DNS configuration
           </p>
         </div>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <Dialog open={isAddDialogOpen} onOpenChange={handleAddOpenChange}>
           {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
           <DialogTrigger asChild>
             <Button>
@@ -189,7 +206,8 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
                   id="max-accounts"
                   type="number"
                   value={newDomainMaxAccounts}
-                  onChange={(e) => setNewDomainMaxAccounts(parseInt(e.target.value) || 100)}
+                  min={0}
+                  onChange={(e) => setNewDomainMaxAccounts(e.target.value)}
                 />
               </div>
             </div>
@@ -247,7 +265,7 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
                 : "Get started by adding your first domain"}
             </p>
             {!searchQuery && (
-              <Button className="mt-4" onClick={() => setIsAddDialogOpen(true)}>
+              <Button className="mt-4" onClick={() => handleAddOpenChange(true)}>
                 <Plus className="mr-2 h-4 w-4" />
                 Add Domain
               </Button>

@@ -171,6 +171,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
 		config.JWTSecret = generateSecureJWTSecret()
 	}
+	audit.SetTrustedProxies(config.TrustedProxies) // F6801
 	if config.TokenExpiry == 0 {
 		config.TokenExpiry = 24 * time.Hour
 	}
@@ -278,6 +279,7 @@ func NewServerWithInterfaces(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	audit.SetTrustedProxies(config.TrustedProxies) // F6801
 	if config.JWTSecret == "" {
 		logger.Warn("JWTSecret is empty, generating random secret - tokens will not survive restarts")
 		config.JWTSecret = generateSecureJWTSecret()

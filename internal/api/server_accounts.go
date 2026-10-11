@@ -642,6 +642,17 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 	defer adminGuardMu.Unlock()
 	if _, err := s.db.GetAccount(domain, user); err != nil {
 		if isKeyNotFound(err) {
+			// F6811: the row is removed before the purge, so a failed purge
+			// leaves orphaned data behind a row that is gone. A repeated
+			// DELETE therefore re-runs the (idempotent) purge; it still
+			// answers 404 once the purge succeeds.
+			if perr := s.purgeAccountData(user + "@" + domain); perr != nil {
+				if s.logger != nil {
+					s.logger.Error("account data purge retry failed", "account", email, "error", perr)
+				}
+				s.sendError(w, http.StatusInternalServerError, "account not found but leftover mailbox data purge failed; retry")
+				return
+			}
 			s.sendError(w, http.StatusNotFound, "account not found")
 		} else {
 			s.sendError(w, http.StatusInternalServerError, "failed to delete account")

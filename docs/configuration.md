@@ -59,13 +59,14 @@ tls:
 
 ```yaml
 smtp:
+  max_connections_per_ip: 50     # Per-client-IP cap on all SMTP listeners (0 = default 50, negative = disabled)
   inbound:
     enabled: true
     port: 25
     bind: 0.0.0.0
     max_message_size: 52428800     # 50MB in bytes
     max_recipients: 100            # Max RCPT TO per message
-    max_connections: 100           # Per-IP connection limit
+    max_connections: 100           # Max concurrent connections on this listener
     read_timeout: 5m
     write_timeout: 5m
 ```

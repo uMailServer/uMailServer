@@ -73,6 +73,7 @@ type Session struct {
 	cmdCount atomic.Int64
 	errCount atomic.Int64
 	bytesIn  atomic.Int64 // octets read from the connection, all phases
+	idle     atomic.Bool  // true while the command loop waits for the next command
 
 	// Per-transaction state from MAIL FROM parameters and address policy.
 	rcptRaw    []string // Received "for" form: local part as received, domain lower-cased

@@ -24,6 +24,8 @@ interface UseWebSocketOptions {
   onStatus?: (status: unknown) => void;
   onHealth?: (health: unknown) => void;
   onError?: (error: Error) => void;
+  /** When false no connection is opened (e.g. before login). Default true. */
+  enabled?: boolean;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
 }
@@ -145,10 +147,13 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     void _message;
   }, []);
 
+  const enabled = options.enabled ?? true;
   useEffect(() => {
+    if (!enabled) return;
+    reconnectCountRef.current = 0;
     connect();
     return () => disconnect();
-  }, [connect, disconnect]);
+  }, [connect, disconnect, enabled]);
 
   return {
     isConnected,

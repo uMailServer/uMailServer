@@ -6,6 +6,14 @@ type ForwardingStatus = {
   forwarding_on: boolean
 }
 
+// A 401 means the session expired or was revoked: sign in again instead of
+// showing a generic failure.
+function redirectIfUnauthorized(res: { status: number }): boolean {
+  if (res.status !== 401) return false
+  if (typeof window !== 'undefined') window.location.href = '/login'
+  return true
+}
+
 function ForwardingPage() {
   const [phase, setPhase] = useState<'loading' | 'ready'>('loading')
   const [forwardTo, setForwardTo] = useState('')
@@ -20,6 +28,7 @@ function ForwardingPage() {
     const loadStatus = async () => {
       try {
         const res = await fetch('/api/v1/account/forwarding', { credentials: 'include' })
+        if (redirectIfUnauthorized(res)) return
         if (!res.ok) throw new Error('status unavailable')
         const data = (await res.json()) as ForwardingStatus
         if (stale) return
@@ -48,6 +57,7 @@ function ForwardingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ forward_to: forwardTo.trim(), keep_copy: keepCopy }),
       })
+      if (redirectIfUnauthorized(res)) return
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null
         setError(data?.error ?? 'Saving forwarding settings failed. Please try again.')

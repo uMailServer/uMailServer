@@ -989,31 +989,69 @@ func threadBucket(user string) string {
 	return fmt.Sprintf("threads:%s", keyUser(user))
 }
 
-// GetOrCreateThreadID finds an existing thread for a message or creates a new one
+// threadReservationBucket holds subject -> thread-ID reservations so that
+// concurrent first messages of one conversation share a thread.
+func threadReservationBucket(user string) string {
+	return fmt.Sprintf("threadres:%s", keyUser(user))
+}
+
+// threadReservationTTL bounds how long a subject reservation joins messages.
+const threadReservationTTL = 30 * 24 * time.Hour
+
+type threadReservation struct {
+	ThreadID string    `json:"thread_id"`
+	Created  time.Time `json:"created"`
+}
+
+// GetOrCreateThreadID finds an existing thread for a message or creates a new
+// one. Lookup and reservation happen in a single bbolt write transaction, so
+// concurrent callers for the same conversation observe the same thread ID.
 func (db *Database) GetOrCreateThreadID(user, mailbox string, subject, inReplyTo string, references []string) (string, error) {
 	if db.bolt == nil {
 		return generateThreadID(subject), nil
 	}
 
-	// Normalize subject (remove Re: Fwd: prefixes)
 	normalizedSubject := NormalizeSubject(subject)
-
-	// Try to find existing thread by message ID references
-	if inReplyTo != "" || len(references) > 0 {
-		threadID, err := db.findThreadByReferences(user, mailbox, inReplyTo, references)
-		if err == nil && threadID != "" {
-			return threadID, nil
+	var result string
+	err := db.bolt.Update(func(tx *bbolt.Tx) error {
+		if inReplyTo != "" || len(references) > 0 {
+			if id := threadByReferencesTx(tx, user, mailbox, inReplyTo, references); id != "" {
+				result = id
+				return nil
+			}
 		}
+		if id := threadBySubjectTx(tx, user, mailbox, normalizedSubject); id != "" {
+			result = id
+			return nil
+		}
+		// Atomic reservation (compare-and-set inside the write tx).
+		resKey := []byte(mailbox + "\x00" + normalizedSubject)
+		if normalizedSubject == "" {
+			result = generateThreadID(subject)
+			return nil
+		}
+		rb, err := tx.CreateBucketIfNotExists([]byte(threadReservationBucket(user)))
+		if err != nil {
+			return err
+		}
+		if v := rb.Get(resKey); v != nil {
+			var r threadReservation
+			if json.Unmarshal(v, &r) == nil && r.ThreadID != "" && time.Since(r.Created) <= threadReservationTTL {
+				result = r.ThreadID
+				return nil
+			}
+		}
+		result = generateThreadID(subject)
+		data, err := json.Marshal(threadReservation{ThreadID: result, Created: time.Now()})
+		if err != nil {
+			return err
+		}
+		return rb.Put(resKey, data)
+	})
+	if err != nil {
+		return "", err
 	}
-
-	// Try to find by normalized subject (for messages without proper threading headers)
-	threadID, err := db.findThreadBySubject(user, mailbox, normalizedSubject)
-	if err == nil && threadID != "" {
-		return threadID, nil
-	}
-
-	// Create new thread
-	return generateThreadID(subject), nil
+	return result, nil
 }
 
 // findThreadByReferences finds a thread by In-Reply-To or References headers
@@ -1021,38 +1059,35 @@ func (db *Database) findThreadByReferences(user, mailbox, inReplyTo string, refe
 	if db.bolt == nil {
 		return "", nil
 	}
-
 	threadID := ""
 	err := db.bolt.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(messagesBucket(user, mailbox)))
-		if b == nil {
-			return nil
-		}
-
-		c := b.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var meta MessageMetadata
-			if err := json.Unmarshal(v, &meta); err != nil {
-				continue
-			}
-
-			// Check if this message matches our references
-			if inReplyTo != "" && meta.MessageID == inReplyTo {
-				threadID = meta.ThreadID
-				return nil
-			}
-
-			for _, ref := range references {
-				if meta.MessageID == ref && meta.ThreadID != "" {
-					threadID = meta.ThreadID
-					return nil
-				}
-			}
-		}
+		threadID = threadByReferencesTx(tx, user, mailbox, inReplyTo, references)
 		return nil
 	})
-
 	return threadID, err
+}
+
+func threadByReferencesTx(tx *bbolt.Tx, user, mailbox, inReplyTo string, references []string) string {
+	b := tx.Bucket([]byte(messagesBucket(user, mailbox)))
+	if b == nil {
+		return ""
+	}
+	c := b.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var meta MessageMetadata
+		if err := json.Unmarshal(v, &meta); err != nil {
+			continue
+		}
+		if inReplyTo != "" && meta.MessageID == inReplyTo {
+			return meta.ThreadID
+		}
+		for _, ref := range references {
+			if meta.MessageID == ref && meta.ThreadID != "" {
+				return meta.ThreadID
+			}
+		}
+	}
+	return ""
 }
 
 // findThreadBySubject finds a thread by normalized subject
@@ -1060,41 +1095,43 @@ func (db *Database) findThreadBySubject(user, mailbox, normalizedSubject string)
 	if db.bolt == nil || normalizedSubject == "" {
 		return "", nil
 	}
-
 	threadID := ""
-	oldestDate := time.Now()
-
 	err := db.bolt.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(messagesBucket(user, mailbox)))
-		if b == nil {
-			return nil
-		}
-
-		c := b.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			var meta MessageMetadata
-			if err := json.Unmarshal(v, &meta); err != nil {
-				continue
-			}
-
-			// Check if subjects match
-			if NormalizeSubject(meta.Subject) == normalizedSubject {
-				// Use the oldest message's thread ID (thread root)
-				if meta.InternalDate.Before(oldestDate) {
-					oldestDate = meta.InternalDate
-					threadID = meta.ThreadID
-				}
-			}
-		}
+		threadID = threadBySubjectTx(tx, user, mailbox, normalizedSubject)
 		return nil
 	})
-
-	// Only use subject-based threading if the thread is recent (within 30 days)
-	if threadID != "" && time.Since(oldestDate) > 30*24*time.Hour {
-		return "", nil
-	}
-
 	return threadID, err
+}
+
+func threadBySubjectTx(tx *bbolt.Tx, user, mailbox, normalizedSubject string) string {
+	if normalizedSubject == "" {
+		return ""
+	}
+	b := tx.Bucket([]byte(messagesBucket(user, mailbox)))
+	if b == nil {
+		return ""
+	}
+	threadID := ""
+	oldestDate := time.Now()
+	c := b.Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		var meta MessageMetadata
+		if err := json.Unmarshal(v, &meta); err != nil {
+			continue
+		}
+		if NormalizeSubject(meta.Subject) == normalizedSubject {
+			// Use the oldest message's thread ID (thread root)
+			if meta.InternalDate.Before(oldestDate) {
+				oldestDate = meta.InternalDate
+				threadID = meta.ThreadID
+			}
+		}
+	}
+	// Only use subject-based threading if the thread is recent (within 30 days)
+	if threadID != "" && time.Since(oldestDate) > threadReservationTTL {
+		return ""
+	}
+	return threadID
 }
 
 // NormalizeSubject removes Re: and Fwd: prefixes for thread matching (exported)

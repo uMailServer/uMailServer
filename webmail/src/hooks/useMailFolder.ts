@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api, { Mail, FLAG_SEEN, FLAG_FLAGGED } from '@/utils/api'
+
+export interface MailFolderFilter {
+  flag?: 'flagged'
+  unread?: boolean
+}
 
 export type MailFlagField = 'read' | 'starred'
 
@@ -7,6 +12,8 @@ export interface UseMailFolderResult {
   emails: Mail[]
   /** Folder size reported by the server (>= emails.length when more pages exist). */
   total: number
+  /** Folder-wide unread count reported by the server (filter-independent). */
+  unreadTotal: number
   hasMore: boolean
   loading: boolean
   loadingMore: boolean
@@ -29,9 +36,16 @@ const FLAG_OF: Record<MailFlagField, string> = { read: FLAG_SEEN, starred: FLAG_
  * belongs to the latest request (folder switch / reload) and the component is
  * still mounted, so a slow earlier fetch can never overwrite newer state.
  */
-export function useMailFolder(folder: string): UseMailFolderResult {
+export function useMailFolder(folder: string, filter?: MailFolderFilter): UseMailFolderResult {
+  const flagOpt = filter?.flag
+  const unreadOpt = !!filter?.unread
+  const filterOpts = useMemo(
+    () => ({ ...(flagOpt ? { flag: flagOpt } : {}), ...(unreadOpt ? { unread: true } : {}) }),
+    [flagOpt, unreadOpt],
+  )
   const [emails, setEmails] = useState<Mail[]>([])
   const [total, setTotal] = useState(0)
+  const [unreadTotal, setUnreadTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -54,12 +68,13 @@ export function useMailFolder(folder: string): UseMailFolderResult {
     setLoading(true)
     setError(null)
     try {
-      const data = await api.getMail(folder)
+      const data = await (Object.keys(filterOpts).length ? api.getMail(folder, filterOpts) : api.getMail(folder))
       if (!mountedRef.current || id !== requestRef.current) return
       const list = Array.isArray(data?.emails) ? data.emails : []
       emailsRef.current = list
       setEmails(list)
       setTotal(typeof data?.total === 'number' ? data.total : list.length)
+      setUnreadTotal(typeof data?.unreadTotal === 'number' ? data.unreadTotal : list.filter((m) => !m.read).length)
     } catch (err) {
       if (!mountedRef.current || id !== requestRef.current) return
       emailsRef.current = []
@@ -69,7 +84,7 @@ export function useMailFolder(folder: string): UseMailFolderResult {
     } finally {
       if (mountedRef.current && id === requestRef.current) setLoading(false)
     }
-  }, [folder])
+  }, [folder, filterOpts])
 
   useEffect(() => {
     mountedRef.current = true
@@ -94,7 +109,7 @@ export function useMailFolder(folder: string): UseMailFolderResult {
     loadingMoreRef.current = true
     setLoadingMore(true)
     try {
-      const data = await api.getMail(folder, { offset })
+      const data = await api.getMail(folder, { offset, ...filterOpts })
       if (!mountedRef.current || id !== requestRef.current) return
       const more = Array.isArray(data?.emails) ? data.emails : []
       const seen = new Set(emailsRef.current.map((e) => e.id))
@@ -111,7 +126,7 @@ export function useMailFolder(folder: string): UseMailFolderResult {
         setLoadingMore(false)
       }
     }
-  }, [folder, apply])
+  }, [folder, filterOpts, apply])
 
   const removeLocal = useCallback((ids: string[]) => {
     const set = new Set(ids)
@@ -130,6 +145,8 @@ export function useMailFolder(folder: string): UseMailFolderResult {
     const set = new Set(targets)
     targets.forEach((id) => pendingFlags.current.add(id))
     apply((prev) => prev.map((e) => (set.has(e.id) ? { ...e, [field]: value } : e)))
+    const unreadDelta = field === 'read' ? (value ? -targets.length : targets.length) : 0
+    if (unreadDelta) setUnreadTotal((n) => Math.max(0, n + unreadDelta))
     const release = () => targets.forEach((id) => pendingFlags.current.delete(id))
     try {
       await api.setFlags(targets, value ? { add: [FLAG_OF[field]] } : { remove: [FLAG_OF[field]] })
@@ -138,6 +155,7 @@ export function useMailFolder(folder: string): UseMailFolderResult {
     } catch {
       release()
       if (mountedRef.current && gen === requestRef.current) {
+        if (unreadDelta) setUnreadTotal((n) => Math.max(0, n - unreadDelta))
         apply((prev) => prev.map((e) => (set.has(e.id) && e[field] === value ? { ...e, [field]: !value } : e)))
       }
       return false
@@ -145,7 +163,7 @@ export function useMailFolder(folder: string): UseMailFolderResult {
   }, [apply])
 
   return {
-    emails, total, hasMore: emails.length < total, loading, loadingMore, error,
+    emails, total, unreadTotal, hasMore: emails.length < total, loading, loadingMore, error,
     reload: load, loadMore, removeLocal, setFlag,
   }
 }

@@ -68,12 +68,17 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   const navigate = useNavigate()
   // "starred" is a view over the inbox: the API has no starred-folder route.
   const apiFolder = folder === "starred" ? "inbox" : folder
-  const { emails: fetched, total, hasMore, loading, loadingMore, error, reload, loadMore, removeLocal, setFlag } = useMailFolder(apiFolder)
-  const emails = fetched
-    .map(toRow)
-    .filter((e) => folder !== "starred" || e.starred)
-  const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
   const [activeFilter, setActiveFilter] = useState("all")
+  // F6761: Starred/Unread are filtered by the server so every page of the
+  // folder is covered, not only the pages already loaded.
+  const wantStarred = folder === "starred" || activeFilter === "starred"
+  const wantUnread = activeFilter === "unread"
+  const { emails: fetched, total, unreadTotal, hasMore, loading, loadingMore, error, reload, loadMore, removeLocal, setFlag } = useMailFolder(
+    apiFolder,
+    { flag: wantStarred ? "flagged" : undefined, unread: wantUnread },
+  )
+  const emails = fetched.map(toRow)
+  const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<ViewMode>("list")
   const [sortBy, setSortBy] = useState<SortOption>("date")
   const mountedRef = useRef(true)
@@ -81,7 +86,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
-  useEffect(() => { setSelectedEmails(new Set()) }, [apiFolder])
+  useEffect(() => { setSelectedEmails(new Set()) }, [apiFolder, wantStarred, wantUnread])
   const [showWelcome, setShowWelcome] = useState(true)
 
   const toggleSelectAll = () => {
@@ -155,7 +160,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
       return 0
     })
 
-  const unreadCount = emails.filter((e) => !e.read).length
+  const unreadCount = unreadTotal
 
   const EmailRow = ({ email }: { email: Email }) => (
     <div
