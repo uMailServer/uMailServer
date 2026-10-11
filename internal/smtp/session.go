@@ -237,6 +237,10 @@ func (s *Session) HandleCommand(line string) error {
 	case "AUTH":
 		return s.handleAUTH(arg)
 	case "STARTTLS":
+		// RFC 3207 §4: STARTTLS takes no parameters (F6746).
+		if strings.TrimSpace(arg) != "" {
+			return s.WriteResponse(501, "5.5.4 Syntax error (no parameters allowed)")
+		}
 		return s.handleSTARTTLS()
 	default:
 		return s.WriteResponse(500, "5.5.2 Syntax error, command unrecognized")
@@ -786,45 +790,49 @@ func (s *Session) addTraceHeaders(ctx *MessageContext, data []byte) []byte {
 			spamScoreHeader := fmt.Sprintf("X-Spam-Score: %.1f\r\n", ctx.SpamResult.Score)
 			data = append([]byte(spamScoreHeader), data...)
 		}
-
-		// Add Received trace header
-		// RFC 3848: an authenticated session is ESMTPA / ESMTPSA (F6155).
-		proto := "ESMTP"
-		switch {
-		case s.isTLS && s.isAuth:
-			proto = "ESMTPSA"
-		case s.isTLS:
-			proto = "ESMTPS"
-		case s.isAuth:
-			proto = "ESMTPA"
+		// Fields stages asked to add (X-Virus for the AV "tag" action, F6614).
+		for _, h := range ctx.AddedHeaders {
+			data = append([]byte(h[0]+": "+h[1]+"\r\n"), data...)
 		}
-		// The "for" clause names a recipient only when there is exactly one:
-		// with several it would disclose one (possibly Bcc) recipient to all
-		// the others (RFC 5321 §4.4, F5674). An IPv6 peer is written as an
-		// address literal (RFC 5321 §4.1.3, F5678).
-		ipLit := s.clientIP().String()
-		if s.clientIP().To4() == nil {
-			ipLit = "IPv6:" + ipLit
-		}
-		var received string
-		forAddr := ""
-		if len(s.rcptTo) == 1 {
-			forAddr = s.rcptTo[0]
-			if len(s.rcptRaw) == 1 {
-				forAddr = s.rcptRaw[0]
-			}
-		}
-		if len(s.rcptTo) == 1 {
-			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
-				s.helloDomain, ipLit, hostname, proto, forAddr,
-				time.Now().Format(time.RFC1123Z))
-		} else {
-			received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
-				s.helloDomain, ipLit, hostname, proto,
-				time.Now().Format(time.RFC1123Z))
-		}
-		data = append([]byte(received), data...)
 	}
+
+	// Add Received trace header
+	// RFC 3848: an authenticated session is ESMTPA / ESMTPSA (F6155).
+	proto := "ESMTP"
+	switch {
+	case s.isTLS && s.isAuth:
+		proto = "ESMTPSA"
+	case s.isTLS:
+		proto = "ESMTPS"
+	case s.isAuth:
+		proto = "ESMTPA"
+	}
+	// The "for" clause names a recipient only when there is exactly one:
+	// with several it would disclose one (possibly Bcc) recipient to all
+	// the others (RFC 5321 §4.4, F5674). An IPv6 peer is written as an
+	// address literal (RFC 5321 §4.1.3, F5678).
+	ipLit := s.clientIP().String()
+	if s.clientIP().To4() == nil {
+		ipLit = "IPv6:" + ipLit
+	}
+	var received string
+	forAddr := ""
+	if len(s.rcptTo) == 1 {
+		forAddr = s.rcptTo[0]
+		if len(s.rcptRaw) == 1 {
+			forAddr = s.rcptRaw[0]
+		}
+	}
+	if len(s.rcptTo) == 1 {
+		received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s for <%s>; %s\r\n",
+			s.helloDomain, ipLit, hostname, proto, forAddr,
+			time.Now().Format(time.RFC1123Z))
+	} else {
+		received = fmt.Sprintf("Received: from %s ([%s]) by %s with %s; %s\r\n",
+			s.helloDomain, ipLit, hostname, proto,
+			time.Now().Format(time.RFC1123Z))
+	}
+	data = append([]byte(received), data...)
 
 	return data
 }
@@ -1291,7 +1299,16 @@ func (s *Session) handleBDAT(arg string) error {
 		return s.WriteResponse(501, "5.5.4 Syntax error in BDAT size parameter")
 	}
 
-	isLast := len(parts) > 1 && strings.ToUpper(parts[1]) == "LAST"
+	// BDAT size [LAST]: anything else is a syntax error, not a silent
+	// non-final chunk (F6745). The announced octets are still content.
+	if len(parts) > 2 || (len(parts) == 2 && strings.ToUpper(parts[1]) != "LAST") {
+		werr := s.WriteResponse(501, "5.5.4 Syntax error in BDAT parameters")
+		if derr := s.discardBDATChunk(size); derr != nil && werr == nil {
+			werr = derr
+		}
+		return werr
+	}
+	isLast := len(parts) == 2
 
 	// Initialize chunking buffer if needed
 	if s.bdatBuffer == nil {
@@ -1438,6 +1455,13 @@ func (s *Session) handleBDAT(arg string) error {
 func (s *Session) discardBDATChunk(size int) error {
 	if size <= 0 {
 		return nil
+	}
+	// A refused chunk may announce any size; do not sit reading it past the
+	// session's octet budget (F6744).
+	if int64(size) > s.server.config.maxSessionBytes()-s.bytesIn.Load() {
+		s.resetTransaction()
+		_ = s.WriteResponse(421, "4.7.0 Session data limit exceeded, closing connection")
+		return ErrSessionQuit
 	}
 	reader := s.reader
 	if reader == nil {

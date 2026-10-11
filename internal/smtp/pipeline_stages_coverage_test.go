@@ -382,13 +382,13 @@ func TestRBLStage_DifferentResultCodes(t *testing.T) {
 		resultIP string
 		minScore float64
 	}{
-		{"127.0.0.2", 3.0},  // confirmed spam source
-		{"127.0.0.3", 3.0},  // confirmed spam source (alt)
-		{"127.0.0.4", 2.0},  // spam domain
-		{"127.0.0.5", 2.5},  // phishing domain
-		{"127.0.0.6", 3.0},  // malware domain
-		{"127.0.0.7", 3.0},  // botnet server
-		{"127.0.0.99", 1.5}, // generic positive or unknown
+		{"127.0.0.2", 3.0}, // confirmed spam source
+		{"127.0.0.3", 3.0}, // confirmed spam source (alt)
+		{"127.0.0.4", 2.0}, // spam domain
+		{"127.0.0.5", 2.5}, // phishing domain
+		{"127.0.0.6", 3.0}, // malware domain
+		{"127.0.0.7", 3.0}, // botnet server
+		{"127.0.0.1", 1.5}, // generic positive (127.0.0.99 is undocumented and ignored, F6616)
 	}
 
 	for _, tc := range testCases {
