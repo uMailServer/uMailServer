@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/mail"
 	"strings"
 )
 
@@ -150,8 +151,13 @@ func (h *Handler) HandleAutodiscover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// F6551: use the bare address (not a "Name <addr>" form) and only
+	// answer for hostname-shaped domains.
+	if a, err := mail.ParseAddress(email); err == nil {
+		email = a.Address
+	}
 	domain := h.validator.ExtractDomain(email)
-	if domain == "" {
+	if domain == "" || !h.validator.IsValidDomain(domain) {
 		http.Error(w, "Invalid email domain", http.StatusBadRequest)
 		return
 	}

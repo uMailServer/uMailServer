@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -165,6 +167,17 @@ func (s *Server) checkRateLimit(ip string) bool {
 	return true
 }
 
+// tokenEqual compares a presented bearer token to a configured one in
+// constant time (F6550); an unset (empty) configured token never matches.
+func tokenEqual(got, want string) bool {
+	if want == "" {
+		return false
+	}
+	a := sha256.Sum256([]byte(got))
+	b := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
+}
+
 // maxRequestBodyBytes caps a single MCP request body (F5018).
 const maxRequestBodyBytes = 1 << 20
 
@@ -225,10 +238,10 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 			token = authHeader[len("Bearer "):]
 		}
 		valid := false
-		if s.authToken != "" && token == s.authToken {
+		if tokenEqual(token, s.authToken) {
 			valid = true
 		}
-		if s.adminAuthToken != "" && token == s.adminAuthToken {
+		if tokenEqual(token, s.adminAuthToken) {
 			valid = true
 			ctx = context.WithValue(ctx, adminCtxKeyVal, true)
 		}
