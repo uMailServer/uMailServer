@@ -251,8 +251,12 @@ func TestRound121StatusItems(t *testing.T) {
 			t.Errorf("%s: want BAD, got %q", bad, l)
 		}
 	}
-	out := strings.Join(c.cmd(`s6 STATUS inbox (UNSEEN MESSAGES HIGHESTMODSEQ)`), "\n")
-	if !strings.Contains(out, `* STATUS "INBOX" (UNSEEN 2 MESSAGES 2 HIGHESTMODSEQ `) {
+	// F6902 supersedes: HIGHESTMODSEQ needs CONDSTORE, which is not advertised.
+	if l := r121Last(c.cmd(`s7 STATUS inbox (UNSEEN HIGHESTMODSEQ)`)); !strings.Contains(l, " BAD") {
+		t.Fatalf("HIGHESTMODSEQ: want BAD, got %q", l)
+	}
+	out := strings.Join(c.cmd(`s6 STATUS inbox (UNSEEN MESSAGES)`), "\n")
+	if !strings.Contains(out, `* STATUS "INBOX" (UNSEEN 2 MESSAGES 2)`) {
 		t.Fatalf("STATUS: %s", out)
 	}
 }

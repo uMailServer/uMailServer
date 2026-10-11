@@ -479,8 +479,11 @@ type Session struct {
 
 	// Compression
 	compressActive bool
-	compressReader io.ReadCloser
-	compressWriter *flushWriter
+
+	// preAuthIdleCmds counts NOOP/CAPABILITY before authentication (F6900).
+	preAuthIdleCmds int
+	compressReader  io.ReadCloser
+	compressWriter  *flushWriter
 
 	// Enabled capabilities (via ENABLE command, RFC 5161)
 	enabledCaps map[string]bool
@@ -763,6 +766,8 @@ func (s *Session) sessionCapabilities() []string {
 			continue
 		case !authOK && strings.HasPrefix(c, "AUTH="):
 			continue
+		case c == "COMPRESS=DEFLATE" && s.compressActive:
+			continue // F6903: RFC 4978 - not offered once active
 		default:
 			caps = append(caps, c)
 		}
