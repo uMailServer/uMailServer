@@ -165,6 +165,8 @@ func (s *Server) indexOne(job indexJob) {
 // a deleted mailbox that the api package cannot reach itself (F6649c).
 type accountPurger struct{ srv *Server }
 
+func (p accountPurger) LockDelivery(email string) func() { return p.srv.lockDeliveryUser(email) }
+
 func (p accountPurger) PurgeAccount(email string) error {
 	s := p.srv
 	var errs []error

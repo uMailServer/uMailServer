@@ -22,6 +22,12 @@ type AccountPurger interface {
 	PurgeAccount(email string) error
 }
 
+// deliveryLocker is optionally implemented by the AccountPurger: it blocks
+// local deliveries to a mailbox while its data is being purged (F6880).
+type deliveryLocker interface {
+	LockDelivery(email string) func()
+}
+
 // SetAccountPurger installs the cascade hook run on account/domain deletion.
 func (s *Server) SetAccountPurger(p AccountPurger) { s.accountPurger = p }
 
@@ -37,6 +43,11 @@ func (s *Server) SetQuotaAdjustFunc(f func(user string, delta int64) error) {
 // installed AccountPurger owns.
 func (s *Server) purgeAccountData(email string) error {
 	var errs []error
+	// A delivery that passed its account check before the row was deleted
+	// would otherwise write after the purge and recreate the mailbox.
+	if dl, ok := s.accountPurger.(deliveryLocker); ok {
+		defer dl.LockDelivery(email)()
+	}
 	if s.mailDB != nil {
 		if err := s.mailDB.PurgeUser(email); err != nil {
 			errs = append(errs, err)

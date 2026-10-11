@@ -168,12 +168,13 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 	// them, so once any copy is stored the recipient counts as delivered; a
 	// failed folder falls back to an INBOX keep (unless INBOX is what failed).
 	var firstErr error
+	st := &copyState{}
 	stored := 0
 	var failedFolders []string
 	for _, f := range targets {
 		err := s.sieveFolderFault(f)
 		if err == nil {
-			err = s.deliverLocalFor(rcpt, user, domain, from, data, f)
+			err = s.deliverLocalCopies(rcpt, user, domain, from, data, st, f)
 		}
 		if err != nil {
 			s.logger.Warn("Sieve delivery to folder failed", "mailbox", mailbox, "folder", f, "error", err)
@@ -201,7 +202,7 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 	if !inboxStored {
 		err := s.sieveFolderFault("")
 		if err == nil {
-			err = s.deliverLocalFor(rcpt, user, domain, from, data, "")
+			err = s.deliverLocalCopies(rcpt, user, domain, from, data, st, "")
 		}
 		if err != nil {
 			s.logger.Warn("Sieve INBOX fallback failed; other copies were stored", "mailbox", mailbox, "error", err)
