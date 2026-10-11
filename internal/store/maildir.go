@@ -201,8 +201,9 @@ func (s *MaildirStore) Deliver(domain, user, folder string, msg []byte) (string,
 	newPath := filepath.Join(basePath, "new", uniqueName)
 
 	// Write file
-	if err := os.WriteFile(tmpPath, msg, 0o600); err != nil {
-		_ = os.Remove(tmpPath) // F5724: don't strand a partial body in tmp/
+	if err := writeNewFile(tmpPath, msg); err != nil {
+		// F5724: writeNewFile removes its own partial body; a collision
+		// (EEXIST) must not delete the other delivery's file.
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
@@ -244,8 +245,9 @@ func (s *MaildirStore) DeliverWithFlags(domain, user, folder string, msg []byte,
 	curPath := filepath.Join(basePath, "cur", uniqueName)
 
 	// Write file
-	if err := os.WriteFile(tmpPath, msg, 0o600); err != nil {
-		_ = os.Remove(tmpPath) // F5724: don't strand a partial body in tmp/
+	if err := writeNewFile(tmpPath, msg); err != nil {
+		// F5724: writeNewFile removes its own partial body; a collision
+		// (EEXIST) must not delete the other delivery's file.
 		return "", fmt.Errorf("failed to write message: %w", err)
 	}
 
@@ -625,4 +627,24 @@ func (s *MaildirStore) MessageCount(domain, user, folder string) (int, error) {
 		return 0, err
 	}
 	return len(messages), nil
+}
+
+// writeNewFile creates path exclusively (O_EXCL) so a unique-name collision,
+// e.g. a PID/counter repeat across restarts or a second process, fails
+// instead of silently truncating another message's tmp file (F6581).
+func writeNewFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }

@@ -1405,7 +1405,9 @@ func readLivePID(pidFile *server.PIDFile) (pid int, running bool, stale bool) {
 	if err != nil || pid <= 0 {
 		return 0, false, false
 	}
-	if !processAlive(pid) {
+	// A live PID that is not a umailserver process is a reused PID from a
+	// crashed server: stale, and must never be signalled (F6580).
+	if !processAlive(pid) || !processIsServer(pid) {
 		return pid, false, true
 	}
 	return pid, true, false

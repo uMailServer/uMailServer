@@ -17,3 +17,6 @@ func processAlive(pid int) bool {
 	_ = p.Release()
 	return true
 }
+
+// processIsServer cannot cheaply verify identity on Windows; trust the PID.
+func processIsServer(pid int) bool { return true }
