@@ -848,11 +848,15 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 	permanent := false
 	var lastErr string
 
+	seenMX := make(map[string]bool, len(mxRecords))
 	for _, mx := range mxRecords {
 		mx = strings.TrimSuffix(mx, ".")
-		if mx == "" {
+		// A host listed twice (or differing only by case) is asked once
+		// (F6392).
+		if mx == "" || seenMX[strings.ToLower(mx)] {
 			continue
 		}
+		seenMX[strings.ToLower(mx)] = true
 		if err := m.deliverToMXTraced(ctx, entry.From, entry.To[0], message, mx); err != nil {
 			lastErr = tagMX(err.Error(), mx)
 			// A 5yz reply is final (RFC 5321 §4.2.1); other MXs of the same
@@ -1631,6 +1635,11 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 
 // createFallbackBounce creates a simple bounce message when DSN generation fails
 func (m *Manager) createFallbackBounce(entry *db.QueueEntry, originalMsg []byte) []byte {
+	// CR/LF in the sender, recipient or error would inject header or DSN
+	// fields (F6391).
+	from := sanitizeDSNField(entry.From)
+	to0 := sanitizeDSNField(entry.To[0])
+	lastErr := sanitizeDSNField(entry.LastError)
 	bounceMsg := fmt.Sprintf(
 		"From: MAILER-DAEMON@umailserver\r\n"+
 			"To: %s\r\n"+
@@ -1660,13 +1669,13 @@ func (m *Manager) createFallbackBounce(entry *db.QueueEntry, originalMsg []byte)
 			"\r\n"+
 			"%s"+
 			"\r\n--boundary--\r\n",
-		entry.From,
+		from,
 		time.Now().Format(time.RFC1123Z),
-		entry.To[0],
-		entry.LastError,
+		to0,
+		lastErr,
 		entry.CreatedAt.Format(time.RFC1123Z),
-		entry.To[0],
-		entry.LastError,
+		to0,
+		lastErr,
 		string(originalMsg),
 	)
 	return []byte(bounceMsg)
