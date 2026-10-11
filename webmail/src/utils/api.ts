@@ -33,12 +33,19 @@ export interface SendMailRequest {
 
 export interface MailListResponse {
   emails?: Mail[]
+  /** Matching messages when a filter is active, else the folder size. */
   total?: number
+  /** Folder-wide unread / flagged counts (independent of the filter). */
+  unreadTotal?: number
+  starredTotal?: number
 }
 
 export interface MailListOptions {
   limit?: number
   offset?: number
+  /** Server-side filters applied before pagination. */
+  flag?: 'flagged'
+  unread?: boolean
 }
 
 export interface DraftRequest {
@@ -276,6 +283,8 @@ class API {
     const qs = new URLSearchParams()
     if (opts?.limit !== undefined) qs.set('limit', String(opts.limit))
     if (opts?.offset !== undefined) qs.set('offset', String(opts.offset))
+    if (opts?.flag) qs.set('flag', opts.flag)
+    if (opts?.unread) qs.set('unread', '1')
     const q = qs.toString()
     return this.get<MailListResponse>(`/mail/${encodeURIComponent(folder)}${q ? `?${q}` : ''}`)
   }
