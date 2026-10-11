@@ -28,6 +28,36 @@ export interface SendMailRequest {
   body: string
 }
 
+export interface MailListResponse {
+  emails?: Mail[]
+  total?: number
+}
+
+export interface MailListOptions {
+  limit?: number
+  offset?: number
+}
+
+export interface DraftRequest {
+  id?: string
+  to: string[]
+  cc?: string[]
+  bcc?: string[]
+  subject: string
+  body: string
+}
+
+export interface DraftResponse {
+  id: string
+  folder: string
+  saved: boolean
+}
+
+export const FLAG_SEEN = '\\Seen'
+export const FLAG_FLAGGED = '\\Flagged'
+export const FLAG_ANSWERED = '\\Answered'
+export const FLAG_DRAFT = '\\Draft'
+
 export interface AuthLoginRequest {
   email: string
   password: string
@@ -237,8 +267,46 @@ class API {
   }
 
   // Mail
-  async getMail(folder: string): Promise<{ emails?: Mail[] }> {
-    return this.get<{ emails?: Mail[] }>(`/mail/${encodeURIComponent(folder)}`)
+  // limit (1-500, default 100) and offset page the folder; `total` is the
+  // folder size. Without options the bare endpoint is requested.
+  async getMail(folder: string, opts?: MailListOptions): Promise<MailListResponse> {
+    const qs = new URLSearchParams()
+    if (opts?.limit !== undefined) qs.set('limit', String(opts.limit))
+    if (opts?.offset !== undefined) qs.set('offset', String(opts.offset))
+    const q = qs.toString()
+    return this.get<MailListResponse>(`/mail/${encodeURIComponent(folder)}${q ? `?${q}` : ''}`)
+  }
+
+  // GET /mail/message: read-only, does not mark the message read.
+  async getMessage(id: string, folder?: string): Promise<Mail> {
+    const qs = new URLSearchParams({ id })
+    if (folder) qs.set('folder', folder)
+    return this.get<Mail>(`/mail/message?${qs.toString()}`)
+  }
+
+  // POST /mail/flags. Returns the ids the server updated.
+  async setFlags(
+    ids: string | string[],
+    change: { add?: string[]; remove?: string[]; folder?: string },
+  ): Promise<string[]> {
+    const list = Array.isArray(ids) ? ids : [ids]
+    if (list.length === 0) return []
+    const body: Record<string, unknown> = list.length === 1 ? { id: list[0] } : { ids: list }
+    if (change.folder) body.folder = change.folder
+    if (change.add?.length) body.add = change.add
+    if (change.remove?.length) body.remove = change.remove
+    const res = await this.post<{ updated?: string[] } | null>('/mail/flags', body)
+    return res?.updated ?? []
+  }
+
+  // Creates a draft, or replaces draft `id` (which then gets a NEW id because
+  // ids are content hashes: callers must adopt the returned id).
+  async saveDraft(draft: DraftRequest): Promise<DraftResponse> {
+    const res = draft.id
+      ? await this.put<DraftResponse>('/mail/draft', draft)
+      : await this.post<DraftResponse>('/mail/draft', draft)
+    if (!res || typeof res.id !== 'string' || !res.id) throw new Error('Draft was not saved')
+    return res
   }
 
   async sendMail(mail: SendMailRequest): Promise<void> {

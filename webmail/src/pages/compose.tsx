@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { ArrowLeft, Send, X, Maximize2, Minimize2 } from "lucide-react"
+import { ArrowLeft, Send, X, Maximize2, Minimize2, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import api from "@/utils/api"
+import api, { FLAG_ANSWERED } from "@/utils/api"
 
 const EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
 
@@ -84,22 +84,84 @@ export function ComposePage() {
     return () => { mounted.current = false }
   }, [])
 
-  // Prefill from an existing draft (GET /mail/drafts; no get-by-id exists).
+  // Draft state. Edited drafts get a NEW id from the server (ids are content
+  // hashes), so the id lives in a ref and is replaced by every save response.
+  const draftIdRef = useRef<string | null>(draftId)
+  const savedSnapshot = useRef<string>(JSON.stringify({ to, cc, bcc, subject, body }))
+  const saveInFlight = useRef<Promise<void> | null>(null)
+  const sentRef = useRef(false)
+  const loadingDraftRef = useRef(!!draftId)
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState<boolean>(false)
+  const origId = searchParams.get("origId")
+  const origFolder = searchParams.get("origFolder") || undefined
+
+  // Prefill from an existing draft via GET /mail/message.
   useEffect(() => {
     if (!draftId) return
     let cancelled = false
-    api.getMail("drafts").then((data) => {
+    draftIdRef.current = draftId
+    loadingDraftRef.current = true
+    api.getMessage(draftId, "drafts").then((d) => {
       if (cancelled) return
-      const d = (data?.emails || []).find((m) => m.id === draftId)
       if (!d) { toast.error("Draft not found"); return }
-      setTo(d.to || [])
-      setSubject(d.subject || "")
-      setBody(d.body || "")
+      const next = { to: d.to || [], cc: [] as string[], bcc: [] as string[], subject: d.subject || "", body: d.body || "" }
+      savedSnapshot.current = JSON.stringify(next)
+      setTo(next.to)
+      setSubject(next.subject)
+      setBody(next.body)
+      loadingDraftRef.current = false
     }).catch((err) => {
       if (!cancelled) toast.error(err instanceof Error && err.message ? err.message : "Failed to load draft")
     })
     return () => { cancelled = true }
   }, [draftId])
+
+  // Saves the current content as a draft. Only one request is ever in flight;
+  // a save requested meanwhile re-runs afterwards if content still differs.
+  const saveDraft = async (manual = false): Promise<void> => {
+    if (sentRef.current || loadingDraftRef.current) return
+    if (saveInFlight.current) {
+      await saveInFlight.current
+      if (manual) return saveDraft(true)
+      return
+    }
+    const cur = latest.current
+    const snap = JSON.stringify(cur)
+    if (snap === savedSnapshot.current) {
+      if (manual) toast.info("No changes to save")
+      return
+    }
+    if (!cur.to.length && !cur.cc.length && !cur.bcc.length && !cur.subject.trim() && !cur.body.trim()) return
+    const run = (async () => {
+      if (mounted.current) setSaving(true)
+      try {
+        const res = await api.saveDraft({
+          ...(draftIdRef.current ? { id: draftIdRef.current } : {}),
+          to: cur.to, cc: cur.cc, bcc: cur.bcc, subject: cur.subject, body: cur.body,
+        })
+        draftIdRef.current = res.id
+        savedSnapshot.current = snap
+        if (mounted.current) setSavedAt(true)
+        if (manual && mounted.current) toast.success("Draft saved")
+      } catch (err) {
+        if (manual && mounted.current) toast.error(err instanceof Error && err.message ? err.message : "Failed to save draft")
+      } finally {
+        saveInFlight.current = null
+        if (mounted.current) setSaving(false)
+      }
+    })()
+    saveInFlight.current = run
+    await run
+  }
+  const saveDraftRef = useRef(saveDraft)
+  saveDraftRef.current = saveDraft
+
+  // Autosave 2s after the last edit; the snapshot comparison skips unchanged content.
+  useEffect(() => {
+    const t = setTimeout(() => { void saveDraftRef.current() }, 2000)
+    return () => clearTimeout(t)
+  }, [to, cc, bcc, subject, body])
 
   const handleSend = async () => {
     if (sendingRef.current) return
@@ -109,6 +171,10 @@ export function ComposePage() {
     sendingRef.current = true
     setSending(true)
     try {
+      // Stop autosave from recreating the draft, and wait for a pending save
+      // so that the id we delete below is the final one.
+      sentRef.current = true
+      if (saveInFlight.current) await saveInFlight.current
       await api.sendMail({
         to: cur.to,
         ...(cur.cc.length ? { cc: cur.cc } : {}),
@@ -116,10 +182,16 @@ export function ComposePage() {
         subject: cur.subject,
         body: cur.body,
       })
+      // Best-effort follow-ups: the message is already sent.
+      const tasks: Promise<unknown>[] = []
+      if (draftIdRef.current) tasks.push(api.deleteMail(draftIdRef.current).catch(() => undefined))
+      if (origId) tasks.push(api.setFlags(origId, { add: [FLAG_ANSWERED], folder: origFolder }).catch(() => undefined))
+      await Promise.all(tasks)
       if (!mounted.current) return
       toast.success("Email sent")
       navigate("/sent")
     } catch (err) {
+      sentRef.current = false
       if (mounted.current) toast.error(err instanceof Error && err.message ? err.message : "Failed to send email")
     } finally {
       sendingRef.current = false
@@ -141,7 +213,7 @@ export function ComposePage() {
   }, [])
 
   const handleDiscard = () => {
-    if ((subject || body || to.length > 0) && !confirm("Discard this message? Drafts cannot be saved by this server.")) return
+    if (JSON.stringify(latest.current) !== savedSnapshot.current && (subject || body || to.length > 0) && !confirm("Discard this message? Unsaved changes will be lost.")) return
     navigate("/inbox")
   }
 
@@ -160,6 +232,10 @@ export function ComposePage() {
           <Button variant="ghost" size="icon" onClick={() => setIsFullscreen(!isFullscreen)}
             title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => void saveDraft(true)} disabled={saving || sending}>
+            <Save className="h-4 w-4" />
+            {saving ? "Saving..." : "Save draft"}
           </Button>
           <Button className="gap-2" onClick={() => void handleSend()} disabled={sending}>
             <Send className="h-4 w-4" />
@@ -193,7 +269,7 @@ export function ComposePage() {
       </div>
 
       <div className="flex items-center justify-end border-t px-4 py-2 text-sm text-muted-foreground">
-        Press Ctrl/⌘ + Enter to send
+        {savedAt ? "Draft autosaved. " : ""}Press Ctrl/⌘ + Enter to send
       </div>
     </div>
   )

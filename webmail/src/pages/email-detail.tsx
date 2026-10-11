@@ -13,9 +13,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { sanitizeHTML } from "@/utils/sanitize"
-import api, { Mail } from "@/utils/api"
+import api, { Mail, ApiError, FLAG_SEEN, FLAG_FLAGGED } from "@/utils/api"
 
-const SEARCH_FOLDERS = ["inbox", "spam", "sent", "drafts", "trash"]
 const LOOKS_LIKE_HTML = /<\s*(?:p|div|br|html|body|table|span|a|img|ul|ol|h[1-6]|b|i|strong|em)\b/i
 
 type LoadState =
@@ -30,31 +29,37 @@ export function EmailDetailPage() {
   const [state, setState] = useState<LoadState>({ status: "loading" })
   const [busy, setBusy] = useState(false)
   const mountedRef = useRef(true)
+  const starBusyRef = useRef(false)
 
   useEffect(() => {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
 
-  // The API has no get-by-id route, so locate the message in the folder
-  // listings. `cancelled` discards results of a superseded id/unmounted page.
+  // GET /mail/message is read-only; mark read explicitly via /mail/flags.
+  // `cancelled` discards results of a superseded id/unmounted page.
   useEffect(() => {
     let cancelled = false
     setState({ status: "loading" })
+    if (!id) { setState({ status: "notfound" }); return }
     ;(async () => {
       try {
-        for (const folder of SEARCH_FOLDERS) {
-          const data = await api.getMail(folder)
-          if (cancelled) return
-          const found = (data?.emails ?? []).find((m) => m.id === id)
-          if (found) {
-            setState({ status: "ready", mail: found, folder })
-            return
+        const mail = await api.getMessage(id)
+        if (cancelled) return
+        if (!mail || typeof mail !== "object") { setState({ status: "notfound" }); return }
+        const folder = String(mail.folder || "inbox").toLowerCase()
+        setState({ status: "ready", mail, folder })
+        if (!mail.read) {
+          try {
+            await api.setFlags(mail.id, { add: [FLAG_SEEN], folder })
+            if (!cancelled) setState((s) => (s.status === "ready" && s.mail.id === mail.id ? { ...s, mail: { ...s.mail, read: true } } : s))
+          } catch {
+            // Best effort: the message stays displayed as unread on the server.
           }
         }
-        if (!cancelled) setState({ status: "notfound" })
       } catch (err) {
         if (cancelled) return
+        if (err instanceof ApiError && err.status === 404) { setState({ status: "notfound" }); return }
         setState({ status: "error", message: err instanceof Error && err.message ? err.message : "Failed to load message" })
       }
     })()
@@ -87,6 +92,23 @@ export function EmailDetailPage() {
     content: mail.body ?? "",
   }
   const isStarred = mail.starred
+  const toggleStar = async () => {
+    if (starBusyRef.current) return
+    starBusyRef.current = true
+    const next = !mail.starred
+    const patch = (v: boolean) => setState((s) => (s.status === "ready" && s.mail.id === mail.id ? { ...s, mail: { ...s.mail, starred: v } } : s))
+    patch(next)
+    try {
+      await api.setFlags(mail.id, next ? { add: [FLAG_FLAGGED], folder } : { remove: [FLAG_FLAGGED], folder })
+    } catch (err) {
+      if (mountedRef.current) {
+        patch(!next)
+        toast.error(err instanceof Error && err.message ? err.message : "Could not update star")
+      }
+    } finally {
+      starBusyRef.current = false
+    }
+  }
 
   const handleDelete = async () => {
     if (busy) return
@@ -118,7 +140,9 @@ export function EmailDetailPage() {
         </div>
 
         <div className="flex items-center gap-1">
-          <Star aria-label={isStarred ? "Starred" : "Not starred"} className={cn("mx-2 h-5 w-5", isStarred ? "fill-amber-400 text-amber-400" : "text-muted-foreground/40")} />
+          <Button variant="ghost" size="icon" aria-label={isStarred ? "Starred" : "Not starred"} aria-pressed={isStarred} onClick={() => void toggleStar()}>
+            <Star className={cn("h-5 w-5", isStarred ? "fill-amber-400 text-amber-400" : "text-muted-foreground/40")} />
+          </Button>
           <Button variant="ghost" size="icon" title="Print" onClick={() => window.print()}>
             <Printer className="h-5 w-5" />
           </Button>
@@ -182,7 +206,7 @@ export function EmailDetailPage() {
         <Button
           className="gap-2"
           onClick={() =>
-            navigate(`/compose?replyTo=${encodeURIComponent(email.fromEmail)}&subject=${encodeURIComponent("Re: " + email.subject)}`)
+            navigate(`/compose?replyTo=${encodeURIComponent(email.fromEmail)}&subject=${encodeURIComponent("Re: " + email.subject)}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
           }
         >
           <Reply className="h-4 w-4" />
@@ -192,7 +216,7 @@ export function EmailDetailPage() {
           variant="outline"
           className="gap-2"
           onClick={() =>
-            navigate(`/compose?forward=true&subject=${encodeURIComponent("Fwd: " + email.subject)}`)
+            navigate(`/compose?forward=true&subject=${encodeURIComponent("Fwd: " + email.subject)}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
           }
         >
           <Forward className="h-4 w-4" />

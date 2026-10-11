@@ -5,8 +5,6 @@ import {
   Trash2,
   Paperclip,
   RefreshCw,
-  ChevronLeft,
-  ChevronRight,
   Filter,
   MoreHorizontal,
   List,
@@ -70,7 +68,7 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   const navigate = useNavigate()
   // "starred" is a view over the inbox: the API has no starred-folder route.
   const apiFolder = folder === "starred" ? "inbox" : folder
-  const { emails: fetched, loading, error, reload, removeLocal } = useMailFolder(apiFolder)
+  const { emails: fetched, total, hasMore, loading, loadingMore, error, reload, loadMore, removeLocal, setFlag } = useMailFolder(apiFolder)
   const emails = fetched
     .map(toRow)
     .filter((e) => folder !== "starred" || e.starred)
@@ -104,8 +102,17 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
     setSelectedEmails(newSelected)
   }
 
-  // The server exposes no flag/read endpoint, so star and read state are
-  // display-only here; only move/delete are real operations.
+  const flag = async (ids: string[], field: "read" | "starred", value: boolean) => {
+    const ok = await setFlag(ids, field, value)
+    if (!ok && mountedRef.current) toast.error("Could not update message flags")
+    return ok
+  }
+
+  const markAllRead = () => {
+    const ids = emails.filter((e) => !e.read).map((e) => e.id)
+    if (ids.length) void flag(ids, "read", true)
+  }
+
   const handleRefresh = () => {
     void reload()
   }
@@ -166,7 +173,15 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
         onClick={(e) => e.stopPropagation()}
       />
 
-      <Star className={cn("h-4 w-4 shrink-0", email.starred ? "fill-current text-amber-500" : "text-muted-foreground/40")} />
+      <button
+        type="button"
+        aria-label={email.starred ? "Unstar" : "Star"}
+        aria-pressed={email.starred}
+        className="shrink-0"
+        onClick={(e) => { e.stopPropagation(); void flag([email.id], "starred", !email.starred) }}
+      >
+        <Star className={cn("h-4 w-4", email.starred ? "fill-current text-amber-500" : "text-muted-foreground/40")} />
+      </button>
 
       <div className={cn("flex-1 min-w-0", viewMode === "compact" && "flex items-center gap-4")}>
         <div className="flex items-center gap-2">
@@ -242,6 +257,9 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
                 {selectedEmails.size} selected
               </span>
               <Separator orientation="vertical" className="h-4" />
+              <Button variant="ghost" size="sm" onClick={() => void flag(Array.from(selectedEmails), "read", true)}>
+                Mark read
+              </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete()} title="Delete">
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -256,6 +274,9 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
             <Badge variant="secondary" className="ml-2">
               {unreadCount} unread
             </Badge>
+          )}
+          {unreadCount > 0 && selectedEmails.size === 0 && (
+            <Button variant="ghost" size="sm" onClick={markAllRead}>Mark all read</Button>
           )}
         </div>
 
@@ -355,15 +376,13 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
       <div className="flex items-center justify-between">
         <span className="text-sm text-muted-foreground">
           {filteredEmails.length} message{filteredEmails.length !== 1 ? "s" : ""}
+          {hasMore && ` (${fetched.length} of ${total} loaded)`}
         </span>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" disabled>
-            <ChevronLeft className="h-4 w-4" />
+        {hasMore && (
+          <Button variant="outline" size="sm" disabled={loadingMore} onClick={() => void loadMore()}>
+            {loadingMore ? "Loading..." : "Load more"}
           </Button>
-          <Button variant="outline" size="icon" disabled>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
+        )}
       </div>
     </div>
   )

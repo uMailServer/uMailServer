@@ -26,7 +26,7 @@ const errMsg = (e: unknown) => (e instanceof Error && e.message ? e.message : "O
 /** Real-API folder list shared by Sent, Drafts and Trash. */
 export function MailFolderList({ folder, icon: Icon, emptyTitle, emptyText, showRecipients, restoreTo }: Props) {
   const navigate = useNavigate()
-  const { emails, loading, error, reload, removeLocal } = useMailFolder(folder)
+  const { emails, total, hasMore, loading, loadingMore, error, reload, loadMore, removeLocal } = useMailFolder(folder)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const mounted = useRef(true)
@@ -176,7 +176,16 @@ export function MailFolderList({ folder, icon: Icon, emptyTitle, emptyText, show
       </div>
 
       {!loading && !error && (
-        <span className="text-sm text-muted-foreground">{label(emails.length)}</span>
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">
+            {label(emails.length)}{hasMore && ` of ${total}`}
+          </span>
+          {hasMore && (
+            <Button variant="outline" size="sm" disabled={loadingMore} onClick={() => void loadMore()}>
+              {loadingMore ? "Loading..." : "Load more"}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   )
