@@ -69,3 +69,8 @@ func TestHandleDATAGeneratesDistinctMessageIDsPerTransaction(t *testing.T) {
 }
 
 func (c *messageIDCaptureConn) SetReadDeadline(time.Time) error { return nil }
+
+// RemoteAddr: the Received trace header (always added, F6617) reads the peer.
+func (c *messageIDCaptureConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 25}
+}

@@ -358,13 +358,20 @@ func (m *Manager) ShouldSendVacation(sender string, days int) bool {
 	return time.Since(lastSent) >= interval
 }
 
-// RecordVacationSent records that we sent a vacation reply to this sender
-func (m *Manager) RecordVacationSent(sender string) {
-	m.vacationCacheMu.Lock()
-	defer m.vacationCacheMu.Unlock()
-
-	// LRU eviction: remove oldest 25% if at capacity
-	if len(m.vacationCache) >= m.vacationMaxSize {
+// touchVacationLocked records a reply to sender now. A sender already cached
+// moves to the most-recent end of the LRU list instead of being appended a
+// second time, so the list never outgrows the cache (F6770). The caller
+// holds vacationCacheMu.
+func (m *Manager) touchVacationLocked(sender string) {
+	if _, ok := m.vacationCache[sender]; ok {
+		for i, s := range m.vacationAccessor {
+			if s == sender {
+				m.vacationAccessor = append(m.vacationAccessor[:i], m.vacationAccessor[i+1:]...)
+				break
+			}
+		}
+	} else if len(m.vacationCache) >= m.vacationMaxSize {
+		// LRU eviction: remove oldest 25% if at capacity
 		removeCount := m.vacationMaxSize / 4
 		for i := 0; i < removeCount && len(m.vacationAccessor) > 0; i++ {
 			oldest := m.vacationAccessor[0]
@@ -375,6 +382,14 @@ func (m *Manager) RecordVacationSent(sender string) {
 
 	m.vacationCache[sender] = time.Now()
 	m.vacationAccessor = append(m.vacationAccessor, sender)
+}
+
+// RecordVacationSent records that we sent a vacation reply to this sender
+func (m *Manager) RecordVacationSent(sender string) {
+	m.vacationCacheMu.Lock()
+	defer m.vacationCacheMu.Unlock()
+
+	m.touchVacationLocked(sender)
 }
 
 // CheckAndRecordVacation atomically checks if we should send a vacation reply and records that we will.
@@ -404,18 +419,7 @@ func (m *Manager) CheckAndRecordVacationFor(sender string, interval time.Duratio
 		}
 	}
 
-	// LRU eviction: remove oldest 25% if at capacity
-	if len(m.vacationCache) >= m.vacationMaxSize {
-		removeCount := m.vacationMaxSize / 4
-		for i := 0; i < removeCount && len(m.vacationAccessor) > 0; i++ {
-			oldest := m.vacationAccessor[0]
-			m.vacationAccessor = m.vacationAccessor[1:]
-			delete(m.vacationCache, oldest)
-		}
-	}
-
-	m.vacationCache[sender] = time.Now()
-	m.vacationAccessor = append(m.vacationAccessor, sender)
+	m.touchVacationLocked(sender)
 	return true
 }
 

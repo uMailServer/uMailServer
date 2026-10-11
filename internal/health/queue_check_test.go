@@ -99,7 +99,7 @@ func TestQueueCheck_Error(t *testing.T) {
 		t.Errorf("expected unhealthy status on error, got %s", check.Status)
 	}
 
-	if check.Message != "failed to get queue stats: connection failed" {
+	if check.Message != "failed to get queue stats" {
 		t.Errorf("unexpected error message: %s", check.Message)
 	}
 }
@@ -128,7 +128,7 @@ func TestMessageStoreCheck_Error(t *testing.T) {
 		t.Errorf("expected unhealthy status, got %s", check.Status)
 	}
 
-	if check.Message != "message store ping failed: ping failed" {
+	if check.Message != "message store ping failed" {
 		t.Errorf("unexpected error message: %s", check.Message)
 	}
 }
@@ -198,7 +198,7 @@ func TestSearchIndexCheck_PingError(t *testing.T) {
 		t.Errorf("expected unhealthy status on ping error, got %s", check.Status)
 	}
 
-	if check.Message != "search index ping failed: search index unavailable" {
+	if check.Message != "search index ping failed" {
 		t.Errorf("unexpected error message: %s", check.Message)
 	}
 }

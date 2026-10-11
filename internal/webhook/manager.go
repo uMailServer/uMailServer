@@ -695,7 +695,7 @@ func (m *Manager) eventMatches(patterns []string, eventType string) bool {
 			return true
 		}
 		// Support wildcards like "mail.*"
-		if len(pattern) > 2 && pattern[len(pattern)-1] == '*' {
+		if len(pattern) > 1 && pattern[len(pattern)-1] == '*' { // "m*" is a prefix wildcard too (F6774)
 			prefix := pattern[:len(pattern)-1]
 			if len(eventType) >= len(prefix) && eventType[:len(prefix)] == prefix {
 				return true

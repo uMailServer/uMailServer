@@ -168,10 +168,7 @@ func (r *rotatingWriter) cleanup() {
 	if r.maxBackups <= 0 && r.maxAge <= 0 {
 		return
 	}
-	matches, err := filepath.Glob(r.filename + ".*")
-	if err != nil {
-		return
-	}
+	matches := r.backupMatches()
 
 	validMatches := r.filterValidMatches(matches)
 	r.cleanupByAge(validMatches)
@@ -179,6 +176,24 @@ func (r *rotatingWriter) cleanup() {
 	if r.maxBackups > 0 {
 		r.cleanupByCount()
 	}
+}
+
+// backupMatches lists rotated files by literal name prefix; filepath.Glob
+// would misread metacharacters in the configured path and never match (F6750).
+func (r *rotatingWriter) backupMatches() []string {
+	dir := filepath.Dir(r.filename)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	prefix := filepath.Base(r.filename) + "."
+	var out []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), prefix) {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
 }
 
 func (r *rotatingWriter) filterValidMatches(matches []string) []string {
@@ -205,11 +220,7 @@ func (r *rotatingWriter) cleanupByAge(matches []string) {
 }
 
 func (r *rotatingWriter) cleanupByCount() {
-	matches, err := filepath.Glob(r.filename + ".*")
-	if err != nil {
-		return
-	}
-	validMatches := r.filterValidMatches(matches)
+	validMatches := r.filterValidMatches(r.backupMatches())
 	if len(validMatches) <= r.maxBackups {
 		return
 	}

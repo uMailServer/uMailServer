@@ -243,28 +243,21 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, name strin
 		}
 		return
 	}
-	if accts, err := s.db.ListAccountsByDomain(name); err == nil {
-		hasAdmin := false
-		for _, a := range accts {
-			if a.IsAdmin && a.IsActive {
-				hasAdmin = true
-			}
+	accts, _ := s.db.ListAccountsByDomain(name)
+	// F6710: the last-admin check runs inside the delete transaction.
+	if err := s.db.DeleteDomainKeepAdmin(name); err != nil {
+		if errors.Is(err, db.ErrLastActiveAdmin) {
+			s.sendError(w, http.StatusConflict, "cannot delete the domain holding the last active administrator")
+		} else {
+			s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
 		}
-		if hasAdmin {
-			others, oerr := s.otherActiveAdmins(func(d, _ string) bool { return d == name })
-			if oerr != nil {
-				s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
-				return
-			}
-			if !others {
-				s.sendError(w, http.StatusConflict, "cannot delete the domain holding the last active administrator")
-				return
-			}
-		}
-	}
-	if err := s.db.DeleteDomain(name); err != nil {
-		s.sendError(w, http.StatusInternalServerError, "failed to delete domain")
 		return
+	}
+	// F6649c: the cascade removed the accounts; remove their mailbox data too.
+	for _, a := range accts {
+		if err := s.purgeAccountData(a.LocalPart + "@" + name); err != nil && s.logger != nil {
+			s.logger.Error("account data purge failed", "account", a.LocalPart+"@"+name, "error", err)
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

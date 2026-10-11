@@ -110,10 +110,8 @@ func TestR187_ShutdownDuringIdleAndData(t *testing.T) {
 	// msgStore+storageDB directly) never calls imap NotificationHub, so an
 	// IDLE client (and the SSE /api/v1/events stream) is not told about it.
 	e.inbound("s@ext.example", []string{"bob@test.com"}, mk187("live", "idl1"))
-	if r187Known(t, "F6649d") {
-		if l := idleDrain(ic, 2*time.Second); !strings.Contains(l, "EXISTS") {
-			t.Errorf("IDLE push after SMTP delivery: %q want EXISTS", l)
-		}
+	if l := idleDrain(ic, 2*time.Second); !strings.Contains(l, "EXISTS") {
+		t.Errorf("IDLE push after SMTP delivery: %q want EXISTS", l)
 	}
 	c := e2eDial(t, e.smtp, false)
 	c.expectSMTP(220)
@@ -211,7 +209,7 @@ func TestR187_AccountDeletionCascade(t *testing.T) {
 	// Mail to the deleted address is refused/dropped, not silently stored.
 	// Mailbox files must be gone (F6649c product check; see ledger).
 	n, files := e.diskBytes("bob@test.com")
-	if n != 0 && r187Known(t, "F6649c") {
+	if n != 0 {
 		t.Errorf("mailbox files survive account deletion: %d bytes %v", n, files)
 	}
 	// Re-create the same address.
@@ -229,10 +227,10 @@ func TestR187_AccountDeletionCascade(t *testing.T) {
 	rc.line()
 	rc.imapCmd("l", `LOGIN "bob@test.com" "Br4nd-New-pass!z"`)
 	o := rc.imapCmd("s", "SELECT INBOX")
-	if r187Known(t, "F6649c") && !strings.Contains(o, "* 0 EXISTS") {
+	if !strings.Contains(o, "* 0 EXISTS") {
 		t.Errorf("re-created account sees the deleted account's mail: %s", o)
 	}
-	if o := e.pop3Count("bob@test.com", "Br4nd-New-pass!z"); r187Known(t, "F6649c") && o != 0 {
+	if o := e.pop3Count("bob@test.com", "Br4nd-New-pass!z"); o != 0 {
 		t.Errorf("POP3 of re-created account sees %d old messages", o)
 	}
 }

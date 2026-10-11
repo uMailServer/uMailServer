@@ -37,6 +37,8 @@ func (s *Server) startAPI() error {
 		s.jmapServer.SetKeyFunc(s.apiServer.JWTKeyFunc)
 	}
 	s.apiServer.SetSearchService(s.searchSvc)
+	s.apiServer.SetAccountPurger(accountPurger{srv: s}) // F6649c
+	s.apiServer.SetQuotaAdjustFunc(s.quotaAdjust)       // F6680
 	if s.pushSvc != nil {
 		s.apiServer.SetPushService(push.NewAPIAdapter(s.pushSvc))
 	}

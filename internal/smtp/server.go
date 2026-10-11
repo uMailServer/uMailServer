@@ -32,6 +32,7 @@ type Server struct {
 	listener    net.Listener
 	listeners   []net.Listener
 	connections map[string]*Session
+	perIPConns  map[string]int // concurrent connections per client IP (F6615), guarded by connMu
 	connMu      sync.RWMutex
 	listenersMu sync.Mutex // protects listeners slice
 	running     atomic.Bool
@@ -203,8 +204,11 @@ type Config struct {
 	MaxMessageSize int64
 	MaxRecipients  int
 	MaxConnections int
-	ReadTimeout    time.Duration
-	WriteTimeout   time.Duration
+	// MaxConnectionsPerIP caps concurrent connections from one client IP
+	// (F6615); 0 selects DefaultMaxConnectionsPerIP, negative disables it.
+	MaxConnectionsPerIP int
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
 	// DataTimeout is the absolute time allowed for one DATA phase, however
 	// steadily the client trickles bytes (each line resets ReadTimeout).
 	// 0 selects max(10*ReadTimeout, 10m).
@@ -227,6 +231,20 @@ type Config struct {
 	RequireAuth  bool // Reject MAIL FROM if not authenticated (submission mode)
 	RequireTLS   bool // Require TLS before AUTH
 	IsSubmission bool // Submission server mode (port 587/465)
+}
+
+// DefaultMaxConnectionsPerIP is the per-IP concurrent connection cap used
+// when Config.MaxConnectionsPerIP is 0.
+const DefaultMaxConnectionsPerIP = 50
+
+func (c *Config) maxConnectionsPerIP() int {
+	switch {
+	case c.MaxConnectionsPerIP < 0:
+		return 0
+	case c.MaxConnectionsPerIP == 0:
+		return DefaultMaxConnectionsPerIP
+	}
+	return c.MaxConnectionsPerIP
 }
 
 // NewServer creates a new SMTP server
@@ -454,6 +472,33 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 		_ = conn.Close()
 		return
+	}
+
+	// Enforce the per-IP concurrent connection cap (F6615). The slot is
+	// reserved under connMu so concurrent accepts cannot overshoot it.
+	if limit := s.config.maxConnectionsPerIP(); limit > 0 {
+		peer := getIPFromAddr(conn.RemoteAddr().String())
+		s.connMu.Lock()
+		if s.perIPConns[peer] >= limit {
+			s.connMu.Unlock()
+			_, _ = conn.Write([]byte("421 4.7.0 Too many connections from your IP, try again later\r\n"))
+			_ = conn.Close()
+			return
+		}
+		if s.perIPConns == nil {
+			s.perIPConns = make(map[string]int)
+		}
+		s.perIPConns[peer]++
+		s.connMu.Unlock()
+		defer func() {
+			s.connMu.Lock()
+			if s.perIPConns[peer] <= 1 {
+				delete(s.perIPConns, peer)
+			} else {
+				s.perIPConns[peer]--
+			}
+			s.connMu.Unlock()
+		}()
 	}
 
 	// Check rate limit

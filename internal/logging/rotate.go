@@ -23,6 +23,8 @@ type RotatingWriter struct {
 	mu   sync.Mutex
 	file *os.File
 	size int64
+
+	closed bool
 }
 
 const defaultMaxSizeMB = 100
@@ -88,6 +90,10 @@ func (w *RotatingWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	if w.closed {
+		return 0, os.ErrClosed // F6751: never reopen after Close
+	}
+
 	// Check if rotation is needed
 	if w.size > 0 && w.size+int64(len(p)) > w.maxSize {
 		if err := w.rotate(); err != nil {
@@ -117,8 +123,11 @@ func (w *RotatingWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	w.closed = true
 	if w.file != nil {
-		return w.file.Close()
+		f := w.file
+		w.file = nil
+		return f.Close()
 	}
 	return nil
 }

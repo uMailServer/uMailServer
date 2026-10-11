@@ -197,23 +197,26 @@ func cmdServe(args []string) {
 		cfg.Server.DataDir = dataDir
 	}
 
+	// Create server
+	srv, err := server.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create server: %s\n", describeStartupError(err))
+		os.Exit(1)
+	}
+
 	// A reload signal must not kill the daemon (default SIGHUP action is to
-	// terminate, skipping graceful shutdown). Live reload is not supported, so
-	// say so and keep serving (F6216).
+	// terminate, skipping graceful shutdown). Manual TLS certificates are
+	// reloaded in place; other config changes need a restart (F6216, F6731).
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	go func() {
 		for range hup {
-			fmt.Fprintln(os.Stderr, "SIGHUP received: live config reload is not supported; use 'umailserver restart'")
+			if err := srv.ReloadTLS(); err != nil {
+				fmt.Fprintf(os.Stderr, "SIGHUP: TLS reload failed: %v\n", err)
+			}
+			fmt.Fprintln(os.Stderr, "SIGHUP received: TLS certificates reloaded; other config changes need 'umailserver restart'")
 		}
 	}()
-
-	// Create server
-	srv, err := server.New(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create server: %v\n", err)
-		os.Exit(1)
-	}
 
 	// Start server
 	if err := srv.Start(); err != nil {
@@ -1532,4 +1535,14 @@ func parseInterspersed(fs *flag.FlagSet, args []string) []string {
 		pos = append(pos, rest[0])
 		args = rest[1:]
 	}
+}
+
+// describeStartupError turns a server construction error into an operator
+// message; a database written by a newer binary gets an explicit upgrade
+// hint instead of a bare schema error (F6732).
+func describeStartupError(err error) string {
+	if errors.Is(err, migrations.ErrSchemaTooNew) {
+		return fmt.Sprintf("this database was written by a newer umailserver; upgrade the binary (%v)", err)
+	}
+	return err.Error()
 }

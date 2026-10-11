@@ -477,6 +477,7 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 				continue
 			}
 			email := storageToJMAPEmail(copies[0].meta, nil, copies[0].mailbox)
+			email.ID = idStr // F6645: extra copies are reported under their own id
 			for _, c := range copies[1:] {
 				email.MailboxIDs[getMailboxIDFromName(c.mailbox)] = true
 			}
@@ -719,17 +720,22 @@ func (s *Server) runEmailQuery(user string, filter interface{}, sortArg interfac
 			if err != nil || meta == nil {
 				continue
 			}
-			if boxes, seen := boxesOf[meta.MessageID]; seen {
-				boxes[mbox] = true
-				continue
+			rowID := meta.MessageID
+			if boxes, seen := boxesOf[rowID]; seen {
+				if !boxes[mbox] {
+					boxes[mbox] = true
+					continue
+				}
+				// F6645: a second copy in the same mailbox is its own Email.
+				rowID = extraCopyID(meta.MessageID, mbox, uid)
 			}
-			boxesOf[meta.MessageID] = map[string]bool{mbox: true}
+			boxesOf[rowID] = map[string]bool{mbox: true}
 			allMessages = append(allMessages, struct {
 				id      string
 				mailbox string
 				uid     uint32
 				meta    *storage.MessageMetadata
-			}{id: meta.MessageID, mailbox: mbox, uid: uid, meta: meta})
+			}{id: rowID, mailbox: mbox, uid: uid, meta: meta})
 		}
 	}
 
@@ -1185,7 +1191,10 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 				// F6362: the reference-aware DeleteMessage keeps a blob that a
 				// pending upload still references; quota is released only
 				// when the file actually went away.
-				if s.msgStore.DeleteMessage(user, emailID) == nil {
+				// F6645: another copy (a same-bytes duplicate) may still use
+				// the blob; keep it until the last reference is gone.
+				if len(s.allBlobCopies(user, copies[0].meta.MessageID)) == 0 &&
+					s.msgStore.DeleteMessage(user, copies[0].meta.MessageID) == nil {
 					_ = s.adjustQuota(user, -copies[0].meta.Size) // F5742
 				}
 				destroyed = append(destroyed, emailID)
@@ -1440,19 +1449,19 @@ type emailCopy struct {
 // imported into several mailboxes has one metadata row per mailbox sharing
 // the same MessageID.
 func (s *Server) findEmailCopies(user, emailID string) []emailCopy {
+	if c := s.extraCopy(user, emailID); c != nil {
+		return c
+	}
+	// F6645: the primary Email holds one copy per mailbox (the lowest UID);
+	// further same-mailbox duplicates are separate Emails with their own ids.
 	var copies []emailCopy
-	mailboxes, _ := s.db.ListMailboxes(user)
-	for _, mbox := range mailboxes {
-		uids, _ := s.db.GetMessageUIDs(user, mbox)
-		for _, uid := range uids {
-			meta, err := s.db.GetMessageMetadata(user, mbox, uid)
-			if err != nil || meta == nil {
-				continue
-			}
-			if meta.MessageID == emailID {
-				copies = append(copies, emailCopy{mailbox: mbox, uid: uid, meta: meta})
-			}
+	inBox := make(map[string]bool)
+	for _, c := range s.allBlobCopies(user, emailID) {
+		if inBox[c.mailbox] {
+			continue
 		}
+		inBox[c.mailbox] = true
+		copies = append(copies, c)
 	}
 	return copies
 }
@@ -1593,7 +1602,12 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			// mailboxes, a repeated import of the same blob) shares one blob
 			// and destroy releases it once, so only the first reference is
 			// charged (no double charge, no leak on destroy).
-			charged := len(s.findEmailCopies(user, blobID)) == 0
+			priorCopies := s.findEmailCopies(user, blobID)
+			charged := len(priorCopies) == 0
+			priorBoxes := make(map[string]bool, len(priorCopies))
+			for _, c := range priorCopies {
+				priorBoxes[c.mailbox] = true
+			}
 			if charged {
 				err = s.adjustQuota(user, meta.Size)
 			} else {
@@ -1674,6 +1688,15 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			email := storageToJMAPEmail(meta, nil, targetNames[0])
 			for _, targetName := range targetNames[1:] {
 				email.MailboxIDs[getMailboxIDFromName(targetName)] = true
+			}
+			// F6645: importing bytes that a target mailbox already holds
+			// makes a new, separate Email, reported under its own id.
+			for _, w := range written {
+				if priorBoxes[w.mailbox] {
+					email.ID = extraCopyID(blobID, w.mailbox, w.uid)
+					email.MailboxIDs = map[string]bool{getMailboxIDFromName(w.mailbox): true}
+					break
+				}
 			}
 			created[key] = email
 		}()

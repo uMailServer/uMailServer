@@ -45,6 +45,9 @@ type Parser struct {
 	pos    int
 	length int
 	depth  int
+	// unterminated is set when a bracketed comment has no closing "*/"
+	// (RFC 5228 §2.3: a syntax error, F6772).
+	unterminated bool
 }
 
 // AST node types
@@ -178,6 +181,9 @@ func (p *Parser) Parse() (*Script, error) {
 			script.Commands = append(script.Commands, *cmd)
 		}
 	}
+	if p.unterminated {
+		return nil, fmt.Errorf("unterminated bracketed comment")
+	}
 
 	return script, nil
 }
@@ -195,12 +201,18 @@ func (p *Parser) skipWhitespaceAndComments() {
 		} else if ch == '/' && p.pos+1 < p.length && p.input[p.pos+1] == '*' {
 			// Multi-line comment
 			p.pos += 2
+			closed := false
 			for p.pos+1 < p.length {
 				if p.input[p.pos] == '*' && p.input[p.pos+1] == '/' {
 					p.pos += 2
+					closed = true
 					break
 				}
 				p.pos++
+			}
+			if !closed {
+				p.unterminated = true
+				p.pos = p.length
 			}
 		} else {
 			break

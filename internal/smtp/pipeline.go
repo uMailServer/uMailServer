@@ -34,6 +34,11 @@ type MessageContext struct {
 	Data    []byte
 	Headers map[string][]string
 
+	// AddedHeaders are header fields (name, value) that stages want written
+	// into the delivered message; the session emits them after stripping any
+	// sender-supplied field of the same name (F6614).
+	AddedHeaders [][2]string
+
 	// Processing results
 	SpamScore   float64
 	SpamResult  SpamResult
@@ -627,6 +632,57 @@ const rblLookupTimeout = 3 * time.Second
 type RBLStage struct {
 	servers  []string
 	resolver RBLDNSResolver
+
+	cacheMu sync.Mutex
+	cache   map[string]rblCacheEntry
+}
+
+// rblCacheEntry is a cached lookup outcome; ip == nil means "not listed".
+type rblCacheEntry struct {
+	ip  net.IP
+	exp time.Time
+}
+
+const (
+	rblMaxParallel  = 4
+	rblListedTTL    = 5 * time.Minute
+	rblNotListedTTL = time.Minute
+	rblCacheMax     = 4096
+)
+
+// lookup resolves one DNSBL name through the TTL cache. Errors other than a
+// definite "not listed" are not cached.
+func (s *RBLStage) lookup(parent context.Context, host string) net.IP {
+	now := time.Now()
+	s.cacheMu.Lock()
+	if e, ok := s.cache[host]; ok && now.Before(e.exp) {
+		s.cacheMu.Unlock()
+		return e.ip
+	}
+	s.cacheMu.Unlock()
+
+	lctx, cancel := context.WithTimeout(parent, rblLookupTimeout)
+	ip, err := s.resolver.LookupHost(lctx, host)
+	cancel()
+	var dnsErr *net.DNSError
+	switch {
+	case err == nil && ip != nil:
+	case errors.As(err, &dnsErr) && dnsErr.IsNotFound:
+		ip = nil
+	default:
+		return nil // transient: do not cache
+	}
+	ttl := rblNotListedTTL
+	if ip != nil {
+		ttl = rblListedTTL
+	}
+	s.cacheMu.Lock()
+	if s.cache == nil || len(s.cache) >= rblCacheMax {
+		s.cache = make(map[string]rblCacheEntry)
+	}
+	s.cache[host] = rblCacheEntry{ip: ip, exp: now.Add(ttl)}
+	s.cacheMu.Unlock()
+	return ip
 }
 
 // RBLDNSResolver interface for RBL DNS lookups
@@ -690,21 +746,33 @@ func (s *RBLStage) Process(ctx *MessageContext) PipelineResult {
 		return ResultAccept
 	}
 
-	// Check each RBL
-	for _, server := range s.servers {
-		lookupHost := fmt.Sprintf("%s.%s", reversedIP, server)
+	// Query the lists in parallel (bounded), then score in list order.
+	parent := ctx.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	answers := make([]net.IP, len(s.servers))
+	sem := make(chan struct{}, rblMaxParallel)
+	var wg sync.WaitGroup
+	for i, server := range s.servers {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, host string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			answers[i] = s.lookup(parent, host)
+		}(i, fmt.Sprintf("%s.%s", reversedIP, server))
+	}
+	wg.Wait()
 
-		lctx, cancel := context.WithTimeout(context.Background(), rblLookupTimeout)
-		ip, err := s.resolver.LookupHost(lctx, lookupHost)
-		cancel()
-		if err != nil || ip == nil {
-			// Not listed or DNS error - continue to next RBL
+	for _, ip := range answers {
+		if ip == nil {
 			continue
 		}
-		// Only 127.0.0.0/8 answers are listings. 127.255.255.x are
-		// DNSBL operator error codes (query refused / open resolver), and
-		// anything else is a wildcard/hijacked response (F5835).
-		if v4 := ip.To4(); v4 == nil || v4[0] != 127 || v4[1] == 255 {
+		// Only the documented 127.0.0.x return codes are listings; other
+		// 127.x answers (127.255.255.x operator errors, wildcard or
+		// hijacked responses) are ignored (F5835, F6616).
+		if _, documented := rblResultCodes[ip.String()]; !documented {
 			continue
 		}
 
@@ -1017,6 +1085,7 @@ func (s *AVStage) Process(ctx *MessageContext) PipelineResult {
 	if err != nil || result == nil {
 		if s.failOpen {
 			ctx.Headers["X-Virus-Scan"] = []string{"error"}
+			ctx.AddedHeaders = append(ctx.AddedHeaders, [2]string{"X-Virus-Scan", "error"})
 			return ResultAccept
 		}
 		ctx.Rejected = true
@@ -1028,6 +1097,7 @@ func (s *AVStage) Process(ctx *MessageContext) PipelineResult {
 	if result.Skipped {
 		// Not scanned: accept, but never claim the message is clean.
 		ctx.Headers["X-Virus-Scan"] = []string{"skipped"}
+		ctx.AddedHeaders = append(ctx.AddedHeaders, [2]string{"X-Virus-Scan", "skipped"})
 		return ResultAccept
 	}
 
@@ -1044,6 +1114,18 @@ func (s *AVStage) Process(ctx *MessageContext) PipelineResult {
 		default: // "tag"
 			// Add tag header
 			ctx.Headers["X-Virus"] = []string{result.Virus}
+			// The signature name comes from the scanner reply: keep it to
+			// one printable line so it cannot inject header fields.
+			name := strings.Map(func(r rune) rune {
+				if r < 0x20 || r == 0x7f {
+					return -1
+				}
+				return r
+			}, result.Virus)
+			if len(name) > 200 {
+				name = name[:200]
+			}
+			ctx.AddedHeaders = append(ctx.AddedHeaders, [2]string{"X-Virus", strings.TrimSpace(name)})
 			return ResultAccept
 		}
 	}

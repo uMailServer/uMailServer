@@ -9,6 +9,9 @@ export interface Mail {
   from: string
   fromName: string
   to: string[]
+  // Only present for drafts (GET /mail/message).
+  cc?: string[]
+  bcc?: string[]
   subject: string
   body: string
   preview: string

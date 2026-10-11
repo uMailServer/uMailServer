@@ -121,6 +121,10 @@ func TestDATAPipelinedMessageAccepted(t *testing.T) {
 		t.Fatalf("FAIL: onDeliver was not invoked for the pipelined message")
 	}
 	want := "Message-ID: <r49-pipelined@testhost>\r\nSubject: t\r\n\r\nbody\r\n"
+	// A Received trace header is always prepended (F6617).
+	if i := strings.Index(string(delivered), "Message-ID:"); strings.HasPrefix(string(delivered), "Received: ") && i > 0 {
+		delivered = delivered[i:]
+	}
 	if string(delivered) != want {
 		t.Fatalf("FAIL: delivered body = %q, want %q", string(delivered), want)
 	}

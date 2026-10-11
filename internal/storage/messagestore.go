@@ -529,6 +529,21 @@ func (s *MessageStore) DeleteMessageUnchecked(user, messageID string) error {
 	return os.Remove(msgPath)
 }
 
+// MessageSize returns the on-disk size of a stored message blob.
+func (s *MessageStore) MessageSize(user, messageID string) (int64, error) {
+	if err := validatePathComponent(user); err != nil {
+		return 0, err
+	}
+	if !isValidMessageID(messageID) {
+		return 0, fmt.Errorf("invalid message ID")
+	}
+	fi, err := os.Stat(filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID))
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
 // MessageExists checks if a message exists
 func (s *MessageStore) MessageExists(user, messageID string) bool {
 	if err := validatePathComponent(user); err != nil {

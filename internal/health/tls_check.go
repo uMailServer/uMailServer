@@ -31,7 +31,7 @@ func TLSCertificateCheck(certPath, keyPath string, warningDays, criticalDays int
 				return check
 			}
 			check.Status = StatusUnhealthy
-			check.Message = fmt.Sprintf("failed to read certificate: %v", err)
+			check.Message = "failed to read certificate"
 			return check
 		}
 
@@ -46,7 +46,7 @@ func TLSCertificateCheck(certPath, keyPath string, warningDays, criticalDays int
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			check.Status = StatusUnhealthy
-			check.Message = fmt.Sprintf("failed to parse certificate: %v", err)
+			check.Message = "failed to parse certificate"
 			return check
 		}
 

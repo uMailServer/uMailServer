@@ -31,7 +31,7 @@ func QueueCheck(stats QueueStats, maxPending int) Checker {
 		queueStats, err := stats.GetStats()
 		if err != nil {
 			check.Status = StatusUnhealthy
-			check.Message = fmt.Sprintf("failed to get queue stats: %v", err)
+			check.Message = "failed to get queue stats"
 			return check
 		}
 
@@ -78,7 +78,7 @@ func MessageStoreCheck(ping func() error) Checker {
 		case err := <-done:
 			if err != nil {
 				check.Status = StatusUnhealthy
-				check.Message = fmt.Sprintf("message store ping failed: %v", err)
+				check.Message = "message store ping failed"
 			} else {
 				check.Message = "message store healthy"
 			}
@@ -109,7 +109,7 @@ func SearchIndexCheck(ping func() error, lastIndexTime func() time.Time) Checker
 		case err := <-done:
 			if err != nil {
 				check.Status = StatusUnhealthy
-				check.Message = fmt.Sprintf("search index ping failed: %v", err)
+				check.Message = "search index ping failed"
 				return check
 			}
 		case <-ctx.Done():
