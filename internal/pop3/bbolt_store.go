@@ -121,6 +121,12 @@ func (s *BboltStore) DeleteMessage(user string, index int) error {
 	// metadata and blob on disk forever, so the user's quota was never freed
 	// (F5743). Remove the metadata row, then the content-addressed blob once no
 	// mailbox still references it.
+	// F6362: hold the shared per-user reference guard across drop-row +
+	// release so a concurrent store of identical content cannot slip in
+	// between the reference check and the unlink.
+	mu := s.msgStore.UserGuard(user)
+	mu.Lock()
+	defer mu.Unlock()
 	meta, err := s.db.GetMessageMetadata(user, "INBOX", uid)
 	if err != nil {
 		return err
@@ -128,31 +134,12 @@ func (s *BboltStore) DeleteMessage(user string, index int) error {
 	if err := s.db.DeleteMessage(user, "INBOX", uid); err != nil {
 		return err
 	}
-	if meta != nil && meta.MessageID != "" && !s.blobReferenced(user, meta.MessageID) {
-		_ = s.msgStore.DeleteMessage(user, meta.MessageID)
+	if meta != nil && meta.MessageID != "" {
+		if refs, err := s.db.BlobReferenced(user, []string{meta.MessageID}); err == nil && !refs[meta.MessageID] {
+			_ = s.msgStore.DeleteMessageUnchecked(user, meta.MessageID)
+		}
 	}
 	return nil
-}
-
-// blobReferenced reports whether any of the user's mailboxes still holds a
-// message whose content blob is blobID (copies share one blob).
-func (s *BboltStore) blobReferenced(user, blobID string) bool {
-	mailboxes, err := s.db.ListMailboxes(user)
-	if err != nil {
-		return true // unknown: keep the blob
-	}
-	for _, mbox := range mailboxes {
-		uids, err := s.db.GetMessageUIDs(user, mbox)
-		if err != nil {
-			return true
-		}
-		for _, uid := range uids {
-			if m, err := s.db.GetMessageMetadata(user, mbox, uid); err == nil && m != nil && m.MessageID == blobID {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // GetMessageCount returns the number of messages in the user's INBOX

@@ -301,6 +301,9 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// Initialize search service
 	s.storageDB = storageDB
+	// F6362: blobs are content-addressed, so identical messages share one
+	// file. Make every msgStore.DeleteMessage reference-aware.
+	s.msgStore.SetBlobReferenceChecker(storageDB.BlobReferenced)
 	searchSvc := search.NewService(storageDB, msgStore, logger)
 	s.searchSvc = searchSvc
 	s.indexWork = make(chan indexJob, 1000)

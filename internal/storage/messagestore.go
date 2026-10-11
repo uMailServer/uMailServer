@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,10 +60,50 @@ type MessageStore struct {
 	// StoreMessageWithQuota per user (F5720).
 	quotaLocks sync.Map // user -> *sync.Mutex
 
+	// refChecker, when set, makes DeleteMessage reference-aware (F6362).
+	refChecker atomic.Pointer[BlobReferenceChecker]
+	// userGuards are the cross-package "reference change vs blob removal"
+	// mutexes handed out by UserGuard.
+	userGuards sync.Map // user -> *sync.Mutex
+
 	// Test seams (nil in production), used to order concurrent writers
 	// deterministically.
 	afterQuotaCheck func() // quota check passed, store not yet started
 	onLockContended func() // a writer found the user lock held
+}
+
+// BlobReferenceChecker reports which of ids the user still references
+// (message rows or pending uploads). Database.BlobReferenced implements it.
+type BlobReferenceChecker func(user string, ids []string) (map[string]bool, error)
+
+// ErrBlobReferenced is returned by DeleteMessage when the content-addressed
+// blob is still referenced by another message of the same user (identical
+// content shares one file), or when that could not be ruled out. Nothing was
+// removed, so callers must not release quota for it.
+var ErrBlobReferenced = errors.New("blob still referenced")
+
+// SetBlobReferenceChecker installs the reference lookup that makes
+// DeleteMessage safe for shared blobs. Call it once at wiring time, before
+// the store is used concurrently. Without a checker DeleteMessage removes the
+// file unconditionally (legacy behaviour; callers must check references).
+func (s *MessageStore) SetBlobReferenceChecker(c BlobReferenceChecker) {
+	if c == nil {
+		s.refChecker.Store(nil)
+		return
+	}
+	s.refChecker.Store(&c)
+}
+
+// UserGuard returns the per-user mutex that serializes "store blob + write
+// its metadata row" against "drop metadata row + release blob". Every
+// package that does either must hold it across the whole sequence, so a
+// release can never observe the window between a dedupe hit and the new
+// reference becoming visible. It is distinct from the internal blob lock and
+// is not held by MessageStore methods themselves, so holding it while
+// calling them is safe.
+func (s *MessageStore) UserGuard(user string) *sync.Mutex {
+	m, _ := s.userGuards.LoadOrStore(user, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // lockUser takes the per-user write lock shared by every blob writer and
@@ -310,8 +351,37 @@ func (s *MessageStore) ReadMessage(user, messageID string) ([]byte, error) {
 	return os.ReadFile(filepath.Clean(msgPath))
 }
 
-// DeleteMessage deletes a message
+// DeleteMessage removes a blob. With a reference checker installed it only
+// removes the file when no message row or pending upload of the user still
+// references it, and otherwise returns ErrBlobReferenced without touching
+// anything (F6362: identical messages share one file). Callers must drop their
+// own metadata row first.
 func (s *MessageStore) DeleteMessage(user, messageID string) error {
+	if err := validatePathComponent(user); err != nil {
+		return err
+	}
+	if !isValidMessageID(messageID) {
+		return fmt.Errorf("invalid message ID")
+	}
+
+	defer s.lockUser(user)()
+	if p := s.refChecker.Load(); p != nil {
+		refs, err := (*p)(user, []string{messageID})
+		if err != nil {
+			return fmt.Errorf("%w: reference check failed: %v", ErrBlobReferenced, err)
+		}
+		if refs[messageID] {
+			return ErrBlobReferenced
+		}
+	}
+	msgPath := filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID)
+	return os.Remove(msgPath)
+}
+
+// DeleteMessageUnchecked removes the blob without consulting the reference
+// checker. Only for callers that have just verified the references
+// themselves (e.g. a batch scan).
+func (s *MessageStore) DeleteMessageUnchecked(user, messageID string) error {
 	if err := validatePathComponent(user); err != nil {
 		return err
 	}

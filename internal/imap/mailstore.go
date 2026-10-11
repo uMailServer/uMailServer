@@ -50,7 +50,13 @@ type blobRef struct {
 	size int64
 }
 
+// userMu returns the per-user reference guard. It is the MessageStore's
+// UserGuard when there is one, so JMAP, POP3 and the REST API serialize their
+// store/release steps against IMAP's (F6362).
 func (m *BboltMailstore) userMu(user string) *sync.Mutex {
+	if m.msgStore != nil {
+		return m.msgStore.UserGuard(user)
+	}
 	mu, _ := m.userLocks.LoadOrStore(user, &sync.Mutex{})
 	return mu.(*sync.Mutex)
 }
@@ -188,6 +194,7 @@ func NewBboltMailstore(dataDir string) (*BboltMailstore, error) {
 		return nil, fmt.Errorf("failed to create message store: %w", err)
 	}
 
+	msgStore.SetBlobReferenceChecker(db.BlobReferenced)
 	closeOnErr = false
 	return &BboltMailstore{
 		dataDir:  dataDir,
@@ -200,6 +207,9 @@ func NewBboltMailstore(dataDir string) (*BboltMailstore, error) {
 
 // NewBboltMailstoreWithInterfaces creates a mailstore using existing storage instances
 func NewBboltMailstoreWithInterfaces(db *storage.Database, msgStore *storage.MessageStore) *BboltMailstore {
+	if msgStore != nil && db != nil {
+		msgStore.SetBlobReferenceChecker(db.BlobReferenced)
+	}
 	return &BboltMailstore{
 		dataDir:  "shared",
 		db:       db,
@@ -798,37 +808,31 @@ func (m *BboltMailstore) releaseBlobsLocked(user string, refs []blobRef) {
 	if len(refs) == 0 {
 		return
 	}
-	mailboxes, err := m.db.ListMailboxes(user)
+	candidates := make(map[string]int64, len(refs))
+	ids := make([]string, 0, len(refs))
+	for _, r := range refs {
+		if _, dup := candidates[r.id]; !dup {
+			ids = append(ids, r.id)
+		}
+		candidates[r.id] = r.size
+	}
+	// One scan of every message row (and pending upload) of the user. On
+	// error nothing is deleted: a leaked blob is recoverable, a deleted live
+	// one is not.
+	referenced, err := m.db.BlobReferenced(user, ids)
 	if err != nil {
 		return
 	}
-	candidates := make(map[string]int64, len(refs))
-	for _, r := range refs {
-		candidates[r.id] = r.size
-	}
-	for _, mb := range mailboxes {
-		uids, err := m.db.GetMessageUIDs(user, mb)
-		if err != nil {
-			return
-		}
-		for _, uid := range uids {
-			meta, err := m.db.GetMessageMetadata(user, mb, uid)
-			if err != nil {
-				return
-			}
-			delete(candidates, meta.MessageID)
-		}
-		if len(candidates) == 0 {
-			return
-		}
-	}
 	for id, size := range candidates {
+		if referenced[id] {
+			continue
+		}
 		if size <= 0 {
 			if data, err := m.msgStore.ReadMessage(user, id); err == nil {
 				size = int64(len(data))
 			}
 		}
-		if err := m.msgStore.DeleteMessage(user, id); err == nil {
+		if err := m.msgStore.DeleteMessageUnchecked(user, id); err == nil {
 			_ = m.adjustQuota(user, -size)
 		}
 	}
