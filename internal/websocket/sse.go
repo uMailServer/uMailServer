@@ -93,8 +93,9 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 		// Authenticate the request - token from X-Auth-Token header or Authorization Bearer
 		token := r.Header.Get("X-Auth-Token")
 		if token == "" {
-			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-				token = strings.TrimPrefix(authHeader, "Bearer ")
+			// The auth scheme is case-insensitive (RFC 7235 §2.1, F6771).
+			if authHeader := r.Header.Get("Authorization"); len(authHeader) > len("Bearer ") && strings.EqualFold(authHeader[:len("Bearer ")], "Bearer ") {
+				token = authHeader[len("Bearer "):]
 			}
 		}
 		// Browser EventSource clients cannot set custom headers. The route is

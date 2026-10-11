@@ -120,10 +120,15 @@ func isForbiddenAddr(addr netip.Addr) bool {
 		addr.IsInterfaceLocalMulticast() {
 		return true
 	}
-	// 100.64.0.0/10 carrier-grade NAT
+	// 100.64.0.0/10 carrier-grade NAT, 198.18.0.0/15 benchmarking,
+	// 192.0.0.0/24 IETF protocol assignments and 240.0.0.0/4 reserved
+	// space: the same non-routable ranges the webhook guard refuses (F6773).
 	if addr.Is4() {
 		b := addr.As4()
-		if b[0] == 100 && b[1]&0xC0 == 64 {
+		if (b[0] == 100 && b[1]&0xC0 == 64) ||
+			(b[0] == 198 && b[1]&0xFE == 18) ||
+			(b[0] == 192 && b[1] == 0 && b[2] == 0) ||
+			b[0] >= 240 {
 			return true
 		}
 	}
