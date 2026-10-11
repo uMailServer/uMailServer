@@ -85,6 +85,11 @@ type SMTPConfig struct {
 	Inbound       InboundSMTPConfig    `yaml:"inbound"`
 	Submission    SubmissionSMTPConfig `yaml:"submission"`
 	SubmissionTLS SubmissionTLSConfig  `yaml:"submission_tls"`
+
+	// MaxConnectionsPerIP caps concurrent connections from one client IP on
+	// every SMTP listener. 0 selects the built-in default (50); negative
+	// disables the per-IP cap.
+	MaxConnectionsPerIP int `yaml:"max_connections_per_ip"`
 }
 
 // InboundSMTPConfig holds MX/inbound SMTP settings

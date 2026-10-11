@@ -19,6 +19,7 @@ func DefaultConfig() *Config {
 			},
 		},
 		SMTP: SMTPConfig{
+			MaxConnectionsPerIP: 50,
 			Inbound: InboundSMTPConfig{
 				Enabled:        true,
 				Port:           25,
