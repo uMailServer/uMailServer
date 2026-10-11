@@ -106,6 +106,10 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 		s.mu.RLock()
 		index = s.indexes[opts.User]
 		s.mu.RUnlock()
+		if index == nil {
+			// ClearIndex raced the rebuild; nothing to search (no nil deref).
+			return []MessageSearchResult{}, nil
+		}
 	}
 
 	// Perform search
@@ -276,9 +280,9 @@ func (s *Service) BuildIndex(user string) error {
 				ID:      fmt.Sprintf("%s:%d", folder, uid),
 				Content: content,
 				Fields: map[string]string{
-					"from":    meta.From,
-					"to":      meta.To,
-					"subject": meta.Subject,
+					"from":    decodeHeaderValue(meta.From),
+					"to":      decodeHeaderValue(meta.To),
+					"subject": decodeHeaderValue(meta.Subject),
 				},
 				Date:          docDate(meta),
 				HasAttachment: hasAtt,
@@ -332,9 +336,9 @@ func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 		ID:      fmt.Sprintf("%s:%d", folder, uid),
 		Content: content,
 		Fields: map[string]string{
-			"from":    meta.From,
-			"to":      meta.To,
-			"subject": meta.Subject,
+			"from":    decodeHeaderValue(meta.From),
+			"to":      decodeHeaderValue(meta.To),
+			"subject": decodeHeaderValue(meta.Subject),
 		},
 		Date:          docDate(meta),
 		HasAttachment: hasAtt,
@@ -403,27 +407,11 @@ func generatePreview(content string, maxLen int) string {
 	return content[:cut] + "..."
 }
 
-// extractTextContent extracts text content from message data
+// extractTextContent extracts searchable text from a raw RFC 5322 message.
+// See extract.go: MIME parts are walked, transfer encodings and common
+// charsets decoded, and HTML stripped only from text/html parts.
 func extractTextContent(data []byte) string {
-	// Simple extraction - remove headers and extract body
-	content := string(data)
-
-	// Find body start
-	bodyStart := strings.Index(content, "\r\n\r\n")
-	if bodyStart == -1 {
-		bodyStart = strings.Index(content, "\n\n")
-	}
-	if bodyStart != -1 {
-		content = content[bodyStart:]
-	}
-
-	// Remove HTML tags if present
-	content = stripHTML(content)
-
-	// Normalize whitespace
-	content = strings.Join(strings.Fields(content), " ")
-
-	return content
+	return extractMIMEText(data)
 }
 
 // stripHTML removes HTML tags from text
