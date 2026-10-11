@@ -201,7 +201,11 @@ func Open(path string) (*DB, error) {
 		Timeout: 1 * time.Second,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		if errors.Is(err, bbolt.ErrTimeout) {
+			// F6565: name the file and the cause instead of a bare "timeout".
+			return nil, fmt.Errorf("failed to open database %s: file is locked by another process (is another uMailServer instance running?): %w", path, err)
+		}
+		return nil, fmt.Errorf("failed to open database %s: %w", path, err)
 	}
 
 	// On POSIX systems, bbolt applies the mode at the syscall level so umask
@@ -563,9 +567,12 @@ func (d *DB) MutateAccount(domain, localPart string, fn func(*AccountData) error
 			return err
 		}
 		quota, step, valid := acct.QuotaUsed, acct.TOTPLastUsedStep, acct.TokensValidAfter
+		ident := [2]string{acct.Domain, acct.LocalPart}
 		if err := fn(&acct); err != nil {
 			return err
 		}
+		// F6562: the row's key identity is immutable.
+		acct.Domain, acct.LocalPart = ident[0], ident[1]
 		acct.QuotaUsed = quota
 		if acct.TOTPLastUsedStep < step {
 			acct.TOTPLastUsedStep = step
@@ -687,7 +694,8 @@ func (d *DB) ConsumeTOTPStep(domain, localPart string, expectedLast, newStep int
 		if err := json.Unmarshal(data, &account); err != nil {
 			return err
 		}
-		if account.TOTPLastUsedStep != expectedLast {
+		// F6561: the guard only moves forward.
+		if account.TOTPLastUsedStep != expectedLast || newStep <= expectedLast {
 			// consumed stays false: the step moved under us.
 			return nil
 		}
@@ -727,7 +735,9 @@ func (d *DB) IsTokenRevoked(tokenHash string) (bool, error) {
 	var revoked bool
 	var toDelete []string
 	now := time.Now()
-	err := d.bolt.Update(func(tx *bbolt.Tx) error {
+	// F6563: View, not Update: a write transaction fsyncs on every call even
+	// when nothing changes, and this runs per authenticated request.
+	err := d.bolt.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(BucketRevokedTokens))
 		if b == nil {
 			return nil
@@ -789,7 +799,43 @@ func (d *DB) CleanupRevokedTokens() error {
 // DeleteAccount removes an account
 func (d *DB) DeleteAccount(domain, localPart string) error {
 	key := AccountKey(domain, localPart)
-	return d.Delete(BucketAccounts, key)
+	// F6566: aliases targeting the mailbox are removed in the same
+	// transaction so they cannot dangle or silently re-attach to a later
+	// account created under the same address.
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		if err := b.Delete([]byte(key)); err != nil {
+			return err
+		}
+		return deleteAliasesTargeting(tx, func(t string) bool {
+			return strings.EqualFold(t, localPart+"@"+domain)
+		})
+	})
+}
+
+// deleteAliasesTargeting removes every alias whose target satisfies match.
+func deleteAliasesTargeting(tx *bbolt.Tx, match func(target string) bool) error {
+	b := tx.Bucket([]byte(BucketAliases))
+	if b == nil {
+		return nil
+	}
+	var keys [][]byte
+	_ = b.ForEach(func(k, v []byte) error {
+		var a AliasData
+		if json.Unmarshal(v, &a) == nil && match(strings.TrimSpace(a.Target)) {
+			keys = append(keys, append([]byte(nil), k...))
+		}
+		return nil
+	})
+	for _, k := range keys {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListAccountsByDomain returns all accounts in a domain
@@ -885,7 +931,13 @@ func (d *DB) DeleteDomain(name string) error {
 		if err := deletePrefix(tx, BucketAccounts, AccountKey(name, "")); err != nil {
 			return err
 		}
-		return deletePrefix(tx, BucketAliases, name+":")
+		if err := deletePrefix(tx, BucketAliases, name+":"); err != nil {
+			return err
+		}
+		suffix := "@" + name
+		return deleteAliasesTargeting(tx, func(t string) bool {
+			return len(t) > len(suffix) && strings.EqualFold(t[len(t)-len(suffix):], suffix)
+		})
 	})
 }
 
@@ -1120,6 +1172,10 @@ func (d *DB) CreateAlias(alias *AliasData) error {
 
 // UpdateAlias updates an existing alias
 func (d *DB) UpdateAlias(alias *AliasData) error {
+	if t := strings.ToLower(alias.Target); t == strings.ToLower(alias.Alias) ||
+		t == strings.ToLower(alias.Alias+"@"+alias.Domain) {
+		return ErrAliasConflict // F6560
+	}
 	key := alias.Domain + ":" + strings.ToLower(alias.Alias)
 	data, err := json.Marshal(alias)
 	if err != nil {
