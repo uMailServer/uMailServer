@@ -601,6 +601,40 @@ func (d *DB) UpdateAccount(account *AccountData) error {
 // guarantees: QuotaUsed is never changed by fn, TOTPLastUsedStep and
 // TokensValidAfter never move backwards. The stored result is returned.
 func (d *DB) MutateAccount(domain, localPart string, fn func(*AccountData) error) (*AccountData, error) {
+	return d.mutateAccount(domain, localPart, false, fn)
+}
+
+// MutateAccountKeepAdmin is MutateAccount plus the F6710 invariant: if fn
+// would demote or deactivate the last active administrator, the transaction
+// is rolled back with ErrLastActiveAdmin. The check runs inside the write
+// transaction, so it holds for concurrent callers and other processes.
+func (d *DB) MutateAccountKeepAdmin(domain, localPart string, fn func(*AccountData) error) (*AccountData, error) {
+	return d.mutateAccount(domain, localPart, true, fn)
+}
+
+// ErrLastActiveAdmin is returned when an operation would leave the system
+// without an active administrator (F6710).
+var ErrLastActiveAdmin = errors.New("cannot remove the last active administrator")
+
+// otherActiveAdminTx reports whether an active admin exists whose key does
+// not satisfy skip.
+func otherActiveAdminTx(tx *bbolt.Tx, skip func(a *AccountData) bool) (bool, error) {
+	b := tx.Bucket([]byte(BucketAccounts))
+	if b == nil {
+		return false, fmt.Errorf("bucket not found: %s", BucketAccounts)
+	}
+	found := false
+	err := b.ForEach(func(_, v []byte) error {
+		var a AccountData
+		if json.Unmarshal(v, &a) == nil && a.IsAdmin && a.IsActive && !skip(&a) {
+			found = true
+		}
+		return nil
+	})
+	return found, err
+}
+
+func (d *DB) mutateAccount(domain, localPart string, keepAdmin bool, fn func(*AccountData) error) (*AccountData, error) {
 	key := []byte(AccountKey(domain, localPart))
 	var result AccountData
 	err := d.bolt.Update(func(tx *bbolt.Tx) error {
@@ -618,8 +652,20 @@ func (d *DB) MutateAccount(domain, localPart string, fn func(*AccountData) error
 		}
 		quota, step, valid := acct.QuotaUsed, acct.TOTPLastUsedStep, acct.TokensValidAfter
 		ident := [2]string{acct.Domain, acct.LocalPart}
+		wasAdmin := acct.IsAdmin && acct.IsActive
 		if err := fn(&acct); err != nil {
 			return err
+		}
+		if keepAdmin && wasAdmin && !(acct.IsAdmin && acct.IsActive) {
+			others, err := otherActiveAdminTx(tx, func(a *AccountData) bool {
+				return a.Domain == ident[0] && a.LocalPart == ident[1]
+			})
+			if err != nil {
+				return err
+			}
+			if !others {
+				return ErrLastActiveAdmin
+			}
 		}
 		// F6562: the row's key identity is immutable.
 		acct.Domain, acct.LocalPart = ident[0], ident[1]
@@ -892,6 +938,47 @@ func (d *DB) DeleteAccount(domain, localPart string) error {
 	})
 }
 
+// DeleteAccountKeepAdmin is DeleteAccount refusing (ErrLastActiveAdmin) to
+// remove the last active administrator; the check and the delete share one
+// write transaction (F6710). A missing account yields ErrAccountNotFound.
+func (d *DB) DeleteAccountKeepAdmin(domain, localPart string) error {
+	key := AccountKey(domain, localPart)
+	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketAccounts))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketAccounts)
+		}
+		cur := b.Get([]byte(key))
+		if cur == nil {
+			return ErrAccountNotFound
+		}
+		var a AccountData
+		if json.Unmarshal(cur, &a) == nil && a.IsAdmin && a.IsActive {
+			others, err := otherActiveAdminTx(tx, func(o *AccountData) bool {
+				return o.Domain == domain && o.LocalPart == localPart
+			})
+			if err != nil {
+				return err
+			}
+			if !others {
+				return ErrLastActiveAdmin
+			}
+		}
+		if err := b.Delete([]byte(key)); err != nil {
+			return err
+		}
+		return deleteAliasesTargeting(tx, func(t string) bool {
+			return strings.EqualFold(t, localPart+"@"+domain)
+		})
+	})
+}
+
+// DeleteDomainKeepAdmin is DeleteDomain refusing (ErrLastActiveAdmin) when
+// the cascade would remove the last active administrator (F6710).
+func (d *DB) DeleteDomainKeepAdmin(name string) error {
+	return d.deleteDomain(name, true)
+}
+
 // deleteAliasesTargeting removes every alias whose target satisfies match.
 func deleteAliasesTargeting(tx *bbolt.Tx, match func(target string) bool) error {
 	b := tx.Bucket([]byte(BucketAliases))
@@ -996,7 +1083,33 @@ func (d *DB) UpdateDomain(domain *DomainData) error {
 // single transaction, so no orphan account of a deleted domain can still
 // authenticate and no orphan alias can still resolve.
 func (d *DB) DeleteDomain(name string) error {
+	return d.deleteDomain(name, false)
+}
+
+func (d *DB) deleteDomain(name string, keepAdmin bool) error {
 	return d.bolt.Update(func(tx *bbolt.Tx) error {
+		if keepAdmin {
+			inDomain := false
+			ab := tx.Bucket([]byte(BucketAccounts))
+			if ab != nil {
+				_ = ab.ForEach(func(_, v []byte) error {
+					var a AccountData
+					if json.Unmarshal(v, &a) == nil && a.IsAdmin && a.IsActive && a.Domain == name {
+						inDomain = true
+					}
+					return nil
+				})
+			}
+			if inDomain {
+				others, err := otherActiveAdminTx(tx, func(a *AccountData) bool { return a.Domain == name })
+				if err != nil {
+					return err
+				}
+				if !others {
+					return ErrLastActiveAdmin
+				}
+			}
+		}
 		b := tx.Bucket([]byte(BucketDomains))
 		if b == nil {
 			return fmt.Errorf("bucket not found: %s", BucketDomains)
