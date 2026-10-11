@@ -50,7 +50,7 @@ func round89Replies(t *testing.T, s *Server) int {
 	}
 	n := 0
 	for _, e := range entries {
-		if e.From == "bob@test.com" {
+		if e.From == "" {
 			n++
 		}
 	}

@@ -294,14 +294,31 @@ func (mm *MigrationManager) MigrateFromDovecot(maildirPath, passwdFile string) e
 	}
 
 	// Read passwd file if provided
+	var userErr error
 	if passwdFile != "" {
-		if err := mm.importDovecotUsers(passwdFile); err != nil {
-			return fmt.Errorf("failed to import users: %w", err)
+		// Account failures do not stop the rest of the migration, but they
+		// are returned (non-zero exit) after the maildir import (F6461).
+		userErr = mm.importDovecotUsers(passwdFile)
+		if userErr != nil && !errors.Is(userErr, errPartialUserImport) {
+			return wrapUserErr(userErr) // passwd file unreadable: abort as before
 		}
 	}
 
 	// Walk maildir and import messages
-	return mm.importMaildir(maildirPath)
+	if err := mm.importMaildir(maildirPath); err != nil {
+		return errors.Join(err, wrapUserErr(userErr))
+	}
+	return wrapUserErr(userErr)
+}
+
+// errPartialUserImport marks per-account failures after the rest was imported.
+var errPartialUserImport = errors.New("partial user import")
+
+func wrapUserErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("failed to import users: %w", err)
 }
 
 // importDovecotUsers imports user accounts from Dovecot passwd file
@@ -316,8 +333,11 @@ func (mm *MigrationManager) importDovecotUsers(passwdFile string) error {
 
 	scanner := bufio.NewScanner(file)
 	imported := 0
+	var failures []error // F6461: failed accounts are reported, not swallowed
+	lineNo := 0
 
 	for scanner.Scan() {
+		lineNo++
 		line := scanner.Text()
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -326,6 +346,8 @@ func (mm *MigrationManager) importDovecotUsers(passwdFile string) error {
 		// Parse passwd line: user@domain:password_hash:uid:gid::home_dir:shell
 		parts := strings.Split(line, ":")
 		if len(parts) < 7 {
+			mm.logger.Error("Skipping malformed passwd line", "line", lineNo)
+			failures = append(failures, fmt.Errorf("line %d: malformed passwd entry", lineNo))
 			continue
 		}
 
@@ -342,6 +364,7 @@ func (mm *MigrationManager) importDovecotUsers(passwdFile string) error {
 		// domain must be hosted here and its max_accounts limit holds.
 		if err := mm.checkImportDomain(domain); err != nil {
 			mm.logger.Error("Failed to import user", "email", email, "error", err)
+			failures = append(failures, fmt.Errorf("%s: %w", email, err))
 			continue
 		}
 
@@ -356,14 +379,22 @@ func (mm *MigrationManager) importDovecotUsers(passwdFile string) error {
 
 		if err := mm.db.CreateAccount(account); err != nil {
 			mm.logger.Error("Failed to import user", "email", email, "error", err)
+			failures = append(failures, fmt.Errorf("%s: %w", email, err))
 			continue
 		}
 
 		imported++
 	}
 
-	fmt.Printf("Imported %d users\n", imported)
-	return scanner.Err()
+	fmt.Printf("Imported %d users (%d failed)\n", imported, len(failures))
+	if err := scanner.Err(); err != nil {
+		failures = append(failures, err)
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("%w: %d passwd entries could not be imported (%d imported): %w",
+			errPartialUserImport, len(failures), imported, errors.Join(failures...))
+	}
+	return nil
 }
 
 // checkImportDomain reports why an account cannot be imported into domain:

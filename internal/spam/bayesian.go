@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"go.etcd.io/bbolt"
 )
@@ -171,6 +172,7 @@ func (c *Classifier) train(bucketName string, tokens []string) error {
 	if c.bolt == nil {
 		return nil
 	}
+	tokens = dedupTokens(tokens)
 	return c.bolt.Update(func(tx *bbolt.Tx) error {
 		for _, token := range tokens {
 			if err := incrementTokenTx(tx, bucketName, token, 1); err != nil {
@@ -248,6 +250,10 @@ func (c *Classifier) Classify(tokens []string) (*ClassifyResult, error) {
 		}, nil
 	}
 
+	tokens = dedupTokens(tokens)
+	if len(tokens) > maxClassifyTokens {
+		tokens = tokens[:maxClassifyTokens]
+	}
 	var probs []float64
 	for _, token := range tokens {
 		hamCount, spamCount, err := c.GetTokenFrequency(token)
@@ -353,7 +359,8 @@ func (t *Tokenizer) normalize(text string) string {
 
 // isValidToken checks if a token is valid for classification
 func (t *Tokenizer) isValidToken(word string) bool {
-	if len(word) < t.minTokenLength || len(word) > t.maxTokenLength {
+	// F6497: lengths are in characters; byte length mis-sized non-ASCII words.
+	if n := utf8.RuneCountInString(word); n < t.minTokenLength || n > t.maxTokenLength {
 		return false
 	}
 	// Reject pure numbers
@@ -391,9 +398,41 @@ func ExtractTokensFromHeaders(headers map[string][]string) []string {
 
 // ExtractTokensFromBody extracts tokens from email body
 func ExtractTokensFromBody(body []byte) []string {
-	tokenizer := NewTokenizer()
-	return tokenizer.Tokenize(string(body))
+	// F6496: bound the work and memory spent on one message.
+	if len(body) > maxBodyBytes {
+		body = body[:maxBodyBytes]
+	}
+	tokens := dedupTokens(NewTokenizer().Tokenize(string(body)))
+	if len(tokens) > maxBodyTokens {
+		tokens = tokens[:maxBodyTokens]
+	}
+	return tokens
 }
+
+const (
+	// maxBodyBytes caps the body prefix that is tokenized.
+	maxBodyBytes = 1 << 20
+	// maxBodyTokens caps the distinct tokens taken from one body.
+	maxBodyTokens = 5000
+)
+
+// dedupTokens drops repeated tokens, keeping first-seen order, so a message
+// repeating one word cannot skew counts or multiply database lookups.
+func dedupTokens(tokens []string) []string {
+	seen := make(map[string]struct{}, len(tokens))
+	out := tokens[:0:0]
+	for _, t := range tokens {
+		if _, ok := seen[t]; ok {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out
+}
+
+// maxClassifyTokens bounds per-message database lookups in Classify.
+const maxClassifyTokens = 10000
 
 // maxEmailTokenLength bounds address tokens to the RFC 5321 path limit so a
 // hostile header cannot produce a token larger than a bbolt key (F5301).

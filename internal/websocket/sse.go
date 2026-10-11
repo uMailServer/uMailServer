@@ -19,6 +19,23 @@ type SSEServer struct {
 	clientsMu  sync.RWMutex
 	authFunc   func(token string) (user string, isAdmin bool, err error)
 	corsOrigin string
+	shutdown   bool // protected by clientsMu
+}
+
+// Close stops every connected client's handler goroutine and makes the
+// handler refuse new connections (F6506). Long-lived SSE requests otherwise
+// keep http.Server.Shutdown waiting until its deadline. Idempotent.
+func (s *SSEServer) Close() {
+	s.clientsMu.Lock()
+	s.shutdown = true
+	var all []*SSEClient
+	for _, list := range s.clients {
+		all = append(all, list...)
+	}
+	s.clientsMu.Unlock()
+	for _, c := range all {
+		c.stopClient()
+	}
 }
 
 // SSEClient represents an SSE connection
@@ -147,6 +164,11 @@ func (s *SSEServer) Handler() http.HandlerFunc {
 
 		// Register client (enforce per-user connection limit)
 		s.clientsMu.Lock()
+		if s.shutdown {
+			s.clientsMu.Unlock()
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		const maxClientsPerUser = 5
 		if len(s.clients[user]) >= maxClientsPerUser {
 			oldest := s.clients[user][0]

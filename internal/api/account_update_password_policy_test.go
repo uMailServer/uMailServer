@@ -164,7 +164,7 @@ func TestPasswordLongerThanBcryptLimitIsRejected(t *testing.T) {
 		}
 	}
 
-	// Self-service keeps its 8-character minimum and gets the same ceiling.
+	// Self-service enforces the full policy (F6422) and the same ceiling.
 	self := func(next string) int {
 		return r528Call(s.handleAccountPassword, http.MethodPost, "/api/v1/account/password", "user@example.test", false,
 			fmt.Sprintf(`{"current_password":%q,"new_password":%q}`, r528Current(), next)).Code
@@ -175,7 +175,7 @@ func TestPasswordLongerThanBcryptLimitIsRejected(t *testing.T) {
 	if ok, _ := s.verifyPassword(r528Current(), r528Get(t, d, "user").PasswordHash); !ok {
 		t.Fatal("rejected self-service change altered the password")
 	}
-	if c := self(strings.Repeat("a", 72)); c != http.StatusOK {
+	if c := self(r528Compliant(72)); c != http.StatusOK {
 		t.Fatalf("72-byte self-service status=%d want 200", c)
 	}
 

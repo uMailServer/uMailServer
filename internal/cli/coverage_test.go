@@ -556,6 +556,9 @@ func TestImportDovecotUsersMixedContent(t *testing.T) {
 	}
 	defer database.Close()
 
+	if err := database.CreateDomain(&db.DomainData{Name: "example.com", IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
 	mm := NewMigrationManager(database, nil, nil)
 
 	passwdFile := filepath.Join(tmpDir, "passwd")
@@ -1743,6 +1746,9 @@ func TestMigrateFromDovecotWithPasswdEmptyMaildir(t *testing.T) {
 	}
 	defer database.Close()
 
+	if err := database.CreateDomain(&db.DomainData{Name: "example.com", IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
 	mm := NewMigrationManager(database, nil, nil)
 
 	// Create empty maildir

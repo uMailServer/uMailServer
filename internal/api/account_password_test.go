@@ -61,7 +61,7 @@ func postAccountPassword(server *Server, user string, current, next string) *htt
 // old one.
 func TestAccountPasswordChangesPassword(t *testing.T) {
 	server, current, database := setupAccountPasswordTest(t)
-	next := "brand-new-password"
+	next := "Brand-New-Passw0rd!"
 
 	rec := postAccountPassword(server, "user@example.com", current, next)
 	if rec.Code != http.StatusOK {
@@ -84,7 +84,7 @@ func TestAccountPasswordChangesPassword(t *testing.T) {
 func TestAccountPasswordRejectsWrongCurrentPassword(t *testing.T) {
 	server, _, _ := setupAccountPasswordTest(t)
 
-	rec := postAccountPassword(server, "user@example.com", "definitely-not-the-seed-password", "brand-new-password")
+	rec := postAccountPassword(server, "user@example.com", "definitely-not-the-seed-password", "Brand-New-Passw0rd!")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
 	}
@@ -115,7 +115,7 @@ func TestAccountPasswordRejectsMissingFields(t *testing.T) {
 func TestAccountPasswordRequiresAuthentication(t *testing.T) {
 	server, current, _ := setupAccountPasswordTest(t)
 
-	rec := postAccountPassword(server, "", current, "brand-new-password")
+	rec := postAccountPassword(server, "", current, "Brand-New-Passw0rd!")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}

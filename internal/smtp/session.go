@@ -1646,7 +1646,8 @@ func (s *Session) handleAuthPLAIN(parts []string) error {
 	s.isAuth = true
 	s.username = usernameNormalized
 	s.server.clearUserFailures(usernameNormalized)
-	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
+	// F6450: only the username's counter is cleared; the IP counter ages out
+	// so a valid login cannot reset failures against other accounts.
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(usernameNormalized, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
 	}
@@ -1736,7 +1737,8 @@ func (s *Session) handleAuthLOGIN(parts []string) error {
 	s.isAuth = true
 	s.username = usernameNormalized
 	s.server.clearUserFailures(usernameNormalized)
-	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
+	// F6450: only the username's counter is cleared; the IP counter ages out
+	// so a valid login cannot reset failures against other accounts.
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(usernameNormalized, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
 	}
@@ -1906,7 +1908,8 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	s.isAuth = true
 	s.username = usernameNormalized
 	s.server.clearUserFailures(usernameNormalized)
-	s.server.clearAuthFailures(getIPFromAddr(s.conn.RemoteAddr().String()))
+	// F6450: only the username's counter is cleared; the IP counter ages out
+	// so a valid login cannot reset failures against other accounts.
 	if s.server.onLoginResult != nil {
 		s.server.onLoginResult(s.username, true, getIPFromAddr(s.conn.RemoteAddr().String()), "")
 	}

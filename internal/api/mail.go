@@ -604,18 +604,19 @@ func (h *MailHandler) handleMailDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Drop the metadata rows first: the blob delete is reference-aware and
+	// only removes the file once no row (or pending upload) still uses it.
+	if h.mailDB != nil {
+		// Search through all mailboxes to find the message
+		h.deleteMessageMetadata(userEmail, messageID)
+	}
+
 	// Delete from message store (actual file)
 	if h.msgStore != nil {
 		if err := h.msgStore.DeleteMessage(userEmail, messageID); err != nil {
 			// Log but don't fail - message might already be deleted
 			fmt.Printf("Warning: failed to delete message file: %v\n", err)
 		}
-	}
-
-	// Also remove from mailDB metadata (find and delete by messageID)
-	if h.mailDB != nil {
-		// Search through all mailboxes to find the message
-		h.deleteMessageMetadata(userEmail, messageID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

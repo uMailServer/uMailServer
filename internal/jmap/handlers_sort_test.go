@@ -113,8 +113,9 @@ func TestEmailQuery_SortDate_DescendingHonored(t *testing.T) {
 	assertEmailOrder(t, ids, []string{"msg-c", "msg-b", "msg-a"}, "receivedAt descending")
 }
 
-// TestEmailQuery_SortDate_DefaultIsDescending: a date sort with isAscending
-// omitted (the Comparator zero value) defaults to descending.
+// TestEmailQuery_SortDate_DefaultIsDescending: RFC 8620 §5.5 says isAscending
+// defaults to true, so an omitted value sorts ascending (F6470; this test
+// previously pinned the opposite, non-conformant default).
 func TestEmailQuery_SortDate_DefaultIsDescending(t *testing.T) {
 	server, db, _, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -122,7 +123,7 @@ func TestEmailQuery_SortDate_DefaultIsDescending(t *testing.T) {
 
 	sortArg := []interface{}{map[string]interface{}{"property": "receivedAt"}}
 	ids := queryEmailIDs(t, server, sortArg)
-	assertEmailOrder(t, ids, []string{"msg-c", "msg-b", "msg-a"}, "receivedAt default")
+	assertEmailOrder(t, ids, []string{"msg-a", "msg-b", "msg-c"}, "receivedAt default")
 }
 
 // TestEmailQuery_SortSentAt_AscendingHonored: the other date property must also

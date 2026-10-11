@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -794,7 +793,7 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	srcAddressbookID := srcParts[0]
-	srcContactUID := strings.TrimSuffix(srcParts[1], filepath.Ext(srcParts[1]))
+	srcContactUID := trimVCardExt(srcParts[1])
 
 	// Verify the source address book belongs to this user
 	ab, err := s.storage.GetAddressbook(username, srcAddressbookID)
@@ -823,7 +822,7 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	destAddressbookID := destParts[0]
-	destContactUID := strings.TrimSuffix(destParts[1], filepath.Ext(destParts[1]))
+	destContactUID := trimVCardExt(destParts[1])
 
 	// Verify the destination address book belongs to this user
 	ab, err = s.storage.GetAddressbook(username, destAddressbookID)
@@ -854,6 +853,11 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 	vcardData, err := s.storage.GetContact(username, srcAddressbookID, srcContactUID)
 	if err != nil || vcardData == "" {
 		s.sendError(w, http.StatusNotFound, "source contact not found")
+		return
+	}
+	// RFC 7232 §3.1: If-Match/If-None-Match apply to the request-URI, the source.
+	if !preconditionsHold(r, true, s.storage.GetETag(username, srcAddressbookID, srcContactUID)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
 
@@ -897,7 +901,7 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	srcAddressbookID := srcParts[0]
-	srcContactUID := strings.TrimSuffix(srcParts[1], filepath.Ext(srcParts[1]))
+	srcContactUID := trimVCardExt(srcParts[1])
 
 	// Verify the source address book belongs to this user
 	ab, err := s.storage.GetAddressbook(username, srcAddressbookID)
@@ -926,7 +930,7 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	}
 
 	destAddressbookID := destParts[0]
-	destContactUID := strings.TrimSuffix(destParts[1], filepath.Ext(destParts[1]))
+	destContactUID := trimVCardExt(destParts[1])
 
 	// Verify the destination address book belongs to this user
 	ab, err = s.storage.GetAddressbook(username, destAddressbookID)
@@ -950,6 +954,11 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 	vcardData, err := s.storage.GetContact(username, srcAddressbookID, srcContactUID)
 	if err != nil || vcardData == "" {
 		s.sendError(w, http.StatusNotFound, "source contact not found")
+		return
+	}
+	// RFC 7232 §3.1: If-Match/If-None-Match apply to the request-URI, the source.
+	if !preconditionsHold(r, true, s.storage.GetETag(username, srcAddressbookID, srcContactUID)) {
+		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
 	}
 
@@ -1021,7 +1030,7 @@ func (s *Server) buildAddressbookResponse(username string, ab *Addressbook) Resp
 	// (the authenticated username scopes storage and is not part of the URL), so
 	// clients operating on these hrefs (RFC 4918 §8.3) reach the item handlers.
 	return Response{
-		Href: fmt.Sprintf("/dav/addressbooks/%s/", ab.ID),
+		Href: (&url.URL{Path: "/dav/addressbooks/" + ab.ID + "/"}).EscapedPath(),
 		Propstat: []Propstat{{
 			Prop: []Property{
 				rawProp(nsDAV, "resourcetype", `<collection xmlns="DAV:"/><addressbook xmlns="`+nsCardDAV+`"/>`),
@@ -1050,7 +1059,7 @@ func (s *Server) buildContactResponse(username, addressbookID, uid, vcardData st
 	props = append(props, s.contactMetaProps(username, addressbookID, uid, vcardData)...)
 	props = append(props, textProp(nsCardDAV, "address-data", vcardData))
 	return Response{
-		Href: fmt.Sprintf("/dav/addressbooks/%s/%s.vcf", addressbookID, uid),
+		Href: (&url.URL{Path: "/dav/addressbooks/" + addressbookID + "/" + uid + ".vcf"}).EscapedPath(),
 		Propstat: []Propstat{{
 			Prop:   props,
 			Status: "HTTP/1.1 200 OK",

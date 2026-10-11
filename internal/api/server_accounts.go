@@ -123,6 +123,12 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusBadRequest, fmt.Sprintf("new password exceeds maximum length of %d characters", maxPasswordLength))
 		return
 	}
+	// F6422: self-service applied only a length minimum while create and
+	// admin reset enforce the full strength policy.
+	if err := validatePassword(req.NewPassword); err != nil {
+		s.sendError(w, http.StatusBadRequest, "new "+err.Error())
+		return
+	}
 	if err := s.checkHasherPasswordLength(req.NewPassword); err != nil { // F5282
 		s.sendError(w, http.StatusBadRequest, "new "+err.Error())
 		return

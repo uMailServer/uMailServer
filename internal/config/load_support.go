@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"time"
 
@@ -269,4 +270,68 @@ func validateBind(b string) error {
 		}
 	}
 	return nil
+}
+
+// secretFieldName reports whether a yaml key names a credential.
+func secretFieldName(name string) bool {
+	n := strings.ToLower(name)
+	if strings.Contains(n, "public") {
+		return false
+	}
+	return strings.Contains(n, "password") || strings.Contains(n, "secret") ||
+		strings.Contains(n, "token") || strings.Contains(n, "private_key") || n == "totp_key"
+}
+
+// configHasSecrets reports whether any credential field of v is non-empty.
+func configHasSecrets(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Ptr:
+		return !v.IsNil() && configHasSecrets(v.Elem())
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			if configHasSecrets(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			if f.PkgPath != "" {
+				continue
+			}
+			name := strings.Split(f.Tag.Get("yaml"), ",")[0]
+			if name == "-" {
+				continue
+			}
+			if f.Type.Kind() == reflect.String && secretFieldName(name) {
+				if v.Field(i).String() != "" {
+					return true
+				}
+				continue
+			}
+			if configHasSecrets(v.Field(i)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// secretsFileTooOpen reports whether the config file at path holds credentials
+// (per cfg, as parsed from that file) while being readable by group or other
+// (F6462). Mode bits carry no meaning on Windows, where it always returns false.
+func secretsFileTooOpen(path string, cfg *Config) (os.FileMode, bool) {
+	if runtime.GOOS == "windows" {
+		return 0, false
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	perm := st.Mode().Perm()
+	if perm&0o044 == 0 || !configHasSecrets(reflect.ValueOf(cfg)) {
+		return perm, false
+	}
+	return perm, true
 }

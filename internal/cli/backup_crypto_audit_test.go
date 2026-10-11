@@ -31,15 +31,15 @@ func TestEncryptDecryptRoundTripAndEnvelopeShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encryptBackup: %v", err)
 	}
-	wantLen := len(backupMagic) + 1 + saltSize + nonceSize + len(data) + 16 // + GCM auth tag
+	wantLen := streamHeaderSize + len(data) + gcmTagSize // v2: header + one final chunk
 	if len(env) != wantLen {
 		t.Fatalf("envelope length = %d, want %d", len(env), wantLen)
 	}
 	if string(env[:len(backupMagic)]) != backupMagic {
 		t.Fatalf("magic mismatch: %q", env[:len(backupMagic)])
 	}
-	if env[len(backupMagic)] != backupVersion {
-		t.Fatalf("version = %d, want %d", env[len(backupMagic)], backupVersion)
+	if env[len(backupMagic)] != backupVersionStream {
+		t.Fatalf("version = %d, want %d", env[len(backupMagic)], backupVersionStream)
 	}
 
 	plain, err := bm.decryptBackup(env)

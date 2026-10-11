@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -31,13 +32,30 @@ func init() {
 	if _, err := rand.Read(dummyPwd); err != nil {
 		panic("failed to generate dummy password: " + err.Error())
 	}
-	// bcrypt cost 4 is intentionally low here since this hash is never user data;
-	// we just need a valid bcrypt structure for timing-safe comparison.
-	hash, err := bcrypt.GenerateFromPassword(dummyPwd, 4)
+	// F6421: the dummy must cost the same as a real hash (hashPassword uses
+	// bcrypt.DefaultCost); a cheaper one made unknown-account logins return
+	// far faster than wrong-password ones, revealing which accounts exist.
+	hash, err := bcrypt.GenerateFromPassword(dummyPwd, bcrypt.DefaultCost)
 	if err != nil {
 		panic("failed to hash dummy password: " + err.Error())
 	}
 	dummyPasswordHash = string(hash)
+}
+
+var (
+	dummyArgon2Once sync.Once
+	dummyArgon2Hash string
+)
+
+// dummyVerify burns the same hashing work an existing account would cost, for
+// whichever hasher the deployment uses (F6421).
+func (s *Server) dummyVerify(password string) {
+	if s.config.PasswordHasher == "argon2id" {
+		dummyArgon2Once.Do(func() { dummyArgon2Hash, _ = hashPasswordArgon2id("dummy-" + dummyPasswordHash) })
+		_ = verifyPasswordArgon2id(password, dummyArgon2Hash)
+		return
+	}
+	_, _ = s.verifyPassword(password, dummyPasswordHash)
 }
 
 // loginAttempt tracks failed login attempts per IP with exponential backoff
@@ -142,6 +160,9 @@ func newJTI() (string, error) {
 // hash and the credential write (F6255/F6256) so tests can interleave a
 // concurrent change deterministically. Nil in production.
 var beforeCredentialWrite func()
+
+// beforeTOTPConsume is a test seam invoked right before ConsumeTOTPStep.
+var beforeTOTPConsume func()
 
 // ceilMicros returns t as unix microseconds rounded up. JWT claims are
 // decoded as float64, which holds microsecond timestamps exactly but not
@@ -578,7 +599,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Timing-safe: perform a dummy password check to avoid revealing
 		// whether the account exists through response timing.
-		_, _ = s.verifyPassword(req.Password, dummyPasswordHash)
+		s.dummyVerify(req.Password)
 		s.recordLoginFailure(ip)
 		s.recordAccountLoginFailure(emailKey)
 		s.auditLogger.LogLoginFailure(req.Email, ip, "account_not_found")
@@ -670,10 +691,17 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// password hash, so two concurrent logins with one code can both
 		// pass it. The compare-and-swap inside one bbolt transaction lets
 		// exactly one login consume; the loser is a replay.
+		if beforeTOTPConsume != nil {
+			beforeTOTPConsume()
+		}
 		consumed, err := s.db.ConsumeTOTPStep(domain, user, account.TOTPLastUsedStep, step)
 		if err != nil {
+			// Fail closed: without a durable consume, a code could be replayed.
 			s.logger.Error("failed to update TOTP last used step", "error", err, "email", req.Email)
-		} else if !consumed {
+			s.sendError(w, http.StatusInternalServerError, "authentication error")
+			return
+		}
+		if !consumed {
 			s.recordTOTPFailure(req.Email)
 			s.recordAccountLoginFailure(emailKey)
 			s.auditLogger.LogLoginFailure(req.Email, ip, "totp_replay")

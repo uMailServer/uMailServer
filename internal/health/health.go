@@ -65,6 +65,12 @@ type Monitor struct {
 	checkers  map[string]Checker
 	startTime time.Time
 	version   string
+
+	// inflight marks checkers whose previous run has not returned yet, so a
+	// checker that ignores its context cannot accumulate one leaked goroutine
+	// per probe (F6503).
+	inflightMu sync.Mutex
+	inflight   map[string]bool
 }
 
 // NewMonitor creates a new health monitor
@@ -73,6 +79,7 @@ func NewMonitor(version string) *Monitor {
 		checkers:  make(map[string]Checker),
 		startTime: time.Now(),
 		version:   version,
+		inflight:  make(map[string]bool),
 	}
 }
 
@@ -119,12 +126,32 @@ func (m *Monitor) Check(ctx context.Context) Report {
 			defer cancel()
 
 			start := time.Now()
+			m.inflightMu.Lock()
+			busy := m.inflight[n]
+			if !busy {
+				m.inflight[n] = true
+			}
+			m.inflightMu.Unlock()
+			if busy {
+				checkCh <- Check{
+					Name:         n,
+					Status:       StatusUnhealthy,
+					Message:      "health check still running from a previous probe",
+					ResponseTime: time.Since(start),
+				}
+				return
+			}
 			// Run the checker in its own goroutine so one that ignores its
 			// context (e.g. a syscall on a hung mount) cannot block the whole
 			// report (F5189). The buffered channel lets it exit when it
 			// eventually returns.
 			result := make(chan Check, 1)
 			go func() {
+				defer func() {
+					m.inflightMu.Lock()
+					delete(m.inflight, n)
+					m.inflightMu.Unlock()
+				}()
 				defer func() {
 					if r := recover(); r != nil {
 						result <- Check{Status: StatusUnhealthy, Message: fmt.Sprintf("health check panicked: %v", r)}

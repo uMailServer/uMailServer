@@ -17,6 +17,7 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -200,8 +201,19 @@ func TestMigrateDovecotUsersEnforceDomainRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	mm := NewMigrationManager(d, nil, nil)
-	if err := mm.importDovecotUsers(passwd); err != nil {
-		t.Fatalf("import: %v", err)
+	// F6461: the failures (limit hit, unhosted domain, malformed line) are
+	// reported, while the importable accounts were still imported.
+	err = mm.importDovecotUsers(passwd)
+	if err == nil {
+		t.Fatal("import: want aggregated error for failed accounts, got nil")
+	}
+	for _, frag := range []string{"c@two.test", "x@unhosted.test", "bare", "2 imported"} {
+		if !strings.Contains(err.Error(), frag) {
+			t.Errorf("error %q lacks %q", err, frag)
+		}
+	}
+	if !errors.Is(err, errPartialUserImport) {
+		t.Errorf("want errPartialUserImport")
 	}
 	for domain, want := range map[string]int{"two.test": 2, "unhosted.test": 0, "": 0} {
 		got, err := d.ListAccountsByDomain(domain)

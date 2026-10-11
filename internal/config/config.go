@@ -445,6 +445,10 @@ func loadWithOptions(path string, optional bool) (*Config, []byte, error) {
 			for _, k := range cfg.unknownKeys {
 				slog.Warn("config: unknown key ignored", "key", k, "file", path)
 			}
+			if perm, bad := secretsFileTooOpen(path, cfg); bad {
+				slog.Warn("config: file contains credentials but is readable by group/other; run chmod 600",
+					"file", path, "mode", fmt.Sprintf("%04o", perm))
+			}
 			resolvePaths(cfg, defaults, path)
 			cfg.source = path
 		case os.IsNotExist(err) && optional:

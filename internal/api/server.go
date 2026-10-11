@@ -194,7 +194,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 	// srv is assigned below, before any request can reach this closure.
 	var srv *Server
 	sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) {
-		parsed, err := jwt.Parse(token, srv.jwtKey)
+		parsed, err := jwt.Parse(token, srv.jwtKey, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()) // F6423
 		if err != nil || !parsed.Valid {
 			return "", false, fmt.Errorf("invalid token")
 		}
@@ -302,7 +302,7 @@ func NewServerWithInterfaces(
 	// srv is assigned below, before any request can reach this closure.
 	var srv *Server
 	sseServer.SetAuthFunc(func(token string) (user string, isAdmin bool, err error) {
-		parsed, err := jwt.Parse(token, srv.jwtKey)
+		parsed, err := jwt.Parse(token, srv.jwtKey, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()) // F6423
 		if err != nil || !parsed.Valid {
 			return "", false, fmt.Errorf("invalid token")
 		}
@@ -670,6 +670,11 @@ func (s *Server) Stop() error {
 		close(s.stopCh)
 	})
 
+	// Open SSE streams would otherwise keep Shutdown waiting until its timeout.
+	if s.sseServer != nil {
+		s.sseServer.Close()
+	}
+
 	s.serverMu.Lock()
 	httpServer := s.httpServer
 	s.serverMu.Unlock()
@@ -782,7 +787,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Validate token
-		token, err := jwt.Parse(tokenStr, s.jwtKey, jwt.WithValidMethods([]string{"HS256"}))
+		token, err := jwt.Parse(tokenStr, s.jwtKey, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired()) // F6423: a signed token with no exp must not be immortal
 
 		if err != nil || !token.Valid {
 			s.sendError(w, http.StatusUnauthorized, "invalid token")

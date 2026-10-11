@@ -159,6 +159,10 @@ func NewServer(db *storage.Database, msgStore *storage.MessageStore, logger *slo
 		config.TokenExpiry = 24 * time.Hour
 	}
 
+	if db != nil && msgStore != nil {
+		// F6362: identical content shares one blob; make every release safe.
+		msgStore.SetBlobReferenceChecker(db.BlobReferenced)
+	}
 	return &Server{
 		logger:   logger,
 		config:   config,
@@ -459,6 +463,12 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		mu := s.userUploadLock(user)
 		mu.Lock()
 		defer mu.Unlock()
+		// F6362: shared reference guard (lock order: upload lock, then guard)
+		// so a concurrent Email/destroy cannot release the blob this upload
+		// is deduplicating onto before the reference is tracked.
+		gmu := s.userGuard(user)
+		gmu.Lock()
+		defer gmu.Unlock()
 		existed := s.msgStore.MessageExists(user, sha256Hex(data))
 		var limit int64
 		if f := s.quotaLimit.Load(); f != nil {
@@ -650,6 +660,11 @@ func (s *Server) dispatchMethodCall(user string, call MethodCall) Response {
 		idsKey = "emailIds"
 	}
 	if idsKey != "" {
+		if v, has := call.Args[idsKey]; has && v != nil {
+			if err := validateStringArray(v, idsKey); err != nil {
+				return err.response(call.ID)
+			}
+		}
 		if ids, ok := call.Args[idsKey].([]interface{}); ok && len(ids) > maxObjectsInGet {
 			return Response{
 				Name: "error",
@@ -663,6 +678,9 @@ func (s *Server) dispatchMethodCall(user string, call MethodCall) Response {
 	// maxObjectsInSet MUST be answered with requestTooLarge (F5332).
 	switch call.Name {
 	case "Mailbox/set", "Email/set", "Identity/set":
+		if err := validateSetArgTypes(call.Args); err != nil {
+			return err.response(call.ID)
+		}
 		create, _ := call.Args["create"].(map[string]interface{})
 		update, _ := call.Args["update"].(map[string]interface{})
 		destroy, _ := call.Args["destroy"].([]interface{})
