@@ -212,12 +212,16 @@ func (c *SPFChecker) evaluate(ctx context.Context, ip net.IP, domain, sender, re
 	// F4888: modifiers may appear anywhere in the record; redirect is applied
 	// only after no mechanism matched.
 	var redirect string
+	seenRedirect := false
 	mechanisms := terms[:0:0]
 	for _, m := range terms {
 		if m.typ == "redirect" {
-			if redirect == "" {
-				redirect = m.value
+			// F6495: RFC 7208 §6 — redirect MUST NOT appear more than once.
+			if seenRedirect {
+				return SPFPermError, "multiple redirect modifiers"
 			}
+			seenRedirect = true
+			redirect = m.value
 			continue
 		}
 		if m.typ == "exp" {

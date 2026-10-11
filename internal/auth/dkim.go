@@ -62,6 +62,9 @@ var (
 // dkimDNSTimeout bounds a DKIM public key lookup (F5075).
 const dkimDNSTimeout = 10 * time.Second
 
+// dkimMinRSABits is the smallest RSA modulus a verifier accepts (RFC 8301).
+const dkimMinRSABits = 1024
+
 // DKIMSignature represents a parsed DKIM-Signature header
 type DKIMSignature struct {
 	Domain         string
@@ -366,7 +369,10 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 	header = strings.TrimSpace(header)
 
 	// Parse tag-value pairs
-	tagValues := parseTagValueList(header)
+	tagValues, dup := parseTagValueListDup(header)
+	if dup {
+		return nil, errors.New("duplicate tag in DKIM-Signature")
+	}
 
 	for tag, value := range tagValues {
 		switch tag {
@@ -394,9 +400,17 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 		case "q":
 			sig.QueryMethod = value
 		case "t":
-			sig.Timestamp = parseInt64(value)
+			n, err := parseStrictUint(value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid t= tag: %w", err)
+			}
+			sig.Timestamp = int64(n)
 		case "x":
-			sig.Expiration = parseInt64(value)
+			n, err := parseStrictUint(value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid x= tag: %w", err)
+			}
+			sig.Expiration = int64(n)
 		case "h":
 			sig.SignedHeaders = parseHeaderList(value)
 		case "bh":
@@ -404,7 +418,11 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 		case "b":
 			sig.Signature = value
 		case "l":
-			sig.BodyLength = parseInt(value)
+			n, err := parseStrictUint(value)
+			if err != nil {
+				return nil, fmt.Errorf("invalid l= tag: %w", err)
+			}
+			sig.BodyLength = int(n)
 		case "z":
 			sig.CopiedHeaders = parseCopiedHeaders(value)
 		}
@@ -440,7 +458,16 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 
 // parseTagValueList parses tag=value;tag=value format
 func parseTagValueList(s string) map[string]string {
+	result, _ := parseTagValueListDup(s)
+	return result
+}
+
+// parseTagValueListDup is parseTagValueList that also reports whether any tag
+// name appeared more than once (RFC 6376 §3.2: tags MUST NOT be duplicated;
+// the last one silently winning let a second d=/bh= override the first).
+func parseTagValueListDup(s string) (map[string]string, bool) {
 	result := make(map[string]string)
+	dup := false
 	// Split by semicolon, but handle b= value which can contain semicolons
 	var current strings.Builder
 	escaped := false
@@ -452,7 +479,9 @@ func parseTagValueList(s string) map[string]string {
 		}
 		if r == ';' && !escaped {
 			// End of tag-value pair
-			parsePair(current.String(), result)
+			if parsePair(current.String(), result) {
+				dup = true
+			}
 			current.Reset()
 		} else {
 			if escaped {
@@ -464,13 +493,15 @@ func parseTagValueList(s string) map[string]string {
 	}
 	// Parse last pair
 	if current.Len() > 0 {
-		parsePair(current.String(), result)
+		if parsePair(current.String(), result) {
+			dup = true
+		}
 	}
 
-	return result
+	return result, dup
 }
 
-func parsePair(s string, result map[string]string) {
+func parsePair(s string, result map[string]string) bool {
 	s = strings.TrimSpace(s)
 	if idx := strings.Index(s, "="); idx > 0 {
 		tag := strings.TrimSpace(s[:idx])
@@ -479,8 +510,11 @@ func parsePair(s string, result map[string]string) {
 		if tag == "b" || tag == "bh" {
 			value = removeWhitespace(value)
 		}
+		_, dup := result[tag]
 		result[tag] = value
+		return dup
 	}
+	return false
 }
 
 func removeWhitespace(s string) string {
@@ -491,6 +525,23 @@ func removeWhitespace(s string) string {
 		}
 	}
 	return result.String()
+}
+
+// parseStrictUint parses a non-negative decimal of at most 18 digits
+// (RFC 6376 §3.2 tag-value numerics); anything else is an error rather than
+// being silently coerced (garbage -> 0, overflow -> wraparound).
+func parseStrictUint(s string) (int64, error) {
+	if s == "" || len(s) > 18 {
+		return 0, fmt.Errorf("bad number %q", s)
+	}
+	var n int64
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("bad number %q", s)
+		}
+		n = n*10 + int64(r-'0')
+	}
+	return n, nil
 }
 
 func parseInt64(s string) int64 {
@@ -559,7 +610,10 @@ func canonicalizeBodySimple(body []byte) []byte {
 	}
 	// If no trailing CRLF, add one
 	if len(body) < 2 || body[len(body)-2] != '\r' || body[len(body)-1] != '\n' {
-		body = append(body, []byte("\r\n")...)
+		// Copy: appending in place could overwrite the caller's buffer.
+		nb := make([]byte, len(body), len(body)+2)
+		copy(nb, body)
+		body = append(nb, '\r', '\n')
 	}
 	return body
 }
@@ -729,7 +783,9 @@ func canonicalizeHeaderRelaxed(name, value string) string {
 	value = whitespaceRegex.ReplaceAllString(value, " ")
 
 	// Trim leading/trailing whitespace
-	value = strings.TrimSpace(value)
+	// RFC 6376 §3.4.2: only WSP (SP/HTAB) is stripped; strings.TrimSpace
+	// would also eat NBSP/U+0085/VT/FF, letting a signed field be altered.
+	value = strings.Trim(value, " \t")
 
 	return name + ":" + value + "\r\n"
 }
@@ -969,6 +1025,10 @@ func parseDKIMPublicKey(record string) (any, string, error) {
 		rsaKey, ok := pubKey.(*rsa.PublicKey)
 		if !ok {
 			return nil, "", errors.New("not an RSA public key")
+		}
+		// RFC 8301 §3.2: verifiers MUST NOT accept RSA keys under 1024 bits.
+		if rsaKey.N == nil || rsaKey.N.BitLen() < dkimMinRSABits {
+			return nil, "", fmt.Errorf("RSA key too short (< %d bits)", dkimMinRSABits)
 		}
 		return rsaKey, "rsa", nil
 
