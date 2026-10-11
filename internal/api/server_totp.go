@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -113,6 +114,13 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 		return
 	}
 
+	// F6381: wrong codes are budgeted like login attempts, otherwise a
+	// stolen session can brute-force the 6-digit code here.
+	if s.isTOTPLockedOut(email) {
+		s.sendError(w, http.StatusTooManyRequests, "too many failed TOTP attempts")
+		return
+	}
+
 	totpSecret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.getTOTPKey())
 	if err != nil {
 		s.logger.Error("failed to decrypt TOTP secret", "error", err, "email", email)
@@ -122,34 +130,49 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 
 	valid, step := auth.ValidateTOTPAtWithStep(totpSecret, req.Code, time.Now(), auth.TOTPAlgorithmSHA1)
 	if !valid {
+		s.recordTOTPFailure(email)
 		s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 		return
 	}
 
 	// RFC 6238 §5.2: an OTP accepted once must never be accepted again.
-	// Consume the matched step here (persisted by the UpdateAccount below
-	// together with the enablement) so the same code cannot be replayed
-	// through the login path, which enforces the identical guard.
-	if step <= account.TOTPLastUsedStep {
+	// The step check and the enablement happen in one transaction so two
+	// concurrent verifies cannot both consume the same code, and the same
+	// code cannot be replayed through login. F6382: enabling the second
+	// factor revokes other sessions (the caller gets a replacement).
+	selfService := authenticatedUser == email
+	errReplay := errors.New("totp replay")
+	updated, err := s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+		if a.TOTPSecret != account.TOTPSecret {
+			return errReplay // enrolment changed underneath us
+		}
+		if step <= a.TOTPLastUsedStep {
+			return errReplay
+		}
+		a.TOTPLastUsedStep = step
+		a.TOTPEnabled = true
+		revokeSessions(a)
+		return nil
+	})
+	if errors.Is(err, errReplay) {
+		s.recordTOTPFailure(email)
 		s.sendError(w, http.StatusUnauthorized, "TOTP code already used")
 		return
 	}
-	account.TOTPLastUsedStep = step
-
-	// Code verified — enable TOTP
-	account.TOTPEnabled = true
-	account.UpdatedAt = time.Now()
-	if err := s.db.UpdateAccount(account); err != nil {
+	if err != nil {
 		s.sendError(w, http.StatusInternalServerError, "failed to enable TOTP")
 		return
 	}
+	s.clearTOTPFailures(email)
 
 	// Audit TOTP verification complete (2FA now enabled)
 	s.auditLogger.LogTOTPEnable(authenticatedUser, email, audit.ExtractIP(r))
 
-	s.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"enabled": true,
-	})
+	resp := map[string]interface{}{"enabled": true}
+	if selfService {
+		s.attachReplacementSession(w, r, updated, resp)
+	}
+	s.sendJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email string) {
@@ -188,6 +211,10 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 			s.sendError(w, http.StatusBadRequest, "current TOTP code required to disable 2FA")
 			return
 		}
+		if s.isTOTPLockedOut(email) {
+			s.sendError(w, http.StatusTooManyRequests, "too many failed TOTP attempts")
+			return
+		}
 		secret, err := auth.DecryptTOTPSecret(account.TOTPSecret, s.getTOTPKey())
 		if err != nil {
 			s.sendError(w, http.StatusInternalServerError, "authentication error")
@@ -195,10 +222,12 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 		}
 		valid, step := auth.ValidateTOTPAtWithStep(secret, req.Code, time.Now(), auth.TOTPAlgorithmSHA1)
 		if !valid {
+			s.recordTOTPFailure(email)
 			s.sendError(w, http.StatusUnauthorized, "invalid TOTP code")
 			return
 		}
 		if step <= account.TOTPLastUsedStep {
+			s.recordTOTPFailure(email)
 			s.sendError(w, http.StatusUnauthorized, "TOTP code already used")
 			return
 		}
@@ -208,12 +237,15 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 	// row are not reverted. F6250: when an admin removes another user's
 	// second factor (account recovery) that user's sessions are revoked, which
 	// also cuts off whoever may hold them; a self-service disable already
-	// proved possession of the factor above and keeps the acting session.
+	// proved possession of the factor above. F6380: a self-service disable
+	// of an enabled factor also revokes other sessions (a stolen session
+	// must not outlive the factor change); the caller gets a replacement.
 	selfService := authenticatedUser == email
-	_, err = s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
+	wasEnabled := account.TOTPEnabled
+	updated, err := s.db.MutateAccount(domain, user, func(a *db.AccountData) error {
 		a.TOTPSecret = ""
 		a.TOTPEnabled = false
-		if !selfService {
+		if !selfService || wasEnabled {
 			revokeSessions(a)
 		}
 		return nil
@@ -226,9 +258,11 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 	// Audit TOTP disable
 	s.auditLogger.LogTOTPDisable(authenticatedUser, email, audit.ExtractIP(r))
 
-	s.sendJSON(w, http.StatusOK, map[string]interface{}{
-		"enabled": false,
-	})
+	resp := map[string]interface{}{"enabled": false}
+	if selfService && wasEnabled {
+		s.attachReplacementSession(w, r, updated, resp)
+	}
+	s.sendJSON(w, http.StatusOK, resp)
 }
 
 // handleSelfTOTP adapts the admin TOTP handlers for self-service use: the
