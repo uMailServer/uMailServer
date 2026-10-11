@@ -31,6 +31,7 @@ const js = ts.transpileModule(source, {
 
 // --- hooks shim ---
 const states = [];
+states[0] = 'ok'; // F6942: Layout gates on a verified session; this spec covers the verified state
 function renderComponent(Layout) {
   states.cursor = 0;
   return Layout();
@@ -94,7 +95,7 @@ const navigateCalls = [];
 const contextified = vm.createContext({
   exports: {},
   require(name) {
-    if (name === 'react') return { useState: hooks.useState };
+    if (name === 'react') return { useState: hooks.useState, useEffect() {} };
     if (name === 'react-router-dom') {
       return {
         Outlet: 'Outlet',

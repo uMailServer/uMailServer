@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react'
 import { Filter, Plus, Trash2, Edit2, X, MoveUp, MoveDown } from 'lucide-react'
 import { useI18n } from '../hooks/useI18n'
 
+// A 401 means the session expired or was revoked: sign in again instead of
+// showing a generic failure.
+function redirectIfUnauthorized(res: { status: number }): boolean {
+  if (res.status !== 401) return false
+  if (typeof window !== 'undefined') window.location.href = '/login'
+  return true
+}
+
 interface FilterCondition {
   field: 'from' | 'to' | 'subject' | 'body' | 'header'
   operator: 'contains' | 'equals' | 'startsWith' | 'endsWith' | 'matches'
@@ -76,6 +84,7 @@ function FiltersPage() {
       const response = await fetch('/api/v1/filters', {
         credentials: 'include' // HttpOnly cookie handles auth
       })
+      if (redirectIfUnauthorized(response)) return
       if (response.ok) {
         const data = await response.json()
         setFilters(data.filters || [])
@@ -106,6 +115,7 @@ function FiltersPage() {
         body: JSON.stringify(filter)
       })
 
+      if (redirectIfUnauthorized(response)) return
       if (response.ok) {
         await loadFilters()
         setEditingFilter(null)
@@ -130,6 +140,7 @@ function FiltersPage() {
         credentials: 'include' // HttpOnly cookie handles auth
       })
 
+      if (redirectIfUnauthorized(response)) return
       if (response.ok) {
         await loadFilters()
       } else {
@@ -148,6 +159,7 @@ function FiltersPage() {
         credentials: 'include' // HttpOnly cookie handles auth
       })
 
+      if (redirectIfUnauthorized(response)) return
       if (response.ok) {
         await loadFilters()
       } else {
@@ -189,6 +201,7 @@ function FiltersPage() {
         credentials: 'include', // HttpOnly cookie handles auth
         body: JSON.stringify({ filterIds: newFilters.map(f => f.id) })
       })
+      if (redirectIfUnauthorized(response)) return
       if (!response.ok) {
         throw new Error(`Reorder failed with status ${response.status}`)
       }

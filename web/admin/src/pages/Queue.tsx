@@ -33,7 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useQueue } from "@/hooks/useApi";
-import { cn, formatRecipients } from "@/lib/utils";
+import { cn, formatRecipients, formatDateTime } from "@/lib/utils";
 import type { QueueEntry } from "@/types";
 
 export function Queue() {
@@ -149,7 +149,6 @@ export function Queue() {
     pending: entries?.filter((e: QueueEntry) => e.status === "pending").length || 0,
     sending: entries?.filter((e: QueueEntry) => e.status === "sending").length || 0,
     failed: entries?.filter((e: QueueEntry) => e.status === "failed").length || 0,
-    delivered: entries?.filter((e: QueueEntry) => e.status === "delivered").length || 0,
   };
 
   return (
@@ -169,12 +168,11 @@ export function Queue() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         <StatCard title="Total" value={stats.total} icon={Mail} color="from-gray-500 to-gray-600" />
         <StatCard title="Pending" value={stats.pending} icon={Clock} color="from-amber-500 to-amber-600" />
         <StatCard title="Sending" value={stats.sending} icon={Send} color="from-blue-500 to-blue-600" />
         <StatCard title="Failed" value={stats.failed} icon={AlertCircle} color="from-red-500 to-red-600" />
-        <StatCard title="Delivered" value={stats.delivered} icon={CheckCircle} color="from-emerald-500 to-emerald-600" />
       </div>
 
       {/* Filter and List */}
@@ -197,7 +195,6 @@ export function Queue() {
                 <SelectItem value="pending">Pending</SelectItem>
                 <SelectItem value="sending">Sending</SelectItem>
                 <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="delivered">Delivered</SelectItem>
                 <SelectItem value="bounced">Bounced</SelectItem>
               </SelectContent>
             </Select>
@@ -399,7 +396,7 @@ function QueueItem({ entry, onRetry, onDrop, getStatusIcon, getStatusBadge }: Qu
           <span className="block text-right">{entry.retry_count} retries</span>
         )}
         <span className="block text-right">
-          {new Date(entry.created_at).toLocaleString()}
+          {formatDateTime(entry.created_at)}
         </span>
       </div>
 

@@ -40,8 +40,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useAccounts } from "@/hooks/useApi";
 import { emailError, passwordError } from "@/lib/validation";
-import { cn, hasLoggedIn } from "@/lib/utils";
+import { cn, hasLoggedIn, formatBytes, gbToBytes, bytesToGb } from "@/lib/utils";
 import type { Account } from "@/types";
+
+// 507 = the server refused because the mailbox is over its storage quota.
+function apiErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error) {
+    if ((err as { status?: number }).status === 507) {
+      return "Storage quota exceeded: " + err.message;
+    }
+    return err.message;
+  }
+  return fallback;
+}
+
+const QUOTA_ERROR = "Quota must be a non-negative number of GB (0 = unlimited)";
 
 export function Accounts() {
   const {
@@ -62,6 +75,10 @@ export function Accounts() {
   const [newAccountEmail, setNewAccountEmail] = useState("");
   const [newAccountPassword, setNewAccountPassword] = useState("");
   const [newAccountIsAdmin, setNewAccountIsAdmin] = useState(false);
+  const [newAccountQuota, setNewAccountQuota] = useState("0");
+  const [editQuota, setEditQuota] = useState("0");
+  const [originalQuota, setOriginalQuota] = useState("0");
+  const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
   // Guards create/update/delete against double submit (ref: synchronous).
   const [busy, setBusy] = useState(false);
@@ -99,6 +116,7 @@ export function Accounts() {
       setNewAccountEmail("");
       setNewAccountPassword("");
       setNewAccountIsAdmin(false);
+      setNewAccountQuota("0");
     }
     setIsAddDialogOpen(open);
   };
@@ -115,14 +133,28 @@ export function Accounts() {
       return;
     }
 
+    const quotaBytes = gbToBytes(newAccountQuota);
+    if (quotaBytes === null) {
+      setFormError(QUOTA_ERROR);
+      return;
+    }
+
     try {
-      await createAccount(newAccountEmail.trim(), newAccountPassword, newAccountIsAdmin);
+      await createAccount(newAccountEmail.trim(), newAccountPassword, newAccountIsAdmin, quotaBytes);
       setIsAddDialogOpen(false);
       setNewAccountEmail("");
       setNewAccountPassword("");
       setNewAccountIsAdmin(false);
+      setNewAccountQuota("0");
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to create account");
+      const msg = apiErrorMessage(err, "Failed to create account");
+      if (msg.startsWith("Account created")) {
+        // The account exists: retrying create would 409, so leave the dialog.
+        setIsAddDialogOpen(false);
+        setNotice(msg);
+      } else {
+        setFormError(msg);
+      }
     }
   });
 
@@ -163,23 +195,25 @@ export function Accounts() {
         }
         updates.current_admin_password = adminPassword;
       }
+      if (editQuota !== originalQuota) {
+        // Only sent when the admin changed it: the field shows a rounded
+        // value and must not overwrite the exact stored limit.
+        const quotaBytes = gbToBytes(editQuota);
+        if (quotaBytes === null) {
+          setFormError(QUOTA_ERROR);
+          return;
+        }
+        updates.quota_limit = quotaBytes;
+      }
       await updateAccount(selectedAccount.email, updates);
       setIsEditDialogOpen(false);
       setSelectedAccount(null);
       setEditPassword("");
       setAdminPassword("");
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to update account");
+      setFormError(apiErrorMessage(err, "Failed to update account"));
     }
   });
-
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-  };
 
   return (
     <div className="space-y-6">
@@ -233,6 +267,18 @@ export function Accounts() {
                   onChange={(e) => setNewAccountPassword(e.target.value)}
                 />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="quota">Storage quota (GB, 0 = unlimited)</Label>
+                <Input
+                  id="quota"
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputMode="decimal"
+                  value={newAccountQuota}
+                  onChange={(e) => setNewAccountQuota(e.target.value)}
+                />
+              </div>
               <div className="flex items-center justify-between pt-2">
                 <Label htmlFor="is-admin">Admin Account</Label>
                 <Switch
@@ -252,6 +298,13 @@ export function Accounts() {
         </Dialog>
       </div>
 
+      {notice && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
+      )}
+
       {/* Search and Filter */}
       <div className="flex items-center gap-4">
         <div className="relative flex-1 max-w-sm">
@@ -266,6 +319,7 @@ export function Accounts() {
         <Button
           variant="outline"
           size="icon"
+          aria-label="Refresh accounts"
           onClick={() => fetchAccounts()}
           disabled={loading}
         >
@@ -312,6 +366,8 @@ export function Accounts() {
               onEdit={() => {
                 setSelectedAccount(account);
                 setOriginalIsAdmin(account.is_admin);
+                setEditQuota(bytesToGb(account.quota_limit));
+                setOriginalQuota(bytesToGb(account.quota_limit));
                 setEditPassword("");
                 setAdminPassword("");
                 setFormError("");
@@ -322,7 +378,6 @@ export function Accounts() {
                 setFormError("");
                 setIsDeleteDialogOpen(true);
               }}
-              formatBytes={formatBytes}
             />
           ))}
         </div>
@@ -364,6 +419,21 @@ export function Accounts() {
                     setSelectedAccount({ ...selectedAccount, is_active: checked })
                   }
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-quota">Storage quota (GB, 0 = unlimited)</Label>
+                <Input
+                  id="edit-quota"
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputMode="decimal"
+                  value={editQuota}
+                  onChange={(e) => setEditQuota(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Currently using {formatBytes(selectedAccount.quota_used)}
+                </p>
               </div>
               <div className="space-y-2 pt-4 border-t">
                 <Label htmlFor="new-password">New Password (optional)</Label>
@@ -432,13 +502,14 @@ interface AccountCardProps {
   account: Account;
   onEdit: () => void;
   onDelete: () => void;
-  formatBytes: (bytes: number) => string;
 }
 
-function AccountCard({ account, onEdit, onDelete, formatBytes }: AccountCardProps) {
-  const quotaPercent = account.quota_limit > 0
-    ? Math.round((account.quota_used / account.quota_limit) * 100)
-    : 0;
+function AccountCard({ account, onEdit, onDelete }: AccountCardProps) {
+  const unlimited = !(account.quota_limit > 0);
+  const overQuota = !unlimited && account.quota_used >= account.quota_limit;
+  const quotaPercent = unlimited
+    ? 0
+    : Math.min(100, Math.round((account.quota_used / account.quota_limit) * 100));
 
   return (
     <Card className="group">
@@ -472,7 +543,7 @@ function AccountCard({ account, onEdit, onDelete, formatBytes }: AccountCardProp
           <DropdownMenu>
             {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Account actions">
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -506,16 +577,22 @@ function AccountCard({ account, onEdit, onDelete, formatBytes }: AccountCardProp
                 Storage
               </span>
               <span className="font-medium">
-                {formatBytes(account.quota_used)} / {formatBytes(account.quota_limit)}
+                {formatBytes(account.quota_used)} / {unlimited ? "Unlimited" : formatBytes(account.quota_limit)}
               </span>
             </div>
-            <Progress
-              value={quotaPercent}
-              className="h-2"
-            />
-            <p className="text-xs text-muted-foreground text-right">
-              {quotaPercent}% used
-            </p>
+            {!unlimited && (
+              <Progress
+                value={quotaPercent}
+                className="h-2"
+              />
+            )}
+            {overQuota ? (
+              <p className="text-xs text-red-600 text-right">Over quota</p>
+            ) : !unlimited ? (
+              <p className="text-xs text-muted-foreground text-right">
+                {quotaPercent}% used
+              </p>
+            ) : null}
           </div>
 
           {/* Last Login */}

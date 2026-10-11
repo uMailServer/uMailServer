@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react'
 import { Palmtree, Calendar, Clock, Mail, AlertCircle } from 'lucide-react'
 import { useI18n } from '../hooks/useI18n'
 
+// A 401 means the session expired or was revoked: sign in again instead of
+// showing a generic failure.
+function redirectIfUnauthorized(res: { status: number }): boolean {
+  if (res.status !== 401) return false
+  if (typeof window !== 'undefined') window.location.href = '/login'
+  return true
+}
+
 interface VacationConfig {
   enabled: boolean
   start_date?: string
@@ -61,6 +69,7 @@ function VacationPage() {
       const response = await fetch('/api/v1/vacation', {
         credentials: 'include' // HttpOnly cookie handles auth
       })
+      if (redirectIfUnauthorized(response)) return
       if (response.ok) {
         const data = await response.json()
         setConfig({
@@ -102,6 +111,7 @@ function VacationPage() {
         body: JSON.stringify(config)
       })
 
+      if (redirectIfUnauthorized(response)) return
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null
         throw new Error(data?.error || 'Failed to save vacation settings')

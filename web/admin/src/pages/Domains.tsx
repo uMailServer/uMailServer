@@ -235,6 +235,7 @@ _dmarc.${domain.name}.    IN    TXT    "v=DMARC1; p=quarantine; rua=mailto:dmarc
         <Button
           variant="outline"
           size="icon"
+          aria-label="Refresh domains"
           onClick={() => fetchDomains()}
           disabled={loading}
         >
@@ -358,7 +359,7 @@ function DomainCard({ domain, onToggle, onDelete, onCopyDNS, copiedDNS }: Domain
           <DropdownMenu>
             {/* @ts-expect-error asChild prop not typed in Base UI but works at runtime */}
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8">
+              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Domain actions">
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>

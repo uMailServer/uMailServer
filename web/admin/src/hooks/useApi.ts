@@ -68,7 +68,13 @@ async function apiRequest<T>(
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     }
     const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
-    throw new ApiRequestError(errorData.error || "Request failed", response.status);
+    let message: string = errorData.error || "Request failed";
+    // A throttled client needs to know how long to wait.
+    const retryAfter = response.headers?.get?.("Retry-After");
+    if (response.status === 429 && retryAfter && /^\d+$/.test(retryAfter)) {
+      message += ` Try again in ${retryAfter} seconds.`;
+    }
+    throw new ApiRequestError(message, response.status);
   }
 
   if (response.status === 204) {
@@ -189,12 +195,30 @@ export function useAccounts() {
     }
   }, []);
 
-  const createAccount = useCallback(async (email: string, password: string, isAdmin = false) => {
+  // The create endpoint does not take quota_limit; a non-zero quota is applied
+  // with a follow-up PUT. If that second step fails the account still exists,
+  // so the error says so instead of implying nothing was created.
+  const createAccount = useCallback(async (email: string, password: string, isAdmin = false, quotaLimit?: number) => {
     const result = await apiRequest<Account>("/accounts", {
       method: "POST",
       body: JSON.stringify({ email, password, is_admin: isAdmin }),
     });
+    let quotaError: unknown = null;
+    if (quotaLimit && quotaLimit > 0) {
+      try {
+        await apiRequest<Account>(`/accounts/${encodeURIComponent(email)}`, {
+          method: "PUT",
+          body: JSON.stringify({ quota_limit: quotaLimit }),
+        });
+      } catch (err) {
+        quotaError = err;
+      }
+    }
     await fetchAccounts();
+    if (quotaError) {
+      const e = quotaError as ApiError;
+      throw new ApiRequestError(`Account created, but the quota could not be set: ${e.message}`, e.status);
+    }
     return result;
   }, [fetchAccounts]);
 

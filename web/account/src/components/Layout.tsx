@@ -1,9 +1,41 @@
+import { useEffect, useState } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
 import { User, Lock, Shield, Forward, Palmtree, LogOut, Filter } from 'lucide-react'
 
 function Layout() {
   const location = useLocation()
   const navigate = useNavigate()
+  const isLoginRoute = location.pathname === '/login'
+  // Auth gate: protected routes render only after the session is verified.
+  // Re-entering /login resets it, so Back after sign-out re-probes instead of
+  // showing the previous user's stale page.
+  const [session, setSession] = useState<'pending' | 'ok'>('pending')
+
+  useEffect(() => {
+    if (isLoginRoute) {
+      setSession('pending')
+      return
+    }
+    let stale = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/v1/account/forwarding', { credentials: 'include' })
+        if (stale) return
+        if (res.status === 401) {
+          navigate('/login')
+          return
+        }
+      } catch {
+        // Network failure is not proof of a missing session: let the page
+        // show its own error rather than locking the user out.
+        if (stale) return
+      }
+      setSession('ok')
+    })()
+    return () => {
+      stale = true
+    }
+  }, [isLoginRoute])
 
   // Revoke the server session: without this the HttpOnly cookie stays valid
   // and "Sign out" only hides the UI. Best-effort — a failing request must
@@ -24,6 +56,10 @@ function Layout() {
     { path: '/filters', label: 'Email Filters', icon: Filter },
     { path: '/vacation', label: 'Vacation Reply', icon: Palmtree },
   ]
+
+  // The login page renders bare, without the signed-in navigation.
+  if (isLoginRoute) return <Outlet />
+  if (session !== 'ok') return null
 
   return (
     <div className="min-h-screen bg-gray-50">
