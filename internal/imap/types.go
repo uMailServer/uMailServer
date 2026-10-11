@@ -126,6 +126,10 @@ type SearchCriteria struct {
 	// Size searches
 	Larger  int64
 	Smaller int64
+	// LargerSet / SmallerSet distinguish "SMALLER 0" (matches nothing) from
+	// an absent key (F6604).
+	LargerSet  bool
+	SmallerSet bool
 
 	// Logical operators
 	Not *SearchCriteria
