@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { Account, Domain, QueueEntry } from "@/types";
 
 interface ApiError {
@@ -26,6 +26,25 @@ interface UseApiOptions {
 }
 
 const API_BASE = "/api/v1";
+export const UNAUTHORIZED_EVENT = "umail:unauthorized";
+
+// The server pages list endpoints (default 100, max 1000). Request the max
+// explicitly and keep fetching until a short page, so lists never truncate.
+const PAGE_LIMIT = 1000;
+const MAX_PAGES = 50;
+async function apiRequestAll<T>(endpoint: string): Promise<T[]> {
+  const sep = endpoint.includes("?") ? "&" : "?";
+  const all: T[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const rows = await apiRequest<T[]>(
+      `${endpoint}${sep}limit=${PAGE_LIMIT}&offset=${page * PAGE_LIMIT}`
+    );
+    if (!Array.isArray(rows)) return rows ?? all;
+    all.push(...rows);
+    if (rows.length < PAGE_LIMIT) break;
+  }
+  return all;
+}
 
 // Token is now stored in HttpOnly cookie by the server
 // No need to read from localStorage (more secure against XSS)
@@ -43,6 +62,11 @@ async function apiRequest<T>(
   });
 
   if (!response.ok) {
+    // Expired/revoked session: let the app drop back to the login screen.
+    // Login itself uses its own fetch, so a 401 here always means a stale session.
+    if (response.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
     throw new ApiRequestError(errorData.error || "Request failed", response.status);
   }
@@ -90,18 +114,20 @@ export function useDomains() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
 
+  const seq = useRef(0);
   const fetchDomains = useCallback(async () => {
+    const mine = ++seq.current;
     setLoading(true);
     setError(null);
     try {
-      const result = await apiRequest<Domain[]>("/domains");
-      setData(result);
+      const result = await apiRequestAll<Domain>("/domains");
+      if (mine === seq.current) setData(result);
       return result;
     } catch (err) {
-      setError(err as ApiError);
+      if (mine === seq.current) setError(err as ApiError);
       throw err;
     } finally {
-      setLoading(false);
+      if (mine === seq.current) setLoading(false);
     }
   }, []);
 
@@ -145,19 +171,21 @@ export function useAccounts() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
 
+  const seq = useRef(0);
   const fetchAccounts = useCallback(async (domain?: string) => {
+    const mine = ++seq.current;
     setLoading(true);
     setError(null);
     try {
       const url = domain ? `/accounts?domain=${encodeURIComponent(domain)}` : "/accounts";
-      const result = await apiRequest<Account[]>(url);
-      setData(result);
+      const result = await apiRequestAll<Account>(url);
+      if (mine === seq.current) setData(result);
       return result;
     } catch (err) {
-      setError(err as ApiError);
+      if (mine === seq.current) setError(err as ApiError);
       throw err;
     } finally {
-      setLoading(false);
+      if (mine === seq.current) setLoading(false);
     }
   }, []);
 
@@ -235,18 +263,22 @@ export function useQueue() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
 
+  const seq = useRef(0);
   const fetchQueue = useCallback(async () => {
+    const mine = ++seq.current;
     setLoading(true);
     try {
-      const result = await apiRequest<QueueEntry[]>("/queue");
-      setData(result);
-      setError(null);
+      const result = await apiRequestAll<QueueEntry>("/queue");
+      if (mine === seq.current) {
+        setData(result);
+        setError(null);
+      }
       return result;
     } catch (err) {
-      setError(err as ApiError);
+      if (mine === seq.current) setError(err as ApiError);
       throw err;
     } finally {
-      setLoading(false);
+      if (mine === seq.current) setLoading(false);
     }
   }, []);
 

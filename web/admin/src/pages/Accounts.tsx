@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Users,
   Plus,
@@ -39,6 +39,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useAccounts } from "@/hooks/useApi";
+import { emailError, passwordError } from "@/lib/validation";
 import { cn, hasLoggedIn } from "@/lib/utils";
 import type { Account } from "@/types";
 
@@ -62,6 +63,20 @@ export function Accounts() {
   const [newAccountPassword, setNewAccountPassword] = useState("");
   const [newAccountIsAdmin, setNewAccountIsAdmin] = useState(false);
   const [formError, setFormError] = useState("");
+  // Guards create/update/delete against double submit (ref: synchronous).
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const guarded = async (fn: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
   // Edit dialog state is separate from the create form so a half-typed
   // create password can never be sent as a password reset for another account.
   const [editPassword, setEditPassword] = useState("");
@@ -76,15 +91,20 @@ export function Accounts() {
     a.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleCreateAccount = async () => {
+  const handleCreateAccount = () => guarded(async () => {
     setFormError("");
     if (!newAccountEmail || !newAccountPassword) {
       setFormError("Email and password are required");
       return;
     }
+    const invalid = emailError(newAccountEmail.trim()) ?? passwordError(newAccountPassword);
+    if (invalid) {
+      setFormError(invalid);
+      return;
+    }
 
     try {
-      await createAccount(newAccountEmail, newAccountPassword, newAccountIsAdmin);
+      await createAccount(newAccountEmail.trim(), newAccountPassword, newAccountIsAdmin);
       setIsAddDialogOpen(false);
       setNewAccountEmail("");
       setNewAccountPassword("");
@@ -92,9 +112,9 @@ export function Accounts() {
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create account");
     }
-  };
+  });
 
-  const handleDeleteAccount = async () => {
+  const handleDeleteAccount = () => guarded(async () => {
     if (!selectedAccount) return;
 
     setFormError("");
@@ -105,9 +125,9 @@ export function Accounts() {
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to delete account");
     }
-  };
+  });
 
-  const handleUpdateAccount = async () => {
+  const handleUpdateAccount = () => guarded(async () => {
     if (!selectedAccount) return;
 
     try {
@@ -116,6 +136,11 @@ export function Accounts() {
         is_active: selectedAccount.is_active,
       };
       if (editPassword) {
+        const pwErr = passwordError(editPassword);
+        if (pwErr) {
+          setFormError(pwErr);
+          return;
+        }
         updates.password = editPassword;
       }
       if (selectedAccount.is_admin !== originalIsAdmin) {
@@ -134,7 +159,7 @@ export function Accounts() {
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to update account");
     }
-  };
+  });
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return "0 B";
@@ -209,7 +234,7 @@ export function Accounts() {
               <Button variant="outline" onClick={() => setIsAddDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleCreateAccount}>Create Account</Button>
+              <Button onClick={handleCreateAccount} disabled={busy}>Create Account</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -355,7 +380,7 @@ export function Accounts() {
             <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleUpdateAccount}>Save Changes</Button>
+            <Button onClick={handleUpdateAccount} disabled={busy}>Save Changes</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -380,7 +405,7 @@ export function Accounts() {
             <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={handleDeleteAccount}>
+            <Button variant="destructive" onClick={handleDeleteAccount} disabled={busy}>
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
             </Button>

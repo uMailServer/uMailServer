@@ -11,6 +11,7 @@ import { Accounts } from "@/pages/Accounts";
 import { Queue } from "@/pages/Queue";
 import { SettingsPage } from "@/pages/Settings";
 import { useWebSocket } from "@/hooks/useWebSocket";
+import { UNAUTHORIZED_EVENT } from "@/hooks/useApi";
 import { recalledEmail, rememberEmail } from "@/lib/serviceStatus";
 import type { User, Activity, RealtimeMetrics } from "@/types";
 
@@ -35,6 +36,19 @@ function App() {
     }).catch(() => {
       // Not authenticated
     });
+  }, []);
+
+  // Any 401 from the API means the session is gone: return to login.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      rememberEmail(null);
+      setIsAuthenticated(false);
+      setUser(null);
+      setActivities([]);
+      setMetrics(undefined);
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
 
   // WebSocket connection for realtime updates
