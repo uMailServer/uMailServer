@@ -61,7 +61,6 @@ type Manager struct {
 	stopped      bool           // Stop closed shutdown; Start must make a new one
 	workers      sync.WaitGroup // delivery workers and the sweeper of the current run
 	mu           sync.RWMutex
-	claimMu      sync.Mutex // serializes the pending->sending claim in deliver (F4927)
 	metrics      *metrics.SimpleMetrics
 	logger       *slog.Logger
 	maxRetries   int
@@ -763,16 +762,15 @@ func (m *Manager) processPendingEntries() {
 // delivered or bounced: the same entry can be dispatched more than once
 // (Enqueue/RetryEntry and the sweeper), but only one copy may be delivered (F4927).
 func (m *Manager) claimEntry(id string) (*db.QueueEntry, bool) {
-	m.claimMu.Lock()
-	defer m.claimMu.Unlock()
-	cur, err := m.db.GetQueueEntry(id)
-	// A stale duplicate dispatched while the entry is deferred must not
-	// retry it early and burn an attempt (F5683).
-	if err != nil || cur.Status != "pending" || cur.NextRetry.After(time.Now()) {
-		return nil, false
-	}
-	cur.Status = "sending"
-	if err := m.db.UpdateQueueEntry(cur); err != nil {
+	// db.ClaimQueueEntry checks status and due time and writes "sending" in
+	// one write transaction, so concurrent workers (or instances sharing the
+	// database) cannot both win. A stale duplicate dispatched while the entry
+	// is deferred must not retry it early and burn an attempt (F5683, F6730).
+	cur, err := m.db.ClaimQueueEntry(id, time.Now())
+	if err != nil {
+		if !errors.Is(err, db.ErrQueueEntryNotClaimable) && !errors.Is(err, db.ErrQueueEntryNotFound) {
+			m.logger.Error("failed to claim queue entry", "error", err, "id", id)
+		}
 		return nil, false
 	}
 	return cur, true
