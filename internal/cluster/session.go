@@ -243,7 +243,7 @@ func NewRedisDistributedLock(redisURL string) (*RedisDistributedLock, error) {
 
 // lockKey returns the Redis key for a lock
 func lockKey(lockName string) string {
-	return fmt.Sprintf("lock:%s", lockName)
+	return fmt.Sprintf("lock:mutex:%s", lockName)
 }
 
 // Acquire attempts to acquire the lock with TTL

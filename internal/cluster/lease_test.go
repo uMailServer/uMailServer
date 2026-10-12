@@ -17,7 +17,7 @@ func newTestLock(t *testing.T) (*fakeRedis, *RedisDistributedLock, string) {
 	if err != nil || !ok {
 		t.Fatalf("acquire: %v %v", ok, err)
 	}
-	tok, _, _ := f.State("lock:job")
+	tok, _, _ := f.State("lock:mutex:job")
 	return f, l, tok
 }
 
@@ -41,11 +41,11 @@ func TestDistributedLockExtendLostLock(t *testing.T) {
 	if err := l.Extend(ctx, "job", 10*time.Second); err != nil {
 		t.Fatalf("extend while held: %v", err)
 	}
-	f.Put("lock:job", "other-instance", 30000)
+	f.Put("lock:mutex:job", "other-instance", 30000)
 	if err := l.Extend(ctx, "job", 10*time.Second); err == nil {
 		t.Fatal("Extend reported success on a lock it does not hold")
 	}
-	if v, ttl, _ := f.State("lock:job"); v != "other-instance" || ttl != 30000 {
+	if v, ttl, _ := f.State("lock:mutex:job"); v != "other-instance" || ttl != 30000 {
 		t.Fatalf("other owner's lock modified: %s %d", v, ttl)
 	}
 
@@ -64,13 +64,13 @@ func TestDistributedLockExtendSubSecond(t *testing.T) {
 	if err := l.Extend(ctx, "job", 500*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
-	if v, ttl, ok := f.State("lock:job"); !ok || v != tok || ttl != 500 {
+	if v, ttl, ok := f.State("lock:mutex:job"); !ok || v != tok || ttl != 500 {
 		t.Fatalf("held=%v ours=%v ttl=%d", ok, v == tok, ttl)
 	}
 	if err := l.Extend(ctx, "job", 0); err == nil {
 		t.Fatal("zero TTL accepted")
 	}
-	if _, _, ok := f.State("lock:job"); !ok {
+	if _, _, ok := f.State("lock:mutex:job"); !ok {
 		t.Fatal("zero TTL released the lock")
 	}
 }

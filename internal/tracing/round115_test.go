@@ -10,7 +10,7 @@ import (
 
 func TestRound115OTLPStartupDoesNotBlock(t *testing.T) {
 	start := time.Now()
-	p, err := NewProvider(Config{Enabled: true, Exporter: "otlp", OTLPEndpoint: "127.0.0.1:1"})
+	p, err := NewProvider(Config{Enabled: true, SampleRate: 1, Exporter: "otlp", OTLPEndpoint: "127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}

@@ -18,7 +18,7 @@ func TestLockAcquireRejectsNonExpiringTTL(t *testing.T) {
 		if err == nil || ok {
 			t.Fatalf("ttl %v: Acquire = %v, %v; want error", ttl, ok, err)
 		}
-		if _, _, held := f.State("lock:job"); held {
+		if _, _, held := f.State("lock:mutex:job"); held {
 			t.Fatalf("ttl %v: a non-expiring lock was stored", ttl)
 		}
 	}

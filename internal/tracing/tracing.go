@@ -2,7 +2,10 @@ package tracing
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +22,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -30,7 +34,7 @@ type Config struct {
 	OTLPEndpoint string            `yaml:"otlp_endpoint"` // OTLP collector endpoint (e.g., "localhost:4317")
 	Environment  string            `yaml:"environment"`   // "production", "staging", "development"
 	Attributes   map[string]string `yaml:"attributes"`    // Additional resource attributes
-	SampleRate   float64           `yaml:"sample_rate"`   // 0.0 to 1.0
+	SampleRate   float64           `yaml:"sample_rate"`   // 0.0 (none) to 1.0 (all)
 }
 
 // Provider manages OpenTelemetry tracing
@@ -63,8 +67,13 @@ func NewProvider(config Config) (*Provider, error) {
 	if config.Environment == "" {
 		config.Environment = "production"
 	}
-	if config.SampleRate <= 0 {
-		config.SampleRate = 1.0
+	// F7040: 0 (or negative) means "sample nothing"; it used to silently
+	// become 100%. Absent config gets 1.0 from config defaults.
+	if config.SampleRate < 0 {
+		config.SampleRate = 0
+	}
+	if config.SampleRate > 1 {
+		config.SampleRate = 1
 	}
 
 	// Create exporter based on configuration
@@ -111,6 +120,33 @@ func NewProvider(config Config) (*Provider, error) {
 	}, nil
 }
 
+// otlpTransport derives the gRPC target and credentials from the endpoint
+// (F7041). An "https://" endpoint uses TLS; "http://" or a bare host:port stays
+// plaintext (a warning is logged for non-loopback hosts so spans, which carry
+// request metadata, are not silently sent in clear).
+func otlpTransport(endpoint string) (string, credentials.TransportCredentials) {
+	target := endpoint
+	useTLS := false
+	switch {
+	case strings.HasPrefix(endpoint, "https://"):
+		target, useTLS = strings.TrimPrefix(endpoint, "https://"), true
+	case strings.HasPrefix(endpoint, "http://"):
+		target = strings.TrimPrefix(endpoint, "http://")
+	}
+	target = strings.TrimSuffix(target, "/")
+	if useTLS {
+		return target, credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	}
+	host := target
+	if h, _, err := net.SplitHostPort(target); err == nil {
+		host = h
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		slog.Warn("tracing: OTLP endpoint uses plaintext gRPC; use an https:// endpoint to encrypt", "endpoint", target)
+	}
+	return target, insecure.NewCredentials()
+}
+
 // createExporter creates a trace exporter based on configuration
 func createExporter(config Config) (sdktrace.SpanExporter, error) {
 	switch config.Exporter {
@@ -123,9 +159,8 @@ func createExporter(config Config) (sdktrace.SpanExporter, error) {
 		// channel, so startup failed after the timeout even with a healthy
 		// collector (F5976). The batcher exports asynchronously and retries,
 		// so an unreachable collector must not block or fail startup.
-		conn, err := grpc.NewClient(config.OTLPEndpoint,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
+		target, creds := otlpTransport(config.OTLPEndpoint)
+		conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to OTLP endpoint: %w", err)
 		}

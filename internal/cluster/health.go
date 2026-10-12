@@ -38,6 +38,10 @@ func NewRedisHealthMonitor(redisURL, instanceID string) (*RedisHealthMonitor, er
 	}, nil
 }
 
+// HealthElectionKey is the leader-election key whose holder is reported as
+// leader in instance health.
+const HealthElectionKey = "server"
+
 // healthKey returns the Redis key for instance health
 func healthKey(instanceID string) string {
 	return fmt.Sprintf("health:%s", instanceID)
@@ -52,11 +56,20 @@ func instancesKey() string {
 func (h *RedisHealthMonitor) RecordHeartbeat(ctx context.Context) error {
 	now := time.Now().Unix()
 
+	// Report real leadership (F7043): it was hard-coded false, so no
+	// instance ever appeared as leader in /cluster status.
+	isLeader := false
+	if cur, err := h.client.Get(ctx, leaderKey(HealthElectionKey)).Result(); err == nil {
+		isLeader = cur == h.instanceID
+	} else if !errors.Is(err, redis.Nil) {
+		return err
+	}
+
 	// Store heartbeat with timestamp
 	err := h.client.HSet(ctx, healthKey(h.instanceID), map[string]interface{}{
 		"instance_id": h.instanceID,
 		"last_beat":   now,
-		"is_leader":   false, // Will be updated by leader election
+		"is_leader":   isLeader,
 	}).Err()
 	if err != nil {
 		return err
@@ -106,7 +119,7 @@ func (h *RedisHealthMonitor) GetInstanceHealth(ctx context.Context) ([]InstanceH
 			status = "offline"
 		}
 
-		isLeader := data["is_leader"] == "true"
+		isLeader := data["is_leader"] == "true" || data["is_leader"] == "1"
 
 		health = append(health, InstanceHealth{
 			InstanceID: id,
