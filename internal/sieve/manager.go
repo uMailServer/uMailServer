@@ -338,6 +338,15 @@ func (m *Manager) ProcessMessage(userID string, msg *MessageContext) ([]Action, 
 	return actions, nil
 }
 
+// vacationDays converts days to a Duration without overflow: a larger value
+// wrapped negative and disabled the reply window (F7171).
+func vacationDays(days int) time.Duration {
+	if days > MaxVacationDays {
+		days = MaxVacationDays
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
 // ShouldSendVacation checks if we should send a vacation reply to this sender
 // Returns false if we sent one recently (within the minimum interval)
 func (m *Manager) ShouldSendVacation(sender string, days int) bool {
@@ -350,7 +359,7 @@ func (m *Manager) ShouldSendVacation(sender string, days int) bool {
 	}
 
 	// Minimum interval is 1 day regardless of user's preference
-	interval := time.Duration(days) * 24 * time.Hour
+	interval := vacationDays(days)
 	if interval < 24*time.Hour {
 		interval = 24 * time.Hour
 	}
@@ -397,7 +406,7 @@ func (m *Manager) RecordVacationSent(sender string) {
 // Days-granular with a 24h floor (RFC 5230 :days semantics); use
 // CheckAndRecordVacationFor for RFC 6131 :seconds windows.
 func (m *Manager) CheckAndRecordVacation(sender string, days int) bool {
-	interval := time.Duration(days) * 24 * time.Hour
+	interval := vacationDays(days)
 	// Minimum interval is 1 day regardless of user's preference
 	if interval < 24*time.Hour {
 		interval = 24 * time.Hour
@@ -425,7 +434,7 @@ func (m *Manager) CheckAndRecordVacationFor(sender string, interval time.Duratio
 
 // GetVacationInterval returns the minimum interval for vacation replies
 func (m *Manager) GetVacationInterval(days int) time.Duration {
-	interval := time.Duration(days) * 24 * time.Hour
+	interval := vacationDays(days)
 	if interval < 24*time.Hour {
 		interval = 24 * time.Hour
 	}

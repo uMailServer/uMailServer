@@ -305,16 +305,16 @@ func (s *ManageSieveServer) Listen() error {
 // serve handles plain TCP connections
 func (s *ManageSieveServer) serve(ln net.Listener) {
 	defer s.wg.Done()
+	var backoff time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			select {
-			case <-s.done:
+			if errors.Is(err, net.ErrClosed) || !acceptBackoff(s.done, &backoff) {
 				return
-			default:
-				continue
 			}
+			continue
 		}
+		backoff = 0
 		if !s.admit(conn) {
 			continue
 		}
@@ -326,16 +326,16 @@ func (s *ManageSieveServer) serve(ln net.Listener) {
 // serveTLS handles TLS connections
 func (s *ManageSieveServer) serveTLS(ln net.Listener) {
 	defer s.wg.Done()
+	var backoff time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			select {
-			case <-s.done:
+			if errors.Is(err, net.ErrClosed) || !acceptBackoff(s.done, &backoff) {
 				return
-			default:
-				continue
 			}
+			continue
 		}
+		backoff = 0
 		if !s.admit(conn) {
 			continue
 		}
@@ -1236,4 +1236,20 @@ func (s *ManageSieveServer) Addr() net.Addr {
 		return s.ln.Addr()
 	}
 	return nil
+}
+
+// acceptBackoff sleeps with exponential backoff (5ms..1s) after an Accept
+// error and reports false if done was closed meanwhile (F7080).
+func acceptBackoff(done <-chan struct{}, backoff *time.Duration) bool {
+	if *backoff == 0 {
+		*backoff = 5 * time.Millisecond
+	} else if *backoff *= 2; *backoff > time.Second {
+		*backoff = time.Second
+	}
+	select {
+	case <-done:
+		return false
+	case <-time.After(*backoff):
+		return true
+	}
 }
