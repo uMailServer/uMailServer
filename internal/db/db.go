@@ -171,8 +171,9 @@ type QueueEntry struct {
 	NextRetry   time.Time     `json:"next_retry"`
 	RetryCount  int           `json:"retry_count"`
 	LastError   string        `json:"last_error"`
-	Status      string        `json:"status"`   // pending, sending, failed, delivered, bounced
-	Priority    QueuePriority `json:"priority"` // 0=low, 1=normal, 2=high, 3=urgent
+	ClaimedAt   time.Time     `json:"claimed_at,omitempty"` // when ClaimQueueEntry moved it to "sending"
+	Status      string        `json:"status"`               // pending, sending, failed, delivered, bounced
+	Priority    QueuePriority `json:"priority"`             // 0=low, 1=normal, 2=high, 3=urgent
 	// DSN fields
 	Notify DSNNotify `json:"notify"` // DSN notification preferences (NEVER, SUCCESS, FAILURE, DELAY)
 	Ret    DSNRet    `json:"ret"`    // What to return in DSN (FULL or HDRS)
@@ -1267,6 +1268,7 @@ func (d *DB) ClaimQueueEntry(id string, now time.Time) (*QueueEntry, error) {
 			return fmt.Errorf("%w: %s (status %q)", ErrQueueEntryNotClaimable, id, claimed.Status)
 		}
 		claimed.Status = "sending"
+		claimed.ClaimedAt = now
 		data, err := json.Marshal(&claimed)
 		if err != nil {
 			return err
@@ -1277,6 +1279,56 @@ func (d *DB) ClaimQueueEntry(id string, now time.Time) (*QueueEntry, error) {
 		return nil, err
 	}
 	return &claimed, nil
+}
+
+// RequeueStaleClaims reverts entries stuck in "sending" whose claim is older
+// than lease (the worker's outcome write failed or the worker died) to
+// "pending", due now. It returns the number of entries reverted (F7191).
+func (d *DB) RequeueStaleClaims(now time.Time, lease time.Duration) (int, error) {
+	n := 0
+	err := d.bolt.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BucketQueue))
+		if b == nil {
+			return fmt.Errorf("bucket not found: %s", BucketQueue)
+		}
+		type kv struct {
+			k string
+			v []byte
+		}
+		var upd []kv
+		err := b.ForEach(func(k, v []byte) error {
+			if !bytes.Contains(v, []byte(`"status":"sending"`)) {
+				return nil
+			}
+			var e QueueEntry
+			if json.Unmarshal(v, &e) != nil || e.Status != "sending" {
+				return nil
+			}
+			if !e.ClaimedAt.IsZero() && now.Sub(e.ClaimedAt) < lease {
+				return nil
+			}
+			e.Status = "pending"
+			e.NextRetry = now
+			e.ClaimedAt = time.Time{}
+			data, err := json.Marshal(&e)
+			if err != nil {
+				return nil
+			}
+			upd = append(upd, kv{string(k), data})
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, u := range upd {
+			if err := b.Put([]byte(u.k), u.v); err != nil {
+				return err
+			}
+			n++
+		}
+		return nil
+	})
+	return n, err
 }
 
 // Dequeue removes a message from the queue
@@ -1394,8 +1446,52 @@ func (d *DB) CreateAlias(alias *AliasData) error {
 			hasKeyFold(ab, []byte(AccountKey(alias.Domain, alias.Alias))) {
 			return ErrAliasConflict
 		}
+		if aliasCycleTx(tx, alias.Domain, key, alias.Target) {
+			return ErrAliasConflict // F7250
+		}
 		return b.Put([]byte(key), data)
 	})
+}
+
+// aliasCycleTx reports whether following target through the alias table
+// (same-store addresses only) reaches the alias stored under selfKey, or
+// runs into a pre-existing loop / absurdly deep chain.
+func aliasCycleTx(tx *bbolt.Tx, domain, selfKey, target string) bool {
+	b := tx.Bucket([]byte(BucketAliases))
+	if b == nil {
+		return false
+	}
+	self := strings.ToLower(selfKey)
+	cur := strings.TrimSpace(target)
+	for depth := 0; depth < 32; depth++ {
+		at := strings.LastIndex(cur, "@")
+		if at <= 0 {
+			return false
+		}
+		k := cur[at+1:] + ":" + strings.ToLower(cur[:at])
+		if strings.ToLower(k) == self {
+			return true
+		}
+		raw := b.Get([]byte(k))
+		if raw == nil {
+			c := b.Cursor()
+			for kk, v := c.First(); kk != nil; kk, v = c.Next() {
+				if bytes.EqualFold(kk, []byte(k)) {
+					raw = v
+					break
+				}
+			}
+		}
+		if raw == nil {
+			return false
+		}
+		var next AliasData
+		if json.Unmarshal(raw, &next) != nil || !next.IsActive {
+			return false
+		}
+		cur = strings.TrimSpace(next.Target)
+	}
+	return true
 }
 
 // UpdateAlias updates an existing alias
@@ -1417,6 +1513,9 @@ func (d *DB) UpdateAlias(alias *AliasData) error {
 		// F6081: never resurrect an alias deleted after the read.
 		if b.Get([]byte(key)) == nil {
 			return ErrAliasNotFound
+		}
+		if aliasCycleTx(tx, alias.Domain, key, alias.Target) {
+			return ErrAliasConflict // F7250
 		}
 		return b.Put([]byte(key), data)
 	})
