@@ -2,9 +2,12 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/mail"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +30,71 @@ func vacationDedupKey(recipient, sender string) string {
 		return strings.ToLower(strings.ReplaceAll(a, "|", "__"))
 	}
 	return norm(recipient) + "|" + norm(sender)
+}
+
+// sieveVacationHandle is the RFC 5230 §4.6 suppression identity of a vacation
+// action: the script's :handle, or a hash of :subject, the reason and :mime.
+func sieveVacationHandle(va sieve.VacationAction) string {
+	if va.Handle != "" {
+		return "h:" + va.Handle
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%q\x00%q\x00%t", va.Subject, va.Body, va.Mime)))
+	return "d:" + hex.EncodeToString(sum[:16])
+}
+
+// sieveVacationKey is the reply-suppression key: mailbox, sender and handle.
+func sieveVacationKey(recipient, sender string, va sieve.VacationAction) string {
+	return vacationDedupKey(recipient, sender) + "|" + sieveVacationHandle(va)
+}
+
+// vacationSuppressedByHeaders applies the message-level rules of RFC 3834 §2
+// and RFC 5230 §4.6: no reply to automatic, bulk/list/junk or mailing-list mail.
+func vacationSuppressedByHeaders(h mail.Header) bool {
+	if as := strings.TrimSpace(h.Get("Auto-Submitted")); as != "" && !strings.EqualFold(as, "no") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(h.Get("Precedence"))) {
+	case "bulk", "list", "junk":
+		return true
+	}
+	for _, name := range []string{"List-Id", "List-Post", "List-Unsubscribe", "X-Auto-Response-Suppress"} {
+		if strings.TrimSpace(h.Get(name)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// vacationMatchedAddress implements the RFC 5230 §4.5 check: it returns the
+// address from To/Cc/Bcc/Resent-* that is one of the user's own (the
+// mailbox, the delivered-to address, a :addresses entry or an alias that
+// routes to the mailbox), or "" when the message is not addressed to the user.
+func (s *Server) vacationMatchedAddress(h mail.Header, mailbox, rcpt string, extra []string) string {
+	own := func(a string) bool {
+		if strings.EqualFold(a, mailbox) || strings.EqualFold(a, rcpt) {
+			return true
+		}
+		for _, e := range extra {
+			if ea, err := mail.ParseAddress(strings.TrimSpace(e)); err == nil && strings.EqualFold(ea.Address, a) {
+				return true
+			}
+		}
+		return s.routesToMailbox(a, mailbox)
+	}
+	for _, name := range []string{"To", "Cc", "Bcc", "Resent-To", "Resent-Cc", "Resent-Bcc"} {
+		for _, v := range h[textproto.CanonicalMIMEHeaderKey(name)] {
+			list, err := mail.ParseAddressList(v)
+			if err != nil {
+				continue
+			}
+			for _, a := range list {
+				if own(a.Address) {
+					return a.Address
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // vacationStorePath is the persisted dedup log, or "" when no data dir is set.
@@ -179,6 +247,13 @@ func vacationBody(s string) string {
 
 // handleSieveVacation handles Sieve vacation action by sending a vacation auto-reply
 func (s *Server) handleSieveVacation(sender, recipient string, va sieve.VacationAction) {
+	s.handleSieveVacationAs(sender, recipient, recipient, va)
+}
+
+// handleSieveVacationAs is handleSieveVacation with matched, the user's own
+// address the message was sent to; it is the default From of the reply
+// (RFC 5230 §5, :from default).
+func (s *Server) handleSieveVacationAs(sender, recipient, matched string, va sieve.VacationAction) {
 	if s.queue == nil {
 		return
 	}
@@ -193,7 +268,7 @@ func (s *Server) handleSieveVacation(sender, recipient string, va sieve.Vacation
 	// (explicit :seconds 0), handled by the caller's window.
 	sendInterval := time.Duration(va.Seconds) * time.Second
 	now := time.Now()
-	if sendInterval > 0 && !s.claimVacationReply(vacationDedupKey(recipient, sender), now, sendInterval) {
+	if sendInterval > 0 && !s.claimVacationReply(sieveVacationKey(recipient, sender, va), now, sendInterval) {
 		return
 	}
 
@@ -209,6 +284,9 @@ func (s *Server) handleSieveVacation(sender, recipient string, va sieve.Vacation
 
 	// Create vacation message - From is the recipient (who's on vacation)
 	fromAddr := recipient
+	if matched != "" {
+		fromAddr = matched
+	}
 	if va.From != "" {
 		fromAddr = va.From
 	}

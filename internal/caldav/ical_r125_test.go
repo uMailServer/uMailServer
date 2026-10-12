@@ -59,6 +59,7 @@ func TestPutRejectsInvalidCalendarData_F6070_F6071(t *testing.T) {
 		if w := r125Do(t, s, "PUT", "/dav/calendars/c/e", "alice", body); w.Code != http.StatusCreated {
 			t.Errorf("%s: PUT=%d, want 201", name, w.Code)
 		}
+		r125Do(t, s, "DELETE", "/dav/calendars/c/e", "alice", "")
 	}
 }
 

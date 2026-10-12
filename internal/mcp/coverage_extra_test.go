@@ -278,8 +278,8 @@ func TestToolAddAccount_NonexistentDomain(t *testing.T) {
 	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
 	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"isError":true`) {
+		t.Errorf("Expected 200 isError result, got %d %s", rr.Code, rr.Body.String())
 	}
 }
 

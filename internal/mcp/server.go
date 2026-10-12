@@ -361,6 +361,19 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// MCP: a failing tool is a successful JSON-RPC result with isError set;
+	// only protocol errors and real internal faults use JSON-RPC errors.
+	if err != nil && req.Method == "tools/call" {
+		var re *rpcError
+		if !errors.Is(err, errAdminRequired) && !errors.Is(err, errInternal) && !errors.As(err, &re) {
+			result = map[string]interface{}{
+				"content": []map[string]string{{"type": "text", "text": err.Error()}},
+				"isError": true,
+			}
+			err = nil
+		}
+	}
+
 	if err != nil {
 		slog.Error("mcp handler error", "method", req.Method, "error", err)
 		// Admin access errors return 403; all other errors return 500.
@@ -861,9 +874,13 @@ func argInt(args map[string]interface{}, key string, min, max int) (int, error) 
 
 // internalError is the client-safe error for unexpected storage failures; the
 // cause is logged, never returned (F5780).
+// errInternal marks a genuine server fault (-32603); every other error from
+// a tool is a business failure reported as an isError result.
+var errInternal = errors.New("internal server error")
+
 func internalError(op string, err error) error {
 	slog.Error("mcp internal error", "op", op, "error", err)
-	return fmt.Errorf("internal server error")
+	return errInternal
 }
 
 // validateDomainName rejects domain names that could escape storage paths
@@ -902,14 +919,14 @@ func (s *Server) toolGetStats() (map[string]interface{}, error) {
 	domains, err := s.db.ListDomains()
 	if err != nil {
 		slog.Error("mcp tool error", "tool", "list_domains", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	}
 	accounts := 0
 	for _, d := range domains {
 		accts, err := s.db.ListAccountsByDomain(d.Name)
 		if err != nil {
 			slog.Error("mcp tool error", "tool", "list_accounts", "domain", d.Name, "error", err)
-			return nil, fmt.Errorf("internal server error")
+			return nil, errInternal
 		}
 		accounts += len(accts)
 	}
@@ -934,13 +951,13 @@ func (s *Server) toolListAccounts(domain string) (map[string]interface{}, error)
 		domains, err := s.db.ListDomains()
 		if err != nil {
 			slog.Error("mcp tool error", "tool", "list_domains", "error", err)
-			return nil, fmt.Errorf("internal server error")
+			return nil, errInternal
 		}
 		for _, d := range domains {
 			domainAccounts, err := s.db.ListAccountsByDomain(d.Name)
 			if err != nil {
 				slog.Error("mcp tool error", "tool", "list_accounts", "domain", d.Name, "error", err)
-				return nil, fmt.Errorf("internal server error")
+				return nil, errInternal
 			}
 			accounts = append(accounts, domainAccounts...)
 		}
@@ -1023,7 +1040,7 @@ func (s *Server) toolAddDomain(name string, maxAccounts int, maxSize string) (ma
 			return nil, fmt.Errorf("domain already exists")
 		}
 		slog.Error("mcp tool error", "tool", "add_domain", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	}
 
 	text := fmt.Sprintf("Domain '%s' created successfully (max accounts: %d)", name, maxAccounts)
@@ -1043,13 +1060,13 @@ func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 	// F5251: a missing domain is an error, not a successful deletion.
 	if exists, err := s.keyExists(db.BucketDomains, name); err != nil {
 		slog.Error("mcp tool error", "tool", "delete_domain", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	} else if !exists {
 		return nil, fmt.Errorf("domain not found")
 	}
 	if err := s.db.DeleteDomain(name); err != nil {
 		slog.Error("mcp tool error", "tool", "delete_domain", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	}
 
 	text := fmt.Sprintf("Domain '%s' deleted successfully", name)
@@ -1103,7 +1120,7 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		slog.Error("mcp tool error", "tool", "add_account", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	}
 
 	account := &db.AccountData{
@@ -1126,7 +1143,7 @@ func (s *Server) toolAddAccount(email, password string) (map[string]interface{},
 			return nil, fmt.Errorf("domain account limit reached")
 		}
 		slog.Error("mcp tool error", "tool", "add_account", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	}
 
 	return map[string]interface{}{
@@ -1151,13 +1168,13 @@ func (s *Server) toolDeleteAccount(email string) (map[string]interface{}, error)
 	// address) is an error, not a successful deletion.
 	if exists, err := s.keyExists(db.BucketAccounts, db.AccountKey(parts[1], parts[0])); err != nil {
 		slog.Error("mcp tool error", "tool", "delete_account", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	} else if !exists {
 		return nil, fmt.Errorf("account not found")
 	}
 	if err := s.db.DeleteAccount(parts[1], parts[0]); err != nil {
 		slog.Error("mcp tool error", "tool", "delete_account", "error", err)
-		return nil, fmt.Errorf("internal server error")
+		return nil, errInternal
 	}
 
 	text := fmt.Sprintf("Account '%s' deleted successfully", email)
@@ -1458,7 +1475,10 @@ func (s *Server) handleResourceRead(ctx context.Context, params json.RawMessage)
 		}
 		var allAccounts []*db.AccountData
 		for _, d := range domains {
-			accounts, _ := s.db.ListAccountsByDomain(d.Name)
+			accounts, err := s.db.ListAccountsByDomain(d.Name)
+			if err != nil {
+				return nil, internalError("resources/read accounts", err)
+			}
 			allAccounts = append(allAccounts, accounts...)
 		}
 		// F5015: never expose credential material through resources.

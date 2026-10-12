@@ -341,7 +341,7 @@ func (s *Session) handleMAIL(arg string) error {
 	}
 
 	// Submission mode: require authentication before MAIL FROM
-	if s.server.config.RequireAuth && !s.isAuth {
+	if (s.server.config.RequireAuth || s.server.config.IsSubmission) && !s.isAuth {
 		return s.WriteResponse(530, "5.7.0 Authentication required")
 	}
 
@@ -356,6 +356,9 @@ func (s *Session) handleMAIL(arg string) error {
 		validated, err := ValidateEmail(from)
 		if err != nil {
 			return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
+		}
+		if checkAddrLength(validated) != nil {
+			return s.WriteResponse(501, "5.1.3 Address too long")
 		}
 		from = validated
 	}
@@ -438,7 +441,15 @@ func (s *Session) checkMailParams(arg string) (mp mailParams, code int, msg stri
 				return mp, 501, "5.5.4 Invalid RET parameter"
 			}
 		case "ENVID", "AUTH":
-			if val == "" {
+			// xtext (RFC 3461 §4.4, RFC 4954 §5); AUTH may be "<>"; ENVID <= 100 (F7262).
+			bad := val == ""
+			if !bad && !(strings.EqualFold(key, "AUTH") && val == "<>") {
+				bad = !validXtext(val)
+			}
+			if strings.EqualFold(key, "ENVID") && len(val) > 100 {
+				bad = true
+			}
+			if bad {
 				return mp, 501, "5.5.4 Invalid " + strings.ToUpper(key) + " parameter"
 			}
 		case "SMTPUTF8":
@@ -472,7 +483,7 @@ func checkRcptParams(arg string) (int, string) {
 				}
 			}
 		case "ORCPT":
-			if t, a, ok := strings.Cut(val, ";"); !ok || t == "" || a == "" {
+			if t, a, ok := strings.Cut(val, ";"); !ok || t == "" || a == "" || !validXtext(a) {
 				return 501, "5.5.4 Invalid ORCPT parameter"
 			}
 		default:
@@ -497,6 +508,14 @@ func (s *Session) handleRCPT(arg string) error {
 	if err != nil {
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
+	// RFC 5321 §4.5.1: <Postmaster> without a domain must be accepted (F7263).
+	if strings.EqualFold(to, "postmaster") {
+		host := s.server.config.Hostname
+		if host == "" {
+			host = "localhost"
+		}
+		to = "postmaster@" + host
+	}
 
 	// Validate to address
 	validated, err := ValidateEmail(to)
@@ -504,6 +523,9 @@ func (s *Session) handleRCPT(arg string) error {
 		return s.WriteResponse(501, "5.5.4 Syntax error in parameters or arguments")
 	}
 
+	if checkAddrLength(validated) != nil {
+		return s.WriteResponse(501, "5.1.3 Address too long")
+	}
 	if code, msg := checkRcptParams(arg); code != 0 {
 		return s.WriteResponse(code, msg)
 	}
@@ -608,6 +630,11 @@ func (s *Session) handleDATA() error {
 		return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
 	}
 
+	if !s.submissionFromAllowed(data) {
+		s.resetTransaction()
+		return s.WriteResponse(553, "5.7.1 Sender address in From header not owned by user")
+	}
+
 	s.data = data
 
 	// Run message through pipeline if configured
@@ -683,6 +710,31 @@ func (s *Session) handleDATA() error {
 	s.resetTransaction()
 	s.errCount.Store(0)
 	return s.WriteResponse(250, "OK")
+}
+
+// submissionFromAllowed reports whether every address in the From header of an
+// authenticated submission belongs to the user (or one of their aliases), the
+// same check MAIL FROM gets; otherwise a user could present another identity
+// to the recipient (RFC 6409 §6.2, F7265). A message with no From field, or a
+// session without the handler, is not restricted here.
+func (s *Session) submissionFromAllowed(data []byte) bool {
+	if !s.isAuth || s.server.onSenderAllowed == nil {
+		return true
+	}
+	h := make(map[string][]string)
+	parseHeaderBlock(data, h)
+	for _, v := range fromHeaderValues(h) {
+		list, err := mail.ParseAddressList(v)
+		if err != nil {
+			return false
+		}
+		for _, a := range list {
+			if !s.server.onSenderAllowed(s.username, normalizeAddr(a.Address)) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // deliver hands the accepted message in s.data to the most capable delivery
@@ -1375,6 +1427,11 @@ func (s *Session) handleBDAT(arg string) error {
 		if int64(len(data)) > s.server.config.maxMessageSize() {
 			s.resetTransaction()
 			return s.WriteResponse(552, "5.2.3 Message exceeds fixed maximum message size")
+		}
+
+		if !s.submissionFromAllowed(data) {
+			s.resetTransaction()
+			return s.WriteResponse(553, "5.7.1 Sender address in From header not owned by user")
 		}
 
 		s.data = data
@@ -2120,17 +2177,64 @@ func parseMailFromWithRet(arg string) (string, string, error) {
 		}
 	}
 
-	// Find end of address (space or end of string)
-	idx := strings.IndexAny(arg, " ")
-	if idx > 0 {
+	addr, err := pathToken(arg)
+	if err != nil {
+		return "", "", err
+	}
+	return addr, ret, nil
+}
+
+// pathToken extracts the address from the first token of a MAIL FROM / RCPT TO
+// argument. Angle brackets must be balanced and not doubled (F7261); bare
+// addresses stay accepted for leniency.
+func pathToken(arg string) (string, error) {
+	if idx := strings.IndexByte(arg, ' '); idx > 0 {
 		arg = arg[:idx]
 	}
-
-	// Remove < and >
-	arg = strings.Trim(arg, "<>")
-
-	return arg, ret, nil
+	if strings.HasPrefix(arg, "<") {
+		if !strings.HasSuffix(arg, ">") {
+			return "", fmt.Errorf("unterminated path")
+		}
+		arg = arg[1 : len(arg)-1]
+	}
+	if strings.ContainsAny(arg, "<>") {
+		return "", fmt.Errorf("malformed path")
+	}
+	return arg, nil
 }
+
+// checkAddrLength enforces the RFC 5321 §4.5.3.1 limits: local part 64
+// octets, domain 255, whole path 256 including the angle brackets (F7260).
+func checkAddrLength(addr string) error {
+	at := strings.LastIndexByte(addr, '@')
+	if at < 0 {
+		return nil
+	}
+	if at > 64 || len(addr)-at-1 > 255 || len(addr)+2 > 256 {
+		return fmt.Errorf("address too long")
+	}
+	return nil
+}
+
+// validXtext reports whether v is RFC 3461 xtext: printable ASCII except '='
+// and space, with '+' followed by two uppercase hex digits.
+func validXtext(v string) bool {
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case c == '+':
+			if i+2 >= len(v) || !isUpperHex(v[i+1]) || !isUpperHex(v[i+2]) {
+				return false
+			}
+			i += 2
+		case c < 33 || c > 126 || c == '=':
+			return false
+		}
+	}
+	return true
+}
+
+func isUpperHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'A' && c <= 'F' }
 
 // parseRcptTo parses the RCPT TO command argument
 func parseRcptTo(arg string) (string, error) {
@@ -2180,16 +2284,11 @@ func parseRcptToWithNotify(arg string) (string, string, error) {
 		}
 	}
 
-	// Find end of address (space or end of string)
-	idx := strings.IndexAny(arg, " ")
-	if idx > 0 {
-		arg = arg[:idx]
+	addr, err := pathToken(arg)
+	if err != nil {
+		return "", "", err
 	}
-
-	// Remove < and >
-	arg = strings.Trim(arg, "<>")
-
-	return arg, notify, nil
+	return addr, notify, nil
 }
 
 // Ensure io.Reader is implemented

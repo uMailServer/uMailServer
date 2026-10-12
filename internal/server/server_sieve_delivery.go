@@ -1,7 +1,6 @@
 package server
 
 import (
-	"fmt"
 	"net/mail"
 	"strings"
 	"time"
@@ -131,16 +130,7 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 	}
 
 	if out.vacation != nil && from != "" && folder != "Junk" {
-		// RFC 6131 §2: when the script specifies :seconds, that value is used
-		// instead of :days (:seconds 0 replies to every message); the days
-		// form keeps RFC 5230 semantics (24h floor inside the manager).
-		window := time.Duration(out.vacation.Days) * 24 * time.Hour
-		if out.vacation.SecondsSet {
-			window = time.Duration(out.vacation.Seconds) * time.Second
-		}
-		if s.sieveManager.CheckAndRecordVacationFor(fmt.Sprintf("%q:%q", rcpt, from), window) {
-			s.handleSieveVacation(from, rcpt, *out.vacation)
-		}
+		s.sieveVacationReply(mailbox, rcpt, from, data, *out.vacation)
 	}
 
 	targets := make([]string, 0, len(out.folders)+1)
@@ -209,6 +199,30 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 		}
 	}
 	return nil
+}
+
+// sieveVacationReply applies the RFC 5230 §4.5/§4.6 gates (addressed to the
+// user, not automatic/list mail, once per sender and handle per window) and
+// sends the reply From the address the message was sent to.
+func (s *Server) sieveVacationReply(mailbox, rcpt, from string, data []byte, va sieve.VacationAction) {
+	var hdr mail.Header
+	if msg, err := mail.ReadMessage(strings.NewReader(string(data))); err == nil {
+		hdr = msg.Header
+	}
+	matched := s.vacationMatchedAddress(hdr, mailbox, rcpt, va.Addresses)
+	if matched == "" || vacationSuppressedByHeaders(hdr) {
+		return
+	}
+	// RFC 6131 §2: when the script specifies :seconds, that value is used
+	// instead of :days (:seconds 0 replies to every message); the days
+	// form keeps RFC 5230 semantics (24h floor inside the manager).
+	window := time.Duration(va.Days) * 24 * time.Hour
+	if va.SecondsSet {
+		window = time.Duration(va.Seconds) * time.Second
+	}
+	if s.sieveManager.CheckAndRecordVacationFor(sieveVacationKey(rcpt, from, va), window) {
+		s.handleSieveVacationAs(from, rcpt, matched, va)
+	}
 }
 
 func sieveHasFolder(list []string, v string) bool {

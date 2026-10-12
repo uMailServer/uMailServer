@@ -88,6 +88,7 @@ func (s *Server) Stop() error {
 
 	// Stop IMAP server
 	if s.imapServer != nil {
+		s.imapServer.SetShutdownDrainTimeout(force)
 		if err := s.imapServer.Stop(); err != nil {
 			s.logger.Error("Failed to stop IMAP server", "error", err)
 		}
@@ -95,6 +96,7 @@ func (s *Server) Stop() error {
 
 	// Stop POP3 server
 	if s.pop3Server != nil {
+		s.pop3Server.SetShutdownDrainTimeout(force)
 		if err := s.pop3Server.Stop(); err != nil {
 			s.logger.Error("Failed to stop POP3 server", "error", err)
 		}
@@ -140,6 +142,7 @@ func (s *Server) Stop() error {
 
 	// Stop API server
 	if s.apiServer != nil {
+		s.apiServer.SetShutdownTimeout(force)
 		if err := s.apiServer.Stop(); err != nil {
 			s.logger.Error("Failed to stop API server", "error", err)
 		}
@@ -150,6 +153,7 @@ func (s *Server) Stop() error {
 
 	// Stop admin server
 	if s.adminServer != nil {
+		s.adminServer.SetShutdownTimeout(force)
 		if err := s.adminServer.Stop(); err != nil {
 			s.logger.Error("Failed to stop admin server", "error", err)
 		}

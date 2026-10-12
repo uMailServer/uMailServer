@@ -203,7 +203,7 @@ func TestDeleteMissingAccountOrDomainFails(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_account","arguments":{"email":"ghost@example.com"}}}`,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_domain","arguments":{"name":"nosuch.test"}}}`,
 	} {
-		if code, body := securityTestCall(s, "admin-tok", b); code == http.StatusOK || strings.Contains(body, "deleted successfully") || !strings.Contains(body, "not found") {
+		if code, body := securityTestCall(s, "admin-tok", b); code != http.StatusOK || !strings.Contains(body, `"isError":true`) || strings.Contains(body, "deleted successfully") || !strings.Contains(body, "not found") {
 			t.Errorf("code=%d body=%s for %s", code, body, b)
 		}
 	}
