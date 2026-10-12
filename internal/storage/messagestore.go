@@ -27,29 +27,46 @@ func validatePathComponent(s string) error {
 	return nil
 }
 
-// isValidMessageID checks that messageID is safe to use in a file path
-// MessageIDs must not contain null bytes, path traversal, and must be long enough
+// isValidMessageID reports whether messageID is a blob key this store can
+// have produced: the lowercase-hex SHA-256 content hash (64 chars), or the
+// copy-qualified form "<hash>_<uid>_<base64url(mailbox)>" that the API and
+// JMAP layers hand out (F7332: the old check accepted any string without
+// "..", including path separators and absolute-looking prefixes). Hex case is
+// tolerated for ids stored by older builds; the path is derived from the
+// first four characters, so qualified ids resolve to their hash's file.
 func isValidMessageID(messageID string) bool {
-	if messageID == "" {
+	if len(messageID) < 64 || len(messageID) > 256 {
 		return false
 	}
-	// Must be at least 4 characters for the path slicing (messageID[:2], messageID[2:4])
-	if len(messageID) < 4 {
-		return false
-	}
-	// Block null bytes (cannot occur in valid Go strings but check anyway)
-	for _, c := range messageID {
-		if c == 0 {
+	for i := 0; i < 64; i++ {
+		c := messageID[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
 			return false
 		}
 	}
-	// Block path traversal sequences (but allow forward slashes for maildir paths)
-	if strings.Contains(messageID, "..") {
+	rest := messageID[64:]
+	if rest == "" {
+		return true
+	}
+	// rest = "_" digits "_" base64url; base64url may itself contain '_'.
+	if rest[0] != '_' {
 		return false
 	}
-	// MessageID should not be too long (prevent other injection)
-	if len(messageID) > 256 {
+	rest = rest[1:]
+	sep := strings.IndexByte(rest, '_')
+	if sep <= 0 || sep == len(rest)-1 {
 		return false
+	}
+	for i := 0; i < sep; i++ {
+		if rest[i] < '0' || rest[i] > '9' {
+			return false
+		}
+	}
+	for i := sep + 1; i < len(rest); i++ {
+		c := rest[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-' || c == '_') {
+			return false
+		}
 	}
 	return true
 }
@@ -69,8 +86,9 @@ type MessageStore struct {
 
 	// Test seams (nil in production), used to order concurrent writers
 	// deterministically.
-	afterQuotaCheck func() // quota check passed, store not yet started
-	onLockContended func() // a writer found the user lock held
+	afterQuotaCheck func()           // quota check passed, store not yet started
+	onLockContended func()           // a writer found the user lock held
+	onDirSync       func(dir string) // a directory is being fsynced
 }
 
 // BlobReferenceChecker reports which of ids the user still references
@@ -185,6 +203,8 @@ func (s *MessageStore) StoreMessageWithQuota(user string, data []byte, limit int
 	messageID := hex.EncodeToString(hash[:])
 	if info, err := os.Stat(filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID)); err == nil &&
 		info.Mode().IsRegular() && info.Size() == int64(len(data)) {
+		touchBlob(filepath.Join(s.basePath, user, messageID[:2], messageID[2:4], messageID))
+		s.syncDir(filepath.Join(s.basePath, user, messageID[:2], messageID[2:4]))
 		if s.afterQuotaCheck != nil {
 			s.afterQuotaCheck()
 		}
@@ -279,7 +299,7 @@ func (s *MessageStore) storeMessageLocked(user string, data []byte) (string, err
 	for attempt := 0; attempt < 5; attempt++ {
 		err := os.Link(tmpPath, msgPath)
 		if err == nil {
-			syncDirPath(filepath.Dir(msgPath)) // F5952: persist the new dir entry
+			s.syncNewBlobDirs(userPath, msgPath) // F5952/F7337: persist the entry and new shard dirs
 			break
 		}
 		if !os.IsExist(err) {
@@ -296,6 +316,10 @@ func (s *MessageStore) storeMessageLocked(user string, data []byte) (string, err
 			return "", fmt.Errorf("message path is not a regular file: %s", msgPath)
 		}
 		if info.Size() == int64(len(data)) {
+			// F7336: a dedupe hit re-references the blob; restart its
+			// orphan-GC grace period and persist its directory entry.
+			touchBlob(msgPath)
+			s.syncDir(filepath.Dir(msgPath))
 			return messageID, nil // Already exists
 		}
 		// A body of the wrong size under a content hash is a leftover from a
@@ -303,15 +327,36 @@ func (s *MessageStore) storeMessageLocked(user string, data []byte) (string, err
 		if err := os.Rename(tmpPath, msgPath); err != nil {
 			return "", err
 		}
-		syncDirPath(filepath.Dir(msgPath))
+		s.syncNewBlobDirs(userPath, msgPath)
 		break
 	}
 
 	return messageID, nil
 }
 
-// syncDirPath best-effort fsyncs a directory so a new entry survives a crash.
-func syncDirPath(dir string) {
+// syncNewBlobDirs fsyncs the blob's directory, its shard parent, the user
+// directory and the store root, so freshly created shard directories survive
+// a crash together with the blob entry (F7337: only the leaf was synced, so a
+// new "ab/cd" chain could vanish after a power loss).
+func (s *MessageStore) syncNewBlobDirs(userPath, msgPath string) {
+	leaf := filepath.Dir(msgPath)
+	s.syncDir(leaf)
+	s.syncDir(filepath.Dir(leaf))
+	s.syncDir(userPath)
+	s.syncDir(s.basePath)
+}
+
+// touchBlob refreshes a blob's mtime; best-effort.
+func touchBlob(path string) {
+	now := time.Now()
+	_ = os.Chtimes(path, now, now)
+}
+
+// syncDir best-effort fsyncs a directory so a new entry survives a crash.
+func (s *MessageStore) syncDir(dir string) {
+	if s.onDirSync != nil {
+		s.onDirSync(dir)
+	}
 	if f, err := os.Open(dir); err == nil {
 		_ = f.Sync()
 		_ = f.Close()

@@ -9,6 +9,7 @@ import (
 // same transaction that writes the closing alias.
 func TestR248_AliasCycleRefused(t *testing.T) {
 	d, _ := openR185(t)
+	r256Domains(t, d, "a.test")
 	if err := d.CreateAlias(&AliasData{Domain: "a.test", Alias: "a", Target: "b@a.test", IsActive: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -25,6 +26,7 @@ func TestR248_AliasCycleRefused(t *testing.T) {
 
 func TestR248_AliasUpdateCycleRefused(t *testing.T) {
 	d, _ := openR185(t)
+	r256Domains(t, d, "a.test")
 	_ = d.CreateAlias(&AliasData{Domain: "a.test", Alias: "a", Target: "b@a.test", IsActive: true})
 	_ = d.CreateAlias(&AliasData{Domain: "a.test", Alias: "b", Target: "ext@other.test", IsActive: true})
 	if err := d.UpdateAlias(&AliasData{Domain: "a.test", Alias: "b", Target: "A@A.test", IsActive: true}); !errors.Is(err, ErrAliasConflict) {

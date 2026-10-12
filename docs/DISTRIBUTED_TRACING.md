@@ -21,6 +21,7 @@ tracing:
   service_name: "umailserver"  # Service name shown in traces
   exporter: "noop"            # Exporter: "noop", "stdout", or "otlp"
   otlp_endpoint: "localhost:4317"  # OTLP collector endpoint (for otlp exporter)
+  insecure: false  # plaintext OTLP to a non-loopback host is refused unless true; prefer an https:// endpoint
   environment: "production"   # Environment tag: "production", "staging", "development"
   sample_rate: 1.0            # Sampling rate 0.0-1.0 (1.0 = trace all requests)
   attributes:                 # Additional resource attributes

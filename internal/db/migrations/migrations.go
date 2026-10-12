@@ -102,6 +102,18 @@ func (m *Migrator) CheckCompatible() error {
 // whole batch back and leaves the database unchanged (F6621). Already
 // applied versions are skipped, so re-running is idempotent.
 func (m *Migrator) Migrate() error {
+	// F7334: an empty or duplicated version would be silently skipped (the
+	// second copy looks "already applied"), losing that migration.
+	seen := make(map[string]struct{}, len(m.registry.migrations))
+	for _, mg := range m.registry.migrations {
+		if mg.Version == "" {
+			return errors.New("migration with empty version")
+		}
+		if _, dup := seen[mg.Version]; dup {
+			return fmt.Errorf("duplicate migration version %q", mg.Version)
+		}
+		seen[mg.Version] = struct{}{}
+	}
 	return m.db.Update(func(tx *bbolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte(migrationBucket))
 		if err != nil {
@@ -150,57 +162,51 @@ func applyMigration(tx *bbolt.Tx, bucket *bbolt.Bucket, migration Migration) err
 	return bucket.Put([]byte(migration.Version), data)
 }
 
-// Rollback rolls back the last migration
+// Rollback rolls back the last applied migration. The choice of the migration,
+// its Down function and the removal of its record all happen inside ONE write
+// transaction (F7333): choosing it from an earlier read let two concurrent
+// rollbacks pick the same version and run its Down twice.
 func (m *Migrator) Rollback() error {
-	// Get applied migrations
-	applied, err := m.getAppliedMigrations()
-	if err != nil {
-		return fmt.Errorf("failed to get applied migrations: %w", err)
-	}
-
-	if len(applied) == 0 {
-		return fmt.Errorf("no migrations to rollback")
-	}
-
-	if unknown := m.unknownApplied(applied); len(unknown) > 0 {
-		return tooNewError(unknown)
-	}
-
-	// Find last applied migration: the highest in registry order (F6621:
-	// AppliedAt ties inside one batch made the old choice nondeterministic).
-	var lastVersion string
-	for _, mg := range m.registry.migrations {
-		if _, ok := applied[mg.Version]; ok {
-			lastVersion = mg.Version
-		}
-	}
-
-	// Find migration
-	var migration *Migration
-	for i := range m.registry.migrations {
-		if m.registry.migrations[i].Version == lastVersion {
-			migration = &m.registry.migrations[i]
-			break
-		}
-	}
-
-	if migration == nil {
-		return fmt.Errorf("migration %s not found in registry", lastVersion)
-	}
-
-	// Run rollback
 	return m.db.Update(func(tx *bbolt.Tx) error {
-		if migration.Down == nil {
-			return fmt.Errorf("migration %s has no rollback", lastVersion)
+		bucket := tx.Bucket([]byte(migrationBucket))
+		applied := make(map[string]migrationRecord)
+		if bucket != nil {
+			if err := bucket.ForEach(func(k, v []byte) error {
+				var record migrationRecord
+				if err := json.Unmarshal(v, &record); err != nil {
+					return err
+				}
+				applied[string(k)] = record
+				return nil
+			}); err != nil {
+				return fmt.Errorf("failed to get applied migrations: %w", err)
+			}
+		}
+		if len(applied) == 0 {
+			return fmt.Errorf("no migrations to rollback")
+		}
+		if unknown := m.unknownApplied(applied); len(unknown) > 0 {
+			return tooNewError(unknown)
 		}
 
+		// Last applied = highest in registry order (F6621: AppliedAt ties
+		// inside one batch made timestamp ordering nondeterministic).
+		var migration *Migration
+		for i := range m.registry.migrations {
+			if _, ok := applied[m.registry.migrations[i].Version]; ok {
+				migration = &m.registry.migrations[i]
+			}
+		}
+		if migration == nil {
+			return fmt.Errorf("no applied migration found in registry")
+		}
+		if migration.Down == nil {
+			return fmt.Errorf("migration %s has no rollback", migration.Version)
+		}
 		if err := migration.Down(tx); err != nil {
 			return fmt.Errorf("rollback failed: %w", err)
 		}
-
-		// Remove migration record
-		bucket := tx.Bucket([]byte(migrationBucket))
-		return bucket.Delete([]byte(lastVersion))
+		return bucket.Delete([]byte(migration.Version))
 	})
 }
 

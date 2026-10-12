@@ -164,11 +164,18 @@ tracing:
   service_name: "umailserver"  # Service name shown in traces
   exporter: "noop"            # Exporter: "noop", "stdout", or "otlp"
   otlp_endpoint: "localhost:4317"  # OTLP collector endpoint (for otlp exporter)
+  insecure: false             # Allow plaintext OTLP to a non-loopback collector; otherwise use https:// (loopback always allowed)
   environment: "production"   # Environment tag: "production", "staging", "development"
   sample_rate: 1.0            # Sampling rate 0.0-1.0 (1.0 = trace all requests)
   attributes:                 # Additional resource attributes
     deployment: "primary"
     region: "us-east-1"
+
+# Outbound queue. max_age is how long a deferred message is retried before it
+# bounces back to the sender. Must be between 105h (the span of the built-in
+# retry schedule) and 720h (30d).
+queue:
+  max_age: 120h                   # default: 5 days (RFC 5321 section 4.5.4.1)
 
 # Web Push notifications (VAPID-based, mobile + desktop browsers)
 # VAPID keys are auto-generated and stored in `<data_dir>/push/vapid.json` on

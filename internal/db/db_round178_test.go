@@ -11,6 +11,7 @@ import (
 // CreateAlias.
 func TestF6560_UpdateAliasRejectsSelfLoop(t *testing.T) {
 	d := openR126(t)
+	r256Domains(t, d, "ex.com")
 	if err := d.CreateAlias(&AliasData{Alias: "sales", Domain: "ex.com", Target: "bob@ex.com", IsActive: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +94,7 @@ func TestF6565_OpenLockedMessage(t *testing.T) {
 // F6566: deleting an account/domain removes aliases that target it.
 func TestF6566_DeleteCascadesAliasTargets(t *testing.T) {
 	d := openR126(t)
+	r256Domains(t, d, "ex.com", "ex.org")
 	if err := d.CreateAccount(&AccountData{Domain: "ex.com", LocalPart: "bob"}); err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +118,6 @@ func TestF6566_DeleteCascadesAliasTargets(t *testing.T) {
 	}
 	if _, err := d.GetAlias("ex.com", "other"); err != nil {
 		t.Fatal("unrelated alias removed")
-	}
-	if err := d.CreateDomain(&DomainData{Name: "ex.com"}); err != nil {
-		t.Fatal(err)
 	}
 	if err := d.CreateAlias(&AliasData{Alias: "y", Domain: "ex.org", Target: "q@ex.com", IsActive: true}); err != nil {
 		t.Fatal(err)
