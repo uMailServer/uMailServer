@@ -3,6 +3,7 @@ package imap
 import (
 	"bufio"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -313,15 +314,33 @@ func TestR150_IdleConcurrentSessionsRace(t *testing.T) {
 	a.send("e1 EXPUNGE\r\n")
 	a.until("e1 ")
 	for name, idler := range map[string]*r150Client{"B": b, "C": c} {
-		exists := 0
-		for exists < n {
-			_ = idler.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		// IDLE reports through the session's own view (syncSelected), which
+		// legitimately coalesces bursts: the idler may see EXISTS 7, then 20,
+		// or jump straight to the post-expunge state. Count lines would be
+		// timing-dependent, so track the idler's mailbox size from EXISTS and
+		// EXPUNGE and wait until it converges to the final (empty) state
+		// after having observed at least one change.
+		size, seen := 0, false
+		for !(seen && size == 0) {
+			_ = idler.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			l, err := idler.rd.ReadString('\n')
 			if err != nil {
-				t.Fatalf("idler %s saw only %d EXISTS: %v", name, exists, err)
+				t.Fatalf("idler %s stuck at size=%d seen=%v: %v", name, size, seen, err)
 			}
-			if strings.Contains(l, "EXISTS") {
-				exists++
+			f := strings.Fields(l)
+			if len(f) < 3 || f[0] != "*" {
+				continue
+			}
+			v, cerr := strconv.Atoi(f[1])
+			if cerr != nil {
+				continue
+			}
+			switch f[2] {
+			case "EXISTS":
+				size, seen = v, true
+			case "EXPUNGE":
+				size--
+				seen = true
 			}
 		}
 		idler.send("DONE\r\n")

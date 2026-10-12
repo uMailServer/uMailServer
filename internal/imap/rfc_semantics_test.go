@@ -99,7 +99,7 @@ func TestUIDCommands_ResponsesIncludeUID(t *testing.T) {
 	if out := strings.Join(run("a2 UID FETCH 2 (FLAGS)"), "\n"); !strings.Contains(out, "* 2 FETCH (UID 2 FLAGS") {
 		t.Fatalf("UID FETCH: %q", out)
 	}
-	if out := strings.Join(run(`a3 UID STORE 2 +FLAGS (\Flagged)`), "\n"); !strings.Contains(out, `* 2 FETCH (UID 2 FLAGS (\Flagged))`) {
+	if out := strings.Join(run(`a3 UID STORE 2 +FLAGS (\Flagged)`), "\n"); !strings.Contains(out, `* 2 FETCH (UID 2 FLAGS (\Flagged \Recent))`) {
 		t.Fatalf("UID STORE: %q", out)
 	}
 	if out := strings.Join(run("a4 FETCH 2 (FLAGS)"), "\n"); strings.Contains(out, "UID") {

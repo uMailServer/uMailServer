@@ -285,7 +285,19 @@ func (m *BboltMailstore) mailboxInfo(user, mailbox string, clearRecent bool) (*M
 
 	// Clear \Recent flags when mailbox is selected (RFC 3501)
 	// Messages from previous sessions should no longer be marked \Recent
+	var recentUIDs map[uint32]bool
 	if clearRecent {
+		// F7280: \Recent is session state; keep this session's set before
+		// the stored flags are cleared.
+		if recent > 0 {
+			recentUIDs = make(map[uint32]bool, recent)
+			uids, _ := m.db.GetMessageUIDs(user, mailbox)
+			for _, uid := range uids {
+				if meta, merr := m.db.GetMessageMetadata(user, mailbox, uid); merr == nil && hasFlag(meta.Flags, "\\Recent") {
+					recentUIDs[uid] = true
+				}
+			}
+		}
 		if err := m.db.ClearRecent(user, mailbox); err != nil {
 			return nil, err
 		}
@@ -301,6 +313,7 @@ func (m *BboltMailstore) mailboxInfo(user, mailbox string, clearRecent bool) (*M
 		Name:           mb.Name,
 		Exists:         exists,
 		Recent:         recent,
+		RecentUIDs:     recentUIDs,
 		Unseen:         unseen,
 		UIDValidity:    mb.UIDValidity,
 		UIDNext:        mb.UIDNext,
@@ -1153,14 +1166,18 @@ func inSeqRanges(ranges []SeqRange, n, hi uint32) bool {
 func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *SearchCriteria) bool {
 	// Handle NOT
 	if criteria.Not != nil {
-		if matchesCriteria(meta, msgData, criteria.Not) {
+		n := *criteria.Not
+		n.recent = criteria.recent
+		if matchesCriteria(meta, msgData, &n) {
 			return false
 		}
 	}
 
 	// Handle OR
 	if criteria.Or[0] != nil && criteria.Or[1] != nil {
-		if !matchesCriteria(meta, msgData, criteria.Or[0]) && !matchesCriteria(meta, msgData, criteria.Or[1]) {
+		o0, o1 := *criteria.Or[0], *criteria.Or[1]
+		o0.recent, o1.recent = criteria.recent, criteria.recent
+		if !matchesCriteria(meta, msgData, &o0) && !matchesCriteria(meta, msgData, &o1) {
 			return false
 		}
 	}
@@ -1197,13 +1214,14 @@ func matchesCriteria(meta *storage.MessageMetadata, msgData []byte, criteria *Se
 	if criteria.Unseen && hasFlag(meta.Flags, "\\Seen") {
 		return false
 	}
-	if criteria.New && (!hasFlag(meta.Flags, "\\Recent") || hasFlag(meta.Flags, "\\Seen")) {
+	isRecent := hasFlag(meta.Flags, "\\Recent") || criteria.recent[meta.UID]
+	if criteria.New && (!isRecent || hasFlag(meta.Flags, "\\Seen")) {
 		return false
 	}
-	if criteria.Old && hasFlag(meta.Flags, "\\Recent") {
+	if criteria.Old && isRecent {
 		return false
 	}
-	if criteria.Recent && !hasFlag(meta.Flags, "\\Recent") {
+	if criteria.Recent && !isRecent {
 		return false
 	}
 	if criteria.Draft && !hasFlag(meta.Flags, "\\Draft") {
