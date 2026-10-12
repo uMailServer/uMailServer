@@ -175,8 +175,10 @@ type QueueEntry struct {
 	Status      string        `json:"status"`               // pending, sending, failed, delivered, bounced
 	Priority    QueuePriority `json:"priority"`             // 0=low, 1=normal, 2=high, 3=urgent
 	// DSN fields
-	Notify DSNNotify `json:"notify"` // DSN notification preferences (NEVER, SUCCESS, FAILURE, DELAY)
-	Ret    DSNRet    `json:"ret"`    // What to return in DSN (FULL or HDRS)
+	Notify DSNNotify `json:"notify"`          // DSN notification preferences (NEVER, SUCCESS, FAILURE, DELAY)
+	Ret    DSNRet    `json:"ret"`             // What to return in DSN (FULL or HDRS)
+	EnvID  string    `json:"envid,omitempty"` // RFC 3461 ENVID (xtext) of the original transaction
+	ORCPT  string    `json:"orcpt,omitempty"` // RFC 3461 ORCPT ("addr-type;xtext") of this recipient
 }
 
 // DSNNotify represents delivery status notification preferences
@@ -1115,13 +1117,16 @@ func (d *DB) deleteDomain(name string, keepAdmin bool) error {
 		if b == nil {
 			return fmt.Errorf("bucket not found: %s", BucketDomains)
 		}
-		if err := b.Delete([]byte(name)); err != nil {
+		// F7331: domains are created case-insensitively (F5165), so delete
+		// the stored key and its accounts/aliases the same way; an exact
+		// match left case-variant rows behind.
+		if err := deletePrefixFold(tx, BucketDomains, name, true); err != nil {
 			return err
 		}
-		if err := deletePrefix(tx, BucketAccounts, AccountKey(name, "")); err != nil {
+		if err := deletePrefixFold(tx, BucketAccounts, AccountKey(name, ""), false); err != nil {
 			return err
 		}
-		if err := deletePrefix(tx, BucketAliases, name+":"); err != nil {
+		if err := deletePrefixFold(tx, BucketAliases, name+":", false); err != nil {
 			return err
 		}
 		suffix := "@" + name
@@ -1145,6 +1150,32 @@ func deletePrefix(tx *bbolt.Tx, bucket, prefix string) error {
 	for k, _ := c.Seek(p); k != nil && bytes.HasPrefix(k, p); k, _ = c.Next() {
 		keys = append(keys, append([]byte(nil), k...))
 	}
+	for _, k := range keys {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deletePrefixFold removes every key of bucket that equals (exact=true) or
+// starts with (exact=false) name, ignoring ASCII case.
+func deletePrefixFold(tx *bbolt.Tx, bucket, name string, exact bool) error {
+	b := tx.Bucket([]byte(bucket))
+	if b == nil {
+		return fmt.Errorf("bucket not found: %s", bucket)
+	}
+	var keys [][]byte
+	_ = b.ForEach(func(k, _ []byte) error {
+		if len(k) < len(name) || !strings.EqualFold(string(k[:len(name)]), name) {
+			return nil
+		}
+		if exact && len(k) != len(name) {
+			return nil
+		}
+		keys = append(keys, append([]byte(nil), k...))
+		return nil
+	})
 	for _, k := range keys {
 		if err := b.Delete(k); err != nil {
 			return err
@@ -1437,6 +1468,12 @@ func (d *DB) CreateAlias(alias *AliasData) error {
 		b := tx.Bucket([]byte(BucketAliases))
 		if b == nil {
 			return fmt.Errorf("bucket not found: %s", BucketAliases)
+		}
+		// F7330: the domain must exist in this same transaction, else a
+		// concurrent DeleteDomain (which also purges aliases) leaves the
+		// alias orphaned and still resolvable.
+		if db := tx.Bucket([]byte(BucketDomains)); db == nil || !hasKeyFold(db, []byte(alias.Domain)) {
+			return ErrDomainNotFound
 		}
 		if hasKeyFold(b, []byte(key)) { // F5165: case-insensitive
 			return ErrAliasExists

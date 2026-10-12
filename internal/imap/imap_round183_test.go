@@ -55,7 +55,7 @@ func TestF6600_SequenceNumbersStableAfterForeignExpunge(t *testing.T) {
 	if s := joined(a.cmd("SEARCH ALL")); !strings.Contains(s, "* SEARCH 3 4 5") || strings.Contains(s, "EXPUNGE") {
 		t.Fatalf("search: %q", s)
 	}
-	if s := joined(a.cmd("STORE 3 +FLAGS (\\Flagged)")); strings.Contains(s, "EXPUNGE") || !strings.Contains(s, "* 3 FETCH (FLAGS (\\Flagged))") {
+	if s := joined(a.cmd("STORE 3 +FLAGS (\\Flagged)")); strings.Contains(s, "EXPUNGE") || !strings.Contains(s, "* 3 FETCH (FLAGS (\\Flagged \\Recent))") {
 		t.Fatalf("store: %q", s)
 	}
 	if f := flagsOfUID(t, ms, user, 3); len(f) != 1 || f[0] != "\\Flagged" {
@@ -94,7 +94,7 @@ func TestF6600_UIDCommandsAndNewMessages(t *testing.T) {
 	if s := joined(a.cmd("UID SEARCH ALL")); strings.Contains(s, "4") || strings.Contains(s, "EXPUNGE") {
 		t.Fatalf("uid search leaked unannounced message / expunge: %q", s)
 	}
-	if s := joined(a.cmd("UID STORE 2 +FLAGS (\\Seen)")); !strings.Contains(s, "* 2 FETCH (UID 2 FLAGS (\\Seen))") {
+	if s := joined(a.cmd("UID STORE 2 +FLAGS (\\Seen)")); !strings.Contains(s, "* 2 FETCH (UID 2 FLAGS (\\Seen \\Recent))") {
 		t.Fatalf("uid store: %q", s)
 	}
 	s := joined(a.cmd("NOOP"))
@@ -226,7 +226,7 @@ func TestF6606_ImplicitSeenReportsFlags(t *testing.T) {
 	if s := joined(a.cmd("FETCH 1 BODY.PEEK[]")); strings.Contains(s, "FLAGS") {
 		t.Fatalf("peek: %q", s)
 	}
-	if s := joined(a.cmd("FETCH 1 BODY[TEXT]")); !strings.Contains(s, "FLAGS (\\Seen)") {
+	if s := joined(a.cmd("FETCH 1 BODY[TEXT]")); !strings.Contains(s, "\\Seen") {
 		t.Fatalf("body: %q", s)
 	}
 	b := newR183(t, ms, user)

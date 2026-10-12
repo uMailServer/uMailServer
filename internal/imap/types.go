@@ -19,6 +19,9 @@ type Mailbox struct {
 	ReadOnly       bool
 	HasChildren    bool // RFC 3348: mailbox has child mailboxes
 	HasNoSelect    bool // RFC 3348: mailbox cannot be selected
+	// RecentUIDs is this session's \Recent set (RFC 3501 §2.3.2), captured at
+	// SELECT before the store's flags are cleared (F7280).
+	RecentUIDs map[uint32]bool
 }
 
 // Message represents an IMAP message
@@ -94,6 +97,9 @@ type SearchCriteria struct {
 	Unseen     bool
 	Draft      bool
 	Undraft    bool
+
+	// recent is the session's \Recent UID set, consulted by RECENT/NEW/OLD.
+	recent map[uint32]bool
 
 	// KEYWORD / UNKEYWORD flag atoms (all must be present / absent)
 	Keyword   []string

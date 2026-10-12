@@ -107,6 +107,14 @@ func (s *Session) fetchSel(set string, items []string) ([]*Message, error) {
 		return nil, err
 	}
 	msgs, err := s.server.mailstore.FetchMessages(s.user, s.selected.Name, live, items)
+	if err == nil && len(s.selected.RecentUIDs) > 0 {
+		// F7280: report this session's \Recent flag (RFC 3501 §2.3.2).
+		for _, m := range msgs {
+			if s.selected.RecentUIDs[m.UID] && !hasFlag(m.Flags, "\\Recent") {
+				m.Flags = append(m.Flags, "\\Recent")
+			}
+		}
+	}
 	if err != nil || !s.snapOn {
 		return msgs, err
 	}

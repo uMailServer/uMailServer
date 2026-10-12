@@ -35,6 +35,7 @@ type Config struct {
 	Environment  string            `yaml:"environment"`   // "production", "staging", "development"
 	Attributes   map[string]string `yaml:"attributes"`    // Additional resource attributes
 	SampleRate   float64           `yaml:"sample_rate"`   // 0.0 (none) to 1.0 (all)
+	Insecure     bool              `yaml:"insecure"`      // Allow plaintext OTLP to non-loopback hosts
 }
 
 // Provider manages OpenTelemetry tracing
@@ -159,6 +160,9 @@ func createExporter(config Config) (sdktrace.SpanExporter, error) {
 		// channel, so startup failed after the timeout even with a healthy
 		// collector (F5976). The batcher exports asynchronously and retries,
 		// so an unreachable collector must not block or fail startup.
+		if !config.Insecure && !strings.HasPrefix(config.OTLPEndpoint, "https://") && !otlpTargetIsLoopback(config.OTLPEndpoint) {
+			return nil, fmt.Errorf("tracing: refusing plaintext OTLP to non-loopback endpoint %q: use https:// or set insecure", config.OTLPEndpoint)
+		}
 		target, creds := otlpTransport(config.OTLPEndpoint)
 		conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
 		if err != nil {
@@ -415,4 +419,23 @@ func (p *Provider) StartSpanWithKind(ctx context.Context, name string, kind Span
 		opts = append(opts, trace.WithAttributes(attrs...))
 	}
 	return p.StartSpan(ctx, name, opts...)
+}
+
+// otlpTargetIsLoopback reports whether a plaintext endpoint ("http://host:port"
+// or "host:port") points at a loopback host.
+func otlpTargetIsLoopback(endpoint string) bool {
+	t := strings.TrimSuffix(strings.TrimPrefix(endpoint, "http://"), "/")
+	if i := strings.IndexByte(t, '/'); i >= 0 {
+		t = t[:i]
+	}
+	host := t
+	if h, _, err := net.SplitHostPort(t); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

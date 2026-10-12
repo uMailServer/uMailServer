@@ -167,6 +167,7 @@ func (s *Server) retryQueueEntry(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
+	s.auditAdmin(r, "queue_retry", id)
 	s.sendJSON(w, http.StatusOK, map[string]string{"status": "retrying"})
 }
 
@@ -184,5 +185,6 @@ func (s *Server) dropQueueEntry(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
+	s.auditAdmin(r, "queue_drop", id)
 	w.WriteHeader(http.StatusNoContent)
 }

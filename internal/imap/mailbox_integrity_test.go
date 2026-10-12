@@ -97,7 +97,7 @@ func TestStore_SystemFlagReachesExpunge(t *testing.T) {
 	ms, user, run := persistentSession(t, 2)
 	run("a1 SELECT INBOX")
 	st := strings.Join(run(`a2 STORE 1 +FLAGS (\Deleted \Seen)`), "\n")
-	if !strings.Contains(st, `FLAGS (\Deleted \Seen)`) {
+	if !strings.Contains(st, `FLAGS (\Deleted \Seen \Recent)`) {
 		t.Fatalf("STORE echo %q", st)
 	}
 	if s := strings.Join(run("a3 SEARCH DELETED"), "\n"); !strings.Contains(s, "* SEARCH 1") {

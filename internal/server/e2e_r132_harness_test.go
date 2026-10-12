@@ -44,13 +44,7 @@ type e2eEnv struct {
 
 func e2eFreePort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
-	return p
+	return reserveFreePort(t)
 }
 
 func e2eWriteCert(t *testing.T, dir string) (string, string) {

@@ -48,6 +48,8 @@ type SendMailRequest struct {
 	// InReplyTo / References carry RFC 5322 threading headers for replies.
 	InReplyTo  string   `json:"inReplyTo,omitempty"`
 	References []string `json:"references,omitempty"`
+	// Attachments are base64 files assembled server-side into multipart/mixed.
+	Attachments []SendAttachment `json:"attachments,omitempty"`
 }
 
 // MailHandler handles mail-related API requests
@@ -582,6 +584,12 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	atts, err := validateAttachments(req.Attachments)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Build RFC 2822 email
 	now := time.Now()
 	dateStr := now.Format("Mon, 02 Jan 2006 15:04:05 -0700")
@@ -610,11 +618,25 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("References: " + strings.Join(refs, " ") + "\r\n")
 	}
 	sb.WriteString("MIME-Version: 1.0\r\n")
-	sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
-	sb.WriteString("\r\n")
-	sb.WriteString(req.Body)
+	if len(atts) > 0 {
+		ct, mixed, err := buildMixedBody(req.Body, atts)
+		if err != nil {
+			h.sendError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sb.WriteString("Content-Type: " + ct + "\r\n\r\n")
+		sb.Write(mixed)
+	} else {
+		sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+		sb.WriteString("\r\n")
+		sb.WriteString(req.Body)
+	}
 
 	rawEmail := sb.String()
+	if len(rawEmail) > 25*1024*1024 {
+		h.sendError(w, http.StatusRequestEntityTooLarge, "Message too large (max 25MB)")
+		return
+	}
 
 	// Queue the message for outbound delivery to all envelope recipients
 	// (To, Cc, Bcc). Bcc addresses must not appear in the message headers

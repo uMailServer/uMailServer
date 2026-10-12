@@ -40,6 +40,7 @@ func TestCreateDomainRejectsDuplicate(t *testing.T) {
 // retarget the existing alias.
 func TestCreateAliasRejectsDuplicate(t *testing.T) {
 	d := openIntegrityDB(t)
+	r256Domains(t, d, "a.test")
 	if err := d.CreateAlias(&AliasData{Alias: "sales", Domain: "a.test", Target: "bob@a.test", IsActive: true}); err != nil {
 		t.Fatalf("create: %v", err)
 	}

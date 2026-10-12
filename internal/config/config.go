@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -41,9 +42,23 @@ type Config struct {
 	DMARC       DMARCConfig       `yaml:"dmarc"`
 	Alert       AlertConfig       `yaml:"alert"`
 	Push        PushConfig        `yaml:"push"`
+	Queue       QueueConfig       `yaml:"queue"`
 
 	source      string   // file the config was read from ("" = built-in defaults)
 	unknownKeys []string // YAML keys that matched no setting
+}
+
+// Bounds for queue.max_age. The minimum is the span of the built-in retry
+// schedule (5m+15m+30m+1h+2h+4h+8h+16h+24h+48h = 104h45m, rounded up), so every
+// scheduled retry fits before the message expires.
+const (
+	MinQueueMaxAge = 105 * time.Hour
+	MaxQueueMaxAge = 30 * 24 * time.Hour
+)
+
+// QueueConfig holds outbound queue settings.
+type QueueConfig struct {
+	MaxAge Duration `yaml:"max_age"` // time in queue before a deferred message bounces (default 120h)
 }
 
 // ServerConfig holds general server settings
@@ -310,6 +325,7 @@ type TracingConfig struct {
 	Environment  string            `yaml:"environment"`   // Deployment environment: "production", "staging", "development"
 	Attributes   map[string]string `yaml:"attributes"`    // Additional resource attributes
 	SampleRate   float64           `yaml:"sample_rate"`   // Sampling rate 0.0-1.0 (1.0 = all traces)
+	Insecure     bool              `yaml:"insecure"`      // Allow plaintext OTLP to a non-loopback collector (default false)
 }
 
 // DatabaseConfig holds database settings
@@ -811,6 +827,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// R252: queue.max_age bounds how long a deferred message is retried.
+	// Zero means unset (the queue uses its 120h default).
+	if age := c.Queue.MaxAge.ToDuration(); age != 0 && (age < MinQueueMaxAge || age > MaxQueueMaxAge) {
+		return fmt.Errorf("queue.max_age must be between %s and %s", MinQueueMaxAge, MaxQueueMaxAge)
+	}
+
 	// R225: a pending greylist entry expires 6h after first sight, so a
 	// longer delay would never let any sender through.
 	if c.Spam.Greylisting.Delay.ToDuration() > 6*time.Hour {
@@ -900,6 +922,20 @@ func (c *Config) Validate() error {
 		if domain.MaxAccounts < 0 {
 			return fmt.Errorf("domains[%d].max_accounts must be non-negative", i)
 		}
+	}
+
+	// F7360: spans carry request metadata; plaintext OTLP is only allowed to
+	// loopback unless tracing.insecure is set explicitly.
+	if c.Tracing.Enabled && c.Tracing.Exporter == "otlp" && !c.Tracing.Insecure {
+		if host, plain := otlpPlaintextHost(c.Tracing.OTLPEndpoint); plain && !IsLoopbackHost(host) {
+			return fmt.Errorf("tracing.otlp_endpoint %q would send spans in plaintext to a non-loopback host: use an https:// endpoint or set tracing.insecure: true", c.Tracing.OTLPEndpoint)
+		}
+	}
+
+	// F7361: a network-reachable MCP listener must not rely on a generated
+	// token; fail at load, not at server start.
+	if c.MCP.Enabled && !IsLoopbackHost(c.MCP.Bind) && c.MCP.AuthToken == "" && c.MCP.AdminAuthToken == "" {
+		return fmt.Errorf("mcp.auth_token is required when mcp.bind %q is not a loopback address", c.MCP.Bind)
 	}
 
 	// Validate metrics path
@@ -1110,4 +1146,39 @@ func (c *Config) DatabasePath() string {
 		return c.Database.Path
 	}
 	return filepath.Join(c.Server.DataDir, "umailserver.db")
+}
+
+// IsLoopbackHost reports whether host (optionally bracketed, no port) is
+// "localhost" or a loopback IP. An empty host (all interfaces) is not loopback.
+func IsLoopbackHost(host string) bool {
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// otlpPlaintextHost returns the host of an OTLP endpoint and whether it is
+// plaintext (anything but an https:// URL). An empty endpoint means the
+// loopback default.
+func otlpPlaintextHost(endpoint string) (string, bool) {
+	e := strings.TrimSpace(endpoint)
+	if e == "" {
+		return "localhost", true
+	}
+	if strings.HasPrefix(e, "https://") {
+		return "", false
+	}
+	e = strings.TrimPrefix(e, "http://")
+	if i := strings.IndexByte(e, '/'); i >= 0 {
+		e = e[:i]
+	}
+	if h, _, err := net.SplitHostPort(e); err == nil {
+		return h, true
+	}
+	return e, true
 }

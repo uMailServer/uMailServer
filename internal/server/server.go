@@ -143,6 +143,7 @@ func New(cfg *config.Config) (*Server, error) {
 		Environment:  cfg.Tracing.Environment,
 		Attributes:   cfg.Tracing.Attributes,
 		SampleRate:   cfg.Tracing.SampleRate,
+		Insecure:     cfg.Tracing.Insecure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize tracing: %w", err)

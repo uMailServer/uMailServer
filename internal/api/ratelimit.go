@@ -129,6 +129,7 @@ func (s *Server) handlePutRateLimitConfig(w http.ResponseWriter, r *http.Request
 		"user_per_day", req.UserPerDay,
 	)
 
+	s.auditAdmin(r, "ratelimit_config_update", "ratelimits")
 	s.sendJSON(w, http.StatusOK, map[string]string{
 		"status":  "config_updated",
 		"message": "Configuration updated successfully.",

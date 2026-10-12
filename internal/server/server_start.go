@@ -45,6 +45,9 @@ func (s *Server) Start() (err error) {
 	s.queue.SetTracingProvider(s.tracingProvider)
 	// F5680: outbound EHLO must be the server's FQDN, not net/smtp's "localhost".
 	s.queue.SetHelloName(s.config.Server.Hostname)
+	if age := s.config.Queue.MaxAge.ToDuration(); age > 0 {
+		s.queue.SetMaxAge(age) // R252: queue.max_age
+	}
 	s.queue.Start(s.ctx)
 	s.logger.Info("Queue manager started")
 

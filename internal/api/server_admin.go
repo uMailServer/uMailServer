@@ -60,6 +60,7 @@ func (s *Server) handleJWTRotate(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("JWT secret rotated", "newKid", newKid, "activeKeys", len(keys))
 
+	s.auditAdmin(r, "jwt_rotate", newKid)
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"status":     "rotated",
 		"newKid":     newKid,

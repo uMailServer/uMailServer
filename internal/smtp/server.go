@@ -52,6 +52,7 @@ type Server struct {
 	rcptPerHour         int
 	userRcpt            map[string][]time.Time
 	userRcptMu          sync.Mutex
+	onDeliverWithDSN    func(from string, to []string, notify []string, dsn *DSNInfo, data []byte) error
 	onDeliverWithNotify func(from string, to []string, notify []string, data []byte) error
 	onDeliver           func(from string, to []string, data []byte) error
 	onDeliverWithAuth   func(from string, to []string, notify []string, data []byte, info *DeliveryAuth) error
@@ -339,6 +340,22 @@ func (s *Server) allowUserRecipient(username string) bool {
 // SetValidateHandler sets the message validation handler
 func (s *Server) SetValidateHandler(handler func(from string, to []string) error) {
 	s.onValidate = handler
+}
+
+// DSNInfo carries the RFC 3461 envelope parameters other than NOTIFY to a
+// delivery handler: RET and ENVID of MAIL FROM, and the ORCPT of each
+// recipient (parallel to the recipient list; "" when not given).
+type DSNInfo struct {
+	Ret   string // FULL, HDRS or ""
+	EnvID string // xtext, as received
+	ORCPT []string
+}
+
+// SetDeliveryHandlerWithDSN sets a delivery handler that also receives the
+// RET/ENVID/ORCPT parameters. It takes precedence over
+// SetDeliveryHandlerWithNotify (F7310).
+func (s *Server) SetDeliveryHandlerWithDSN(handler func(from string, to []string, notify []string, dsn *DSNInfo, data []byte) error) {
+	s.onDeliverWithDSN = handler
 }
 
 // SetDeliveryHandlerWithNotify sets the message delivery handler with per-recipient

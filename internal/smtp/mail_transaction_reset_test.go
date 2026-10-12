@@ -38,6 +38,11 @@ func TestAuditRegressionF15(t *testing.T) {
 				t.Fatal("partial chunk fixture invalid")
 			}
 		}
+		if replace {
+			// A nested MAIL is a bad sequence (F7311); the client abandons the
+			// old transaction with RSET before starting a new one.
+			command("RSET")
+		}
 		command("MAIL FROM:<new@example.test>")
 		command("RCPT TO:<new-recipient@example.test> NOTIFY=NEVER")
 		s.reader = bufio.NewReader(strings.NewReader("NEW"))
@@ -68,13 +73,18 @@ func TestAuditRegressionF15(t *testing.T) {
 	if len(s.rcptTo) != 1 || s.state != StateRcptTo {
 		t.Fatal("invalid MAIL changed transaction")
 	}
-	for i := 0; i < 2; i++ {
-		if e := s.handleMAIL("FROM:<>"); e != nil {
-			t.Fatal(e)
-		}
-		if len(s.rcptTo) != 0 || len(s.rcptToNotify) != 0 || s.data != nil || s.bdatBuffer != nil || s.mailFrom != "" || !s.isAuth || s.state != StateMailFrom {
-			t.Fatal("null/repeated MAIL retained transaction or lost authentication")
-		}
+	// Nested MAIL is 503 and leaves the open transaction untouched (F7311).
+	if e := s.handleMAIL("FROM:<>"); e != nil {
+		t.Fatal(e)
 	}
-
+	if len(s.rcptTo) != 1 || s.state != StateRcptTo || string(s.data) != "old" {
+		t.Fatal("nested MAIL modified the open transaction")
+	}
+	s.resetTransaction()
+	if e := s.handleMAIL("FROM:<>"); e != nil {
+		t.Fatal(e)
+	}
+	if len(s.rcptTo) != 0 || len(s.rcptToNotify) != 0 || s.data != nil || s.bdatBuffer != nil || s.mailFrom != "" || !s.isAuth || s.state != StateMailFrom {
+		t.Fatal("null MAIL retained transaction or lost authentication")
+	}
 }

@@ -48,29 +48,32 @@ type WebhookTrigger interface {
 // Admin API methods (GetStats, SetMaxRetries, SetMaxQueueSize, FlushQueue, RetryEntry, DropEntry)
 // are implemented and exposed via /api/v1/admin/queue/* routes.
 type Manager struct {
-	db           *db.DB
-	store        *store.MaildirStore
-	dataDir      string
-	queueDir     string // directory for queue message files; defaults to dataDir
-	resolver     DNSResolver
-	running      atomic.Bool
-	shutdown     chan struct{}
-	stopOnce     sync.Once
-	shutMu       sync.RWMutex   // guards the shutdown channel variable
-	lifeMu       sync.Mutex     // guards Start/Stop and the shutdown channel (F5904)
-	stopped      bool           // Stop closed shutdown; Start must make a new one
-	workers      sync.WaitGroup // delivery workers and the sweeper of the current run
-	mu           sync.RWMutex
-	metrics      *metrics.SimpleMetrics
-	logger       *slog.Logger
-	maxRetries   int
-	maxAge       time.Duration              // entries older than this bounce instead of retrying (F7190)
-	claimLease   time.Duration              // a "sending" claim older than this is reverted (F7191)
-	updateEntry  func(*db.QueueEntry) error // test seam; defaults to db.UpdateQueueEntry
-	maxQueueSize int
-	requireTLS   bool
-	helloName    string         // EHLO name for outbound connections (F5680)
-	webhook      WebhookTrigger // optional webhook trigger for delivery events
+	db          *db.DB
+	store       *store.MaildirStore
+	dataDir     string
+	queueDir    string // directory for queue message files; defaults to dataDir
+	resolver    DNSResolver
+	running     atomic.Bool
+	shutdown    chan struct{}
+	stopOnce    sync.Once
+	shutMu      sync.RWMutex   // guards the shutdown channel variable
+	lifeMu      sync.Mutex     // guards Start/Stop and the shutdown channel (F5904)
+	stopped     bool           // Stop closed shutdown; Start must make a new one
+	workers     sync.WaitGroup // delivery workers and the sweeper of the current run
+	mu          sync.RWMutex
+	metrics     *metrics.SimpleMetrics
+	logger      *slog.Logger
+	maxRetries  int
+	maxAge      time.Duration              // entries older than this bounce instead of retrying (F7190)
+	claimLease  time.Duration              // a "sending" claim older than this is reverted (F7191)
+	updateEntry func(*db.QueueEntry) error // test seam; defaults to db.UpdateQueueEntry
+	// persistBackoff is the base delay between attempts to write a delivery
+	// outcome; it doubles per attempt (F7292). 0 means defaultPersistBackoff.
+	persistBackoff time.Duration
+	maxQueueSize   int
+	requireTLS     bool
+	helloName      string         // EHLO name for outbound connections (F5680)
+	webhook        WebhookTrigger // optional webhook trigger for delivery events
 
 	// Worker pool settings
 	workerCount  int                 // number of delivery workers (default 10)
@@ -490,6 +493,20 @@ func (m *Manager) SetWebhookTrigger(w WebhookTrigger) {
 // Each element of notify corresponds to the same index in to. An empty string
 // means the sender has no preference (bounce on permanent failure per RFC 3461).
 func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, message []byte) (string, error) {
+	return m.EnqueueWithDSN(from, to, notify, nil, message)
+}
+
+// DSNParams carries the RFC 3461 envelope parameters besides NOTIFY: RET and
+// ENVID of MAIL FROM, and ORCPT per recipient (parallel to the recipients).
+type DSNParams struct {
+	Ret   string
+	EnvID string
+	ORCPT []string
+}
+
+// EnqueueWithDSN is EnqueueWithNotify plus the RET/ENVID/ORCPT parameters,
+// which are stored on the queue entries for DSN generation (F7310).
+func (m *Manager) EnqueueWithDSN(from string, to []string, notify []string, params *DSNParams, message []byte) (string, error) {
 	if len(to) == 0 {
 		return "", fmt.Errorf("cannot enqueue message without recipients")
 	}
@@ -524,6 +541,13 @@ func (m *Manager) EnqueueWithNotify(from string, to []string, notify []string, m
 			RetryCount:  0,
 			Status:      "pending",
 			Notify:      db.DSNNotify(dsnNotify),
+		}
+		if params != nil {
+			entries[i].Ret = db.DSNRet(ParseDSNRet(params.Ret))
+			entries[i].EnvID = params.EnvID
+			if i < len(params.ORCPT) {
+				entries[i].ORCPT = params.ORCPT[i]
+			}
 		}
 	}
 
@@ -641,6 +665,7 @@ func (m *Manager) RetryEntry(id string) error {
 	entry.NextRetry = time.Now()
 	entry.RetryCount = 0
 	entry.LastError = ""
+	deleteFile(m.deliveredMarkerPath(entry.ID)) // an explicit retry resends
 
 	if err := m.db.UpdateQueueEntry(entry); err != nil {
 		return err
@@ -665,6 +690,7 @@ func (m *Manager) DropEntry(id string) error {
 	if err := m.db.Dequeue(id); err != nil {
 		return err
 	}
+	deleteFile(m.deliveredMarkerPath(id))
 	m.deleteMessageFileIfUnreferenced(entry.MessagePath)
 	return nil
 }
@@ -809,6 +835,16 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 		return
 	}
 	entry = claimed
+
+	// A previous attempt was accepted by the remote MTA but its outcome could
+	// not be recorded: finalize without delivering again (F7292).
+	if _, err := os.Stat(m.deliveredMarkerPath(entry.ID)); err == nil {
+		m.logger.Warn("finalizing already-delivered entry from marker", "id", entry.ID)
+		if err := m.handleDeliverySuccess(entry); err != nil {
+			m.logger.Error("delivered entry still cannot be finalized", "error", err, "id", entry.ID)
+		}
+		return
+	}
 
 	if m.tracingProvider != nil && m.tracingProvider.IsEnabled() {
 		var span = m.startDeliverSpan(ctx, entry)
@@ -1467,11 +1503,21 @@ func (m *Manager) checkDANE(mx string, st tls.ConnectionState) error {
 // handleDeliverySuccess handles successful delivery. Returns error if the queue
 // entry could not be persisted — callers must not delete message files on error.
 func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) error {
+	// Record the acceptance durably before the outcome write: if that write
+	// fails (or we crash), the lease sweeper requeues the entry and deliver()
+	// finalizes it from this marker instead of sending it again (F7292).
+	// Best effort: without the marker the at-least-once fallback applies.
+	if err := os.MkdirAll(filepath.Dir(m.deliveredMarkerPath(entry.ID)), 0o750); err == nil {
+		if err := writeFile(m.deliveredMarkerPath(entry.ID), []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+			m.logger.Warn("failed to write delivered marker", "error", err, "id", entry.ID)
+		}
+	}
 	entry.Status = "delivered"
 	if err := m.persistEntry(entry); err != nil {
 		m.logger.Error("failed to update queue entry after delivery success", "error", err)
 		return err
 	}
+	deleteFile(m.deliveredMarkerPath(entry.ID))
 
 	// Send DSN if requested (NOTIFY includes SUCCESS)
 	if entry.Notify != 0 && int(entry.Notify)&int(DSNNotifySuccess) != 0 {
@@ -1515,10 +1561,12 @@ func (m *Manager) sendSuccessDSN(entry *db.QueueEntry) {
 		ArrivalDate:    entry.CreatedAt,
 		OriginalFrom:   entry.From,
 		OriginalTo:     entry.To[0],
+		EnvID:          entry.EnvID,
 		Recipient: DSNRecipient{
-			Original: entry.To[0],
-			Notify:   DSNNotifyNever,
-			Ret:      DSNRet(entry.Ret),
+			Original:          entry.To[0],
+			OriginalRecipient: entry.ORCPT,
+			Notify:            DSNNotifyNever,
+			Ret:               DSNRet(entry.Ret),
 		},
 		Action:    "delivered",
 		Status:    "2.0.0",
@@ -1585,6 +1633,14 @@ func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent 
 		entry.Status = "pending"
 	}
 
+	// Queue the failure DSN before recording "bounced": a crash between the
+	// two then re-bounces on recovery (a possible duplicate DSN) instead of
+	// losing the notification (F7294). The spool file is kept until the
+	// outcome is stored.
+	if entry.Status == "bounced" {
+		m.enqueueBounce(entry)
+	}
+
 	if err := m.persistEntry(entry); err != nil {
 		// The entry is still "sending" in the database. The sweeper reverts
 		// the claim once its lease expires (F7191).
@@ -1593,7 +1649,6 @@ func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent 
 	}
 
 	if entry.Status == "bounced" {
-		m.generateBounce(entry)
 		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
 	} else if entry.RetryCount == 1 && int(entry.Notify)&int(DSNNotifyDelay) != 0 {
 		m.sendDelayDSN(entry)
@@ -1631,7 +1686,8 @@ func (m *Manager) sendDelayDSN(entry *db.QueueEntry) {
 		ArrivalDate:    entry.CreatedAt,
 		OriginalFrom:   entry.From,
 		OriginalTo:     entry.To[0],
-		Recipient:      DSNRecipient{Original: entry.To[0], Notify: DSNNotifyNever},
+		EnvID:          entry.EnvID,
+		Recipient:      DSNRecipient{Original: entry.To[0], OriginalRecipient: entry.ORCPT, Notify: DSNNotifyNever},
 		DiagnosticCode: text,
 		RemoteMTA:      mx,
 		MessageID:      GenerateMessageID(),
@@ -1645,8 +1701,19 @@ func (m *Manager) sendDelayDSN(entry *db.QueueEntry) {
 	}
 }
 
-// generateBounce generates a bounce message and delivers it back to the sender
+// generateBounce queues the bounce message and then releases the spool file.
 func (m *Manager) generateBounce(entry *db.QueueEntry) {
+	m.enqueueBounce(entry)
+	// Only delete message file when no other entries reference it
+	if m.db != nil {
+		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+	} else {
+		deleteFile(entry.MessagePath)
+	}
+}
+
+// enqueueBounce generates a bounce message and queues it back to the sender.
+func (m *Manager) enqueueBounce(entry *db.QueueEntry) {
 	// RFC 3461 §4.1: without NOTIFY the default is FAILURE; with NOTIFY a
 	// failure DSN is sent only when FAILURE is listed (NEVER excludes it).
 	// NOTIFY=SUCCESS or DELAY alone must not produce a failure DSN (F5159).
@@ -1674,10 +1741,12 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 		ArrivalDate:    entry.CreatedAt,
 		OriginalFrom:   entry.From,
 		OriginalTo:     entry.To[0],
+		EnvID:          entry.EnvID,
 		Recipient: DSNRecipient{
-			Original: entry.To[0],
-			Notify:   DSNNotifyNever,
-			Ret:      ret,
+			Original:          entry.To[0],
+			OriginalRecipient: entry.ORCPT,
+			Notify:            DSNNotifyNever,
+			Ret:               ret,
 		},
 		Action:         "failed",
 		Status:         bounceStatus(entry.LastError),
@@ -1706,13 +1775,6 @@ func (m *Manager) generateBounce(entry *db.QueueEntry) {
 			// above instead of generating another bounce to ourselves.
 			m.logger.Error("failed to enqueue bounce message", "error", enqueueErr)
 		}
-	}
-
-	// Only delete message file when no other entries reference it
-	if m.db != nil {
-		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
-	} else {
-		deleteFile(entry.MessagePath)
 	}
 }
 
@@ -1824,21 +1886,42 @@ func (m *Manager) getStats() (*QueueStats, error) {
 	return stats, err
 }
 
-// persistEntry writes a claimed entry's outcome, retrying briefly so a
-// transient write error does not strand the claim.
+// Outcome writes are retried with doubling backoff (about 0.8s in total by
+// default) before the claim is left to the lease sweeper (F7292).
+const (
+	defaultPersistBackoff = 25 * time.Millisecond
+	persistAttempts       = 6
+)
+
+// persistEntry writes a claimed entry's outcome, retrying so a transient write
+// error does not strand the claim.
 func (m *Manager) persistEntry(entry *db.QueueEntry) error {
 	upd := m.updateEntry
 	if upd == nil {
 		upd = m.db.UpdateQueueEntry
 	}
+	m.mu.RLock()
+	delay := m.persistBackoff
+	m.mu.RUnlock()
+	if delay <= 0 {
+		delay = defaultPersistBackoff
+	}
 	var err error
-	for i := 0; i < 3; i++ {
+	for i := 0; i < persistAttempts; i++ {
 		if err = upd(entry); err == nil || errors.Is(err, db.ErrQueueEntryNotFound) {
 			return err
 		}
-		time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+		if i < persistAttempts-1 {
+			time.Sleep(delay << uint(i))
+		}
 	}
 	return err
+}
+
+// deliveredMarkerPath is the durable "remote MTA accepted this entry" marker.
+// It lives on the spool filesystem, independent of the bbolt outcome write.
+func (m *Manager) deliveredMarkerPath(entryID string) string {
+	return filepath.Join(m.dataDir, "queue", entryID+".delivered")
 }
 
 // SetMaxAge sets how long an entry is retried before it bounces. Zero or

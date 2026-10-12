@@ -154,6 +154,7 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.auditAdmin(r, "alias_create", req.Alias)
 	s.sendJSON(w, http.StatusCreated, aliasToJSON(alias))
 }
 
@@ -220,6 +221,7 @@ func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request, alias strin
 		return
 	}
 
+	s.auditAdmin(r, "alias_update", alias)
 	s.sendJSON(w, http.StatusOK, aliasToJSON(data))
 }
 
@@ -243,5 +245,6 @@ func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request, alias strin
 		return
 	}
 
+	s.auditAdmin(r, "alias_delete", alias)
 	w.WriteHeader(http.StatusNoContent)
 }

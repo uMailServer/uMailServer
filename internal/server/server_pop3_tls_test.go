@@ -68,13 +68,7 @@ func pop3TLSCert(t *testing.T, dir string) (string, string) {
 
 func pop3TLSFreePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("INVALID: listen: %v", err)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port
+	return reserveFreePort(t)
 }
 
 // pop3TLSStart mirrors Start(): New, an account, the IMAP mailstore, startPOP3.

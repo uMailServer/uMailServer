@@ -1568,10 +1568,49 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			keywords, _ := importData["keywords"].(map[string]interface{})
 			receivedAt, _ := importData["receivedAt"].(string)
 
+			// RFC 8621 §4.8: if the "blobId", "mailboxIds", or "keywords"
+			// properties are invalid (e.g., missing, wrong type, id not
+			// found), the server MUST reject the import with an
+			// "invalidProperties" SetError, which RFC 8620 §2.6 requires to
+			// list the invalid properties. Without this gate a wrong-typed
+			// mailboxIds silently fell back to INBOX and wrong-typed
+			// keywords were silently dropped while the entry was reported
+			// as created; a wrong-typed blobId produced an "invalidArguments"
+			// SetError, which is not a legal SetError type (RFC 8620 §2.6 —
+			// it is a method-level error name, §3.6.1).
+			var invalidProps []string
 			if blobID == "" {
+				invalidProps = append(invalidProps, "blobId")
+			}
+			if raw, present := importData["mailboxIds"]; present && raw != nil {
+				if m, isMap := raw.(map[string]interface{}); !isMap {
+					invalidProps = append(invalidProps, "mailboxIds")
+				} else {
+					for _, v := range m {
+						if _, isBool := v.(bool); !isBool {
+							invalidProps = append(invalidProps, "mailboxIds")
+							break
+						}
+					}
+				}
+			}
+			if raw, present := importData["keywords"]; present && raw != nil {
+				if m, isMap := raw.(map[string]interface{}); !isMap {
+					invalidProps = append(invalidProps, "keywords")
+				} else {
+					for _, v := range m {
+						if _, isBool := v.(bool); !isBool {
+							invalidProps = append(invalidProps, "keywords")
+							break
+						}
+					}
+				}
+			}
+			if len(invalidProps) > 0 {
 				notCreated[key] = map[string]interface{}{
-					"type":        "invalidArguments",
-					"description": "blobId is required",
+					"type":        "invalidProperties",
+					"description": "One or more import properties are missing or of the wrong type",
+					"properties":  invalidProps,
 				}
 				return
 			}

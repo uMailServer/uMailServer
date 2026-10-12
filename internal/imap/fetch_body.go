@@ -105,16 +105,15 @@ func splitHeaderBody(data []byte) (header, body []byte) {
 	return data, nil
 }
 
-// bodySection extracts an RFC 3501 section-spec from a message.
-func bodySection(data []byte, section string) []byte {
-	if section == "" {
-		return data
-	}
-	// Leading part number path ("1", "2.3", "1.HEADER", ...).
-	part := data
-	isMessage := true // part still has an RFC 822 header (top level)
+// resolvePart walks the leading part-number path of a section-spec. It
+// returns the addressed entity, whether that entity is still the top-level
+// message, the remaining non-numeric section, and false when a numbered part
+// does not exist (F7283).
+func resolvePart(data []byte, section string) (part []byte, isMessage bool, rest string, ok bool) {
+	part = data
+	isMessage = true // part still has an RFC 822 header (top level)
 	for section != "" {
-		head, rest, _ := strings.Cut(section, ".")
+		head, tail, _ := strings.Cut(section, ".")
 		n, err := strconv.Atoi(head)
 		if err != nil || n <= 0 {
 			break
@@ -123,13 +122,42 @@ func bodySection(data []byte, section string) []byte {
 		// encapsulated message (RFC 3501 §6.4.5), not of the part itself.
 		if !isMessage && isRFC822Part(part) {
 			_, part = splitHeaderBody(part)
+		} else if !isMessage && !isMultipartEntity(part) {
+			// F7283: a leaf part has no sub-parts ("1.1" of a text/plain
+			// message does not exist; "1" is its body).
+			return nil, false, section, false
 		}
 		part = mimeSubpart(part, n)
 		if part == nil {
-			return nil
+			return nil, false, section, false
 		}
 		isMessage = false
-		section = rest
+		section = tail
+	}
+	return part, isMessage, section, true
+}
+
+// isMultipartEntity reports whether a MIME entity is a multipart.
+func isMultipartEntity(entity []byte) bool {
+	mediaType, params, err := mime.ParseMediaType(partHeader(entity).Get("Content-Type"))
+	return err == nil && strings.HasPrefix(mediaType, "multipart/") && params["boundary"] != ""
+}
+
+// bodySectionExists reports whether the numbered part addressed by section
+// exists in data.
+func bodySectionExists(data []byte, section string) bool {
+	_, _, _, ok := resolvePart(data, section)
+	return ok
+}
+
+// bodySection extracts an RFC 3501 section-spec from a message.
+func bodySection(data []byte, section string) []byte {
+	if section == "" {
+		return data
+	}
+	part, isMessage, section, ok := resolvePart(data, section)
+	if !ok {
+		return nil
 	}
 	header, body := splitHeaderBody(part)
 	// F5494: HEADER, HEADER.FIELDS[.NOT] and TEXT after a part number refer

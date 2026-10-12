@@ -156,6 +156,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.auditAdmin(r, "domain_create", domain.Name)
 	s.sendJSON(w, http.StatusCreated, domainToJSON(domain))
 }
 
@@ -229,6 +230,7 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
+	s.auditAdmin(r, "domain_update", name)
 	s.sendJSON(w, http.StatusOK, domainToJSON(domain))
 }
 
@@ -253,6 +255,7 @@ func (s *Server) deleteDomain(w http.ResponseWriter, r *http.Request, name strin
 		}
 		return
 	}
+	s.auditAdmin(r, "domain_delete", name)
 	// F6649c: the cascade removed the accounts; remove their mailbox data too.
 	// F6811: a failed purge is not success: the domain is gone so it cannot be
 	// retried by domain, but DELETE /accounts/{email} re-runs the purge for

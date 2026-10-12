@@ -312,6 +312,9 @@ type vacationMsgInfo struct {
 	MessageID  string
 	Subject    string
 	References []string
+	// Headers holds the original message's header fields (first value per
+	// name) for the RFC 3834 suppression rules in vacation.Eligible.
+	Headers map[string]string
 }
 
 // vacationInfoFromMessage extracts the Message-ID, Subject and References of
@@ -322,7 +325,14 @@ func vacationInfoFromMessage(data []byte) vacationMsgInfo {
 		return vacationMsgInfo{}
 	}
 	_, refs := parseThreadHeaders(data)
+	headers := make(map[string]string, len(msg.Header))
+	for k, v := range msg.Header {
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
 	return vacationMsgInfo{
+		Headers:    headers,
 		MessageID:  sanitizeHeaderValue(strings.TrimSpace(msg.Header.Get("Message-ID"))),
 		Subject:    sanitizeHeaderValue(strings.TrimSpace(msg.Header.Get("Subject"))),
 		References: refs,
@@ -377,7 +387,7 @@ func (s *Server) sendVacationReplyCtx(recipientEmail, senderEmail, origRcpt stri
 	if vacation.IsAutomatedSender(senderEmail) {
 		return
 	}
-	eff, ok := vacation.Eligible(cfg, recipientEmail, senderEmail, nil, now)
+	eff, ok := vacation.Eligible(cfg, recipientEmail, senderEmail, info.Headers, now)
 	if !ok {
 		return
 	}

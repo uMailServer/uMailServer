@@ -179,7 +179,7 @@ func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
 	// record, and more than one such record is a permerror (no SPF policy).
 	var spfRecords []string
 	for _, txt := range txtRecords {
-		if txt == "v=spf1" || strings.HasPrefix(txt, "v=spf1 ") {
+		if strings.EqualFold(txt, "v=spf1") || (len(txt) > 7 && strings.EqualFold(txt[:7], "v=spf1 ")) {
 			spfRecords = append(spfRecords, txt)
 		}
 	}
@@ -199,7 +199,7 @@ func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
 		// "mx" substring.
 		authorized := false
 		for _, token := range strings.Fields(txt) {
-			if token == "mx" || token == "a:"+hostname {
+			if strings.EqualFold(token, "mx") || strings.EqualFold(token, "a:"+hostname) {
 				authorized = true
 				break
 			}
@@ -225,10 +225,23 @@ func (d *Diagnostics) checkSPF(domain string) DNSCheckResult {
 	}
 }
 
+// dkimSelector returns the DKIM selector configured for domain, or "default"
+// (the selector `domain add` generates) when none is configured (F7321).
+func (d *Diagnostics) dkimSelector(domain string) string {
+	if d.config != nil {
+		for _, dc := range d.config.Domains {
+			if strings.EqualFold(dc.Name, domain) && dc.DKIM.Selector != "" {
+				return dc.DKIM.Selector
+			}
+		}
+	}
+	return "default"
+}
+
 // checkDKIM checks DKIM record
 func (d *Diagnostics) checkDKIM(domain string) DNSCheckResult {
 	// Try to lookup default DKIM selector
-	selector := "default._domainkey." + domain
+	selector := d.dkimSelector(domain) + "._domainkey." + domain
 	txtRecords, err := net.LookupTXT(selector)
 	if err != nil {
 		return DNSCheckResult{

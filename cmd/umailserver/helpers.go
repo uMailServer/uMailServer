@@ -154,3 +154,54 @@ func cmdConfig(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "config OK: %s\n", cfg.Source())
 	return 0
 }
+
+// confirmDestructive asks for y/yes on in unless assumeYes is set. EOF or any
+// other answer declines, so a non-interactive run never deletes by accident.
+func confirmDestructive(prompt string, assumeYes bool, in io.Reader, out io.Writer) bool {
+	if assumeYes {
+		return true
+	}
+	fmt.Fprintf(out, "%s (y/N): ", prompt)
+	var resp string
+	_, _ = fmt.Fscanln(in, &resp)
+	resp = strings.ToLower(strings.TrimSpace(resp))
+	return resp == "y" || resp == "yes"
+}
+
+// resolveSecret returns the secret from the flag value, else the first
+// non-empty of envNames, else $UMAILSERVER_PASSWORD. A secret passed on the
+// command line is visible to every local user in the process list, so warn.
+func resolveSecret(flagVal, flagName string, stderr io.Writer, envNames ...string) string {
+	if flagVal != "" {
+		fmt.Fprintf(stderr, "warning: %s on the command line is visible in the process list; prefer %s or UMAILSERVER_PASSWORD\n",
+			flagName, strings.Join(envNames, "/"))
+		return flagVal
+	}
+	for _, n := range append(envNames, "UMAILSERVER_PASSWORD") {
+		if v := os.Getenv(n); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// hasYesFlag reports whether args contain --yes/-y.
+func hasYesFlag(args []string) bool {
+	for _, a := range args {
+		if a == "--yes" || a == "-y" {
+			return true
+		}
+	}
+	return false
+}
+
+// positionalArgs returns args without --yes/-y.
+func positionalArgs(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if a != "--yes" && a != "-y" {
+			out = append(out, a)
+		}
+	}
+	return out
+}

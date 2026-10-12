@@ -965,6 +965,11 @@ func (s *Session) handleRename(args []string) error {
 		s.WriteResponse(s.tag, "NO [ALREADYEXISTS] Mailbox already exists")
 		return nil
 	}
+	// F7282: a mailbox cannot become its own descendant.
+	if strings.HasPrefix(newName, oldName+"/") {
+		s.WriteResponse(s.tag, "NO Cannot rename a mailbox into its own descendant")
+		return nil
+	}
 	type move struct{ from, to string }
 	moves := []move{{oldName, newName}}
 	for _, n := range names {
@@ -1443,8 +1448,14 @@ func (s *Session) handleLsub(args []string) error {
 		subSet[m] = true
 	}
 	var all []string
+	allOK := false
 	if l, lerr := s.server.mailstore.ListMailboxes(s.user, "*"); lerr == nil {
 		all = l
+		allOK = true
+	}
+	exists := make(map[string]bool, len(all))
+	for _, o := range all {
+		exists[o] = true
 	}
 	hasChild := func(m string) bool {
 		for _, o := range all {
@@ -1466,6 +1477,11 @@ func (s *Session) handleLsub(args []string) error {
 			attrs := "\\HasNoChildren"
 			if hasChild(mbox) {
 				attrs = "\\HasChildren"
+			}
+			// F7281: a subscribed name whose mailbox is gone stays listed
+			// (RFC 3501 §6.3.9) but as \Noselect.
+			if allOK && !exists[mbox] && !strings.EqualFold(mbox, "INBOX") {
+				attrs = "\\Noselect " + attrs
 			}
 			emitted[mbox] = true
 			entries = append(entries, lsubEntry{mbox, attrs})
@@ -2768,6 +2784,19 @@ func (s *Session) fetch(args []string, line string, uidCmd bool) error {
 
 	if span != nil {
 		tracing.SetIntAttribute(span, "fetch.message_count", len(messages))
+	}
+
+	// F7283: a numbered part the message does not have is refused rather than
+	// answered with an empty or wrong literal.
+	for _, item := range fetchItems {
+		if it, ok := parseBodySectionItem(item); ok && it.section != "" && it.section[0] >= '1' && it.section[0] <= '9' {
+			for _, msg := range messages {
+				if !bodySectionExists(msg.Data, it.section) {
+					s.WriteResponse(s.tag, "NO [NONEXISTENT] Section "+it.section+" does not exist")
+					return nil
+				}
+			}
+		}
 	}
 
 	// RFC 3501 §6.4.5: a non-PEEK BODY[section] sets \Seen (unless the
@@ -4178,6 +4207,7 @@ func (s *Session) evalSearch(e *searchExpr) ([]uint32, error) {
 		}
 		flat.SeqSet = live
 	}
+	flat.recent = s.selected.RecentUIDs
 	base, err := s.server.mailstore.SearchMessages(s.user, s.selected.Name, flat)
 	if err != nil {
 		return nil, err

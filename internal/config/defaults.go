@@ -203,6 +203,9 @@ func DefaultConfig() *Config {
 			TLSWarningDays:  7,
 			QueueThreshold:  1000,
 		},
+		Queue: QueueConfig{
+			MaxAge: Duration(120 * time.Hour),
+		},
 		Push: PushConfig{
 			Enabled: true,
 			Subject: "mailto:admin@umailserver.local",

@@ -90,15 +90,19 @@ type DSN struct {
 	RemoteMTA      string // Remote MTA that attempted delivery
 	FinalMTA       string // Final MTA
 	MessageID      string // Message ID of the DSN
+	EnvID          string // RFC 3461 ENVID (xtext) of the original transaction
 }
 
 // DSNRecipient holds per-recipient DSN information
 type DSNRecipient struct {
-	Original       string    // Original recipient address
-	DSNAddress     string    // DSN address (may differ for DSN)
-	Notify         DSNNotify // What to notify
-	Ret            DSNRet    // What to return
-	OriginalFields *mail.Header
+	Original   string // Original recipient address
+	DSNAddress string // DSN address (may differ for DSN)
+	// OriginalRecipient is the RFC 3461 ORCPT value ("addr-type;xtext") given
+	// for this recipient; "" when none.
+	OriginalRecipient string
+	Notify            DSNNotify // What to notify
+	Ret               DSNRet    // What to return
+	OriginalFields    *mail.Header
 }
 
 // GenerateMessageID generates a unique Message-ID for the DSN
@@ -155,6 +159,8 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 	d.RemoteMTA = sanitizeDSNField(d.RemoteMTA)
 	d.Recipient.Original = sanitizeDSNField(d.Recipient.Original)
 	d.Recipient.DSNAddress = sanitizeDSNField(d.Recipient.DSNAddress)
+	envID := sanitizeDSNField(xtextDecode(d.EnvID))
+	origRcpt := dsnOriginalRecipient(d.Recipient.OriginalRecipient)
 	dsn = &d
 
 	// Generate DSN message
@@ -181,10 +187,10 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 			"--%s\r\n"+
 			"Content-Type: message/delivery-status\r\n"+
 			"\r\n"+
-			"Reporting-MTA: dns; %s\r\n"+
+			"%sReporting-MTA: dns; %s\r\n"+
 			"Arrival-Date: %s\r\n"+
 			"\r\n"+
-			"Final-Recipient: rfc822; %s\r\n"+
+			"%sFinal-Recipient: rfc822; %s\r\n"+
 			"Action: %s\r\n"+
 			"Status: %s\r\n"+
 			"",
@@ -199,8 +205,10 @@ func GenerateDSN(dsn *DSN, originalMessage []byte, ret DSNRet) ([]byte, error) {
 		dsn.Action,
 		dsn.Status,
 		boundary,
+		envIDField(envID),
 		dsn.ReportedDomain,
 		dsn.ArrivalDate.Format(time.RFC1123Z),
+		origRcpt,
 		dsn.Recipient.Original,
 		dsn.Action,
 		dsn.Status,
@@ -328,4 +336,42 @@ func sanitizeDSNField(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// envIDField renders the Original-Envelope-Id per-message field (RFC 3464
+// §2.2.1) or nothing when the sender gave no ENVID.
+func envIDField(envID string) string {
+	if envID == "" {
+		return ""
+	}
+	return "Original-Envelope-Id: " + envID + "\r\n"
+}
+
+// dsnOriginalRecipient renders the Original-Recipient per-recipient field
+// (RFC 3464 §2.3.1) from an ORCPT value "addr-type;xtext", or nothing.
+func dsnOriginalRecipient(orcpt string) string {
+	typ, addr, ok := strings.Cut(orcpt, ";")
+	if !ok || typ == "" || addr == "" {
+		return ""
+	}
+	return "Original-Recipient: " + sanitizeDSNField(typ) + "; " + sanitizeDSNField(xtextDecode(addr)) + "\r\n"
+}
+
+// xtextDecode reverses RFC 3461 xtext encoding ("+XX" hex escapes).
+func xtextDecode(v string) string {
+	if !strings.Contains(v, "+") {
+		return v
+	}
+	var b strings.Builder
+	for i := 0; i < len(v); i++ {
+		if v[i] == '+' && i+2 < len(v) {
+			if n, err := strconv.ParseUint(v[i+1:i+3], 16, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
 }

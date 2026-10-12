@@ -37,6 +37,7 @@ func TestF6080_UpdateAccountDoesNotResurrect(t *testing.T) {
 // F6081: same for aliases.
 func TestF6081_UpdateAliasDoesNotResurrect(t *testing.T) {
 	d := openR126(t)
+	r256Domains(t, d, "ex.com")
 	al := &AliasData{Alias: "s", Domain: "ex.com", Target: "bob@ex.com", IsActive: true}
 	if err := d.CreateAlias(al); err != nil {
 		t.Fatal(err)
@@ -69,6 +70,7 @@ func TestF6082_UpdateDomainDoesNotResurrect(t *testing.T) {
 // F6083: an alias may not shadow a mailbox (any case) or point at itself.
 func TestF6083_AliasCollisions(t *testing.T) {
 	d := openR126(t)
+	r256Domains(t, d, "ex.com")
 	if err := d.CreateAccount(&AccountData{Domain: "ex.com", LocalPart: "bob", IsActive: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +88,7 @@ func TestF6083_AliasCollisions(t *testing.T) {
 // F6084: account creation must not shadow an existing alias.
 func TestF6084_AccountVsExistingAlias(t *testing.T) {
 	d := openR126(t)
+	r256Domains(t, d, "ex.com")
 	if err := d.CreateAlias(&AliasData{Alias: "sales", Domain: "ex.com", Target: "bob@ex.com", IsActive: true}); err != nil {
 		t.Fatal(err)
 	}

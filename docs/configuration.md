@@ -252,7 +252,7 @@ queue:
     - 12h
 
   max_retries: 7                    # After this, generate bounce
-  max_age: 48h                      # Maximum time in queue
+  max_age: 120h                     # Maximum time in queue before bounce (default 120h; allowed 105h-720h, unset = default)
 
   # Concurrency
   max_concurrent_deliveries: 50
@@ -278,6 +278,7 @@ tracing:
   service_name: "umailserver"
   exporter: "noop"                # Options: noop, stdout, otlp
   otlp_endpoint: "localhost:4317" # OTLP collector endpoint
+  insecure: false                 # allow plaintext OTLP to a non-loopback collector (default: refused; use https://)
   environment: "production"       # Environment tag
   sample_rate: 1.0                # 0.0 to 1.0 (1.0 = trace all)
     attributes:                   # Additional resource attributes
