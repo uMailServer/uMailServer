@@ -188,8 +188,9 @@ func TestAddDomainAndAccountCreateActiveRecords(t *testing.T) {
 	}
 }
 
-// F5251: deleting a missing account/domain (including a case variant of a
-// stored address) must not report success.
+// F5251: deleting a missing account/domain must not report success.
+// (F7142: case variants of an existing address now resolve to it; see
+// TestR237CaseInsensitiveLookups.)
 func TestDeleteMissingAccountOrDomainFails(t *testing.T) {
 	s, database := newSecurityTestServer(t)
 	if err := database.CreateDomain(&db.DomainData{Name: "example.com", IsActive: true}); err != nil {
@@ -200,7 +201,6 @@ func TestDeleteMissingAccountOrDomainFails(t *testing.T) {
 	}
 	for _, b := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_account","arguments":{"email":"ghost@example.com"}}}`,
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_account","arguments":{"email":"Victim@Example.com"}}}`,
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_domain","arguments":{"name":"nosuch.test"}}}`,
 	} {
 		if code, body := securityTestCall(s, "admin-tok", b); code == http.StatusOK || strings.Contains(body, "deleted successfully") || !strings.Contains(body, "not found") {

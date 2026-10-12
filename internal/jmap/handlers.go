@@ -17,8 +17,9 @@ import (
 // If accountId is provided and doesn't match, returns an error Response.
 func validateAccountId(accountId, user, methodName, callID string) (bool, Response) {
 	if accountId != "" && accountId != user {
+		// RFC 8620 §3.6.2: method-level errors are "error" responses (F7120).
 		return false, Response{
-			Name: methodName,
+			Name: "error",
 			Args: map[string]interface{}{
 				"type":        "accountNotFound",
 				"description": "Account not found or access denied",
@@ -383,6 +384,21 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 					continue
 				}
 			}
+			// F7122: removing the mailbox's emails must journal each Email as
+			// destroyed and release blobs/quota reference-aware, exactly like
+			// Email/set destroy; dropping the bucket alone leaked both.
+			gmu := s.userGuard(user)
+			gmu.Lock()
+			var removed []*storage.MessageMetadata
+			if onDestroyRemoveEmails {
+				uids, _ := s.db.GetMessageUIDs(user, name)
+				for _, uid := range uids {
+					if meta, err := s.db.GetMessageMetadata(user, name, uid); err == nil && meta != nil {
+						removed = append(removed, meta)
+					}
+					_ = s.db.DeleteMessage(user, name, uid)
+				}
+			}
 			if err := s.db.DeleteMailbox(user, name); err != nil {
 				notDestroyed[idStr] = map[string]interface{}{
 					"type":        "serverFail",
@@ -391,6 +407,18 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 			} else {
 				destroyed = append(destroyed, idStr)
 			}
+			released := make(map[string]bool, len(removed))
+			for _, meta := range removed {
+				if released[meta.MessageID] {
+					continue
+				}
+				released[meta.MessageID] = true
+				if len(s.allBlobCopies(user, meta.MessageID)) == 0 &&
+					s.msgStore.DeleteMessage(user, meta.MessageID) == nil {
+					_ = s.adjustQuota(user, -meta.Size)
+				}
+			}
+			gmu.Unlock()
 		}
 	}
 
@@ -1520,6 +1548,12 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			mu := s.userUploadLock(user)
 			mu.Lock()
 			defer mu.Unlock()
+			// F7123: shared reference guard (lock order: upload lock, then
+			// guard, as in handleUpload) so a concurrent Email/destroy
+			// cannot free the blob between the read and the metadata store.
+			gmu := s.userGuard(user)
+			gmu.Lock()
+			defer gmu.Unlock()
 			importData, ok := val.(map[string]interface{})
 			if !ok {
 				notCreated[key] = map[string]interface{}{
@@ -2209,7 +2243,7 @@ func (s *Server) handleChanges(user string, call MethodCall, methodName string, 
 	entries, hasMore, lastSeq, err := s.db.GetChangesSince(user, ct, since, int(maxChanges))
 	if err != nil {
 		return Response{
-			Name: methodName,
+			Name: "error",
 			Args: map[string]interface{}{
 				"type":        "serverFail",
 				"description": s.safeError("GetChangesSince", err),

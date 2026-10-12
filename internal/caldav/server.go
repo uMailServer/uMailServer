@@ -815,7 +815,8 @@ func parseICSDuration(value string) (time.Duration, bool) {
 	return total, true
 }
 
-// parseTimeRange parses the RFC 4791 §9.9.3 start/end attributes.
+// parseTimeRange parses the RFC 4791 §9.9.3 start/end attributes. Both are
+// required (free-busy-query, RFC 4791 §7.10).
 func parseTimeRange(tr *TimeRange) (time.Time, time.Time, bool) {
 	if tr == nil {
 		return time.Time{}, time.Time{}, false
@@ -824,6 +825,33 @@ func parseTimeRange(tr *TimeRange) (time.Time, time.Time, bool) {
 	end, okEnd := parseICSTime(tr.End)
 	if !okStart || !okEnd {
 		return time.Time{}, time.Time{}, false
+	}
+	return start, end, true
+}
+
+// parseFilterTimeRange parses a calendar-query time-range, where RFC 4791
+// §9.9 makes start and end individually optional (open-ended range). A
+// missing bound becomes a far sentinel; at least one bound is required and a
+// present-but-malformed one is unparseable (F7130).
+func parseFilterTimeRange(tr *TimeRange) (time.Time, time.Time, bool) {
+	if tr == nil || (tr.Start == "" && tr.End == "") {
+		return time.Time{}, time.Time{}, false
+	}
+	start := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(9000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if tr.Start != "" {
+		t, ok := parseICSTime(tr.Start)
+		if !ok {
+			return time.Time{}, time.Time{}, false
+		}
+		start = t
+	}
+	if tr.End != "" {
+		t, ok := parseICSTime(tr.End)
+		if !ok {
+			return time.Time{}, time.Time{}, false
+		}
+		end = t
 	}
 	return start, end, true
 }
@@ -856,7 +884,7 @@ func compFilterMatches(cf *CompFilter, icsData string) bool {
 	}
 
 	if cf.TimeRange != nil {
-		rStart, rEnd, ok := parseTimeRange(cf.TimeRange)
+		rStart, rEnd, ok := parseFilterTimeRange(cf.TimeRange)
 		if !ok {
 			return false
 		}
@@ -924,7 +952,7 @@ func supportedCompFilter(cf *CompFilter) bool {
 		}
 	}
 	if cf.TimeRange != nil {
-		if _, _, ok := parseTimeRange(cf.TimeRange); !ok {
+		if _, _, ok := parseFilterTimeRange(cf.TimeRange); !ok {
 			return false
 		}
 		switch cf.Name {

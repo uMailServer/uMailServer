@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net"
@@ -266,13 +267,20 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	// decoder buffer an arbitrarily large request.
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	var raw json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&raw); err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
 			s.writeError(w, http.StatusRequestEntityTooLarge, rpcInvalidRequest, nil, "Request body too large")
 			return
 		}
 		// F5046: JSON-RPC 2.0 §5.1 parse error, id null.
+		s.writeError(w, http.StatusBadRequest, rpcParseError, nil, "Parse error")
+		return
+	}
+	// F7141: only one JSON value per body; trailing data (e.g. a second
+	// concatenated request) would otherwise be silently dropped.
+	if _, err := dec.Token(); err != io.EOF {
 		s.writeError(w, http.StatusBadRequest, rpcParseError, nil, "Parse error")
 		return
 	}
@@ -330,6 +338,9 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 	switch req.Method {
 	case "initialize":
 		result, err = s.handleInitialize()
+	case "ping":
+		// F7140: MCP ping is answered with an empty result.
+		result = map[string]interface{}{}
 	case "tools/list":
 		result = s.handleToolsList()
 	case "tools/call":
@@ -1028,6 +1039,7 @@ func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 		return nil, invalidParams("domain name is required")
 	}
 
+	name = strings.ToLower(name) // F7142: stored canonical form
 	// F5251: a missing domain is an error, not a successful deletion.
 	if exists, err := s.keyExists(db.BucketDomains, name); err != nil {
 		slog.Error("mcp tool error", "tool", "delete_domain", "error", err)
@@ -1129,8 +1141,8 @@ func (s *Server) toolDeleteAccount(email string) (map[string]interface{}, error)
 		return nil, invalidParams("email is required")
 	}
 
-	// Parse domain and local part
-	parts := strings.Split(email, "@")
+	// Parse domain and local part; F7142: stored canonical form is lower-case.
+	parts := strings.Split(strings.ToLower(email), "@")
 	if len(parts) != 2 {
 		return nil, invalidParams("invalid email address")
 	}
@@ -1175,8 +1187,8 @@ func (s *Server) toolGetAccountInfo(email string) (map[string]interface{}, error
 		return nil, invalidParams("email is required")
 	}
 
-	// Parse domain and local part
-	parts := strings.Split(email, "@")
+	// Parse domain and local part; F7142: stored canonical form is lower-case.
+	parts := strings.Split(strings.ToLower(email), "@")
 	if len(parts) != 2 {
 		return nil, invalidParams("invalid email address")
 	}
