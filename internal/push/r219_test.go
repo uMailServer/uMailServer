@@ -74,16 +74,16 @@ func TestSubscribeRejectsOversizedFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	long := strings.Repeat("a", 5000)
-	if err := s.Subscribe("u", &Subscription{Endpoint: "https://push.example/" + long, P256dh: "k", Auth: "a"}); err == nil {
+	if err := s.Subscribe("u", &Subscription{Endpoint: "https://push.example/" + long, P256dh: testP256dh, Auth: testAuth}); err == nil {
 		t.Fatal("oversized endpoint accepted")
 	}
-	if err := s.Subscribe("u", &Subscription{Endpoint: "https://push.example/x", P256dh: long, Auth: "a"}); err == nil {
+	if err := s.Subscribe("u", &Subscription{Endpoint: "https://push.example/x", P256dh: long, Auth: testAuth}); err == nil {
 		t.Fatal("oversized key accepted")
 	}
 	if err := s.Subscribe("u", &Subscription{Endpoint: "https://push.example/x", DeviceInfo: DeviceInfo{Name: long}}); err == nil {
 		t.Fatal("oversized device name accepted")
 	}
-	sub := &Subscription{Endpoint: "https://push.example/ok", P256dh: "k", Auth: "a"}
+	sub := &Subscription{Endpoint: "https://push.example/ok", P256dh: testP256dh, Auth: testAuth}
 	if err := s.Subscribe("u", sub); err != nil {
 		t.Fatal(err)
 	}

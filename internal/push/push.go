@@ -2,6 +2,7 @@
 package push
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -237,7 +238,32 @@ func validateSubscriptionFields(sub *Subscription) error {
 	if len(sub.Endpoint) > maxEndpointLen || len(sub.P256dh) > maxKeyLen || len(sub.Auth) > maxKeyLen {
 		return fmt.Errorf("push subscription field too long")
 	}
+	if err := validateSubscriptionKeys(sub); err != nil {
+		return err
+	}
 	return validateDeviceInfo(sub.DeviceInfo)
+}
+
+// validateSubscriptionKeys checks the Web Push keys (RFC 8291): p256dh is an
+// uncompressed P-256 point (65 bytes) and auth a 16-byte secret, both
+// base64url (padding tolerated).
+func validateSubscriptionKeys(sub *Subscription) error {
+	p, err := decodeB64URL(sub.P256dh)
+	if err != nil || len(p) != 65 {
+		return fmt.Errorf("invalid p256dh key")
+	}
+	if _, err := ecdh.P256().NewPublicKey(p); err != nil {
+		return fmt.Errorf("invalid p256dh key")
+	}
+	a, err := decodeB64URL(sub.Auth)
+	if err != nil || len(a) != 16 {
+		return fmt.Errorf("invalid auth key")
+	}
+	return nil
+}
+
+func decodeB64URL(s string) ([]byte, error) {
+	return base64.RawURLEncoding.DecodeString(strings.TrimRight(s, "="))
 }
 
 func validateDeviceInfo(d DeviceInfo) error {

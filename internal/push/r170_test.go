@@ -17,15 +17,15 @@ func TestF6504_PerUserSubscriptionCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < MaxSubscriptionsPerUser; i++ {
-		if err := svc.Subscribe("u", &Subscription{Endpoint: fmt.Sprintf("https://push.example.com/%d", i)}); err != nil {
+		if err := svc.Subscribe("u", &Subscription{Endpoint: fmt.Sprintf("https://push.example.com/%d", i), P256dh: testP256dh, Auth: testAuth}); err != nil {
 			t.Fatalf("sub %d: %v", i, err)
 		}
 	}
-	if err := svc.Subscribe("u", &Subscription{Endpoint: "https://push.example.com/over"}); err == nil {
+	if err := svc.Subscribe("u", &Subscription{Endpoint: "https://push.example.com/over", P256dh: testP256dh, Auth: testAuth}); err == nil {
 		t.Fatal("expected cap error")
 	}
 	// Another user is unaffected.
-	if err := svc.Subscribe("v", &Subscription{Endpoint: "https://push.example.com/other"}); err != nil {
+	if err := svc.Subscribe("v", &Subscription{Endpoint: "https://push.example.com/other", P256dh: testP256dh, Auth: testAuth}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -57,7 +57,7 @@ func TestF6505_ExpiryDoesNotDeleteReplacedSubscription(t *testing.T) {
 
 	prev := pushHTTPClient.Transport
 	pushHTTPClient.Transport = &resubRT{fn: func() {
-		_ = svc.Subscribe("u", &Subscription{ID: "sub1", Endpoint: "https://push.example.com/new"})
+		_ = svc.Subscribe("u", &Subscription{ID: "sub1", Endpoint: "https://push.example.com/new", P256dh: testP256dh, Auth: testAuth})
 	}}
 	defer func() { pushHTTPClient.Transport = prev }()
 

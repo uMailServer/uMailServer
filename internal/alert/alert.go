@@ -162,6 +162,11 @@ func NewManager(config Config, logger Logger) *Manager {
 		logger = &noopLogger{}
 	}
 
+	// A zero/negative MaxAlerts means "use the default" rather than "drop
+	// every alert" (F7203).
+	if config.MaxAlerts <= 0 {
+		config.MaxAlerts = DefaultConfig().MaxAlerts
+	}
 	m := &Manager{
 		config:         config,
 		logger:         logger,
