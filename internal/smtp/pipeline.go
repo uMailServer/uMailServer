@@ -503,6 +503,33 @@ type GreylistStage struct {
 	greylist    map[string]*greylistEntry
 	lastCleanup time.Time
 	maxEntries  int // Maximum entries before emergency cleanup
+	delay       time.Duration
+	now         func() time.Time // injectable clock (tests)
+}
+
+// DefaultGreylistDelay is the retry delay used when none is configured.
+const DefaultGreylistDelay = 5 * time.Minute
+
+// GreylistOption customizes a GreylistStage.
+type GreylistOption func(*GreylistStage)
+
+// WithGreylistDelay sets the minimum delay before a retried triplet is
+// accepted. Non-positive values keep the default.
+func WithGreylistDelay(d time.Duration) GreylistOption {
+	return func(s *GreylistStage) {
+		if d > 0 {
+			s.delay = d
+		}
+	}
+}
+
+// WithGreylistClock injects a clock (for tests).
+func WithGreylistClock(now func() time.Time) GreylistOption {
+	return func(s *GreylistStage) {
+		if now != nil {
+			s.now = now
+		}
+	}
 }
 
 type greylistEntry struct {
@@ -512,12 +539,18 @@ type greylistEntry struct {
 }
 
 // NewGreylistStage creates a new greylisting stage
-func NewGreylistStage() *GreylistStage {
-	return &GreylistStage{
-		greylist:    make(map[string]*greylistEntry),
-		lastCleanup: time.Now(),
-		maxEntries:  50000, // Maximum entries before emergency cleanup
+func NewGreylistStage(opts ...GreylistOption) *GreylistStage {
+	s := &GreylistStage{
+		greylist:   make(map[string]*greylistEntry),
+		maxEntries: 50000, // Maximum entries before emergency cleanup
+		delay:      DefaultGreylistDelay,
+		now:        time.Now,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	s.lastCleanup = s.now()
+	return s
 }
 
 func (s *GreylistStage) Name() string { return "Greylist" }
@@ -526,7 +559,7 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
+	now := s.now()
 
 	// Emergency cleanup if we've exceeded max entries
 	if len(s.greylist) >= s.maxEntries {
@@ -581,8 +614,8 @@ func (s *GreylistStage) Process(ctx *MessageContext) PipelineResult {
 		}
 
 		if !entry.allowed {
-			// Check if enough time has passed (5 minutes)
-			if now.Sub(entry.firstSeen) < 5*time.Minute {
+			// Check if the configured delay has passed
+			if now.Sub(entry.firstSeen) < s.delay {
 				deferred = true
 				continue
 			}

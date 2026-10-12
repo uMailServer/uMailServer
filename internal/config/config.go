@@ -76,7 +76,7 @@ type ACMEConfig struct {
 	Enabled     bool   `yaml:"enabled"`
 	Email       string `yaml:"email"`
 	Provider    string `yaml:"provider"`               // letsencrypt, letsencrypt-staging
-	Challenge   string `yaml:"challenge"`              // http-01, dns-01
+	Challenge   string `yaml:"challenge"`              // accepted: http-01, dns-01; issuance always uses TLS-ALPN-01 on the HTTPS port (no port-80 listener, no DNS plugins)
 	DNSProvider string `yaml:"dns_provider,omitempty"` // cloudflare, route53, etc.
 }
 
@@ -811,6 +811,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// R225: a pending greylist entry expires 6h after first sight, so a
+	// longer delay would never let any sender through.
+	if c.Spam.Greylisting.Delay.ToDuration() > 6*time.Hour {
+		return fmt.Errorf("spam.greylisting.delay must not exceed 6h")
+	}
+
 	// F5362: every SMTP listener rejects messages longer than this limit, so
 	// a zero or negative value refuses all mail.
 	smtpEnabled := c.SMTP.Inbound.Enabled || c.SMTP.Submission.Enabled || c.SMTP.SubmissionTLS.Enabled
@@ -971,7 +977,7 @@ func (c *Config) Validate() error {
 // valid, distinct ports. It mirrors internal/server: a disabled service binds
 // nothing (F5360), the HTTP API always binds, and ManageSieve also binds
 // port+1 for implicit TLS. imap.starttls_port and http.http_port are not bound
-// today but stay reserved.
+// today (no port-80 listener exists) but stay reserved.
 func (c *Config) checkPortConflicts() error {
 	manageSieveTLSPort := 0
 	if c.ManageSieve.Port > 0 && c.ManageSieve.Port < 65535 {

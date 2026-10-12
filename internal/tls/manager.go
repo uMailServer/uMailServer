@@ -339,8 +339,17 @@ func (m *Manager) GetTLSConfigWithClientAuth(requireClientCert bool) *tls.Config
 		}
 	}
 
+	// ACME TLS-ALPN-01 (R224 F7010): autocert answers the challenge from
+	// GetCertificate only when the listener negotiates "acme-tls/1". No
+	// port-80 listener exists, so this is the only supported ACME challenge.
+	var nextProtos []string
+	if m.autocertManager() != nil {
+		nextProtos = []string{acme.ALPNProto}
+	}
+
 	// #nosec G402 -- MinVersion is runtime-validated to be >= TLS 1.2 above
 	return &tls.Config{
+		NextProtos:     nextProtos,
 		GetCertificate: m.GetCertificate,
 		MinVersion:     minVersion,
 		MaxVersion:     tls.VersionTLS13,

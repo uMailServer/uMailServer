@@ -80,6 +80,7 @@ spam:
     enabled: true
   greylisting:
     enabled: true
+    delay: 5m             # minimum wait before a retried sender is accepted (max 6h)
   rbl_servers:
     - zen.spamhaus.org
 

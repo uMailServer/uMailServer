@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -57,7 +58,7 @@ func TestR212IgnoredKeysWarn(t *testing.T) {
 		t.Fatalf("must not fail: %v", err)
 	}
 	_ = cfg
-	for _, k := range []string{"server.force_close_after", "spam.greylisting.delay", "storage.shared_folders", "domains"} {
+	for _, k := range []string{"server.force_close_after", "storage.shared_folders", "domains"} {
 		if !strings.Contains(buf.String(), "key="+k+" ") && !strings.Contains(buf.String(), "key="+k+"\n") {
 			t.Errorf("no warning for %s: %s", k, buf.String())
 		}
@@ -81,5 +82,13 @@ func TestR212ExampleHasNoIgnoredKeys(t *testing.T) {
 	}
 	if got := findIgnoredKeys(&root); len(got) != 0 {
 		t.Fatalf("example sets ignored keys: %v", got)
+	}
+}
+
+func TestR225GreylistDelayValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Spam.Greylisting.Delay = Duration(7 * time.Hour)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("delay >6h must be rejected")
 	}
 }
