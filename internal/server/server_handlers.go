@@ -508,16 +508,18 @@ func (s *Server) deliverMessageWithSieve(from string, to []string, data []byte, 
 
 // relayMessage relays a message to a remote server
 func (s *Server) relayMessage(from, to string, data []byte) error {
-	if s.queue != nil {
-		_, err := s.queue.Enqueue(from, []string{to}, data)
-		if err != nil {
-			s.logger.Error("Failed to enqueue relay message", "error", err)
-			return fmt.Errorf("failed to queue message: %w", err)
-		}
-		s.logger.Debug("Message queued for relay", "from", from, "to", to)
-		return nil
+	if s.queue == nil {
+		// Reporting success here would silently drop the message after the
+		// sender was told it was accepted (F7061); a temp failure lets the
+		// sender retry.
+		s.logger.Error("Cannot relay message: queue not available", "from", from, "to", to)
+		return errors.New("relay queue not available")
 	}
-	s.logger.Debug("Relaying message (queue not available)", "from", from, "to", to)
+	if _, err := s.queue.Enqueue(from, []string{to}, data); err != nil {
+		s.logger.Error("Failed to enqueue relay message", "error", err)
+		return fmt.Errorf("failed to queue message: %w", err)
+	}
+	s.logger.Debug("Message queued for relay", "from", from, "to", to)
 	return nil
 }
 
@@ -662,7 +664,10 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 		if st.dropLocal {
 			return nil
 		}
-	} else if account.ForwardTo != "" {
+	} else if account.ForwardTo != "" && folder != "Junk" {
+		// Junk-verdict mail is kept for the recipient to review and is never
+		// auto-forwarded: forwarding spam makes this server a backscatter and
+		// reputation hazard for the forward target (F7062).
 		// Check for forwarding loop. A looped message is not forwarded
 		// again; it falls through to the local store so it is neither lost
 		// nor left holding the quota reserved above (F4878).
@@ -768,6 +773,20 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 		"message_id", messageID,
 	)
 
+	// metaFail releases what this delivery charged when no metadata row ends
+	// up referencing the blob: the quota reserved above and, when this
+	// delivery created the blob (reserved > 0, so nobody else referenced it
+	// and the per-user lock is still held), the blob itself (F7060).
+	metaFail := func(err error) error {
+		if reserved > 0 {
+			if derr := s.msgStore.DeleteMessageUnchecked(email, messageID); derr != nil {
+				s.logger.Error("Failed to remove unreferenced blob", "email", email, "message_id", messageID, "error", derr)
+			}
+			s.database.IncrementQuota(domain, user, -reserved)
+		}
+		return fmt.Errorf("failed to store message metadata: %w", err)
+	}
+
 	// Store metadata and index message for search
 	if s.storageDB != nil {
 		// A folder other than INBOX (Junk, a Sieve fileinto target) may not
@@ -779,7 +798,11 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 			}
 		}
 		uid, uidErr := s.storageDB.GetNextUID(email, folder)
-		if uidErr == nil {
+		if uidErr != nil {
+			s.logger.Error("Failed to allocate UID", "email", email, "folder", folder, "error", uidErr)
+			return metaFail(uidErr)
+		}
+		{
 			subject, fromAddr, toAddr, dateStr := parseBasicHeaders(data)
 			inReplyTo, references := parseThreadHeaders(data)
 			// Assign thread identity at delivery, mirroring the IMAP APPEND
@@ -804,6 +827,7 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 			}
 			if err := s.storageDB.StoreMessageMetadata(email, folder, uid, meta); err != nil {
 				s.logger.Error("Failed to store message metadata", "email", email, "uid", uid, "folder", folder, "error", err)
+				return metaFail(err)
 			}
 
 			// Refresh the thread aggregate row (best-effort), mirroring the

@@ -1273,8 +1273,8 @@ func TestRelayMessageWithoutQueue(t *testing.T) {
 	msgData := []byte("Subject: Test\r\n\r\nBody")
 	err = server.relayMessage("sender@test.example.com", "recipient@external.com", msgData)
 
-	if err != nil {
-		t.Errorf("relayMessage without queue should not error, got: %v", err)
+	if err == nil {
+		t.Errorf("relayMessage without queue must fail so the sender gets a temp failure (F7061)")
 	}
 }
 
@@ -1865,8 +1865,8 @@ func TestRelayMessage_NilQueue(t *testing.T) {
 
 	msgData := []byte("Subject: Relay test\r\n\r\nBody")
 	err := srv.relayMessage("sender@test.example.com", "recipient@external.com", msgData)
-	if err != nil {
-		t.Fatalf("relayMessage with nil queue should return nil, got: %v", err)
+	if err == nil {
+		t.Fatal("relayMessage with nil queue must return an error (F7061)")
 	}
 }
 
@@ -1921,8 +1921,8 @@ func TestDeliverMessage_UnknownDomain_Relays(t *testing.T) {
 
 	msgData := []byte("Subject: Relay\r\n\r\nBody")
 	err := srv.deliverMessage("sender@test.example.com", []string{"recipient@unknown.com"}, msgData)
-	if err != nil {
-		t.Fatalf("deliverMessage should relay for unknown domain, got: %v", err)
+	if err == nil {
+		t.Fatal("deliverMessage relay without a queue must fail (F7061)")
 	}
 }
 
@@ -1933,8 +1933,8 @@ func TestDeliverMessage_InactiveDomain_Relays(t *testing.T) {
 
 	msgData := []byte("Subject: Relay\r\n\r\nBody")
 	err := srv.deliverMessage("sender@test.example.com", []string{"user@inactive.example.com"}, msgData)
-	if err != nil {
-		t.Fatalf("deliverMessage should relay for inactive domain, got: %v", err)
+	if err == nil {
+		t.Fatal("deliverMessage relay without a queue must fail (F7061)")
 	}
 }
 
@@ -2217,14 +2217,14 @@ func TestDeliverMessage_TableDriven(t *testing.T) {
 			domainActive: false,
 			setupUser:    false,
 			recipient:    "user@inactive.example.com",
-			wantErr:      false,
+			wantErr:      true,
 		},
 		{
 			name:        "unknown domain triggers relay",
 			setupDomain: false,
 			setupUser:   false,
 			recipient:   "user@unknown.com",
-			wantErr:     false,
+			wantErr:     true,
 		},
 		{
 			name:         "local domain no user",
@@ -2277,11 +2277,11 @@ func TestRelayMessage_TableDriven(t *testing.T) {
 		wantErr    bool
 	}{
 		{
-			name:       "nil queue no error",
+			name:       "nil queue errors",
 			from:       "sender@test.example.com",
 			to:         "recipient@external.com",
 			setupQueue: false,
-			wantErr:    false,
+			wantErr:    true,
 		},
 		{
 			name:       "with queue manager",
@@ -2855,8 +2855,8 @@ func TestDeliverMessage_DomainNil(t *testing.T) {
 
 	msgData := []byte("Subject: Test\r\n\r\nBody")
 	err := srv.deliverMessage("sender@external.com", []string{"user@unknowndomain.com"}, msgData)
-	if err != nil {
-		t.Fatalf("deliverMessage should handle nil domain gracefully, got: %v", err)
+	if err == nil {
+		t.Fatal("deliverMessage relay without a queue must fail (F7061)")
 	}
 }
 

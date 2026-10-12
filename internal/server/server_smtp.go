@@ -157,7 +157,7 @@ func (s *Server) startInboundSMTP() error {
 
 	// Spam filtering stages
 	if s.config.Spam.Greylisting.Enabled {
-		pipeline.AddStage(smtp.NewGreylistStage())
+		pipeline.AddStage(smtp.NewGreylistStage(smtp.WithGreylistDelay(s.config.Spam.Greylisting.Delay.ToDuration())))
 	}
 	if len(s.config.Spam.RBLServers) > 0 {
 		pipeline.AddStage(smtp.NewRBLStage(s.config.Spam.RBLServers, smtp.NewRealRBLDNSResolver()))
