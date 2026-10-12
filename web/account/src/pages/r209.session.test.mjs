@@ -7,6 +7,8 @@ import vm from 'node:vm'
 import assert from 'node:assert'
 import test from 'node:test'
 import { createRequire } from 'node:module'
+const EN = JSON.parse(fs.readFileSync(new URL('../locales/en.json', import.meta.url), 'utf8'));
+
 
 const require_ = createRequire(new URL('../../package.json', import.meta.url))
 const ts = require_('typescript')
@@ -43,6 +45,7 @@ function run(file, extra) {
     exports, console, React: { createElement: el },
     require(name) {
       if (name === 'react') return { useState: h.useState, useEffect: h.useEffect }
+      if (name === '../hooks/useI18n') return { useI18n: () => ({ t: (k, p = {}) => String(k.split('.').reduce((o, x) => o?.[x], EN) ?? k).replace(/\{\{(\w+)\}\}/g, (m, q) => p[q] ?? m) }) };
       if (name === 'lucide-react') return new Proxy({}, { get: (_t, p) => String(p) })
       throw new Error('import ' + name)
     },

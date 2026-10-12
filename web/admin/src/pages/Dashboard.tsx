@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { cn, formatTime } from "@/lib/utils";
 import { useStats } from "@/hooks/useApi";
 import type { Activity as ActivityType, ServiceStatus, RealtimeMetrics } from "@/types";
 
@@ -345,7 +345,7 @@ function ActivityItem({ message, details, timestamp, severity = "info" }: Activi
         <p className="text-sm font-medium">{message}</p>
         {details && <p className="text-xs text-muted-foreground mt-0.5">{details}</p>}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(timestamp).toLocaleTimeString()}
+          {formatTime(timestamp)}
         </p>
       </div>
     </div>

@@ -199,26 +199,15 @@ export function useAccounts() {
   // with a follow-up PUT. If that second step fails the account still exists,
   // so the error says so instead of implying nothing was created.
   const createAccount = useCallback(async (email: string, password: string, isAdmin = false, quotaLimit?: number) => {
+    // The server accepts quota_limit on create (R221): one atomic POST, so a
+    // failure can never leave a created-but-unlimited account behind.
+    const body: Record<string, unknown> = { email, password, is_admin: isAdmin };
+    if (quotaLimit && quotaLimit > 0) body.quota_limit = quotaLimit;
     const result = await apiRequest<Account>("/accounts", {
       method: "POST",
-      body: JSON.stringify({ email, password, is_admin: isAdmin }),
+      body: JSON.stringify(body),
     });
-    let quotaError: unknown = null;
-    if (quotaLimit && quotaLimit > 0) {
-      try {
-        await apiRequest<Account>(`/accounts/${encodeURIComponent(email)}`, {
-          method: "PUT",
-          body: JSON.stringify({ quota_limit: quotaLimit }),
-        });
-      } catch (err) {
-        quotaError = err;
-      }
-    }
     await fetchAccounts();
-    if (quotaError) {
-      const e = quotaError as ApiError;
-      throw new ApiRequestError(`Account created, but the quota could not be set: ${e.message}`, e.status);
-    }
     return result;
   }, [fetchAccounts]);
 

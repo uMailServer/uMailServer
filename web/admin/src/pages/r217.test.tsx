@@ -135,7 +135,7 @@ it('F6944 card shows used / limit, Unlimited for 0, and Over quota past the limi
   })
 })
 
-it('F6944 create with a quota creates then sets quota_limit', async () => {
+it('F7100 create with a quota sends quota_limit in the single POST (no second PUT)', async () => {
   const calls: { url: string; o: RequestInit }[] = []
   vi.stubGlobal('fetch', vi.fn(async (u: string, o: RequestInit = {}) => {
     calls.push({ url: u, o })
@@ -152,10 +152,10 @@ it('F6944 create with a quota creates then sets quota_limit', async () => {
     })
     await act(async () => btn(document.body, 'Create Account')[0].click())
     await flush()
-    const put = calls.find((x) => x.o.method === 'PUT')
-    expect(put, 'PROBLEM CONFIRMED: quota never sent').toBeTruthy()
-    expect(put!.url).toContain('n%40example.com')
-    expect(JSON.parse(put!.o.body as string).quota_limit).toBe(1.5 * GB)
+    const post = calls.find((x) => x.o.method === 'POST')
+    expect(post, 'PROBLEM CONFIRMED: no create POST').toBeTruthy()
+    expect(JSON.parse(post!.o.body as string).quota_limit).toBe(1.5 * GB)
+    expect(calls.some((x) => x.o.method === 'PUT'), 'PROBLEM CONFIRMED: two-step create flow').toBe(false)
   })
 })
 

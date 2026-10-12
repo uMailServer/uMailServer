@@ -40,7 +40,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
 import { useAccounts } from "@/hooks/useApi";
 import { emailError, passwordError } from "@/lib/validation";
-import { cn, hasLoggedIn, formatBytes, gbToBytes, bytesToGb } from "@/lib/utils";
+import { cn, hasLoggedIn, formatDate, formatBytes, gbToBytes, bytesToGb } from "@/lib/utils";
 import type { Account } from "@/types";
 
 // 507 = the server refused because the mailbox is over its storage quota.
@@ -598,7 +598,7 @@ function AccountCard({ account, onEdit, onDelete }: AccountCardProps) {
           {/* Last Login */}
           {hasLoggedIn(account.last_login) && (
             <div className="text-xs text-muted-foreground pt-2 border-t">
-              Last login: {new Date(account.last_login!).toLocaleDateString()}
+              Last login: {formatDate(account.last_login)}
             </div>
           )}
         </div>
