@@ -43,6 +43,7 @@ export interface SendMailRequest {
   body: string
   inReplyTo?: string
   references?: string[]
+  attachments?: { filename: string; contentType: string; data: string }[]
 }
 
 export interface MailListResponse {

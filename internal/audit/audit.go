@@ -26,6 +26,7 @@ const (
 	TOTPEnable     EventType = "totp_enable"
 	TOTPDisable    EventType = "totp_disable"
 	PasswordChange EventType = "password_change"
+	AdminAction    EventType = "admin_action"
 )
 
 // Event represents a single audit log entry
@@ -370,6 +371,22 @@ func (l *Logger) LogAccountDelete(actor, target, ip string) {
 		IP:      ip,
 		Success: true,
 		Details: map[string]string{"target": target},
+		Service: "api",
+	})
+}
+
+// LogAdminAction logs an administrative mutation (domain, alias, queue, key
+// rotation, rate-limit changes) with the acting admin and the affected object.
+func (l *Logger) LogAdminAction(actor, ip, action, target string) {
+	if l == nil {
+		return
+	}
+	_ = l.Log(Event{
+		Type:    AdminAction,
+		User:    actor,
+		IP:      ip,
+		Success: true,
+		Details: map[string]string{"action": action, "target": target},
 		Service: "api",
 	})
 }

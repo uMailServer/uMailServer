@@ -675,17 +675,16 @@ func cmdDomain(args []string) {
 		fmt.Println("Replace <YOUR_SERVER_IP> with your actual server IP.")
 
 	case "delete":
+		assumeYes := hasYesFlag(args)
+		args = positionalArgs(args)
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: umailserver domain delete <domain>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver domain delete <domain> [--yes]")
 			os.Exit(1)
 		}
 		domainName := args[1]
 
 		// Confirm deletion
-		fmt.Printf("Are you sure you want to delete domain %s? This will delete all accounts! (y/N): ", domainName)
-		var response string
-		_, _ = fmt.Scanln(&response)
-		if response != "y" && response != "Y" {
+		if !confirmDestructive(fmt.Sprintf("Are you sure you want to delete domain %s? This will delete all accounts!", domainName), assumeYes, os.Stdin, os.Stdout) {
 			fmt.Println("Aborted.")
 			os.Exit(0)
 		}
@@ -750,10 +749,7 @@ func cmdAccount(args []string) {
 
 		// Get password (from flag or prompt)
 		// UMAILSERVER_ACCOUNT_PASSWORD keeps the secret out of argv (F6215).
-		password := *passwordFlag
-		if password == "" {
-			password = os.Getenv("UMAILSERVER_ACCOUNT_PASSWORD")
-		}
+		password := resolveSecret(*passwordFlag, "--password", os.Stderr, "UMAILSERVER_ACCOUNT_PASSWORD")
 		if password == "" {
 			fmt.Print("Enter password: ")
 			password = readNewPassword()
@@ -878,8 +874,10 @@ func cmdAccount(args []string) {
 		fmt.Printf("✓ Password updated for: %s\n", email)
 
 	case "delete":
+		assumeYes := hasYesFlag(args)
+		args = positionalArgs(args)
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: umailserver account delete <email>")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver account delete <email> [--yes]")
 			os.Exit(1)
 		}
 		email := args[1]
@@ -891,10 +889,7 @@ func cmdAccount(args []string) {
 		parts := []string{localPart, domainPart}
 
 		// Confirm deletion
-		fmt.Printf("Are you sure you want to delete account %s? (y/N): ", email)
-		var response string
-		_, _ = fmt.Scanln(&response)
-		if response != "y" && response != "Y" {
+		if !confirmDestructive(fmt.Sprintf("Are you sure you want to delete account %s?", email), assumeYes, os.Stdin, os.Stdout) {
 			fmt.Println("Aborted.")
 			os.Exit(0)
 		}
@@ -1143,9 +1138,7 @@ func cmdBackup(args []string) {
 	bm := cli.NewBackupManager(cfg)
 	// UMAILSERVER_BACKUP_PASSWORD keeps the secret out of argv, which any
 	// local user can read via /proc/<pid>/cmdline or ps (F5916).
-	if *password == "" {
-		*password = os.Getenv("UMAILSERVER_BACKUP_PASSWORD")
-	}
+	*password = resolveSecret(*password, "--password", os.Stderr, "UMAILSERVER_BACKUP_PASSWORD")
 	if *password != "" {
 		bm.SetPassword(*password)
 	}
@@ -1181,9 +1174,7 @@ func cmdRestore(args []string) {
 	bm := cli.NewBackupManager(cfg)
 	// UMAILSERVER_BACKUP_PASSWORD keeps the secret out of argv, which any
 	// local user can read via /proc/<pid>/cmdline or ps (F5916).
-	if *password == "" {
-		*password = os.Getenv("UMAILSERVER_BACKUP_PASSWORD")
-	}
+	*password = resolveSecret(*password, "--password", os.Stderr, "UMAILSERVER_BACKUP_PASSWORD")
 	if *password != "" {
 		bm.SetPassword(*password)
 	}
@@ -1248,7 +1239,7 @@ func cmdMigrate(args []string) {
 		SourceURL:  *source,
 		SourcePath: *source,
 		Username:   *username,
-		Password:   *password,
+		Password:   resolveSecret(*password, "--password", os.Stderr, "UMAILSERVER_MIGRATE_PASSWORD"),
 		TargetUser: *targetUser,
 		DryRun:     *dryRun,
 	}
@@ -1364,8 +1355,8 @@ func cmdDBMigrate(args []string) {
 
 func cmdDBRollback(args []string) {
 	dataDir := config.GetDefaultDataDir()
-	if len(args) > 0 {
-		dataDir = args[0]
+	if pos := positionalArgs(args); len(pos) > 0 {
+		dataDir = pos[0]
 	}
 
 	dbPath := filepath.Join(dataDir, "umailserver.db")
@@ -1376,6 +1367,10 @@ func cmdDBRollback(args []string) {
 	}
 	defer database.Close()
 
+	if !confirmDestructive("Roll back the last database migration?", hasYesFlag(args), os.Stdin, os.Stdout) {
+		fmt.Println("Aborted.")
+		os.Exit(0)
+	}
 	fmt.Println("Rolling back last migration...")
 
 	registry := migrations.NewRegistry()

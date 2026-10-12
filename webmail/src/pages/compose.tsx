@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { ArrowLeft, Send, X, Maximize2, Minimize2, Save } from "lucide-react"
+import { ArrowLeft, Send, X, Maximize2, Minimize2, Save, Paperclip } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -9,6 +9,7 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { quoteForReply, forwardBody, replyAllRecipients } from "@/utils/quote"
 import api, { FLAG_ANSWERED } from "@/utils/api"
+import { attachmentError, readFileBase64, type ComposeAttachment } from "@/utils/attachments"
 
 const EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
 
@@ -75,6 +76,22 @@ export function ComposePage() {
   const [bcc, setBcc] = useState<string[]>([])
   const [subject, setSubject] = useState(() => searchParams.get("subject") || "")
   const [body, setBody] = useState("")
+  const [attachments, setAttachments] = useState<ComposeAttachment[]>([])
+  const attachmentsRef = useRef<ComposeAttachment[]>([])
+  attachmentsRef.current = attachments
+  const addFiles = async (files: FileList | null) => {
+    if (!files) return
+    let next = attachmentsRef.current
+    for (const f of Array.from(files)) {
+      const err = attachmentError(next, f)
+      if (err) { toast.error(err); continue }
+      try {
+        const data = await readFileBase64(f)
+        next = [...next, { filename: f.name, contentType: f.type || "application/octet-stream", data, size: f.size }]
+      } catch { toast.error(`Could not read ${f.name}`) }
+    }
+    if (mounted.current) setAttachments(next)
+  }
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [sending, setSending] = useState(false)
   const sendingRef = useRef(false)
@@ -236,6 +253,9 @@ export function ComposePage() {
         ...(cur.bcc.length ? { bcc: cur.bcc } : {}),
         subject: cur.subject,
         body: cur.body,
+        ...(attachmentsRef.current.length
+          ? { attachments: attachmentsRef.current.map(({ filename, contentType, data }) => ({ filename, contentType, data })) }
+          : {}),
         ...((mode === "reply" || mode === "replyall") && inReplyTo ? { inReplyTo } : {}),
       })
       // Best-effort follow-ups: the message is already sent.
@@ -330,6 +350,25 @@ export function ComposePage() {
             onChange={(e) => setSubject(e.target.value)}
           />
         </div>
+      </div>
+
+      <div className="border-b px-4 py-2 flex flex-wrap items-center gap-1">
+        <label className="inline-flex cursor-pointer items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <Paperclip className="h-4 w-4" />
+          Attach files
+          <input type="file" multiple aria-label="Attach files" className="sr-only"
+            onChange={(e) => { const el = e.target; void addFiles(el.files).then(() => { el.value = "" }) }} />
+        </label>
+        {attachments.map((a, i) => (
+          <Badge key={`${a.filename}-${i}`} variant="secondary" className="gap-1 pr-1.5 py-1">
+            {a.filename} ({Math.max(1, Math.round(a.size / 1024))} KB)
+            <button type="button" aria-label={`Remove attachment ${a.filename}`}
+              onClick={() => setAttachments((cur) => cur.filter((_, j) => j !== i))}
+              className="ml-0.5 rounded-full hover:bg-muted p-0.5">
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
+        ))}
       </div>
 
       <div className="flex-1 overflow-hidden">

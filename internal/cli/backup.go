@@ -664,7 +664,7 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		// Reject any path that could escape the restore_temp directory
 		// Also normalize path separators for cross-platform compatibility
 		sanitizedName := strings.ReplaceAll(header.Name, "/", string(filepath.Separator))
-		if strings.Contains(sanitizedName, "..") || strings.HasPrefix(sanitizedName, string(filepath.Separator)) {
+		if hasDotDotElement(sanitizedName) || strings.HasPrefix(sanitizedName, string(filepath.Separator)) {
 			return fmt.Errorf("invalid filename in tar: %s - path traversal detected", header.Name)
 		}
 
@@ -1054,4 +1054,15 @@ func getInt64(m map[string]interface{}, key string) int64 {
 		return int64(v)
 	}
 	return 0
+}
+
+// hasDotDotElement reports whether any path element is exactly "..". A name
+// that merely contains two dots (a..b.eml) is not a traversal (F7322).
+func hasDotDotElement(name string) bool {
+	for _, el := range strings.Split(name, string(filepath.Separator)) {
+		if el == ".." {
+			return true
+		}
+	}
+	return false
 }
