@@ -269,8 +269,24 @@ export function ComposePage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [])
 
+  const isDirty = () => {
+    const c = latest.current
+    return JSON.stringify(c) !== savedSnapshot.current &&
+      !!(c.to.length || c.cc.length || c.bcc.length || c.subject.trim() || c.body.trim())
+  }
+  // Warn on tab close / reload while there are unsaved edits.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (sentRef.current || !isDirty()) return
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [])
+
   const handleDiscard = () => {
-    if (JSON.stringify(latest.current) !== savedSnapshot.current && (subject || body || to.length > 0) && !confirm("Discard this message? Unsaved changes will be lost.")) return
+    if (isDirty() && !confirm("Discard this message? Unsaved changes will be lost.")) return
     navigate("/inbox")
   }
 

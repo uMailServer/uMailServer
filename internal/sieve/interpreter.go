@@ -100,7 +100,13 @@ type Interpreter struct {
 	ops         int           // operations charged this run (maxRunOps)
 	sinceClock  int
 	deadline    time.Time
+	vacHandles  map[string]bool // vacation handles already used this run (F7172)
 }
+
+// MaxVacationDays bounds :days (and :seconds, as MaxVacationDays*86400): a
+// larger value overflows time.Duration in callers, and a negative window
+// disabled reply suppression (F7171).
+const MaxVacationDays = 3650
 
 // NewInterpreter creates a new Sieve interpreter
 func NewInterpreter(script *Script) *Interpreter {
@@ -218,6 +224,7 @@ func (i *Interpreter) Execute(msg *MessageContext) (actions []Action, err error)
 	}
 	i.stopped = false
 	i.redirected = nil
+	i.vacHandles = nil
 	i.flags = nil
 	i.ops, i.sinceClock = 0, 0
 	i.deadline = time.Now().Add(maxRunDuration * time.Second)
@@ -868,10 +875,32 @@ func (i *Interpreter) executeVacation(cmd *Command) ([]Action, error) {
 		vacation.Days = 1
 	}
 
+	if vacation.Days > MaxVacationDays {
+		vacation.Days = MaxVacationDays
+	}
+	if vacation.Seconds > MaxVacationDays*86400 {
+		vacation.Seconds = MaxVacationDays * 86400
+	}
+
 	// Only send vacation if enabled
 	if vacation.Subject == "" && vacation.Body == "" {
 		return nil, nil
 	}
+
+	// F7172: RFC 5230 §4.6: the handle (default: derived from :subject,
+	// reason and :mime) identifies a vacation; a second action with the same
+	// handle in one run does not reply again.
+	handle := vacation.Handle
+	if handle == "" {
+		handle = fmt.Sprintf("\x00%q\x00%q\x00%t", vacation.Subject, vacation.Body, vacation.Mime)
+	}
+	if i.vacHandles[handle] {
+		return nil, nil
+	}
+	if i.vacHandles == nil {
+		i.vacHandles = map[string]bool{}
+	}
+	i.vacHandles[handle] = true
 
 	return []Action{vacation}, nil
 }

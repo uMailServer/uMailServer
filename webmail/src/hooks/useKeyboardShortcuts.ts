@@ -6,7 +6,10 @@ export function useKeyboardShortcuts() {
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     // Ignore if typing in an input
+    // IME composition, already-handled events and Alt/AltGr chords are not ours.
+    if (e.defaultPrevented || e.isComposing || e.altKey) return
     if (
+      e.target instanceof HTMLSelectElement ||
       e.target instanceof HTMLInputElement ||
       e.target instanceof HTMLTextAreaElement ||
       (e.target instanceof HTMLElement && e.target.isContentEditable)

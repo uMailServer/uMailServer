@@ -15,6 +15,8 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert';
 import { createRequire } from 'node:module';
+const EN = JSON.parse(fs.readFileSync(new URL('../locales/en.json', import.meta.url), 'utf8'));
+
 
 const require_ = createRequire(new URL('../../package.json', import.meta.url));
 const ts = require_('typescript');
@@ -96,6 +98,7 @@ const contextified = vm.createContext({
   exports: {},
   require(name) {
     if (name === 'react') return { useState: hooks.useState, useEffect() {} };
+    if (name === '../hooks/useI18n') return { useI18n: () => ({ t: (k, p = {}) => String(k.split('.').reduce((o, x) => o?.[x], EN) ?? k).replace(/\{\{(\w+)\}\}/g, (m, q) => p[q] ?? m) }) };
     if (name === 'react-router-dom') {
       return {
         Outlet: 'Outlet',

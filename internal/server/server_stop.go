@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/umailserver/umailserver/internal/autoconfig"
+	"github.com/umailserver/umailserver/internal/smtp"
 	"os"
 	"os/signal"
 	"syscall"
@@ -34,6 +36,15 @@ func (s *Server) Stop() error {
 	// pipeline can still register their delivery before the gate closes
 	// (otherwise they were answered 451 by a gate that closed ahead of the
 	// listeners). The gate then fences stragglers and drains in-flight ones.
+	// server.force_close_after bounds how long SMTP sessions may drain before
+	// they are force-closed (F7090).
+	force := s.forceCloseAfter()
+	for _, srv := range []*smtp.Server{s.smtpServer, s.submissionServer, s.submissionTLSServer} {
+		if srv != nil {
+			srv.SetShutdownDrainTimeout(force)
+		}
+	}
+
 	// Stop SMTP server
 	if s.smtpServer != nil {
 		if err := s.smtpServer.Stop(); err != nil {
@@ -91,11 +102,9 @@ func (s *Server) Stop() error {
 
 	// Stop MCP server
 	if s.mcpHTTPServer != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.mcpHTTPServer.Shutdown(shutdownCtx); err != nil {
+		if err := shutdownHTTP(s.mcpHTTPServer, force, time.After); err != nil {
 			s.logger.Error("Failed to stop MCP server", "error", err)
 		}
-		shutdownCancel()
 	}
 
 	// Stop ManageSieve server
@@ -107,31 +116,25 @@ func (s *Server) Stop() error {
 
 	// Stop CalDAV server
 	if s.caldavHTTPServer != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.caldavHTTPServer.Shutdown(shutdownCtx); err != nil {
+		if err := shutdownHTTP(s.caldavHTTPServer, force, time.After); err != nil {
 			s.logger.Error("Failed to stop CalDAV server", "error", err)
 		}
-		shutdownCancel()
 		s.logger.Debug("CalDAV server stopped")
 	}
 
 	// Stop CardDAV server
 	if s.carddavHTTPServer != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.carddavHTTPServer.Shutdown(shutdownCtx); err != nil {
+		if err := shutdownHTTP(s.carddavHTTPServer, force, time.After); err != nil {
 			s.logger.Error("Failed to stop CardDAV server", "error", err)
 		}
-		shutdownCancel()
 		s.logger.Debug("CardDAV server stopped")
 	}
 
 	// Stop JMAP server
 	if s.jmapHTTPServer != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.jmapHTTPServer.Shutdown(shutdownCtx); err != nil {
+		if err := shutdownHTTP(s.jmapHTTPServer, force, time.After); err != nil {
 			s.logger.Error("Failed to stop JMAP server", "error", err)
 		}
-		shutdownCancel()
 		s.logger.Debug("JMAP server stopped")
 	}
 
@@ -217,6 +220,38 @@ func (s *Server) gracefulTimeout() time.Duration {
 		return time.Duration(s.config.Server.GracefulTimeout) * time.Second
 	}
 	return 10 * time.Second
+}
+
+// forceCloseAfter is how long shutdown lets connections drain before they are
+// force-closed: server.force_close_after seconds, or 30s when unset (F7090).
+func (s *Server) forceCloseAfter() time.Duration {
+	if s.config != nil && s.config.Server.ForceCloseAfter > 0 {
+		return time.Duration(s.config.Server.ForceCloseAfter) * time.Second
+	}
+	return 30 * time.Second
+}
+
+// shutdownHTTP gracefully shuts srv down; when the after-timer fires before
+// connections drain, the remaining ones are force-closed (F7090). after is
+// injectable for tests.
+func shutdownHTTP(srv *http.Server, d time.Duration, after func(time.Duration) <-chan time.Time) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := after(d)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-timer:
+			cancel()
+		case <-stop:
+		}
+	}()
+	err := srv.Shutdown(ctx)
+	if err != nil {
+		_ = srv.Close()
+	}
+	return err
 }
 
 // waitBackground waits up to d for the delivery-spawned background goroutines.

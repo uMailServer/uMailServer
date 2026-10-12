@@ -38,6 +38,7 @@ export function SearchPage() {
   const [results, setResults] = useState<SearchEmail[]>([])
   const [totalResults, setTotalResults] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [searchedTerm, setSearchedTerm] = useState("")
   const [recentSearches, setRecentSearches] = useState<string[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const searchIdRef = useRef(0)
@@ -81,6 +82,7 @@ export function SearchPage() {
     setLoading(true)
     setError(null)
     setHasSearched(true)
+    setSearchedTerm(searchQuery)
 
     try {
       const response = await API.search(searchQuery)
@@ -135,6 +137,9 @@ export function SearchPage() {
   }
 
   const handleClear = () => {
+    // Invalidate any in-flight search so it cannot repopulate the cleared page.
+    searchIdRef.current++
+    setLoading(false)
     setQuery("")
     setHasSearched(false)
     setResults([])
@@ -242,14 +247,14 @@ export function SearchPage() {
             </div>
           )}
         </div>
-      ) : results.length === 0 ? (
+      ) : error ? null : results.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="rounded-full bg-muted p-4">
             <Mail className="h-8 w-8 text-muted-foreground" />
           </div>
           <h3 className="mt-4 text-lg font-semibold">No results found</h3>
           <p className="text-sm text-muted-foreground mt-1">
-            No results for "<span className="font-medium">{query}</span>".
+            No results for "<span className="font-medium">{searchedTerm}</span>".
             <br />
             Try different keywords or check your spelling.
           </p>
@@ -260,7 +265,7 @@ export function SearchPage() {
       ) : (
         <div className="space-y-2">
           <div className="text-sm text-muted-foreground px-2">
-            {totalResults} result{totalResults !== 1 ? "s" : ""} for "<span className="font-medium">{query}</span>"
+            {totalResults} result{totalResults !== 1 ? "s" : ""} for "<span className="font-medium">{searchedTerm}</span>"
           </div>
           <div className="rounded-lg border bg-card divide-y">
             {results.map((email) => (

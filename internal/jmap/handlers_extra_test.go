@@ -616,8 +616,8 @@ func TestValidateAccountId_MismatchedAccount(t *testing.T) {
 	if valid {
 		t.Error("Expected valid=false when accountId doesn't match user")
 	}
-	if resp.Name != "Test/method" {
-		t.Errorf("Response.Name = %s, want Test/method", resp.Name)
+	if resp.Name != "error" { // RFC 8620 §3.6.2 (F7120)
+		t.Errorf("Response.Name = %s, want error", resp.Name)
 	}
 	if resp.ID != "call-1" {
 		t.Errorf("Response.ID = %s, want call-1", resp.ID)

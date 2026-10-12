@@ -307,6 +307,13 @@ func Eligible(config *Config, user, sender string, headers map[string]string, no
 	// Header values such as Precedence are case-insensitive (F5206).
 	precedence := strings.ToLower(strings.TrimSpace(hdr(headers, "Precedence")))
 
+	// RFC 3834 §2: never answer Precedence bulk/list/junk, whatever the
+	// ignore_* options say; a missing option (JSON omitempty) must not turn
+	// the responder into a list/bulk mail-loop participant (F7173).
+	if precedence == "list" || precedence == "bulk" || precedence == "junk" {
+		return nil, false
+	}
+
 	// Check headers for mailing list
 	if config.IgnoreLists {
 		if hdr(headers, "List-Id") != "" || hdr(headers, "List-Post") != "" || hdr(headers, "List-Unsubscribe") != "" {

@@ -447,6 +447,7 @@ func (s *Server) Serve(listener net.Listener) error {
 		slog.String("hostname", s.config.Hostname),
 	)
 
+	var backoff time.Duration
 	for {
 		select {
 		case <-s.shutdown:
@@ -462,11 +463,26 @@ func (s *Server) Serve(listener net.Listener) error {
 			if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
 				continue
 			}
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
 			if s.running.Load() {
 				s.logger.Error("accept error", slog.Any("error", err))
 			}
+			// Back off so a persistent error does not spin a core (F7081).
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else if backoff *= 2; backoff > time.Second {
+				backoff = time.Second
+			}
+			select {
+			case <-s.shutdown:
+				return nil
+			case <-time.After(backoff):
+			}
 			continue
 		}
+		backoff = 0
 
 		go s.handleConnection(conn)
 	}

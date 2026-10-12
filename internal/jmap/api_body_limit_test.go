@@ -5,7 +5,7 @@ package jmap
 // could make the server buffer an arbitrarily large request (memory
 // exhaustion). The sibling handleUpload already capped uploads at 50MB via
 // http.MaxBytesReader "to prevent DoS"; the fix gives handleAPI the same
-// class of budget (maxJMAPAPIRequestBodySize) and answers 413 requestTooLarge
+// class of budget (now maxSizeRequest) and answers 400 limit/maxSizeRequest
 // for over-budget bodies.
 
 import (
@@ -92,10 +92,10 @@ func TestAPIRequestBodySizeLimit(t *testing.T) {
 		t.Fatalf("CONTROL FAILED (harness): small request status = %d, want 200", code)
 	}
 
-	// Over-budget: a valid request beyond maxJMAPAPIRequestBodySize must be
-	// rejected with 413 instead of being buffered whole.
-	big := apiLimitRequestBody(t, maxJMAPAPIRequestBodySize+1)
-	if code := apiLimitPost(t, ts, big); code != 413 {
-		t.Fatalf("FAIL: %d-byte /jmap/api request status = %d, want 413 (unbounded body buffering)", len(big), code)
+	// Over-budget: a valid request beyond maxSizeRequest must be rejected
+	// (400 limit error since F7121) instead of being buffered whole.
+	big := apiLimitRequestBody(t, maxSizeRequest+1)
+	if code := apiLimitPost(t, ts, big); code != 400 {
+		t.Fatalf("FAIL: %d-byte /jmap/api request status = %d, want 400 (unbounded body buffering)", len(big), code)
 	}
 }

@@ -44,9 +44,29 @@ export function bytesToGb(bytes: number): string {
   return String(parseFloat((bytes / GIB).toFixed(2)))
 }
 
-/** Locale date-time for an API timestamp; "-" instead of "Invalid Date" when missing or unparseable. */
-export function formatDateTime(value: string | undefined | null): string {
-  if (!value) return "-"
+// One explicit formatter for every date the admin UI shows: fixed locale and
+// the viewer's timezone, so dates and times never mix en-US/de-DE styles.
+const DATE_LOCALE = "en-GB"
+const parse = (value: string | number | Date | undefined | null): Date | null => {
+  if (value === undefined || value === null || value === "") return null
   const d = new Date(value)
-  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleString()
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/** "12 Oct 2026, 14:03:09" for an API timestamp; "-" when missing or unparseable. */
+export function formatDateTime(value: string | number | Date | undefined | null): string {
+  const d = parse(value)
+  return d ? d.toLocaleString(DATE_LOCALE, { dateStyle: "medium", timeStyle: "medium" }) : "-"
+}
+
+/** "12 Oct 2026"; "-" when missing or unparseable. */
+export function formatDate(value: string | number | Date | undefined | null): string {
+  const d = parse(value)
+  return d ? d.toLocaleDateString(DATE_LOCALE, { dateStyle: "medium" }) : "-"
+}
+
+/** "14:03:09"; "-" when missing or unparseable. */
+export function formatTime(value: string | number | Date | undefined | null): string {
+  const d = parse(value)
+  return d ? d.toLocaleTimeString(DATE_LOCALE, { timeStyle: "medium" }) : "-"
 }

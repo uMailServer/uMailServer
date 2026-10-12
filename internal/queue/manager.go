@@ -809,7 +809,9 @@ func (m *Manager) deliver(ctx context.Context, entry *db.QueueEntry) {
 	// Read message from disk
 	message, err := readFile(entry.MessagePath)
 	if err != nil {
-		m.handleDeliveryFailure(entry, fmt.Sprintf("failed to read message: %v", err))
+		// A missing spool file cannot reappear: retrying for days only delays
+		// the inevitable (F7161).
+		m.failDelivery(entry, fmt.Sprintf("failed to read message: %v", err), os.IsNotExist(err))
 		return
 	}
 
@@ -1282,6 +1284,13 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 			if testingMode {
 				m.recordTLSFailure(domain, mx, "starttls-not-supported")
 			}
+			// RFC 7672 §2.2: authenticated TLSA records make TLS mandatory;
+			// a stripped or refused STARTTLS must not fall back to plaintext
+			// (F7160).
+			if m.daneRequired(mx) {
+				m.recordTLSFailure(mx, mx, "starttls-not-supported")
+				return &tlsPolicyError{fmt.Errorf("DANE requires TLS but STARTTLS failed for %s: %w", mx, err)}
+			}
 			// A non-reply error is a failed handshake: the connection is
 			// unusable and cannot fall back to plaintext (F5682).
 			var tp *textproto.Error
@@ -1300,7 +1309,9 @@ func (m *Manager) doDeliverToMX(ctx context.Context, from, to string, message []
 					}
 				}
 				if derr := m.checkDANE(mx, st); derr != nil {
-					return derr
+					// A policy refusal, not a host failure: must not open the
+					// MX circuit breaker (F7164).
+					return &tlsPolicyError{derr}
 				}
 			}
 		}
@@ -1388,6 +1399,22 @@ func (m *Manager) SetDANESecureHook(fn func(mx string) bool) {
 	m.mu.Lock()
 	m.daneSecure = fn
 	m.mu.Unlock()
+}
+
+// daneRequired reports whether mx publishes DNSSEC-authenticated TLSA records,
+// which make TLS mandatory for the delivery.
+func (m *Manager) daneRequired(mx string) bool {
+	if m.daneValidator == nil {
+		return false
+	}
+	m.mu.RLock()
+	secure := m.daneSecure
+	m.mu.RUnlock()
+	if secure == nil || !secure(mx) {
+		return false
+	}
+	tlsa, err := m.daneValidator.LookupTLSA(mx, 25)
+	return err == nil && len(tlsa) > 0
 }
 
 // checkDANE validates the negotiated TLS session against TLSA records when
@@ -1509,9 +1536,12 @@ func (m *Manager) handleDeliveryFailure(entry *db.QueueEntry, errorMsg string) {
 func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent bool) {
 	entry.LastError = errorMsg
 	entry.RetryCount++
+	m.mu.RLock()
+	maxRetries := m.maxRetries
+	m.mu.RUnlock()
 
 	// Check if max retries reached
-	if permanent || entry.RetryCount >= m.maxRetries {
+	if permanent || entry.RetryCount >= maxRetries {
 		// Generate bounce
 		entry.Status = "bounced"
 	} else {
@@ -1539,6 +1569,8 @@ func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent 
 	if entry.Status == "bounced" {
 		m.generateBounce(entry)
 		m.deleteMessageFileIfUnreferenced(entry.MessagePath)
+	} else if entry.RetryCount == 1 && int(entry.Notify)&int(DSNNotifyDelay) != 0 {
+		m.sendDelayDSN(entry)
 	}
 
 	// Track metric
@@ -1555,8 +1587,35 @@ func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent 
 			"domain":      extractDomain(entry.To[0]),
 			"error":       errorMsg,
 			"retry_count": entry.RetryCount,
-			"max_retries": m.maxRetries,
+			"max_retries": maxRetries,
 		})
+	}
+}
+
+// sendDelayDSN tells the sender, once, that delivery is delayed and will be
+// retried, when the sender asked for NOTIFY=DELAY (RFC 3461 §4.1, F7163).
+func (m *Manager) sendDelayDSN(entry *db.QueueEntry) {
+	if entry.From == "" || len(entry.To) == 0 {
+		return
+	}
+	text, mx := splitMXTag(entry.LastError)
+	dsn := &DSN{
+		ReportedDomain: "umailserver",
+		ReportedName:   "umailserver",
+		ArrivalDate:    entry.CreatedAt,
+		OriginalFrom:   entry.From,
+		OriginalTo:     entry.To[0],
+		Recipient:      DSNRecipient{Original: entry.To[0], Notify: DSNNotifyNever},
+		DiagnosticCode: text,
+		RemoteMTA:      mx,
+		MessageID:      GenerateMessageID(),
+	}
+	msg, err := GenerateDelayDSN(dsn)
+	if err != nil {
+		return
+	}
+	if _, err := m.Enqueue("", []string{entry.From}, msg); err != nil {
+		m.logger.Error("failed to enqueue delay DSN", "error", err)
 	}
 }
 

@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
-import { User, Lock, Shield, Forward, Palmtree, LogOut, Filter } from 'lucide-react'
+import { User, Lock, Shield, Forward, Palmtree, LogOut, Filter, Trash2 } from 'lucide-react'
+import { useI18n } from '../hooks/useI18n'
 
 function Layout() {
+  const { t } = useI18n()
   const location = useLocation()
   const navigate = useNavigate()
   const isLoginRoute = location.pathname === '/login'
@@ -49,12 +51,13 @@ function Layout() {
   }
 
   const navItems = [
-    { path: '/profile', label: 'Profile', icon: User },
-    { path: '/password', label: 'Password', icon: Lock },
-    { path: '/2fa', label: 'Two-Factor Auth', icon: Shield },
-    { path: '/forwarding', label: 'Forwarding', icon: Forward },
-    { path: '/filters', label: 'Email Filters', icon: Filter },
-    { path: '/vacation', label: 'Vacation Reply', icon: Palmtree },
+    { path: '/profile', label: t('nav.profile'), icon: User },
+    { path: '/password', label: t('nav.password'), icon: Lock },
+    { path: '/2fa', label: t('nav.2fa'), icon: Shield },
+    { path: '/forwarding', label: t('nav.forwarding'), icon: Forward },
+    { path: '/filters', label: t('nav.filters'), icon: Filter },
+    { path: '/vacation', label: t('nav.vacation'), icon: Palmtree },
+    { path: '/delete-account', label: t('nav.deleteAccount'), icon: Trash2 },
   ]
 
   // The login page renders bare, without the signed-in navigation.
@@ -68,12 +71,12 @@ function Layout() {
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center">
               <h1 className="text-xl font-semibold text-gray-900">
-                Account Settings
+                {t('layout.title')}
               </h1>
             </div>
             <button onClick={handleSignOut} className="flex items-center text-sm text-gray-600 hover:text-gray-900">
               <LogOut className="w-4 h-4 mr-2" />
-              Sign out
+              {t('nav.signOut')}
             </button>
           </div>
         </div>

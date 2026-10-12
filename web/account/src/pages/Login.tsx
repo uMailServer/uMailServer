@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Mail } from 'lucide-react'
+import { useI18n } from '../hooks/useI18n'
 
 const API_URL = window.location.origin + '/api/v1'
 
@@ -11,7 +12,7 @@ class LoginError extends Error {
   }
 }
 
-async function loginApi(email: string, password: string, totpCode: string) {
+async function loginApi(email: string, password: string, totpCode: string, retryText: (seconds: string) => string) {
   const response = await fetch(`${API_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -24,7 +25,7 @@ async function loginApi(email: string, password: string, totpCode: string) {
     let message = body?.error ?? 'Invalid credentials'
     const retryAfter = response.headers?.get?.('Retry-After')
     if (response.status === 429 && retryAfter && /^\d+$/.test(retryAfter)) {
-      message += ` Try again in ${retryAfter} seconds.`
+      message += ' ' + retryText(retryAfter)
     }
     throw new LoginError(message, response.status)
   }
@@ -38,6 +39,7 @@ async function loginApi(email: string, password: string, totpCode: string) {
 }
 
 function LoginPage() {
+  const { t } = useI18n()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -51,19 +53,19 @@ function LoginPage() {
     setError('')
 
     try {
-      await loginApi(email, password, totpCode)
+      await loginApi(email, password, totpCode, (seconds) => t('auth.retryAfter', { seconds }))
       window.location.href = '/'
     } catch (err) {
       if (err instanceof LoginError && err.status === 401 && /totp/i.test(err.message) && !totpCode) {
         // Two-factor is enabled: ask for the authenticator code.
         setNeedsTotp(true)
-        setError('Enter the 6-digit code from your authenticator app')
+        setError(t('auth.totpPrompt'))
       } else if (err instanceof LoginError && err.status === 429) {
         setError(err.message)
       } else if (err instanceof LoginError && /totp/i.test(err.message)) {
-        setError('Invalid authentication code')
+        setError(t('auth.totpInvalid'))
       } else {
-        setError('Invalid email or password')
+        setError(t('auth.invalidCredentials'))
       }
     } finally {
       setLoading(false)
@@ -78,10 +80,10 @@ function LoginPage() {
             <Mail className="h-6 w-6 text-primary-600" />
           </div>
           <h2 className="mt-6 text-3xl font-bold text-gray-900">
-            Account Settings
+            {t('layout.title')}
           </h2>
           <p className="mt-2 text-sm text-gray-600">
-            Sign in to manage your account
+            {t('auth.subtitle')}
           </p>
         </div>
 
@@ -89,7 +91,7 @@ function LoginPage() {
           <div className="space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email address
+                {t('auth.emailLabel')}
               </label>
               <input
                 id="email"
@@ -103,7 +105,7 @@ function LoginPage() {
 
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
+                {t('auth.passwordLabel')}
               </label>
               <input
                 id="password"
@@ -119,7 +121,7 @@ function LoginPage() {
           {needsTotp && (
             <div>
               <label htmlFor="totp" className="block text-sm font-medium text-gray-700">
-                Authentication code
+                {t('auth.totpLabel')}
               </label>
               <input
                 id="totp"
@@ -146,7 +148,7 @@ function LoginPage() {
             disabled={loading}
             className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
           >
-            {loading ? 'Signing in...' : 'Sign in'}
+            {loading ? t('auth.signingIn') : t('auth.signIn')}
           </button>
         </form>
       </div>

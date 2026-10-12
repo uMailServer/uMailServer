@@ -223,7 +223,8 @@ func (m *Manager) sendKeyed(key, name string, severity Severity, message string,
 	}
 
 	// Check rate limiting
-	if !m.shouldSend(key) {
+	prev, hadPrev, reserved := m.reserve(key)
+	if !reserved {
 		return nil
 	}
 
@@ -253,15 +254,47 @@ func (m *Manager) sendKeyed(key, name string, severity Severity, message string,
 	}
 
 	if len(errs) > 0 {
+		// F7150: nothing was delivered when every configured channel failed,
+		// so release the cooldown instead of silencing the alert for
+		// MinInterval. The hourly count stays consumed to bound retries.
+		attempted := 0
+		if m.config.WebhookURL != "" {
+			attempted++
+		}
+		if m.config.SMTPServer != "" && len(m.config.ToAddresses) > 0 {
+			attempted++
+		}
+		if len(errs) == attempted {
+			m.release(key, prev, hadPrev)
+		}
 		return errs[0]
 	}
 	return nil
+}
+
+// release undoes the cooldown reservation made by reserve.
+func (m *Manager) release(key string, prev time.Time, hadPrev bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if hadPrev {
+		m.lastAlert[key] = prev
+	} else {
+		delete(m.lastAlert, key)
+	}
+	m.saveStateLocked()
 }
 
 // shouldSend checks rate limiting and, when sending is allowed, atomically
 // reserves the slot (cooldown + hourly count) so concurrent callers with the
 // same key cannot all pass the check (F5790).
 func (m *Manager) shouldSend(name string) bool {
+	_, _, ok := m.reserve(name)
+	return ok
+}
+
+// reserve is shouldSend that also returns the previous cooldown entry so a
+// failed delivery can roll it back.
+func (m *Manager) reserve(name string) (prev time.Time, hadPrev, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -273,7 +306,7 @@ func (m *Manager) shouldSend(name string) bool {
 
 	// Check max alerts per hour
 	if m.hourlyCount >= m.config.MaxAlerts {
-		return false
+		return time.Time{}, false, false
 	}
 
 	// Drop expired cooldown entries so the map stays bounded (F6502).
@@ -288,14 +321,15 @@ func (m *Manager) shouldSend(name string) bool {
 	// Check min interval for same alert type
 	if lastSent, ok := m.lastAlert[name]; ok {
 		if time.Since(lastSent) < m.config.MinInterval {
-			return false
+			return time.Time{}, false, false
 		}
 	}
 
+	prev, hadPrev = m.lastAlert[name]
 	m.lastAlert[name] = time.Now()
 	m.hourlyCount++
 	m.saveStateLocked()
-	return true
+	return prev, hadPrev, true
 }
 
 // SetStateFile enables persistence of alert cooldown times at path. Existing
@@ -415,7 +449,7 @@ func (m *Manager) sendWebhook(alert Alert) error {
 // blockedNets lists non-routable ranges net.IP's helpers do not cover.
 var blockedNets = func() []*net.IPNet {
 	var nets []*net.IPNet
-	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4"} {
+	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4", "64:ff9b::/96", "2002::/16", "fec0::/10", "100::/64"} {
 		_, n, _ := net.ParseCIDR(c)
 		nets = append(nets, n)
 	}

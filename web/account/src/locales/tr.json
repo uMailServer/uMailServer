@@ -9,7 +9,9 @@
     "2fa": "İki Faktörlü Doğrulama",
     "filters": "E-posta Filtreleri",
     "vacation": "Tatil Yanıtı",
-    "logout": "Çıkış"
+    "logout": "Çıkış",
+    "deleteAccount": "Hesabı Sil",
+    "signOut": "Çıkış yap"
   },
   "auth": {
     "login": "Hesap Girişi",
@@ -18,7 +20,16 @@
     "submit": "Giriş Yap",
     "forgotPassword": "Şifremi Unuttum?",
     "invalidCredentials": "Geçersiz e-posta veya şifre",
-    "sessionExpired": "Oturumunuz sona erdi. Lütfen tekrar giriş yapın."
+    "sessionExpired": "Oturumunuz sona erdi. Lütfen tekrar giriş yapın.",
+    "signIn": "Giriş yap",
+    "signingIn": "Giriş yapılıyor...",
+    "subtitle": "Hesabınızı yönetmek için giriş yapın",
+    "emailLabel": "E-posta adresi",
+    "passwordLabel": "Şifre",
+    "totpLabel": "Doğrulama kodu",
+    "totpPrompt": "Doğrulayıcı uygulamanızdaki 6 haneli kodu girin",
+    "totpInvalid": "Geçersiz doğrulama kodu",
+    "retryAfter": "{{seconds}} saniye sonra tekrar deneyin."
   },
   "profile": {
     "title": "Profil Ayarları",
@@ -165,5 +176,23 @@
     "no": "Hayır",
     "saving": "Kaydediliyor...",
     "add": "Ekle"
+  },
+  "layout": {
+    "title": "Hesap Ayarları"
+  },
+  "deleteAccount": {
+    "title": "Hesabı Sil",
+    "warning": "Hesabınızı silmek posta kutunuzu, iletilerinizi, filtrelerinizi ve ayarlarınızı kalıcı olarak kaldırır. Bu işlem geri alınamaz.",
+    "open": "Hesabımı sil",
+    "dialogTitle": "Hesap silmeyi onaylayın",
+    "dialogBody": "Hesabınızı kalıcı olarak silmek için mevcut şifrenizi girin.",
+    "password": "Mevcut şifre",
+    "confirm": "Kalıcı olarak sil",
+    "deleting": "Siliniyor...",
+    "passwordRequired": "Mevcut şifrenizi girin",
+    "wrongPassword": "Şifre yanlış",
+    "tooMany": "Çok fazla deneme. Daha sonra tekrar deneyin.",
+    "lastAdmin": "Son yönetici hesabı silinemez",
+    "failed": "Hesap silinemedi"
   }
 }

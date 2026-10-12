@@ -53,12 +53,12 @@ func TestR212IgnoredKeysWarn(t *testing.T) {
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	defer slog.SetDefault(old)
-	cfg, err := Load(writeCfg(t, "server:\n  hostname: mail.example.com\n  data_dir: "+dd(t)+"\n  force_close_after: 5\nspam:\n  greylisting:\n    delay: 1m\nstorage:\n  shared_folders: true\ndomains:\n  - name: example.com\n"))
+	cfg, err := Load(writeCfg(t, "server:\n  hostname: mail.example.com\n  data_dir: "+dd(t)+"\nspam:\n  greylisting:\n    delay: 1m\nstorage:\n  shared_folders: true\ndomains:\n  - name: example.com\n"))
 	if err != nil {
 		t.Fatalf("must not fail: %v", err)
 	}
 	_ = cfg
-	for _, k := range []string{"server.force_close_after", "storage.shared_folders", "domains"} {
+	for _, k := range []string{"storage.shared_folders", "domains"} {
 		if !strings.Contains(buf.String(), "key="+k+" ") && !strings.Contains(buf.String(), "key="+k+"\n") {
 			t.Errorf("no warning for %s: %s", k, buf.String())
 		}

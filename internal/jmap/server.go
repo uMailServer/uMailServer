@@ -26,9 +26,9 @@ import (
 // idCounter is used to ensure unique IDs even when called rapidly
 var idCounter uint64
 
-// maxJMAPAPIRequestBodySize bounds the JSON method-call request body,
-// mirroring handleUpload's upload budget.
-const maxJMAPAPIRequestBodySize = 32 << 20 // 32 MiB
+// maxSizeRequest is the advertised core-capability request cap and the
+// bound on the JSON method-call request body (RFC 8620 §3.6.1, F7121).
+const maxSizeRequest = 10 * 1024 * 1024
 
 // maxCallsInRequest and maxObjectsInGet are the limits advertised in the
 // session's urn:ietf:params:jmap:core capability; RFC 8620 §3.6.1 and §5.1
@@ -245,7 +245,7 @@ func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
 			"urn:ietf:params:jmap:core": map[string]interface{}{
 				"maxSizeUpload":         50 * 1024 * 1024, // 50MB
 				"maxConcurrentUpload":   4,
-				"maxSizeRequest":        10 * 1024 * 1024, // 10MB
+				"maxSizeRequest":        maxSizeRequest,
 				"maxConcurrentRequests": 4,
 				"maxCallsInRequest":     16,
 				"maxObjectsInGet":       256,
@@ -286,7 +286,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			"urn:ietf:params:jmap:core": CoreCapabilities{
 				MaxSizeUpload:         50 * 1024 * 1024,
 				MaxConcurrentUpload:   4,
-				MaxSizeRequest:        10 * 1024 * 1024,
+				MaxSizeRequest:        maxSizeRequest,
 				MaxConcurrentRequests: 4,
 				MaxCallsInRequest:     16,
 				MaxObjectsInGet:       256,
@@ -344,12 +344,18 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 	// Parse request body. The API endpoint must enforce the same class of
 	// budget as handleUpload: without a cap, any authenticated user can make
 	// the server buffer an unbounded request body (memory exhaustion).
-	limitedBody := http.MaxBytesReader(w, r.Body, maxJMAPAPIRequestBodySize)
+	limitedBody := http.MaxBytesReader(w, r.Body, maxSizeRequest)
 	body, err := io.ReadAll(limitedBody)
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			s.sendError(w, http.StatusRequestEntityTooLarge, "requestTooLarge", nil)
+			// RFC 8620 §3.6.1: a request over the advertised maxSizeRequest
+			// is a 400 limit error (F7121).
+			s.sendJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"type":   "urn:ietf:params:jmap:error:limit",
+				"status": http.StatusBadRequest,
+				"limit":  "maxSizeRequest",
+			})
 			return
 		}
 		s.sendError(w, http.StatusBadRequest, "invalidArguments", nil)

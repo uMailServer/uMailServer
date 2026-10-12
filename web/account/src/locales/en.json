@@ -9,7 +9,9 @@
     "2fa": "Two-Factor Auth",
     "filters": "Email Filters",
     "vacation": "Vacation Reply",
-    "logout": "Logout"
+    "logout": "Logout",
+    "deleteAccount": "Delete Account",
+    "signOut": "Sign out"
   },
   "auth": {
     "login": "Account Login",
@@ -18,7 +20,16 @@
     "submit": "Sign In",
     "forgotPassword": "Forgot Password?",
     "invalidCredentials": "Invalid email or password",
-    "sessionExpired": "Your session has expired. Please sign in again."
+    "sessionExpired": "Your session has expired. Please sign in again.",
+    "signIn": "Sign in",
+    "signingIn": "Signing in...",
+    "subtitle": "Sign in to manage your account",
+    "emailLabel": "Email address",
+    "passwordLabel": "Password",
+    "totpLabel": "Authentication code",
+    "totpPrompt": "Enter the 6-digit code from your authenticator app",
+    "totpInvalid": "Invalid authentication code",
+    "retryAfter": "Try again in {{seconds}} seconds."
   },
   "profile": {
     "title": "Profile Settings",
@@ -158,5 +169,23 @@
     "confirm": "Confirm",
     "yes": "Yes",
     "no": "No"
+  },
+  "layout": {
+    "title": "Account Settings"
+  },
+  "deleteAccount": {
+    "title": "Delete Account",
+    "warning": "Deleting your account permanently removes your mailbox, messages, filters and settings. This cannot be undone.",
+    "open": "Delete my account",
+    "dialogTitle": "Confirm account deletion",
+    "dialogBody": "Enter your current password to permanently delete your account.",
+    "password": "Current password",
+    "confirm": "Permanently delete",
+    "deleting": "Deleting...",
+    "passwordRequired": "Enter your current password",
+    "wrongPassword": "The password is incorrect",
+    "tooMany": "Too many attempts. Try again later.",
+    "lastAdmin": "The last administrator account cannot be deleted",
+    "failed": "Could not delete the account"
   }
 }

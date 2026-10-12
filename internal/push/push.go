@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -113,6 +114,13 @@ func newPushTransport() http.RoundTripper {
 	return t
 }
 
+var forbiddenV6 = []netip.Prefix{
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("fec0::/10"),
+	netip.MustParsePrefix("100::/64"),
+}
+
 // isForbiddenAddr reports whether addr is not a public unicast address.
 func isForbiddenAddr(addr netip.Addr) bool {
 	addr = addr.Unmap()
@@ -131,6 +139,15 @@ func isForbiddenAddr(addr netip.Addr) bool {
 			(b[0] == 192 && b[1] == 0 && b[2] == 0) ||
 			b[0] >= 240 {
 			return true
+		}
+	}
+	// NAT64, 6to4, deprecated site-local and discard-only IPv6 space can
+	// embed or route to internal IPv4 hosts.
+	if addr.Is6() {
+		for _, p := range forbiddenV6 {
+			if p.Contains(addr) {
+				return true
+			}
 		}
 	}
 	return false
@@ -475,6 +492,12 @@ func (s *Service) SendNotification(sub *Subscription, notification *Notification
 
 	resp, err := webpush.SendNotification(payload, webSub, options)
 	if err != nil {
+		// url.Error embeds the endpoint, which is a bearer capability for
+		// the subscriber's push channel; keep it out of errors and logs.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		return fmt.Errorf("failed to send notification: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()

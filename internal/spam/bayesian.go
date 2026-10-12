@@ -260,6 +260,12 @@ func (c *Classifier) Classify(tokens []string) (*ClassifyResult, error) {
 		if err != nil {
 			continue
 		}
+		if hamCount == 0 && spamCount == 0 {
+			// F7170: a token never seen in training carries no evidence;
+			// with unbalanced corpora its smoothed probability is far from
+			// 0.5 and would crowd out the informative tokens.
+			continue
+		}
 		prob := tokenProbability(hamCount, spamCount, totalHam, totalSpam)
 		probs = append(probs, prob)
 	}

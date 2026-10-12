@@ -605,6 +605,27 @@ func (m *Manager) isValidWebhookURL(rawURL string) (bool, string) {
 	return true, resolvedIP
 }
 
+// literalTargetBlocked reports whether the URL's host is localhost or an IP
+// literal in a blocked range. It performs no DNS lookup.
+func (m *Manager) literalTargetBlocked(raw string) bool {
+	m.mu.RLock()
+	allow := m.allowPrivateIP
+	m.mu.RUnlock()
+	if allow {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && isBlockedIP(ip)
+}
+
 // isBlockedIP reports whether ip is an address webhooks must not reach.
 // The unspecified address (0.0.0.0, ::) is included because connecting to it
 // reaches the local host (F5175).
@@ -626,7 +647,7 @@ func isBlockedIP(ip net.IP) bool {
 // IETF protocol assignments and reserved space (F5923).
 var blockedNets = func() []*net.IPNet {
 	var nets []*net.IPNet
-	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4"} {
+	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4", "64:ff9b::/96", "2002::/16", "fec0::/10", "100::/64"} {
 		_, n, _ := net.ParseCIDR(c)
 		nets = append(nets, n)
 	}
@@ -744,6 +765,12 @@ func (m *Manager) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// F5972: reject non-http(s)/hostless URLs at registration time rather
 	// than accepting them and failing every delivery silently.
 	if u, err := url.Parse(req.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	// F7152: a literal loopback/private/link-local target can never be
+	// delivered to; refuse it now instead of accepting it silently.
+	if m.literalTargetBlocked(req.URL) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
