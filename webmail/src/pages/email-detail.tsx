@@ -3,6 +3,8 @@ import { useParams, useNavigate } from "react-router-dom"
 import {
   ArrowLeft,
   Reply,
+  ReplyAll,
+  Paperclip,
   Forward,
   Trash2,
   Star,
@@ -177,6 +179,11 @@ export function EmailDetailPage() {
                 <span>
                   <span className="font-medium text-foreground">To:</span> {email.to.join(", ")}
                 </span>
+                {(mail.cc?.length ?? 0) > 0 && (
+                  <span>
+                    <span className="font-medium text-foreground">Cc:</span> {mail.cc!.join(", ")}
+                  </span>
+                )}
               </div>
 
               <div className="mt-1 text-sm text-muted-foreground">
@@ -200,6 +207,25 @@ export function EmailDetailPage() {
           )}
         </div>
 
+        {(mail.attachments?.length ?? 0) > 0 && (
+          <div className="border-t px-6 py-4" aria-label="Attachments">
+            <ul className="flex flex-wrap gap-2">
+              {mail.attachments!.map((a) => (
+                <li key={a.index}>
+                  <a
+                    href={api.attachmentUrl(mail.id, folder, a.index)}
+                    download={a.filename}
+                    className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                    {a.filename} <span className="text-muted-foreground">({formatSize(a.size)})</span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
       </div>
 
       {/* Reply Actions */}
@@ -217,6 +243,16 @@ export function EmailDetailPage() {
           variant="outline"
           className="gap-2"
           onClick={() =>
+            navigate(`/compose?mode=replyall&inReplyTo=${encodeURIComponent(mail.messageId || "")}&subject=${encodeURIComponent(replySubject(email.subject))}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
+          }
+        >
+          <ReplyAll className="h-4 w-4" />
+          Reply all
+        </Button>
+        <Button
+          variant="outline"
+          className="gap-2"
+          onClick={() =>
             navigate(`/compose?mode=forward&subject=${encodeURIComponent(forwardSubject(email.subject))}&origId=${encodeURIComponent(mail.id)}&origFolder=${encodeURIComponent(folder)}`)
           }
         >
@@ -226,6 +262,12 @@ export function EmailDetailPage() {
       </div>
     </div>
   )
+}
+
+function formatSize(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
 function cn(...classes: (string | boolean | undefined)[]) {

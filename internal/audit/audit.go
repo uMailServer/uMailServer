@@ -434,10 +434,15 @@ func SetTrustedProxies(list []string) {
 }
 
 func isTrustedProxy(ip string) bool {
-	parsed := net.ParseIP(ip)
 	trustedMu.RLock()
-	defer trustedMu.RUnlock()
-	for _, t := range trustedProxies {
+	list := trustedProxies
+	trustedMu.RUnlock()
+	return inProxyList(ip, list)
+}
+
+func inProxyList(ip string, list []string) bool {
+	parsed := net.ParseIP(ip)
+	for _, t := range list {
 		t = strings.TrimSpace(t)
 		if t == ip {
 			return true
@@ -455,25 +460,40 @@ func isTrustedProxy(ip string) bool {
 	return false
 }
 
-// ExtractIP returns the client IP for an audit record. Forwarding headers are
-// client-controlled, so they count only when the direct peer is a configured
-// trusted proxy; otherwise RemoteAddr is used.
+// ExtractIP returns the client IP for an audit record using the globally
+// configured trusted proxies (see SetTrustedProxies).
 func ExtractIP(r *http.Request) string {
+	trustedMu.RLock()
+	list := trustedProxies
+	trustedMu.RUnlock()
+	return ClientIP(r, list)
+}
+
+// ClientIP returns the client IP. Forwarding headers are client-controlled, so
+// they count only when the direct peer is in trusted. The X-Forwarded-For chain
+// is walked right-to-left and the rightmost entry that is not itself a trusted
+// proxy is returned (leftmost entries can be forged by the client). An
+// unparseable entry stops the walk and the peer address is used (F6990).
+func ClientIP(r *http.Request, trusted []string) string {
 	peer, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		peer = r.RemoteAddr
 	}
-	if !isTrustedProxy(peer) {
+	if !inProxyList(peer, trusted) {
 		return peer
 	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if idx := strings.Index(xff, ","); idx != -1 {
-			xff = xff[:idx]
+		parts := strings.Split(xff, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			e := strings.TrimSpace(parts[i])
+			if net.ParseIP(e) == nil {
+				return peer
+			}
+			if !inProxyList(e, trusted) {
+				return e
+			}
 		}
-		xff = strings.TrimSpace(xff)
-		if net.ParseIP(xff) != nil {
-			return xff
-		}
+		return peer
 	}
 	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" && net.ParseIP(xri) != nil {
 		return xri

@@ -745,11 +745,11 @@ paths:
       summary: List threads
       description: Get email conversation threads
       parameters:
-        - name: folder
+        - name: mailbox
           in: query
+          description: Only threads with messages in this folder (alias `folder`); omitted = all threads. Counts are scoped to the folder.
           schema:
             type: string
-            default: inbox
         - name: offset
           in: query
           schema:
@@ -759,7 +759,8 @@ paths:
           in: query
           schema:
             type: integer
-            default: 50
+            default: 20
+            maximum: 100
       responses:
         '200':
           description: List of threads

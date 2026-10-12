@@ -4,13 +4,23 @@ const API_URL = window.location.origin + '/api/v1'
 // Type Definitions
 // ============================================================================
 
+export interface AttachmentInfo {
+  index: number
+  filename: string
+  contentType: string
+  size: number
+}
+
 export interface Mail {
   id: string
   from: string
   fromName: string
   to: string[]
-  // Only present for drafts (GET /mail/message).
+  // GET /mail/message: cc for every message, bcc only for drafts.
   cc?: string[]
+  /** The caller's own address (GET /mail/message), used by Reply-all. */
+  account?: string
+  attachments?: AttachmentInfo[]
   bcc?: string[]
   subject: string
   body: string
@@ -291,6 +301,12 @@ class API {
     if (opts?.unread) qs.set('unread', '1')
     const q = qs.toString()
     return this.get<MailListResponse>(`/mail/${encodeURIComponent(folder)}${q ? `?${q}` : ''}`)
+  }
+
+  /** URL of GET /mail/attachment (same-origin, cookie auth). */
+  attachmentUrl(id: string, folder: string, index: number): string {
+    const qs = new URLSearchParams({ id, folder, index: String(index) })
+    return `${API_URL}/mail/attachment?${qs.toString()}`
   }
 
   // GET /mail/message: read-only, does not mark the message read.

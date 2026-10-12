@@ -344,8 +344,8 @@ func TestGetClientIP_XForwardedFor_TrustedProxy(t *testing.T) {
 
 	// With trusted proxy, X-Forwarded-For is respected
 	ip := getClientIP(req, []string{"192.168.1.1"})
-	if ip != "10.0.0.1" {
-		t.Errorf("Expected IP 10.0.0.1 (from trusted proxy), got %s", ip)
+	if ip != "10.0.0.3" {
+		t.Errorf("Expected IP 10.0.0.3 (rightmost untrusted), got %s", ip)
 	}
 }
 

@@ -22,7 +22,7 @@ func routeAllow(path string) string {
 		return "POST"
 	case "/api/v1/auth/logout":
 		return "POST, DELETE"
-	case "/api/v1/push/unsubscribe":
+	case "/api/v1/push/unsubscribe", "/api/v1/account":
 		return "DELETE"
 	case "/api/v1/account/totp", "/api/v1/search", "/api/v1/threads", "/api/v1/threads/search",
 		"/api/v1/push/vapid-public-key", "/api/v1/push/subscriptions", "/api/v1/admin/push/stats",

@@ -96,7 +96,7 @@ func (s *Server) createDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 
@@ -185,7 +185,7 @@ func (s *Server) updateDomain(w http.ResponseWriter, r *http.Request, name strin
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 

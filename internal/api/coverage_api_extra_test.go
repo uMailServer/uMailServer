@@ -3454,22 +3454,8 @@ func TestGetAccount_Forbidden(t *testing.T) {
 	}
 }
 
-func TestDeleteAccount_Forbidden(t *testing.T) {
-	server, database, _ := helperSetupAccount(t)
-	defer database.Close()
-
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/admin@test.com", strings.NewReader("{}"))
-	req.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(context.Background(), "user", "user@test.com")
-	ctx = context.WithValue(ctx, "isAdmin", false)
-	req = req.WithContext(ctx)
-	rec := httptest.NewRecorder()
-	server.deleteAccount(rec, req, "admin@test.com")
-
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("Expected 403 for forbidden deleteAccount, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
+// TestDeleteAccount_Forbidden was retired in R221 (F6980): the non-admin branch
+// it exercised was unreachable; see TestR221_LegacySelfDeleteBranchUnreachable.
 
 func TestUpdateAccount_AdminVerifyGetAccountError(t *testing.T) {
 	server, database, _ := helperSetupAccount(t)

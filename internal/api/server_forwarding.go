@@ -74,7 +74,7 @@ func (s *Server) handleSetForwarding(w http.ResponseWriter, r *http.Request) {
 		ForwardCopy bool   `json:"forward_copy"` // legacy alias
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 

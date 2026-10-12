@@ -92,7 +92,7 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 
@@ -192,7 +192,7 @@ func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request, alias strin
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 

@@ -107,7 +107,7 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 		NewPassword     string `json:"new_password"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 	if req.CurrentPassword == "" || req.NewPassword == "" {
@@ -264,13 +264,19 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 		IsAdmin  bool   `json:"is_admin"`
+		// F6984: accepted here so clients need no follow-up PUT.
+		QuotaLimit int64 `json:"quota_limit"`
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 
+	if req.QuotaLimit < 0 {
+		s.sendError(w, http.StatusBadRequest, "quota_limit must be non-negative")
+		return
+	}
 	if req.Email == "" || req.Password == "" {
 		s.sendError(w, http.StatusBadRequest, "email and password are required")
 		return
@@ -346,6 +352,7 @@ func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: hashedPassword,
 		APOPHash:     fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password))),
 		IsAdmin:      req.IsAdmin && isAdmin,
+		QuotaLimit:   req.QuotaLimit,
 		IsActive:     true,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -440,7 +447,7 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 
@@ -595,46 +602,85 @@ func (s *Server) updateAccount(w http.ResponseWriter, r *http.Request, email str
 }
 
 func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email string) {
-	user, domain := parseEmail(email)
+	// Admin-only: the route is behind adminMiddleware, so the former
+	// non-admin self-delete branch here was unreachable (F6980). Self-service
+	// deletion is handleSelfDelete (DELETE /api/v1/account).
+	if s.removeAccount(w, r, email) {
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
 
-	// Authorization check: ensure user owns this account or is admin
-	authUser, _ := r.Context().Value("user").(string)
-	isAdmin, _ := r.Context().Value("isAdmin").(bool)
-
-	// If auth context exists, enforce ownership/non-admin restrictions
-	if authUser != "" && !isAdmin && authUser != user+"@"+domain {
-		s.sendError(w, http.StatusForbidden, "access denied")
+// handleSelfDelete implements DELETE /api/v1/account: the authenticated user
+// deletes their own account after re-entering the current password (F6981).
+func (s *Server) handleSelfDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		s.methodNotAllowed(w, "DELETE")
 		return
 	}
-
-	// F6702: a non-admin deleting their own account must re-authenticate with
-	// the current password (shares the password-change guess budget).
-	if authUser != "" && !isAdmin {
-		var req struct {
-			Password string `json:"password"`
-		}
-		if err := decodeJSON(r, &req); err != nil || req.Password == "" {
-			s.sendError(w, http.StatusBadRequest, "password is required to delete your own account")
-			return
-		}
-		self, gerr := s.db.GetAccount(domain, user)
-		if gerr != nil || self == nil {
-			s.sendError(w, http.StatusNotFound, "account not found")
-			return
-		}
-		emailKey := accountLoginKey(getClientIP(r, s.config.TrustedProxies), authUser)
-		if !s.checkAccountLoginRateLimit(emailKey) {
-			s.sendError(w, http.StatusTooManyRequests, "too many password attempts for this account")
-			return
-		}
-		if matches, _ := s.verifyPassword(req.Password, self.PasswordHash); !matches {
-			s.recordAccountLoginFailure(emailKey)
-			s.auditLogger.LogLoginFailure(authUser, audit.ExtractIP(r), "account_delete_wrong_password")
-			s.sendError(w, http.StatusForbidden, "password is incorrect")
-			return
-		}
-		s.clearAccountLoginFailures(emailKey)
+	authUser, _ := r.Context().Value("user").(string)
+	if authUser == "" {
+		s.sendError(w, http.StatusUnauthorized, "missing authentication")
+		return
 	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &req); err != nil || req.Password == "" {
+		s.sendError(w, http.StatusBadRequest, "password is required to delete your own account")
+		return
+	}
+	user, domain := parseEmail(authUser)
+	self, err := s.db.GetAccount(domain, user)
+	if err != nil || self == nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	// Shares the password-change / login guess budget.
+	emailKey := accountLoginKey(getClientIP(r, s.config.TrustedProxies), authUser)
+	if !s.checkAccountLoginRateLimit(emailKey) {
+		s.sendError(w, http.StatusTooManyRequests, "too many password attempts for this account")
+		return
+	}
+	if matches, _ := s.verifyPassword(req.Password, self.PasswordHash); !matches {
+		s.recordAccountLoginFailure(emailKey)
+		s.auditLogger.LogLoginFailure(authUser, audit.ExtractIP(r), "account_delete_wrong_password")
+		s.sendError(w, http.StatusForbidden, "password is incorrect")
+		return
+	}
+	s.clearAccountLoginFailures(emailKey)
+
+	// F6982/F6983: the shared cascade enforces the last-admin guard and the
+	// purge. Sessions: the row is gone (tokens of a missing account are
+	// rejected), and the presenting token is revoked and its cookie cleared.
+	if !s.removeAccount(w, r, authUser) {
+		return
+	}
+	s.revokePresentedTokens(r)
+	http.SetCookie(w, &http.Cookie{Name: "jwt", Value: "", Path: "/", HttpOnly: true,
+		Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// revokePresentedTokens blacklists the cookie and Bearer tokens of the request.
+func (s *Server) revokePresentedTokens(r *http.Request) {
+	var toks []string
+	if c, err := r.Cookie("jwt"); err == nil && c.Value != "" {
+		toks = append(toks, c.Value)
+	}
+	if parts := strings.SplitN(r.Header.Get("Authorization"), " ", 2); len(parts) == 2 && strings.EqualFold(parts[0], "bearer") && parts[1] != "" {
+		toks = append(toks, parts[1])
+	}
+	for _, t := range toks {
+		s.RevokeToken(fmt.Sprintf("%x", sha256.Sum256([]byte(t))), s.tokenExpiryFromString(t))
+	}
+}
+
+// removeAccount deletes the account row (last-admin guarded) and purges its
+// data. On success it audits and returns true without writing a response; on
+// failure it writes the error response and returns false.
+func (s *Server) removeAccount(w http.ResponseWriter, r *http.Request, email string) bool {
+	user, domain := parseEmail(email)
+	authUser, _ := r.Context().Value("user").(string)
 
 	// F6130: deleting a missing account is a 404, not a 204 with an audit
 	// entry for a deletion that never happened.
@@ -651,13 +697,13 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 					s.logger.Error("account data purge retry failed", "account", email, "error", perr)
 				}
 				s.sendError(w, http.StatusInternalServerError, "account not found but leftover mailbox data purge failed; retry")
-				return
+				return false
 			}
 			s.sendError(w, http.StatusNotFound, "account not found")
 		} else {
 			s.sendError(w, http.StatusInternalServerError, "failed to delete account")
 		}
-		return
+		return false
 	}
 	// F6710: the last-admin check is a db-level invariant (same transaction
 	// as the delete), not only this process's mutex.
@@ -672,14 +718,14 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 		default:
 			s.sendError(w, http.StatusInternalServerError, "failed to delete account")
 		}
-		return
+		return false
 	}
 	if err := s.purgeAccountData(user + "@" + domain); err != nil {
 		if s.logger != nil {
 			s.logger.Error("account data purge failed", "account", email, "error", err)
 		}
 		s.sendError(w, http.StatusInternalServerError, "account removed but mailbox data purge failed")
-		return
+		return false
 	}
 
 	// Audit account deletion
@@ -689,5 +735,5 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 	}
 	s.auditLogger.LogAccountDelete(actor, email, audit.ExtractIP(r))
 
-	w.WriteHeader(http.StatusNoContent)
+	return true
 }
