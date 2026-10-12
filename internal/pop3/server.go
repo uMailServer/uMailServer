@@ -380,6 +380,7 @@ func (s *Server) Stop() error {
 
 // acceptLoop accepts incoming connections
 func (s *Server) acceptLoop() {
+	var backoff time.Duration
 	for {
 		select {
 		case <-s.shutdown:
@@ -389,11 +390,27 @@ func (s *Server) acceptLoop() {
 
 		conn, err := s.listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			if s.running.Load() {
 				s.logger.Error("Failed to accept connection", "error", err)
 			}
+			// Back off so a persistent error (EMFILE, broken listener) does
+			// not spin a CPU core (F7074).
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else if backoff *= 2; backoff > time.Second {
+				backoff = time.Second
+			}
+			select {
+			case <-s.shutdown:
+				return
+			case <-time.After(backoff):
+			}
 			continue
 		}
+		backoff = 0
 
 		go s.handleConnection(conn)
 	}
@@ -883,8 +900,12 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 
 	case "CAPA":
 		s.WriteResponse("+OK Capability list follows")
-		s.WriteDataLine("USER")
-		s.WriteDataLine("PASS")
+		// USER/PASS are refused until TLS is active when TLS is required;
+		// do not advertise a capability that cannot be used (F7073).
+		if !(s.server.requireTLS && !s.isTLS) {
+			s.WriteDataLine("USER")
+			s.WriteDataLine("PASS")
+		}
 		s.WriteDataLine("STAT")
 		s.WriteDataLine("LIST")
 		s.WriteDataLine("RETR")

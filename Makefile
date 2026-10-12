@@ -96,7 +96,7 @@ run:
 # Run in development mode with hot reload
 dev:
 	@echo "Starting development server..."
-	@which air > /dev/null || go install github.com/cosmtrek/air@latest
+	@which air > /dev/null || go install github.com/air-verse/air@latest
 	air
 
 # Download and tidy dependencies
@@ -153,7 +153,7 @@ build-client:
 # Install development tools
 install-tools:
 	@echo "Installing development tools..."
-	go install github.com/cosmtrek/air@latest
+	go install github.com/air-verse/air@latest
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 	go install golang.org/x/tools/cmd/goimports@latest
 

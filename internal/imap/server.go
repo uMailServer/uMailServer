@@ -388,6 +388,7 @@ func (s *Server) Stop() error {
 
 // acceptLoop accepts incoming connections
 func (s *Server) acceptLoop(listener net.Listener) {
+	var backoff time.Duration
 	for {
 		select {
 		case <-s.shutdown:
@@ -397,11 +398,27 @@ func (s *Server) acceptLoop(listener net.Listener) {
 
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			if s.running.Load() {
 				s.logger.Error("Failed to accept connection", "error", err)
 			}
+			// Back off so a persistent error (EMFILE, broken listener) does
+			// not spin a CPU core (F7074).
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else if backoff *= 2; backoff > time.Second {
+				backoff = time.Second
+			}
+			select {
+			case <-s.shutdown:
+				return
+			case <-time.After(backoff):
+			}
 			continue
 		}
+		backoff = 0
 
 		go s.handleConnection(conn)
 	}
