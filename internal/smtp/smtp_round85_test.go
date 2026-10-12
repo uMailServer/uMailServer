@@ -271,6 +271,7 @@ func TestRound85F5673Params(t *testing.T) {
 	if r := c.cmd(t, "RCPT TO:<b@mx.test> NOTIFY=SUCCESS,FAILURE ORCPT=rfc822;b@mx.test\r\n"); !strings.HasPrefix(r, "250") {
 		t.Fatalf("INVALID control (valid RCPT params): %q", r)
 	}
+	c.cmd(t, "RSET\r\n") // a nested MAIL is a 503 (F7311)
 	for _, tc := range []struct{ line, want string }{
 		{"MAIL FROM:<a@example.org> BODY=GARBAGE\r\n", "501"},
 		{"MAIL FROM:<a@example.org> RET=GARBAGE\r\n", "501"},

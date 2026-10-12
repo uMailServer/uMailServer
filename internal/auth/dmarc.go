@@ -2,10 +2,10 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/big"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,6 +65,7 @@ type DMARCRecord struct {
 	Version            string         // v=DMARC1 (required)
 	Policy             DMARCPolicy    // p= (required)
 	SubdomainPolicy    DMARCPolicy    // sp= (optional, defaults to p)
+	NonExistentPolicy  DMARCPolicy    // np= (RFC 9091, optional, defaults to sp/p)
 	AlignmentDKIM      DMARCAlignment // adkim= (optional, defaults to r)
 	AlignmentSPF       DMARCAlignment // aspf= (optional, defaults to r)
 	Percentage         int            // pct= (optional, defaults to 100)
@@ -72,6 +73,21 @@ type DMARCRecord struct {
 	ReportForensicURI  []string       // ruf= (optional)
 	ReportInterval     int            // ri= (optional, defaults to 86400)
 	FailureReports     []string       // fo= (optional)
+}
+
+// DomainExistenceResolver is optionally implemented by a DNSResolver that can
+// tell a non-existent domain (NXDOMAIN) from an empty one. DMARC np= (RFC
+// 9091) is honoured only with such a resolver: LookupTXT alone cannot
+// distinguish NXDOMAIN from NODATA.
+type DomainExistenceResolver interface {
+	// DomainExists reports false only for a definitive NXDOMAIN answer.
+	DomainExists(ctx context.Context, domain string) (bool, error)
+}
+
+// DKIMSignatureResult is the outcome of verifying one DKIM signature.
+type DKIMSignatureResult struct {
+	Result DKIMResult
+	Domain string // d= of the signature
 }
 
 // DMARCEvaluator evaluates DMARC policy for a message
@@ -171,6 +187,15 @@ func NewDMARCEvaluator(resolver DNSResolver) *DMARCEvaluator {
 
 // Evaluate evaluates DMARC for the given message
 func (e *DMARCEvaluator) Evaluate(ctx context.Context, fromDomain string, spfResult SPFResult, spfDomain string, dkimResult DKIMResult, dkimDomain string) (*DMARCEvaluation, error) {
+	return e.EvaluateSignatures(ctx, fromDomain, "", spfResult, spfDomain,
+		[]DKIMSignatureResult{{Result: dkimResult, Domain: dkimDomain}})
+}
+
+// EvaluateSignatures evaluates DMARC given every DKIM signature's result: the
+// message passes when ANY signature verified and aligns (RFC 7489 §3.1).
+// sampleKey (normally the Message-ID) makes pct= sampling deterministic per
+// message; when empty the key is derived from the From and auth domains.
+func (e *DMARCEvaluator) EvaluateSignatures(ctx context.Context, fromDomain, sampleKey string, spfResult SPFResult, spfDomain string, sigs []DKIMSignatureResult) (*DMARCEvaluation, error) {
 	record, err := e.policyRecord(ctx, fromDomain)
 	if err != nil {
 		return &DMARCEvaluation{
@@ -204,7 +229,13 @@ func (e *DMARCEvaluator) Evaluate(ctx context.Context, fromDomain string, spfRes
 		}
 	}
 
-	return e.evaluateWithRecord(fromDomain, spfResult, spfDomain, dkimResult, dkimDomain, record, fromOrg)
+	if sampleKey == "" {
+		sampleKey = spfDomain
+		for _, sg := range sigs {
+			sampleKey += "|" + sg.Domain
+		}
+	}
+	return e.evaluateWithRecord(ctx, fromDomain, sampleKey, spfResult, spfDomain, sigs, record, fromOrg)
 }
 
 // errDMARCMultipleRecords and dmarcMultipleRecords mark a _dmarc TXT set
@@ -260,7 +291,7 @@ func (e *DMARCEvaluator) policyRecord(ctx context.Context, domain string) (*DMAR
 // evaluateWithRecord evaluates DMARC using a cached or looked-up record
 // fromOrg reports that record was found at the organizational domain
 // rather than at fromDomain itself.
-func (e *DMARCEvaluator) evaluateWithRecord(fromDomain string, spfResult SPFResult, spfDomain string, dkimResult DKIMResult, dkimDomain string, record *DMARCRecord, fromOrg bool) (*DMARCEvaluation, error) {
+func (e *DMARCEvaluator) evaluateWithRecord(ctx context.Context, fromDomain, sampleKey string, spfResult SPFResult, spfDomain string, sigs []DKIMSignatureResult, record *DMARCRecord, fromOrg bool) (*DMARCEvaluation, error) {
 	// Handle negative cache entry (nil record means no DMARC record found)
 	if record == nil {
 		return &DMARCEvaluation{
@@ -282,11 +313,16 @@ func (e *DMARCEvaluator) evaluateWithRecord(fromDomain string, spfResult SPFResu
 
 	// Check alignment
 	spfAligned := checkAlignment(spfDomain, fromDomain, record.AlignmentSPF)
-	dkimAligned := checkAlignment(dkimDomain, fromDomain, record.AlignmentDKIM)
 
 	// DMARC passes if either SPF or DKIM passes AND is aligned
 	spfPassed := spfResult == SPFPass && spfAligned
-	dkimPassed := dkimResult == DKIMPass && dkimAligned
+	dkimPassed := false
+	for _, sg := range sigs {
+		if sg.Result == DKIMPass && checkAlignment(sg.Domain, fromDomain, record.AlignmentDKIM) {
+			dkimPassed = true
+			break
+		}
+	}
 
 	evaluation := &DMARCEvaluation{
 		Domain: fromDomain,
@@ -313,10 +349,18 @@ func (e *DMARCEvaluator) evaluateWithRecord(fromDomain string, spfResult SPFResu
 		if record.SubdomainPolicy != "" && fromOrg {
 			policyToApply = record.SubdomainPolicy
 		}
+		// RFC 9091: np= governs a From domain that does not exist.
+		if record.NonExistentPolicy != "" && fromOrg {
+			if x, ok := e.resolver.(DomainExistenceResolver); ok {
+				if exists, xerr := x.DomainExists(ctx, fromDomain); xerr == nil && !exists {
+					policyToApply = record.NonExistentPolicy
+				}
+			}
+		}
 
 		// Apply percentage sampling
 		if record.Percentage < 100 {
-			if !shouldApplyPolicy(record.Percentage) {
+			if !shouldApplyPolicy(record.Percentage, fromDomain+"|"+sampleKey) {
 				// F5078: RFC 7489 §6.6.4 — an unsampled message gets the
 				// next-lower policy: reject → quarantine, quarantine → none.
 				if policyToApply == DMARCPolicyReject {
@@ -429,6 +473,8 @@ func parseDMARCRecord(record string) (*DMARCRecord, error) {
 			if err == nil && pct >= 0 && pct <= 100 {
 				rec.Percentage = pct
 			}
+		case "np":
+			rec.NonExistentPolicy = DMARCPolicy(strings.ToLower(value))
 		case "rua":
 			rec.ReportAggregateURI = parseURIList(value)
 		case "ruf":
@@ -465,6 +511,10 @@ func parseDMARCRecord(record string) (*DMARCRecord, error) {
 	// default (p=); it must not become the applied policy.
 	if sp := rec.SubdomainPolicy; sp != DMARCPolicyNone && sp != DMARCPolicyQuarantine && sp != DMARCPolicyReject {
 		rec.SubdomainPolicy = ""
+	}
+
+	if np := rec.NonExistentPolicy; np != DMARCPolicyNone && np != DMARCPolicyQuarantine && np != DMARCPolicyReject {
+		rec.NonExistentPolicy = ""
 	}
 
 	// Validate alignment modes
@@ -511,21 +561,19 @@ func isOrganizationalDomainMatch(domain1, domain2 string) bool {
 	return err == nil && org1 == org2
 }
 
-// shouldApplyPolicy determines if DMARC policy should be applied based on percentage
-func shouldApplyPolicy(percentage int) bool {
+// shouldApplyPolicy determines whether the DMARC policy applies at the given
+// percentage. The draw is a deterministic hash of key (RFC 7489 §6.6.4 leaves
+// sampling to the receiver): retries and repeated evaluations of one message
+// get the same disposition instead of a coin flip.
+func shouldApplyPolicy(percentage int, key string) bool {
 	if percentage >= 100 {
 		return true
 	}
 	if percentage <= 0 {
 		return false
 	}
-	// F6191: uniform draw in [0,100) via rand.Int; byte%100 was biased.
-	n, err := rand.Int(rand.Reader, big.NewInt(100))
-	if err != nil {
-		// If crypto/rand fails, default to applying policy (fail open for availability)
-		return true
-	}
-	return int(n.Int64()) < percentage
+	sum := sha256.Sum256([]byte(key))
+	return int(binary.BigEndian.Uint64(sum[:8])%100) < percentage
 }
 
 // parseURIList parses a comma-separated list of URIs

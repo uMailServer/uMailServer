@@ -100,7 +100,7 @@ func (s *Server) startInboundSMTP() error {
 	// Refuse relaying to foreign domains at RCPT time (F6042).
 	smtpServer.SetLocalDomainHandler(s.isLocalDomain)
 	// Inbound mail honours the pipeline's spam verdict (F4975).
-	smtpServer.SetDeliveryHandlerWithNotify(s.deliverInboundWithNotify)
+	smtpServer.SetDeliveryHandlerWithDSN(s.deliverInboundWithDSN)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken (CVE-2022-37454, etc.)
 	// smtpServer.SetUserSecretHandler(s.getUserSecret)
 	smtpServer.SetLoginResultHandler(s.protoLoginHandler("smtp"))
@@ -280,7 +280,7 @@ func (s *Server) startSubmissionSMTP() error {
 
 	submissionServer := smtp.NewServer(submissionCfg, s.logger)
 	submissionServer.SetAuthHandler(s.authenticate)
-	submissionServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
+	submissionServer.SetDeliveryHandlerWithDSN(s.deliverMessageWithDSN)
 	submissionServer.SetSenderAllowedHandler(s.senderAllowed)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
 	// submissionServer.SetUserSecretHandler(s.getUserSecret)
@@ -320,7 +320,7 @@ func (s *Server) startSubmissionTLSSMTP() error {
 
 	submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
 	submissionTLSServer.SetAuthHandler(s.authenticate)
-	submissionTLSServer.SetDeliveryHandlerWithNotify(s.deliverMessageWithNotify)
+	submissionTLSServer.SetDeliveryHandlerWithDSN(s.deliverMessageWithDSN)
 	submissionTLSServer.SetSenderAllowedHandler(s.senderAllowed)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
 	// submissionTLSServer.SetUserSecretHandler(s.getUserSecret)

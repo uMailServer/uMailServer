@@ -378,7 +378,7 @@ func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
 			recipResult := s.limiter.CheckRecipients(user, len(ctx.To))
 			if !recipResult.Allowed {
 				ctx.Rejected = true
-				ctx.RejectionCode = 421
+				ctx.RejectionCode = 451 // 421 would mean the channel is closing (F7312)
 				ctx.RejectionMessage = recipResult.Reason
 				return ResultReject
 			}
@@ -391,7 +391,7 @@ func (s *RateLimitStage) Process(ctx *MessageContext) PipelineResult {
 	result := s.limiter.CheckMessage(user, ctx.RemoteIP.String())
 	if !result.Allowed {
 		ctx.Rejected = true
-		ctx.RejectionCode = 421
+		ctx.RejectionCode = 451 // 421 would mean the channel is closing (F7312)
 		ctx.RejectionMessage = result.Reason
 		if result.RetryAfter > 0 {
 			ctx.RejectionMessage = fmt.Sprintf("%s (retry in %ds)", ctx.RejectionMessage, result.RetryAfter)

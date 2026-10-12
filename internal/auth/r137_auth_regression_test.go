@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -28,7 +29,7 @@ func TestShouldApplyPolicy_Uniform_F6191(t *testing.T) {
 	const n = 40000
 	hits := 0
 	for i := 0; i < n; i++ {
-		if shouldApplyPolicy(50) {
+		if shouldApplyPolicy(50, fmt.Sprint("msg", i)) {
 			hits++
 		}
 	}

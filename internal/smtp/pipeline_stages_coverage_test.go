@@ -90,8 +90,8 @@ func TestRateLimitStage_AuthenticatedUserRateLimited(t *testing.T) {
 	if result != ResultReject {
 		t.Errorf("Expected ResultReject for rate-limited user, got %d", result)
 	}
-	if ctx.RejectionCode != 421 {
-		t.Errorf("Expected rejection code 421, got %d", ctx.RejectionCode)
+	if ctx.RejectionCode != 451 {
+		t.Errorf("Expected rejection code 451, got %d", ctx.RejectionCode)
 	}
 }
 

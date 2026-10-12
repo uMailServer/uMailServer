@@ -144,6 +144,12 @@ func (s *Server) deliverMessageWithNotify(from string, to []string, notify []str
 // deliverMessageToFolder is deliverMessageWithNotify with the local folder
 // ("" for INBOX) chosen by the caller.
 func (s *Server) deliverMessageToFolder(from string, to []string, notify []string, data []byte, folder string) error {
+	return s.deliverMessageToFolderDSN(from, to, notify, nil, data, folder)
+}
+
+// deliverMessageToFolderDSN also carries the RFC 3461 RET/ENVID/ORCPT
+// parameters to the queue entries and failure reports (F7310).
+func (s *Server) deliverMessageToFolderDSN(from string, to []string, notify []string, dsn *smtp.DSNInfo, data []byte, folder string) error {
 	if !s.beginDelivery() {
 		return errServerStopping
 	}
@@ -170,11 +176,15 @@ func (s *Server) deliverMessageToFolder(from string, to []string, notify []strin
 		if i < len(notify) {
 			rcptNotify = notify[i]
 		}
+		rcptOrcpt := ""
+		if dsn != nil && i < len(dsn.ORCPT) {
+			rcptOrcpt = dsn.ORCPT[i]
+		}
 
 		user, domain, external, routeErr := s.routeRecipient(recipient)
 		if routeErr != nil {
 			s.logger.Error("Recipient routing failed", "to", recipient, "error", routeErr)
-			failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("route %s: %w", recipient, routeErr), local: routeErr})
+			failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, dsn: dsn, orcpt: rcptOrcpt, err: fmt.Errorf("route %s: %w", recipient, routeErr), local: routeErr})
 			continue
 		}
 		if k := rcptDedupKey(user, domain, external); seenRcpt[k] {
@@ -183,9 +193,9 @@ func (s *Server) deliverMessageToFolder(from string, to []string, notify []strin
 			seenRcpt[k] = true
 		}
 		if external != "" {
-			if relayErr := s.relayMessageWithNotify(from, external, []string{rcptNotify}, data); relayErr != nil {
+			if relayErr := s.relayMessageWithDSN(from, external, []string{rcptNotify}, relayDSN(dsn, rcptOrcpt), data); relayErr != nil {
 				s.logger.Error("Failed to relay message", "to", external, "error", relayErr)
-				failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("relay %s: %w", recipient, relayErr)})
+				failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, dsn: dsn, orcpt: rcptOrcpt, err: fmt.Errorf("relay %s: %w", recipient, relayErr)})
 			} else {
 				delivered++
 			}
@@ -196,13 +206,36 @@ func (s *Server) deliverMessageToFolder(from string, to []string, notify []strin
 		// discard or reject (F5115); without a script this is deliverLocal.
 		if err := s.deliverLocalFiltered(user, domain, recipient, from, rcptNotify, data, folder); err != nil {
 			s.logger.Error("Failed to deliver locally", "user", user, "domain", domain, "error", err)
-			failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, err: fmt.Errorf("deliver %s: %w", recipient, err), local: err})
+			failed = append(failed, rcptFailure{rcpt: recipient, notify: rcptNotify, dsn: dsn, orcpt: rcptOrcpt, err: fmt.Errorf("deliver %s: %w", recipient, err), local: err})
 		} else {
 			delivered++
 		}
 	}
 
 	return s.settleDelivery(from, data, delivered, failed)
+}
+
+// deliverMessageWithDSN is the submission delivery handler: deliverMessageWithNotify
+// plus the RET/ENVID/ORCPT parameters (F7310).
+func (s *Server) deliverMessageWithDSN(from string, to []string, notify []string, dsn *smtp.DSNInfo, data []byte) error {
+	return s.deliverMessageToFolderDSN(from, to, notify, dsn, data, "")
+}
+
+// deliverInboundWithDSN is deliverInboundWithNotify plus RET/ENVID/ORCPT.
+func (s *Server) deliverInboundWithDSN(from string, to []string, notify []string, dsn *smtp.DSNInfo, data []byte) error {
+	folder := ""
+	if hasSpamVerdict(data) {
+		folder = "Junk"
+	}
+	return s.deliverMessageToFolderDSN(from, to, notify, dsn, data, folder)
+}
+
+// relayDSN narrows the transaction's DSN parameters to one recipient.
+func relayDSN(dsn *smtp.DSNInfo, orcpt string) *queue.DSNParams {
+	if dsn == nil {
+		return nil
+	}
+	return &queue.DSNParams{Ret: dsn.Ret, EnvID: dsn.EnvID, ORCPT: []string{orcpt}}
 }
 
 // deliverInboundWithNotify is the delivery handler of the inbound (MX)
@@ -316,7 +349,9 @@ func (s *Server) beginDelivery() bool {
 // rcptFailure records one recipient that could not be delivered or queued.
 type rcptFailure struct {
 	rcpt   string
-	notify string // RFC 3461 NOTIFY value given for this recipient, if any
+	notify string        // RFC 3461 NOTIFY value given for this recipient, if any
+	dsn    *smtp.DSNInfo // RET/ENVID of the transaction, nil if none (F7310)
+	orcpt  string        // RFC 3461 ORCPT given for this recipient, if any
 	err    error
 	local  error  // the deliverLocal error, when the failure was local
 	diag   string // Diagnostic-Code for the DSN; "" picks one from local
@@ -385,6 +420,10 @@ func (s *Server) bounceFailedRecipients(from string, data []byte, failed []rcptF
 			RemoteMTA: "umailserver",
 			MessageID: queue.GenerateMessageID(),
 		}
+		dsn.Recipient.OriginalRecipient = f.orcpt
+		if f.dsn != nil {
+			dsn.EnvID = f.dsn.EnvID
+		}
 		msg, err := queue.GenerateFailureDSN(dsn, data, queue.DSNRetHeaders, diag)
 		if err != nil {
 			return fmt.Errorf("generate DSN for %s: %w", f.rcpt, err)
@@ -398,8 +437,13 @@ func (s *Server) bounceFailedRecipients(from string, data []byte, failed []rcptF
 
 // relayMessageWithNotify relays a message with per-recipient DSN notify preferences.
 func (s *Server) relayMessageWithNotify(from, to string, notify []string, data []byte) error {
+	return s.relayMessageWithDSN(from, to, notify, nil, data)
+}
+
+// relayMessageWithDSN also stores the RET/ENVID/ORCPT parameters (F7310).
+func (s *Server) relayMessageWithDSN(from, to string, notify []string, params *queue.DSNParams, data []byte) error {
 	if s.queue != nil {
-		_, err := s.queue.EnqueueWithNotify(from, []string{to}, notify, data)
+		_, err := s.queue.EnqueueWithDSN(from, []string{to}, notify, params, data)
 		if err != nil {
 			s.logger.Error("Failed to enqueue relay message with notify", "error", err)
 			return fmt.Errorf("failed to queue message: %w", err)

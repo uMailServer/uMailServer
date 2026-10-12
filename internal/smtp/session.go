@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/mail"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +64,8 @@ type Session struct {
 	mailFromRet  string // RET parameter (FULL or HDRS)
 	rcptTo       []string
 	rcptToNotify []string // NOTIFY parameter per recipient
+	mailEnvID    string   // ENVID parameter (xtext as received, F7310)
+	rcptOrcpt    []string // ORCPT parameter per recipient, parallel to rcptTo (F7310)
 	data         []byte
 	bdatBuffer   *bytes.Buffer
 
@@ -117,6 +120,7 @@ func NewSession(conn net.Conn, server *Server) *Session {
 		state:        StateNew,
 		rcptTo:       make([]string, 0),
 		rcptToNotify: make([]string, 0),
+		rcptOrcpt:    make([]string, 0),
 	}
 }
 
@@ -339,6 +343,11 @@ func (s *Session) handleMAIL(arg string) error {
 	if s.state == StateNew {
 		return s.WriteResponse(503, "5.5.1 Bad sequence of commands")
 	}
+	// A transaction is already open: nested MAIL is a bad sequence
+	// (RFC 5321 §4.1.4, F7311).
+	if s.state != StateGreeted {
+		return s.WriteResponse(503, "5.5.1 Nested MAIL command")
+	}
 
 	// Submission mode: require authentication before MAIL FROM
 	if (s.server.config.RequireAuth || s.server.config.IsSubmission) && !s.isAuth {
@@ -382,6 +391,7 @@ func (s *Session) handleMAIL(arg string) error {
 	s.resetTransaction()
 	s.mailFrom = from
 	s.mailFromRet = ret
+	s.mailEnvID = paramValue(arg, "ENVID")
 	s.mailBinary = mp.binary
 	s.smtputf8 = mp.utf8
 	s.state = StateMailFrom
@@ -400,6 +410,18 @@ func mailParamFields(arg string) []string {
 		return nil
 	}
 	return fields[1:]
+}
+
+// paramValue returns the value of the ESMTP parameter key (case-insensitive
+// name, value kept verbatim) or "".
+func paramValue(arg, key string) string {
+	for _, field := range mailParamFields(arg) {
+		k, v, _ := strings.Cut(field, "=")
+		if strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
 }
 
 // checkMailParams validates the MAIL FROM parameters this server advertises
@@ -562,6 +584,7 @@ func (s *Session) handleRCPT(arg string) error {
 	s.rcptTo = append(s.rcptTo, validated)
 	s.rcptRaw = append(s.rcptRaw, rawFor)
 	s.rcptToNotify = append(s.rcptToNotify, notify)
+	s.rcptOrcpt = append(s.rcptOrcpt, paramValue(arg, "ORCPT"))
 	s.state = StateRcptTo
 
 	return s.WriteResponse(250, "OK")
@@ -681,6 +704,7 @@ func (s *Session) handleDATA() error {
 			if ctx.RejectionMessage != "" {
 				msg = ctx.RejectionMessage
 			}
+			code, msg = stageReply(code, msg)
 			return s.WriteResponse(code, msg)
 		case ResultQuarantine:
 			// Add spam headers but continue delivery
@@ -710,6 +734,30 @@ func (s *Session) handleDATA() error {
 	s.resetTransaction()
 	s.errCount.Store(0)
 	return s.WriteResponse(250, "OK")
+}
+
+// enhancedStatusRe matches a leading RFC 3463 enhanced status code.
+var enhancedStatusRe = regexp.MustCompile(`^[245]\.\d{1,3}\.\d{1,3}( |$)`)
+
+// stageReply makes a pipeline stage rejection a valid SMTP reply (F7312):
+// 421 means the channel is closing (RFC 5321 §4.2.2), which a rejection never
+// does, so it becomes 451; a code outside 4xx/5xx becomes 550; and the text
+// gets an RFC 2034 enhanced status code of the matching class when it has none.
+func stageReply(code int, msg string) (int, string) {
+	if code == 421 {
+		code = 451
+	}
+	if code < 400 || code > 599 {
+		code = 550
+	}
+	if !enhancedStatusRe.MatchString(msg) {
+		class := "5.7.1"
+		if code < 500 {
+			class = "4.7.1"
+		}
+		msg = class + " " + msg
+	}
+	return code, msg
 }
 
 // submissionFromAllowed reports whether every address in the From header of an
@@ -742,6 +790,7 @@ func (s *Session) submissionFromAllowed(data []byte) bool {
 // pctx is the pipeline context, nil when no pipeline ran.
 func (s *Session) deliver(pctx *MessageContext) error {
 	srv := s.server
+	dsnInfo := &DSNInfo{Ret: s.mailFromRet, EnvID: s.mailEnvID, ORCPT: s.rcptOrcpt}
 	switch {
 	case srv.onDeliverWithAuth != nil:
 		info := &DeliveryAuth{SieveActions: s.sieveActions}
@@ -750,6 +799,8 @@ func (s *Session) deliver(pctx *MessageContext) error {
 			info.SPF, info.DKIM, info.DMARC, info.ARC = pctx.SPFResult, pctx.DKIMResult, pctx.DMARCResult, pctx.ARCResult
 		}
 		return srv.onDeliverWithAuth(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data, info)
+	case srv.onDeliverWithDSN != nil:
+		return srv.onDeliverWithDSN(s.mailFrom, s.rcptTo, s.rcptToNotify, dsnInfo, s.data)
 	case srv.onDeliverWithNotify != nil:
 		return srv.onDeliverWithNotify(s.mailFrom, s.rcptTo, s.rcptToNotify, s.data)
 	case srv.onDeliverWithSieve != nil:
@@ -1473,6 +1524,7 @@ func (s *Session) handleBDAT(arg string) error {
 				if ctx.RejectionMessage != "" {
 					msg = ctx.RejectionMessage
 				}
+				code, msg = stageReply(code, msg)
 				return s.WriteResponse(code, msg)
 			case ResultQuarantine:
 				spamHeader := fmt.Sprintf("X-Spam-Status: Yes, score=%.1f\r\n", ctx.SpamScore)
@@ -2106,6 +2158,9 @@ func (s *Session) resetTransaction() {
 	s.mailBinary = false
 	s.smtputf8 = false
 	s.rcptToNotify = make([]string, 0) // Clear per-recipient DSN NOTIFY preferences
+	s.rcptOrcpt = make([]string, 0)
+	s.mailEnvID = ""
+	s.mailFromRet = ""
 	s.data = nil
 	s.bdatBuffer = nil
 	if s.state > StateGreeted {

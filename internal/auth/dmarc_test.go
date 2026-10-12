@@ -263,18 +263,18 @@ func TestShouldApplyPolicy(t *testing.T) {
 	// Note: This uses random sampling, so we can't test exact behavior
 
 	// 100% should always apply
-	if !shouldApplyPolicy(100) {
+	if !shouldApplyPolicy(100, "k") {
 		t.Error("shouldApplyPolicy(100) should always return true")
 	}
 
 	// 0% should never apply
-	if shouldApplyPolicy(0) {
+	if shouldApplyPolicy(0, "k") {
 		t.Error("shouldApplyPolicy(0) should always return false")
 	}
 
 	// 50% should apply roughly half the time (we'll just verify it doesn't panic)
 	for i := 0; i < 10; i++ {
-		_ = shouldApplyPolicy(50)
+		_ = shouldApplyPolicy(50, "k")
 	}
 }
 
