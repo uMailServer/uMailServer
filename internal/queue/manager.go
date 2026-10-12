@@ -64,6 +64,9 @@ type Manager struct {
 	metrics      *metrics.SimpleMetrics
 	logger       *slog.Logger
 	maxRetries   int
+	maxAge       time.Duration              // entries older than this bounce instead of retrying (F7190)
+	claimLease   time.Duration              // a "sending" claim older than this is reverted (F7191)
+	updateEntry  func(*db.QueueEntry) error // test seam; defaults to db.UpdateQueueEntry
 	maxQueueSize int
 	requireTLS   bool
 	helloName    string         // EHLO name for outbound connections (F5680)
@@ -313,6 +316,8 @@ func NewManager(db *db.DB, store *store.MaildirStore, dataDir string, logger *sl
 		shutdown:        make(chan struct{}),
 		metrics:         metrics.Get(),
 		logger:          logger,
+		maxAge:          defaultMaxAge,
+		claimLease:      defaultClaimLease,
 		maxRetries:      len(retryDelays) + 1, // N delays separate N+1 attempts (F5901)
 		maxQueueSize:    10000,
 		workerCount:     10,
@@ -711,6 +716,17 @@ func (m *Manager) queueSweeper(ctx context.Context) {
 
 // sweepPendingEntries picks up entries ready for delivery and sends them to workers
 func (m *Manager) sweepPendingEntries() {
+	// Revert claims abandoned because the outcome write failed (F7191).
+	m.mu.RLock()
+	lease := m.claimLease
+	m.mu.RUnlock()
+	if lease > 0 {
+		if n, err := m.db.RequeueStaleClaims(time.Now(), lease); err != nil {
+			m.logger.Error("failed to requeue stale queue claims", "error", err)
+		} else if n > 0 {
+			m.logger.Warn("reverted stale queue claims", "count", n)
+		}
+	}
 	entries, err := m.db.GetPendingQueue(time.Now())
 	if err != nil {
 		return
@@ -1452,7 +1468,7 @@ func (m *Manager) checkDANE(mx string, st tls.ConnectionState) error {
 // entry could not be persisted — callers must not delete message files on error.
 func (m *Manager) handleDeliverySuccess(entry *db.QueueEntry) error {
 	entry.Status = "delivered"
-	if err := m.db.UpdateQueueEntry(entry); err != nil {
+	if err := m.persistEntry(entry); err != nil {
 		m.logger.Error("failed to update queue entry after delivery success", "error", err)
 		return err
 	}
@@ -1538,10 +1554,18 @@ func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent 
 	entry.RetryCount++
 	m.mu.RLock()
 	maxRetries := m.maxRetries
+	maxAge := m.maxAge
 	m.mu.RUnlock()
 
+	// Bounce once the message is older than maxAge (RFC 5321 §4.5.4.1), or
+	// when the next retry would fall past it (F7190).
+	expired := maxAge > 0 && !entry.CreatedAt.IsZero() && time.Since(entry.CreatedAt) >= maxAge
+	if expired && !permanent {
+		entry.LastError = errorMsg + " (delivery expired after " + maxAge.String() + ")"
+	}
+
 	// Check if max retries reached
-	if permanent || entry.RetryCount >= maxRetries {
+	if permanent || expired || entry.RetryCount >= maxRetries {
 		// Generate bounce
 		entry.Status = "bounced"
 	} else {
@@ -1561,7 +1585,9 @@ func (m *Manager) failDelivery(entry *db.QueueEntry, errorMsg string, permanent 
 		entry.Status = "pending"
 	}
 
-	if err := m.db.UpdateQueueEntry(entry); err != nil {
+	if err := m.persistEntry(entry); err != nil {
+		// The entry is still "sending" in the database. The sweeper reverts
+		// the claim once its lease expires (F7191).
 		m.logger.Error("failed to update queue entry after delivery failure", "error", err)
 		return
 	}
@@ -1740,6 +1766,14 @@ func (m *Manager) createFallbackBounce(entry *db.QueueEntry, originalMsg []byte)
 
 // Retry delays for exponential backoff
 // Schedule: 5m, 15m, 30m, 1h, 2h, 4h, 8h, 16h, 24h, 48h
+// defaultMaxAge is how long an entry is retried before it bounces; RFC 5321
+// §4.5.4.1 suggests 4-5 days. The retry schedule alone spans ~4.3 days (F7190).
+const defaultMaxAge = 5 * 24 * time.Hour
+
+// defaultClaimLease bounds how long an entry may stay "sending" before the
+// sweeper treats the claim as abandoned (F7191).
+const defaultClaimLease = 30 * time.Minute
+
 var retryDelays = []time.Duration{
 	5 * time.Minute,
 	15 * time.Minute,
@@ -1788,6 +1822,31 @@ func (m *Manager) getStats() (*QueueStats, error) {
 	})
 
 	return stats, err
+}
+
+// persistEntry writes a claimed entry's outcome, retrying briefly so a
+// transient write error does not strand the claim.
+func (m *Manager) persistEntry(entry *db.QueueEntry) error {
+	upd := m.updateEntry
+	if upd == nil {
+		upd = m.db.UpdateQueueEntry
+	}
+	var err error
+	for i := 0; i < 3; i++ {
+		if err = upd(entry); err == nil || errors.Is(err, db.ErrQueueEntryNotFound) {
+			return err
+		}
+		time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+	}
+	return err
+}
+
+// SetMaxAge sets how long an entry is retried before it bounces. Zero or
+// negative disables the age limit.
+func (m *Manager) SetMaxAge(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxAge = d
 }
 
 // SetMaxRetries sets the maximum number of retry attempts

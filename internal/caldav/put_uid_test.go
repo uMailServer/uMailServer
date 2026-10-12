@@ -96,7 +96,7 @@ func TestHandlePutDuplicateUIDConflicts(t *testing.T) {
 	req.SetBasicAuth("alice", "pw")
 	w = httptest.NewRecorder()
 	server.ServeHTTP(w, req)
-	if w.Code != http.StatusCreated {
+	if w.Code != http.StatusNoContent {
 		t.Fatalf("re-PUT = %d", w.Code)
 	}
 }

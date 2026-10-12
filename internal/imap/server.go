@@ -35,6 +35,11 @@ type Server struct {
 	// races the session goroutine's last writes to bbolt (caught by
 	// `go test -race`: Session.Close vs Database.RecordChange).
 	sessionWG sync.WaitGroup
+	// drainTimeout is how long Stop lets in-flight commands finish before
+	// force-closing; zero means defaultDrainTimeout. after is injectable.
+	drainMu      sync.Mutex
+	drainTimeout time.Duration
+	after        func(time.Duration) <-chan time.Time
 
 	// Authentication
 	authFunc func(username, password string) (bool, error)
@@ -357,7 +362,21 @@ func (s *Server) StartTLS() error {
 	return nil
 }
 
-// Stop stops the IMAP server
+// defaultDrainTimeout bounds Stop's drain when none was configured.
+const defaultDrainTimeout = 30 * time.Second
+
+// SetShutdownDrainTimeout sets how long Stop lets in-flight commands finish
+// before the remaining sessions are force-closed (server.force_close_after).
+func (s *Server) SetShutdownDrainTimeout(d time.Duration) {
+	s.drainMu.Lock()
+	s.drainTimeout = d
+	s.drainMu.Unlock()
+}
+
+// Stop stops accepting, closes idle sessions (including IDLE), lets sessions
+// running a command finish it, and force-closes whatever is left after the
+// drain timeout (F7180). It returns only once every session goroutine exited,
+// so deferred srv.Stop() does not race the session's last writes to bbolt.
 func (s *Server) Stop() error {
 	s.running.Store(false)
 	s.stopOnce.Do(func() { close(s.shutdown) })
@@ -368,19 +387,36 @@ func (s *Server) Stop() error {
 		}
 	}
 
-	// Close all sessions
-	s.sessionsMu.Lock()
+	s.sessionsMu.RLock()
+	live := make([]*Session, 0, len(s.sessions))
 	for _, session := range s.sessions {
-		session.Close()
+		live = append(live, session)
 	}
-	s.sessions = make(map[string]*Session)
-	s.sessionsMu.Unlock()
+	s.sessionsMu.RUnlock()
+	for _, session := range live {
+		session.drain()
+	}
 
-	// Wait for all session goroutines to finish so deferred srv.Stop() in
-	// tests (and production shutdowns) don't race the session's last writes
-	// to bbolt / storage. Without this, `go test -race` flags a Session.Close
-	// vs Database.RecordChange data race.
-	s.sessionWG.Wait()
+	s.drainMu.Lock()
+	d, after := s.drainTimeout, s.after
+	s.drainMu.Unlock()
+	if d <= 0 {
+		d = defaultDrainTimeout
+	}
+	if after == nil {
+		after = time.After
+	}
+	done := make(chan struct{})
+	go func() { s.sessionWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-after(d):
+		s.logger.Warn("IMAP sessions still running at shutdown; force-closing")
+		for _, session := range live {
+			session.Close()
+		}
+		<-done
+	}
 
 	s.logger.Info("IMAP server stopped")
 	return nil
@@ -426,8 +462,6 @@ func (s *Server) acceptLoop(listener net.Listener) {
 
 // handleConnection handles a single IMAP connection
 func (s *Server) handleConnection(conn net.Conn) {
-	s.sessionWG.Add(1)
-	defer s.sessionWG.Done()
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Error("Panic in IMAP connection handler", "error", r)
@@ -435,21 +469,30 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	}()
 
-	s.sessionsMu.RLock()
-	atLimit := s.maxConnections > 0 && len(s.sessions) >= s.maxConnections
-	s.sessionsMu.RUnlock()
-	if atLimit {
-		_, _ = conn.Write([]byte("* BYE Too many connections\r\n"))
+	// Limit check, shutdown check, WaitGroup add and registration happen under
+	// one lock so Stop's drain snapshot and Wait see every admitted session.
+	session := NewSession(conn, s)
+	reject := ""
+	s.sessionsMu.Lock()
+	select {
+	case <-s.shutdown:
+		reject = "* BYE Server shutting down"
+	default:
+		if s.maxConnections > 0 && len(s.sessions) >= s.maxConnections {
+			reject = "* BYE Too many connections"
+		} else {
+			s.sessions[session.ID()] = session
+			s.sessionWG.Add(1)
+		}
+	}
+	s.sessionsMu.Unlock()
+	if reject != "" {
+		_, _ = conn.Write([]byte(reject + "\r\n"))
 		_ = conn.Close()
 		return
 	}
-
-	session := NewSession(conn, s)
+	defer s.sessionWG.Done()
 	metrics.Get().IMAPConnection()
-
-	s.sessionsMu.Lock()
-	s.sessions[session.ID()] = session
-	s.sessionsMu.Unlock()
 
 	s.logger.Info("New IMAP session", "session", session.ID(), "remote", conn.RemoteAddr())
 
@@ -512,6 +555,52 @@ type Session struct {
 	idleActive     bool
 	idleStop       chan struct{}
 	idleNotifyChan chan MailboxNotification
+
+	// Drain state for graceful shutdown (F7180): busy while a non-IDLE command
+	// runs, draining once Stop asked the session to finish.
+	drainMu  sync.Mutex
+	busy     bool
+	draining bool
+}
+
+// beginCommand marks a command as running; false means the server is draining
+// and the command must not start.
+func (s *Session) beginCommand() bool {
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	if s.draining {
+		return false
+	}
+	s.busy = true
+	return true
+}
+
+// endCommand clears the running mark and reports whether the server is
+// draining and the session should exit.
+func (s *Session) endCommand() (draining bool) {
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	s.busy = false
+	return s.draining
+}
+
+// drain asks the session to exit: an idle one (waiting for a command, or in
+// IDLE) is closed now, a busy one exits after its current command.
+func (s *Session) drain() {
+	s.drainMu.Lock()
+	s.draining = true
+	idle := !s.busy
+	s.drainMu.Unlock()
+	if idle {
+		s.Close()
+	}
+}
+
+// isIdleCommand reports whether line is "<tag> IDLE", which blocks waiting for
+// the client and so must not hold shutdown back.
+func isIdleCommand(line string) bool {
+	f := strings.Fields(line)
+	return len(f) == 2 && strings.EqualFold(f[1], "IDLE")
 }
 
 // State represents the IMAP session state
@@ -632,6 +721,9 @@ func (s *Session) Handle() {
 			continue
 		}
 
+		if !s.beginCommand() {
+			return
+		}
 		line, ok, err := s.resolveLiterals(line)
 		if err != nil {
 			if !errors.Is(err, errLiteralFatal) {
@@ -640,7 +732,16 @@ func (s *Session) Handle() {
 			return
 		}
 		if !ok {
+			if s.endCommand() {
+				return
+			}
 			continue
+		}
+		if isIdleCommand(line) {
+			// IDLE waits on the client; count it as idle so Stop closes it.
+			if s.endCommand() {
+				return
+			}
 		}
 
 		s.server.logger.Debug("IMAP command", "session", s.id, "line", truncateCommand(line, 80))
@@ -648,6 +749,9 @@ func (s *Session) Handle() {
 		err = s.handleCommand(line)
 		if err != nil {
 			s.server.logger.Error("Command error", "error", err)
+		}
+		if s.endCommand() {
+			return
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/smtp"
@@ -15,6 +16,14 @@ import (
 // for the life of the process. Entry.Count already carries the message volume,
 // so retaining a small window of recent values is sufficient for reporting.
 const maxRetainedPerSourceIP = 10
+
+// Caps on aggregate-report state. The header-From domain and source IP are
+// attacker-chosen, so both the tracked domains and the per-domain source rows
+// must be bounded (F7244).
+const (
+	maxReportEntriesPerDomain = 1000
+	maxReportDomains          = 10000
+)
 
 // appendBounded appends v to s, retaining only the most recent max elements.
 // It never reorders and keeps the newest value last, which is what BuildReport
@@ -85,6 +94,9 @@ func (r *DMARCReporter) RecordResult(domain string, eval *DMARCEvaluation, sourc
 
 	data, exists := r.reports[domain]
 	if !exists {
+		if len(r.reports) >= maxReportDomains {
+			return
+		}
 		data = &reportData{
 			Domain: domain,
 			Begin:  time.Now().Add(-r.interval),
@@ -102,6 +114,9 @@ func (r *DMARCReporter) RecordResult(domain string, eval *DMARCEvaluation, sourc
 		}
 	}
 	if entry == nil {
+		if len(data.Entries) >= maxReportEntriesPerDomain {
+			return
+		}
 		data.Entries = append(data.Entries, ReportEntry{
 			SourceIP: sourceIP,
 		})
@@ -146,16 +161,18 @@ func (r *DMARCReporter) SetPolicy(domain string, policy DMARCPolicy, sp DMARCPol
 	data.End = time.Now()
 }
 
-// GenerateAndSendReport generates a report for a domain and sends it via email
-func (r *DMARCReporter) GenerateAndSendReport(domain, ruaEmail string) error {
+// buildDomainReport snapshots and drains a domain's accumulated data under
+// the lock and renders the aggregate report XML. F7240: the window start used
+// to be reset to now before BuildReport read it (yielding an empty/negative
+// date range) and the fields were read after unlocking (data race).
+func (r *DMARCReporter) buildDomainReport(domain, ruaEmail string) ([]byte, error) {
 	r.reportsMu.Lock()
 	data, exists := r.reports[domain]
 	if !exists {
 		r.reportsMu.Unlock()
-		return fmt.Errorf("no data for domain %s", domain)
+		return nil, fmt.Errorf("no data for domain %s", domain)
 	}
-
-	// Copy entries for sending
+	snap := *data
 	entries := make([]ReportEntry, len(data.Entries))
 	copy(entries, data.Entries)
 
@@ -164,24 +181,42 @@ func (r *DMARCReporter) GenerateAndSendReport(domain, ruaEmail string) error {
 	data.Begin = time.Now()
 	r.reportsMu.Unlock()
 
-	// Build XML report
-	xmlData, err := BuildReport(
+	end := snap.End
+	if end.Before(snap.Begin) {
+		end = time.Now()
+	}
+	return BuildReport(
 		r.orgName,
 		ruaEmail,
-		data.Domain,
-		string(data.Adkim),
-		string(data.Aspf),
-		data.Policy,
-		data.Subdomain,
-		data.Pct,
-		data.Begin,
-		data.End,
+		snap.Domain,
+		string(snap.Adkim),
+		string(snap.Aspf),
+		snap.Policy,
+		snap.Subdomain,
+		snap.Pct,
+		snap.Begin,
+		end,
 		entries,
 	)
+}
+
+// GenerateAndSendReport generates a report for a domain and sends it via email
+func (r *DMARCReporter) GenerateAndSendReport(domain, ruaEmail string) error {
+	// F7241: RFC 7489 §7.1 — never mail a report to a third-party domain that
+	// has not opted in.
+	if toEmail, perr := ParseRUAEmail(ruaEmail); perr == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ok, verr := VerifyReportDestination(ctx, r.resolver, domain, toEmail)
+		cancel()
+		if !ok {
+			return fmt.Errorf("report destination %s not authorized for %s: %v", toEmail, domain, verr)
+		}
+	}
+
+	xmlData, err := r.buildDomainReport(domain, ruaEmail)
 	if err != nil {
 		return fmt.Errorf("failed to build report: %w", err)
 	}
-
 	// Send email with report
 	if err := r.sendReportEmail(ruaEmail, domain, xmlData); err != nil {
 		return fmt.Errorf("failed to send report: %w", err)
@@ -190,7 +225,6 @@ func (r *DMARCReporter) GenerateAndSendReport(domain, ruaEmail string) error {
 	r.logger.Info("DMARC report sent",
 		"domain", domain,
 		"to", ruaEmail,
-		"entries", len(entries),
 	)
 
 	return nil

@@ -111,6 +111,9 @@ func (s *AdminServer) Stop() error {
 	srv := s.httpServer
 	s.mu.Unlock()
 	if srv != nil {
+		if s.Server != nil {
+			return s.Server.shutdownHTTP(srv)
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return srv.Shutdown(ctx)

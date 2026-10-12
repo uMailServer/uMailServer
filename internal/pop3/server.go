@@ -35,6 +35,15 @@ type Server struct {
 	stopOnce   sync.Once
 	running    atomic.Bool
 
+	// sessionWG tracks live session goroutines so Stop can guarantee that no
+	// session touches the mailstore after it returns (F7181).
+	sessionWG sync.WaitGroup
+	// drainTimeout is how long Stop lets in-flight commands finish before
+	// force-closing; zero means defaultDrainTimeout. after is injectable.
+	drainMu      sync.Mutex
+	drainTimeout time.Duration
+	after        func(time.Duration) <-chan time.Time
+
 	authFunc  func(username, password string) (bool, error)
 	mailstore Mailstore
 
@@ -131,6 +140,45 @@ type Session struct {
 	// activeSpan is set by handleCommand for the duration of one command so
 	// inner handlers (notably PASS) can record auth attributes against it.
 	activeSpan otrace.Span
+
+	// Drain state for graceful shutdown (F7181): busy while a command runs,
+	// draining once Stop asked the session to finish.
+	drainMu  sync.Mutex
+	busy     bool
+	draining bool
+}
+
+// beginCommand marks a command as running; false means the server is draining
+// and the command must not start.
+func (s *Session) beginCommand() bool {
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	if s.draining {
+		return false
+	}
+	s.busy = true
+	return true
+}
+
+// endCommand clears the running mark and reports whether the session should
+// now exit because the server is draining.
+func (s *Session) endCommand() (draining bool) {
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	s.busy = false
+	return s.draining
+}
+
+// drain asks the session to exit: an idle one is closed now, a busy one exits
+// after its current command.
+func (s *Session) drain() {
+	s.drainMu.Lock()
+	s.draining = true
+	idle := !s.busy
+	s.drainMu.Unlock()
+	if idle {
+		s.Close()
+	}
 }
 
 // State represents the POP3 session state
@@ -355,7 +403,20 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop stops the POP3 server
+// defaultDrainTimeout bounds Stop's drain when none was configured.
+const defaultDrainTimeout = 30 * time.Second
+
+// SetShutdownDrainTimeout sets how long Stop lets in-flight commands finish
+// before the remaining sessions are force-closed (server.force_close_after).
+func (s *Server) SetShutdownDrainTimeout(d time.Duration) {
+	s.drainMu.Lock()
+	s.drainTimeout = d
+	s.drainMu.Unlock()
+}
+
+// Stop stops accepting, closes idle sessions, lets sessions that are running a
+// command finish it, and force-closes whatever is left after the drain timeout
+// (F7181). It returns only once every session goroutine has exited.
 func (s *Server) Stop() error {
 	s.running.Store(false)
 	s.stopOnce.Do(func() { close(s.shutdown) })
@@ -366,13 +427,36 @@ func (s *Server) Stop() error {
 		}
 	}
 
-	// Close all sessions
-	s.sessionsMu.Lock()
+	s.sessionsMu.RLock()
+	live := make([]*Session, 0, len(s.sessions))
 	for _, session := range s.sessions {
-		session.Close()
+		live = append(live, session)
 	}
-	s.sessions = make(map[string]*Session)
-	s.sessionsMu.Unlock()
+	s.sessionsMu.RUnlock()
+	for _, session := range live {
+		session.drain()
+	}
+
+	s.drainMu.Lock()
+	d, after := s.drainTimeout, s.after
+	s.drainMu.Unlock()
+	if d <= 0 {
+		d = defaultDrainTimeout
+	}
+	if after == nil {
+		after = time.After
+	}
+	done := make(chan struct{})
+	go func() { s.sessionWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-after(d):
+		s.logger.Warn("POP3 sessions still running at shutdown; force-closing")
+		for _, session := range live {
+			session.Close()
+		}
+		<-done
+	}
 
 	s.logger.Info("POP3 server stopped")
 	return nil
@@ -441,6 +525,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			reject = "-ERR Too many connections"
 		} else {
 			s.sessions[session.ID()] = session
+			s.sessionWG.Add(1)
 		}
 	}
 	s.sessionsMu.Unlock()
@@ -451,6 +536,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+
+	defer s.sessionWG.Done()
 
 	s.logger.Info("New POP3 session", "session", session.ID(), "remote", conn.RemoteAddr())
 
@@ -554,7 +641,11 @@ func (s *Session) Handle() {
 
 		s.server.logger.Debug("POP3 command", "session", s.id, "line", truncateCommand(redactCommand(line), 80))
 
-		if err := s.handleCommand(line); err != nil {
+		if !s.beginCommand() {
+			return
+		}
+		err = s.handleCommand(line)
+		if s.endCommand() || err != nil {
 			return
 		}
 	}

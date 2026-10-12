@@ -6,11 +6,13 @@ package server
 // redirect loop check.
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/queue"
+	"go.etcd.io/bbolt"
 )
 
 func pendingTo(t *testing.T, s *Server) map[string]*db.QueueEntry {
@@ -87,8 +89,16 @@ func TestR123AliasChainAndLoop(t *testing.T) {
 	if inboxCount(t, s, "bob@test.com") != 1 {
 		t.Error("chained alias did not reach bob")
 	}
+	// F7250: CreateAlias now refuses loops, so write the legacy loop (data
+	// stored before that check existed) straight into the bucket; delivery
+	// must still refuse it.
 	mkAlias(t, s, "l1", "l2@test.com")
-	mkAlias(t, s, "l2", "l1@test.com")
+	if err := s.database.BoltDB().Update(func(tx *bbolt.Tx) error {
+		data, _ := json.Marshal(&db.AliasData{Domain: "test.com", Alias: "l2", Target: "l1@test.com", IsActive: true})
+		return tx.Bucket([]byte(db.BucketAliases)).Put([]byte("test.com:l2"), data)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.deliverMessageWithNotify("s@ext.com", []string{"l1@test.com"}, nil, []byte(deliveryAuditMsg)); err == nil {
 		t.Error("alias loop must be refused")
 	}

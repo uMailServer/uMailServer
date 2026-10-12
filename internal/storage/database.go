@@ -742,6 +742,15 @@ func (db *Database) StoreMessageMetadata(user, mailbox string, uid uint32, meta 
 		if err := raiseHighestModSeqTx(tx, user, mailbox, cp.ModSeq); err != nil {
 			return err
 		}
+		// F7251: UIDNEXT must stay above every stored UID, or GetNextUID
+		// would re-issue it and overwrite this message.
+		if mb := tx.Bucket([]byte(mailboxKey(user, mailbox))); mb != nil && uid != math.MaxUint32 {
+			if cur := btoi(mb.Get([]byte("uidnext"))); cur <= uid {
+				if err := mb.Put([]byte("uidnext"), itob(uid+1)); err != nil {
+					return err
+				}
+			}
+		}
 		data, err := json.Marshal(&cp)
 		if err != nil {
 			return err

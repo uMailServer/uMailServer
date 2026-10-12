@@ -1,9 +1,12 @@
 package auth
 
 import (
+	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -159,17 +162,59 @@ func BuildReport(orgName, email, domain, adkim, aspf string, policy DMARCPolicy,
 	return xml.MarshalIndent(&report, "", "  ")
 }
 
-// ParseRUAEmail parses a mailto: URI and extracts email address
+// ParseRUAEmail parses a mailto: URI and extracts email address. The scheme is
+// case-insensitive and an RFC 7489 §6.2 "!size" limit suffix is ignored.
 func ParseRUAEmail(uri string) (string, error) {
 	uri = strings.TrimSpace(uri)
-	uri = strings.TrimPrefix(uri, "mailto:")
+	if len(uri) >= len("mailto:") && strings.EqualFold(uri[:len("mailto:")], "mailto:") {
+		uri = uri[len("mailto:"):]
+	}
 	// Extract email from mailto:user@example.com?subject=...
 	if idx := strings.Index(uri, "?"); idx > 0 {
 		uri = uri[:idx]
+	}
+	if idx := strings.LastIndex(uri, "!"); idx > 0 {
+		switch strings.ToLower(uri[idx+1:]) {
+		case "", "k", "m", "g", "t":
+			uri = uri[:idx]
+		default:
+			if _, err := strconv.Atoi(strings.TrimRight(strings.ToLower(uri[idx+1:]), "kmgt")); err == nil {
+				uri = uri[:idx]
+			}
+		}
 	}
 	addr, err := mail.ParseAddress(uri)
 	if err != nil {
 		return "", fmt.Errorf("invalid email address: %w", err)
 	}
 	return addr.Address, nil
+}
+
+// VerifyReportDestination implements RFC 7489 §7.1 external destination
+// verification: a report for domain may go to an address in another
+// organizational domain only if <domain>._report._dmarc.<dest-domain>
+// publishes a v=DMARC1 TXT record.
+func VerifyReportDestination(ctx context.Context, resolver DNSResolver, domain, destEmail string) (bool, error) {
+	at := strings.LastIndex(destEmail, "@")
+	if at < 0 || at == len(destEmail)-1 {
+		return false, fmt.Errorf("invalid destination %q", destEmail)
+	}
+	destDomain := strings.ToLower(strings.TrimSuffix(destEmail[at+1:], "."))
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	if isOrganizationalDomainMatch(domain, destDomain) {
+		return true, nil
+	}
+	if resolver == nil {
+		return false, errors.New("no resolver for external destination verification")
+	}
+	txts, err := resolver.LookupTXT(ctx, domain+"._report._dmarc."+destDomain)
+	if err != nil {
+		return false, err
+	}
+	for _, t := range txts {
+		if isDMARCRecord(t) {
+			return true, nil
+		}
+	}
+	return false, errors.New("no authorization record")
 }

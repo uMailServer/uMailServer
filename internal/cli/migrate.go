@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -56,6 +58,9 @@ type MigrateOptions struct {
 
 // MigrateFromIMAP migrates data from an IMAP server
 func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
+	if opts.TargetUser == "" && !opts.DryRun {
+		return fmt.Errorf("target user is required (--target)")
+	}
 	// Parse IMAP URL
 	u, err := url.Parse(opts.SourceURL)
 	if err != nil {
@@ -144,6 +149,7 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 
 	totalMessages := 0
 	migratedMessages := 0
+	failedMessages := 0
 
 	for _, mailbox := range mailboxes {
 		// Check if mailbox is selectable (skip \Noselect mailboxes)
@@ -212,14 +218,16 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 			msgData, err := extractIMAPMessageData(msg)
 			if err != nil {
 				mm.logger.Warn("Failed to extract message data", "seq", msg.SeqNum, "error", err)
+				failedMessages++
 				continue
 			}
 
 			// Store message
 			if mm.msgStore != nil {
-				msgID, err := mm.msgStore.StoreMessage(opts.TargetUser, msgData)
+				msgID, err := mm.storeCharged(opts.TargetUser, msgData)
 				if err != nil {
 					mm.logger.Error("Failed to store message", "seq", msg.SeqNum, "error", err)
+					failedMessages++
 					continue
 				}
 
@@ -252,6 +260,9 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 		fmt.Println("(Dry run - no actual changes made)")
 	}
 
+	if failedMessages > 0 {
+		return fmt.Errorf("%d message(s) could not be migrated (%d migrated)", failedMessages, migratedMessages)
+	}
 	return nil
 }
 
@@ -472,7 +483,7 @@ func (mm *MigrationManager) importMessage(messagePath string) error {
 
 	// Store message
 	if mm.msgStore != nil {
-		_, err := mm.msgStore.StoreMessage(email, data)
+		_, err := mm.storeCharged(email, data)
 		if err != nil {
 			return fmt.Errorf("failed to store message: %w", err)
 		}
@@ -529,6 +540,7 @@ func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
 	// Messages are separated by lines starting with "From "
 	reader := bufio.NewReader(file)
 	messageCount := 0
+	failed := 0
 	currentMessage := []byte{}
 	inMessage := false
 
@@ -551,6 +563,7 @@ func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
 			if len(currentMessage) > 0 {
 				if err := mm.processMBOXMessage(currentMessage, folder); err != nil {
 					mm.logger.Error("Failed to process message", "error", err)
+					failed++
 				} else {
 					messageCount++
 				}
@@ -565,6 +578,7 @@ func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
 				// Process last message
 				if err := mm.processMBOXMessage(currentMessage, folder); err != nil {
 					mm.logger.Error("Failed to process message", "error", err)
+					failed++
 				} else {
 					messageCount++
 				}
@@ -574,6 +588,9 @@ func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
 	}
 
 	fmt.Printf("  Imported %d messages\n", messageCount)
+	if failed > 0 {
+		return fmt.Errorf("%d message(s) could not be imported (%d imported)", failed, messageCount)
+	}
 	return nil
 }
 
@@ -585,6 +602,7 @@ func (mm *MigrationManager) processMBOXMessage(data []byte, folder string) error
 		lines = lines[1:]
 	}
 
+	unescapeMboxFrom(lines)
 	// Reconstruct message
 	messageData := []byte(strings.Join(lines, "\n"))
 
@@ -596,7 +614,7 @@ func (mm *MigrationManager) processMBOXMessage(data []byte, folder string) error
 
 	// Store message if we have a valid target
 	if mm.msgStore != nil {
-		msgID, err := mm.msgStore.StoreMessage(targetUser, messageData)
+		msgID, err := mm.storeCharged(targetUser, messageData)
 		if err != nil {
 			return fmt.Errorf("failed to store message: %w", err)
 		}
@@ -618,6 +636,49 @@ func (mm *MigrationManager) extractTargetUser(_, folder string) string {
 	}
 
 	return "unknown"
+}
+
+// storeCharged stores an imported message through the same quota path as
+// delivery (F7271): a blob the user already holds costs nothing (so repeated
+// imports are idempotent), otherwise the account's quota is reserved first and
+// released again if the store fails. Users without an account row (the
+// mailbox is addressed by a bare name) have no quota to charge.
+func (mm *MigrationManager) storeCharged(user string, data []byte) (string, error) {
+	if mm.db == nil || mm.msgStore == nil {
+		return mm.msgStore.StoreMessage(user, data)
+	}
+	local, domain := parseEmail(user)
+	if domain == "" {
+		return mm.msgStore.StoreMessage(user, data)
+	}
+	if acc, err := mm.db.GetAccount(domain, local); err != nil || acc == nil {
+		return mm.msgStore.StoreMessage(user, data)
+	}
+	reserved := int64(len(data))
+	if sum := sha256.Sum256(data); mm.msgStore.MessageExists(user, hex.EncodeToString(sum[:])) {
+		reserved = 0
+	}
+	if reserved > 0 {
+		if err := mm.db.IncrementQuota(domain, local, reserved); err != nil {
+			return "", fmt.Errorf("quota exceeded for user %s: %w", user, err)
+		}
+	}
+	id, err := mm.msgStore.StoreMessage(user, data)
+	if err != nil && reserved > 0 {
+		_ = mm.db.IncrementQuota(domain, local, -reserved)
+	}
+	return id, err
+}
+
+// unescapeMboxFrom undoes mboxrd quoting: a body line made of one or more ">"
+// followed by "From " loses one ">" (F7270).
+func unescapeMboxFrom(lines []string) {
+	for i, l := range lines {
+		t := strings.TrimLeft(l, ">")
+		if len(t) < len(l) && strings.HasPrefix(t, "From ") {
+			lines[i] = l[1:]
+		}
+	}
 }
 
 // parseEmail splits an email address into user and domain

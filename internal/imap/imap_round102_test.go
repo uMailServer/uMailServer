@@ -2,6 +2,7 @@ package imap
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -69,11 +70,21 @@ func TestRound102MultiappendAtomicQuota(t *testing.T) {
 	}
 }
 
-// F5841: a failure part-way (invalid UTF-8 in the 2nd message) rolls back the 1st.
+// F5841: a failure part-way (storage error on the 2nd message) rolls back the 1st.
 func TestRound102MultiappendRollbackOnFailure(t *testing.T) {
-	c, _ := round82Server(t)
+	c, ms := round82Server(t)
 	good := round91Msg("one", 300)
-	bad := "Subject: x\r\n\r\n\xff\xfe\r\n"
+	bad := round91Msg("two", 300)
+	calls := 0
+	ms.SetQuotaAdjustFunc(func(_ string, delta int64) error {
+		if delta > 0 {
+			calls++
+			if calls == 2 {
+				return errors.New("injected storage failure")
+			}
+		}
+		return nil
+	})
 	got := round75Tagged(round102Multi(t, c, "m1", "INBOX", good, bad))
 	if !strings.HasPrefix(got, "m1 NO") {
 		t.Fatalf("expected NO, got %q", got)

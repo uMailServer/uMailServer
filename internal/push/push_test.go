@@ -74,8 +74,8 @@ func TestSubscribe(t *testing.T) {
 
 	sub := &Subscription{
 		Endpoint: "https://fcm.googleapis.com/fcm/send/test",
-		P256dh:   "test-p256dh-key",
-		Auth:     "test-auth-secret",
+		P256dh:   testP256dh,
+		Auth:     testAuth,
 		DeviceInfo: DeviceInfo{
 			DeviceType: "mobile",
 			OS:         "Android",
@@ -109,8 +109,8 @@ func TestSubscribe_WithID(t *testing.T) {
 	sub := &Subscription{
 		ID:       "existing-id",
 		Endpoint: "https://fcm.googleapis.com/fcm/send/test",
-		P256dh:   "test-p256dh-key",
-		Auth:     "test-auth-secret",
+		P256dh:   testP256dh,
+		Auth:     testAuth,
 	}
 
 	err := service.Subscribe("user@example.com", sub)
@@ -137,8 +137,8 @@ func TestGetUserSubscriptions(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		sub := &Subscription{
 			Endpoint: "https://fcm.googleapis.com/fcm/send/test-" + string(rune('a'+i)),
-			P256dh:   "test-key",
-			Auth:     "test-auth",
+			P256dh:   testP256dh,
+			Auth:     testAuth,
 		}
 		_ = service.Subscribe("user@example.com", sub)
 	}
@@ -157,8 +157,8 @@ func TestUnsubscribe(t *testing.T) {
 	sub := &Subscription{
 		ID:       "test-sub-id",
 		Endpoint: "https://fcm.googleapis.com/fcm/send/test",
-		P256dh:   "test-key",
-		Auth:     "test-auth",
+		P256dh:   testP256dh,
+		Auth:     testAuth,
 	}
 	_ = service.Subscribe("user@example.com", sub)
 
@@ -198,8 +198,8 @@ func TestUnsubscribe_WrongUser(t *testing.T) {
 	sub := &Subscription{
 		ID:       "test-sub-id",
 		Endpoint: "https://fcm.googleapis.com/fcm/send/test",
-		P256dh:   "test-key",
-		Auth:     "test-auth",
+		P256dh:   testP256dh,
+		Auth:     testAuth,
 	}
 	_ = service.Subscribe("user@example.com", sub)
 
@@ -217,8 +217,8 @@ func TestUpdateDeviceInfo(t *testing.T) {
 	sub := &Subscription{
 		ID:       "test-sub-id",
 		Endpoint: "https://fcm.googleapis.com/fcm/send/test",
-		P256dh:   "test-key",
-		Auth:     "test-auth",
+		P256dh:   testP256dh,
+		Auth:     testAuth,
 		DeviceInfo: DeviceInfo{
 			DeviceType: "mobile",
 			OS:         "Android",
@@ -257,8 +257,8 @@ func TestCleanExpiredSubscriptions(t *testing.T) {
 	recentSub := &Subscription{
 		ID:        "recent-sub",
 		Endpoint:  "https://fcm.googleapis.com/fcm/send/recent",
-		P256dh:    "test-key",
-		Auth:      "test-auth",
+		P256dh:    testP256dh,
+		Auth:      testAuth,
 		UpdatedAt: time.Now(),
 	}
 	service.Subscribe("user@example.com", recentSub)
@@ -268,8 +268,8 @@ func TestCleanExpiredSubscriptions(t *testing.T) {
 		ID:        "expired-sub",
 		UserID:    "user@example.com",
 		Endpoint:  "https://fcm.googleapis.com/fcm/send/expired",
-		P256dh:    "test-key",
-		Auth:      "test-auth",
+		P256dh:    testP256dh,
+		Auth:      testAuth,
 		UpdatedAt: time.Now().Add(-100 * 24 * time.Hour), // 100 days ago
 	}
 	service.mu.Lock()
@@ -302,20 +302,20 @@ func TestGetStats(t *testing.T) {
 	subs := []*Subscription{
 		{
 			Endpoint:   "https://fcm.googleapis.com/fcm/send/1",
-			P256dh:     "key1",
-			Auth:       "auth1",
+			P256dh:     testP256dh,
+			Auth:       testAuth,
 			DeviceInfo: DeviceInfo{DeviceType: "mobile", OS: "Android"},
 		},
 		{
 			Endpoint:   "https://fcm.googleapis.com/fcm/send/2",
-			P256dh:     "key2",
-			Auth:       "auth2",
+			P256dh:     testP256dh,
+			Auth:       testAuth,
 			DeviceInfo: DeviceInfo{DeviceType: "mobile", OS: "iOS"},
 		},
 		{
 			Endpoint:   "https://fcm.googleapis.com/fcm/send/3",
-			P256dh:     "key3",
-			Auth:       "auth3",
+			P256dh:     testP256dh,
+			Auth:       testAuth,
 			DeviceInfo: DeviceInfo{DeviceType: "desktop", OS: "Windows"},
 		},
 	}
@@ -469,7 +469,7 @@ func TestSendNewMailNotification(t *testing.T) {
 	sub := &Subscription{
 		Endpoint: "https://invalid.endpoint.test/404",
 		P256dh:   "test-p256dh",
-		Auth:     "test-auth",
+		Auth:     testAuth,
 	}
 	_ = service.Subscribe("user@example.com", sub)
 
@@ -506,7 +506,7 @@ func TestLoadSubscriptions_VariousFiles(t *testing.T) {
 		UserID:    "user@example.com",
 		Endpoint:  "https://example.com/push",
 		P256dh:    "test-p256dh",
-		Auth:      "test-auth",
+		Auth:      testAuth,
 		CreatedAt: time.Now(),
 	}
 	service1.Subscribe("user@example.com", sub)
@@ -730,8 +730,8 @@ func TestUnsubscribe_DeleteFileError(t *testing.T) {
 	sub := &Subscription{
 		ID:       "test-sub-delete",
 		Endpoint: "https://example.com/push",
-		P256dh:   "test-key",
-		Auth:     "test-auth",
+		P256dh:   testP256dh,
+		Auth:     testAuth,
 	}
 	_ = service.Subscribe("user@example.com", sub)
 
@@ -769,8 +769,8 @@ func TestCleanExpiredSubscriptions_MultiUser(t *testing.T) {
 		sub := &Subscription{
 			ID:        fmt.Sprintf("multi-sub-%d", i),
 			Endpoint:  fmt.Sprintf("https://example.com/push%d", i),
-			P256dh:    "test-key",
-			Auth:      "test-auth",
+			P256dh:    testP256dh,
+			Auth:      testAuth,
 			UpdatedAt: time.Now(),
 		}
 		service.Subscribe(user, sub)
@@ -781,8 +781,8 @@ func TestCleanExpiredSubscriptions_MultiUser(t *testing.T) {
 		ID:        "expired-multi",
 		UserID:    "user1@example.com",
 		Endpoint:  "https://example.com/expired",
-		P256dh:    "test-key",
-		Auth:      "test-auth",
+		P256dh:    testP256dh,
+		Auth:      testAuth,
 		UpdatedAt: time.Now().Add(-100 * 24 * time.Hour),
 	}
 	service.mu.Lock()

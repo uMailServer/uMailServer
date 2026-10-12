@@ -123,7 +123,7 @@ func TestSaveSubscription_MarshalError(t *testing.T) {
 		UserID:   "user@example.com",
 		Endpoint: "https://example.com/push",
 		P256dh:   "test-p256dh",
-		Auth:     "test-auth",
+		Auth:     testAuth,
 	}
 
 	err := service.saveSubscription(sub)
@@ -233,7 +233,7 @@ func TestSendNotification_NoQueue(t *testing.T) {
 		UserID:   "user@example.com",
 		Endpoint: "https://example.com/push",
 		P256dh:   "test-p256dh",
-		Auth:     "test-auth",
+		Auth:     testAuth,
 	}
 
 	notification := &Notification{

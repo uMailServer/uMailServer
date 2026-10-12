@@ -69,14 +69,14 @@ func TestF5760_EndpointValidation(t *testing.T) {
 		"https://100.64.0.1/x", "ftp://x.example.com", "https:///x",
 	}
 	for _, ep := range bad {
-		if err := svc.Subscribe("u", &Subscription{Endpoint: ep}); err == nil {
+		if err := svc.Subscribe("u", &Subscription{Endpoint: ep, P256dh: testP256dh, Auth: testAuth}); err == nil {
 			t.Errorf("Subscribe accepted %q", ep)
 		}
 		if err := svc.SendNotification(&Subscription{ID: "x", UserID: "u", Endpoint: ep}, &Notification{Title: "t"}); err == nil {
 			t.Errorf("SendNotification accepted %q", ep)
 		}
 	}
-	if err := svc.Subscribe("u", &Subscription{Endpoint: "https://fcm.googleapis.com/fcm/send/a"}); err != nil {
+	if err := svc.Subscribe("u", &Subscription{Endpoint: "https://fcm.googleapis.com/fcm/send/a", P256dh: testP256dh, Auth: testAuth}); err != nil {
 		t.Errorf("valid endpoint rejected: %v", err)
 	}
 }
@@ -92,20 +92,20 @@ func TestF5760_DialerBlocksLoopback(t *testing.T) {
 // F5761/F5762: IDs are validated and cannot hijack another user's record.
 func TestF5761_F5762_SubscriptionID(t *testing.T) {
 	svc := newSvc(t)
-	if err := svc.Subscribe("u", &Subscription{ID: "../evil", Endpoint: "https://a.example.com/1"}); err == nil {
+	if err := svc.Subscribe("u", &Subscription{ID: "../evil", Endpoint: "https://a.example.com/1", P256dh: testP256dh, Auth: testAuth}); err == nil {
 		t.Error("path traversal ID accepted")
 	}
-	if err := svc.Subscribe("alice", &Subscription{ID: "s1", Endpoint: "https://a.example.com/1"}); err != nil {
+	if err := svc.Subscribe("alice", &Subscription{ID: "s1", Endpoint: "https://a.example.com/1", P256dh: testP256dh, Auth: testAuth}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Subscribe("bob", &Subscription{ID: "s1", Endpoint: "https://a.example.com/2"}); err == nil {
+	if err := svc.Subscribe("bob", &Subscription{ID: "s1", Endpoint: "https://a.example.com/2", P256dh: testP256dh, Auth: testAuth}); err == nil {
 		t.Error("bob overwrote alice's subscription ID")
 	}
 	if got := svc.GetUserSubscriptions("alice"); len(got) != 1 || got[0].Endpoint != "https://a.example.com/1" {
 		t.Errorf("alice's subscription damaged: %+v", got)
 	}
 	// Same-user re-subscribe with same ID must not duplicate userSubs.
-	if err := svc.Subscribe("alice", &Subscription{ID: "s1", Endpoint: "https://a.example.com/3"}); err != nil {
+	if err := svc.Subscribe("alice", &Subscription{ID: "s1", Endpoint: "https://a.example.com/3", P256dh: testP256dh, Auth: testAuth}); err != nil {
 		t.Fatal(err)
 	}
 	if got := svc.GetUserSubscriptions("alice"); len(got) != 1 {
@@ -118,7 +118,7 @@ func TestF5763_SaveFailureRollsBack(t *testing.T) {
 	dir := t.TempDir()
 	svc, _ := NewService(dir, nil)
 	svc.dataDir = filepath.Join(dir, "missing", "nested")
-	if err := svc.Subscribe("u", &Subscription{Endpoint: "https://a.example.com/1"}); err == nil {
+	if err := svc.Subscribe("u", &Subscription{Endpoint: "https://a.example.com/1", P256dh: testP256dh, Auth: testAuth}); err == nil {
 		t.Fatal("expected save error")
 	}
 	if n := len(svc.GetUserSubscriptions("u")); n != 0 {
@@ -129,7 +129,7 @@ func TestF5763_SaveFailureRollsBack(t *testing.T) {
 // F5764: returned subscriptions are copies (race with UpdateDeviceInfo).
 func TestF5764_NoRaceOnReturnedSubscriptions(t *testing.T) {
 	svc := newSvc(t)
-	_ = svc.Subscribe("u", &Subscription{ID: "s", Endpoint: "https://a.example.com/1"})
+	_ = svc.Subscribe("u", &Subscription{ID: "s", Endpoint: "https://a.example.com/1", P256dh: testP256dh, Auth: testAuth})
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -257,7 +257,7 @@ func TestF5768_SendToUserConcurrent(t *testing.T) {
 
 func TestF5769_UserEntryRemovedAndAtomicPersist(t *testing.T) {
 	svc := newSvc(t)
-	_ = svc.Subscribe("u", &Subscription{ID: "s", Endpoint: "https://a.example.com/1"})
+	_ = svc.Subscribe("u", &Subscription{ID: "s", Endpoint: "https://a.example.com/1", P256dh: testP256dh, Auth: testAuth})
 	data, err := os.ReadFile(filepath.Join(svc.dataDir, "sub_s.json"))
 	if err != nil || !json.Valid(data) {
 		t.Fatalf("persisted file bad: %v", err)

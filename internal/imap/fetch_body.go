@@ -21,7 +21,8 @@ type bodySectionItem struct {
 	section string // upper-cased section spec as echoed in the response
 	partial bool
 	origin  int
-	count   int // -1 = to the end
+	echo    uint32 // origin exactly as the client sent it (F7231)
+	count   int    // -1 = to the end
 }
 
 // parseBodySectionItem recognises BODY[...] / BODY.PEEK[...] items.
@@ -56,7 +57,7 @@ func parseBodySectionItem(item string) (bodySectionItem, bool) {
 		if err != nil {
 			return it, false
 		}
-		it.partial, it.origin = true, int(min(origin, math.MaxInt32))
+		it.partial, it.origin, it.echo = true, int(min(origin, math.MaxInt32)), uint32(origin)
 		if hasCount {
 			count, err := strconv.ParseUint(countStr, 10, 32)
 			if err != nil {
@@ -73,7 +74,7 @@ func (it bodySectionItem) format(data []byte) string {
 	b := bodySection(data, it.section)
 	name := "BODY[" + it.section + "]"
 	if it.partial {
-		name += fmt.Sprintf("<%d>", it.origin)
+		name += fmt.Sprintf("<%d>", it.echo)
 		if it.origin >= len(b) {
 			b = nil
 		} else {

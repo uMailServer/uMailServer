@@ -84,14 +84,14 @@ func TestSubscribeAtCapDoesNotEvictOtherUsersEndpoint_F6637(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < MaxSubscriptionsPerUser; i++ {
-		if err := svc.Subscribe("a", &Subscription{Endpoint: fmt.Sprintf("https://p.example.invalid/a%d", i)}); err != nil {
+		if err := svc.Subscribe("a", &Subscription{Endpoint: fmt.Sprintf("https://p.example.invalid/a%d", i), P256dh: testP256dh, Auth: testAuth}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := svc.Subscribe("b", &Subscription{ID: "bsub", Endpoint: "https://p.example.invalid/shared"}); err != nil {
+	if err := svc.Subscribe("b", &Subscription{ID: "bsub", Endpoint: "https://p.example.invalid/shared", P256dh: testP256dh, Auth: testAuth}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Subscribe("a", &Subscription{Endpoint: "https://p.example.invalid/shared"}); err == nil {
+	if err := svc.Subscribe("a", &Subscription{Endpoint: "https://p.example.invalid/shared", P256dh: testP256dh, Auth: testAuth}); err == nil {
 		t.Fatal("expected cap rejection")
 	}
 	if len(svc.GetUserSubscriptions("b")) != 1 {
@@ -101,7 +101,7 @@ func TestSubscribeAtCapDoesNotEvictOtherUsersEndpoint_F6637(t *testing.T) {
 		t.Fatal("user a count changed")
 	}
 	// Re-registering an own endpoint at cap is a replace, not growth.
-	if err := svc.Subscribe("a", &Subscription{Endpoint: "https://p.example.invalid/a0"}); err != nil {
+	if err := svc.Subscribe("a", &Subscription{Endpoint: "https://p.example.invalid/a0", P256dh: testP256dh, Auth: testAuth}); err != nil {
 		t.Fatalf("replace at cap rejected: %v", err)
 	}
 }
@@ -117,7 +117,7 @@ func TestConcurrentSubscribeRespectsCap_F6637(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_ = svc.Subscribe("u", &Subscription{Endpoint: fmt.Sprintf("https://p.example.invalid/%d", i)})
+			_ = svc.Subscribe("u", &Subscription{Endpoint: fmt.Sprintf("https://p.example.invalid/%d", i), P256dh: testP256dh, Auth: testAuth})
 		}(i)
 	}
 	wg.Wait()

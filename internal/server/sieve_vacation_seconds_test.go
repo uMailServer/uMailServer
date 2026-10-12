@@ -31,12 +31,12 @@ func TestSieveVacationSecondsZeroRepliesToEveryMessage(t *testing.T) {
 	srv := junkRTServer(t, true)
 	sieveDTScript(t, srv, "alice@test.com", "require [\"vacation-seconds\"];\nvacation :seconds 0 \"ack\";\n")
 
-	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, junkRTClean)
+	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, sieveVacMsg("alice@test.com", ""))
 	if got := sieveVacReplies(t, srv); got != 1 {
 		t.Fatalf("CONTROL FAILED (harness): first :seconds 0 delivery queued %d replies, want 1", got)
 	}
 
-	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, junkRTClean)
+	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, sieveVacMsg("alice@test.com", ""))
 	if got := sieveVacReplies(t, srv); got != 2 {
 		t.Fatalf("FAIL: :seconds 0 must reply to every message (RFC 6131 §2), got %d replies after 2 deliveries — the script's :seconds window is being ignored", got)
 	}
@@ -49,14 +49,14 @@ func TestSieveVacationSecondsWindowHonored(t *testing.T) {
 	srv := junkRTServer(t, true)
 	sieveDTScript(t, srv, "alice@test.com", "require [\"vacation-seconds\"];\nvacation :seconds 1 \"brb\";\n")
 
-	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, junkRTClean)
+	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, sieveVacMsg("alice@test.com", ""))
 	if got := sieveVacReplies(t, srv); got != 1 {
 		t.Fatalf("CONTROL FAILED (harness): first delivery queued %d replies, want 1", got)
 	}
 
 	time.Sleep(1400 * time.Millisecond) // bounded real wait; the 1s window must have elapsed (waits only overshoot)
 
-	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, junkRTClean)
+	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, sieveVacMsg("alice@test.com", ""))
 	if got := sieveVacReplies(t, srv); got != 2 {
 		t.Fatalf("FAIL: :seconds 1 window ignored — after 1.4s got %d replies, want 2 (the 7-day days-form gate would suppress)", got)
 	}
@@ -73,8 +73,8 @@ func TestSieveVacationDaysFormSuppressionKept(t *testing.T) {
 	srv := junkRTServer(t, true)
 	sieveDTScript(t, srv, "alice@test.com", "require [\"vacation\"];\nvacation :days 7 \"ooo\";\n")
 
-	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, junkRTClean)
-	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, junkRTClean)
+	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, sieveVacMsg("alice@test.com", ""))
+	sieveDTSend(t, srv, sieveVacSender, []string{"alice@test.com"}, sieveVacMsg("alice@test.com", ""))
 	if got := sieveVacReplies(t, srv); got != 1 {
 		t.Fatalf("CONTROL FAILED: :days 7 suppression broken: %d replies, want 1", got)
 	}

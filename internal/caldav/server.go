@@ -1039,22 +1039,6 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	// RFC 4791 §5.3.2.1 no-uid-conflict: a UID may live in one resource only.
-	if bodyUID != "" {
-		other, cerr := s.storage.FindUIDConflict(username, calendarID, bodyUID, uid)
-		if cerr != nil {
-			s.sendError(w, http.StatusInternalServerError, "failed to read calendar")
-			return
-		}
-		if other != "" {
-			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(xml.Header + `<d:error xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><c:no-uid-conflict>` +
-				davHref((&url.URL{Path: "/dav/calendars/" + calendarID + "/" + other}).EscapedPath()) + `</c:no-uid-conflict></d:error>`))
-			return
-		}
-	}
-
 	existing, err := s.storage.GetEvent(username, calendarID, uid)
 	if err != nil {
 		s.logger.Error("Failed to read event", "error", err)
@@ -1069,6 +1053,22 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	if !preconditionsHold(r, existing != "", currentETag) {
 		s.sendError(w, http.StatusPreconditionFailed, "precondition failed")
 		return
+	}
+
+	// RFC 4791 §5.3.2.1 no-uid-conflict: a UID may live in one resource only.
+	if bodyUID != "" {
+		other, cerr := s.storage.FindUIDConflict(username, calendarID, bodyUID, uid)
+		if cerr != nil {
+			s.sendError(w, http.StatusInternalServerError, "failed to read calendar")
+			return
+		}
+		if other != "" {
+			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(xml.Header + `<d:error xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><c:no-uid-conflict>` +
+				davHref((&url.URL{Path: "/dav/calendars/" + calendarID + "/" + other}).EscapedPath()) + `</c:no-uid-conflict></d:error>`))
+			return
+		}
 	}
 
 	// Create event
@@ -1088,6 +1088,10 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request, username stri
 	// Set ETag header
 	if etag := s.storage.GetETag(username, calendarID, uid); etag != "" {
 		w.Header().Set("ETag", etag)
+	}
+	if existing != "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 	w.WriteHeader(http.StatusCreated)
 }

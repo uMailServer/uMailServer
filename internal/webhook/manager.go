@@ -50,6 +50,11 @@ type Manager struct {
 	backoffMax  time.Duration
 	maxTotal    time.Duration // total delivery budget (all attempts + backoffs)
 	secretMu    sync.RWMutex  // guards secret (rotation)
+
+	wg           sync.WaitGroup // in-flight deliveries (F7200)
+	drainTimeout time.Duration  // bound on Stop waiting for in-flight deliveries
+	dnsTimeout   time.Duration  // bound on the validation-time DNS lookup (F7201)
+	lookupIP     func(ctx context.Context, host string) ([]net.IP, error)
 }
 
 const (
@@ -67,7 +72,22 @@ const (
 // Stop aborts pending retry backoffs and refuses new deliveries. It is
 // idempotent.
 func (m *Manager) Stop() {
-	m.stopOnce.Do(func() { close(m.stopCh) })
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+		// Trigger registers deliveries under m.mu after checking stopCh, so
+		// once this lock cycles no new wg.Add can race with Wait below.
+		m.mu.Lock()
+		m.mu.Unlock() //nolint:staticcheck // barrier only
+	})
+	done := make(chan struct{})
+	go func() { m.wg.Wait(); close(done) }()
+	t := time.NewTimer(m.drainTimeout)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		log.Printf("webhook: Stop timed out waiting for in-flight deliveries")
+	}
 }
 
 // DroppedDeliveries returns how many deliveries were dropped because the
@@ -288,6 +308,16 @@ func NewManager(database *db.DB, secret string) *Manager {
 		backoffBase:    time.Second,
 		backoffMax:     30 * time.Second,
 		maxTotal:       defaultMaxTotal,
+		drainTimeout:   10 * time.Second,
+		dnsTimeout:     5 * time.Second,
+		lookupIP: func(ctx context.Context, host string) ([]net.IP, error) {
+			addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			ips := make([]net.IP, 0, len(addrs))
+			for _, a := range addrs {
+				ips = append(ips, a.IP)
+			}
+			return ips, err
+		},
 	}
 	// The SSRF guard is enforced again on the address actually dialed
 	// (F5175/F5176): isValidWebhookURL resolves the host once, but the
@@ -336,17 +366,18 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 		Data:      data,
 	}
 
+	// The read lock is held while deliveries are registered with the
+	// WaitGroup so Stop's lock barrier orders every Add before its Wait.
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	select {
 	case <-m.stopCh:
 		m.dropped.Add(1)
 		return
 	default:
 	}
-
-	m.mu.RLock()
 	hooks := make([]*Webhook, len(m.hooks))
 	copy(hooks, m.hooks)
-	m.mu.RUnlock()
 
 	// Send asynchronously with semaphore to limit concurrent deliveries
 	for _, hook := range hooks {
@@ -359,7 +390,9 @@ func (m *Manager) Trigger(eventType string, data interface{}) {
 		// Acquire semaphore to limit concurrent webhook deliveries
 		select {
 		case m.sem <- struct{}{}:
+			m.wg.Add(1)
 			go func(h *Webhook, e Event) {
+				defer m.wg.Done()
 				defer func() { <-m.sem }() // Release semaphore when done
 				m.send(h, e)
 			}(hook, event)
@@ -588,7 +621,9 @@ func (m *Manager) isValidWebhookURL(rawURL string) (bool, string) {
 
 	// DNS rebinding protection: Resolve hostname at validation time
 	// This prevents attackers from changing DNS records after validation
-	ips, err := net.LookupIP(hostname)
+	ctx, cancel := context.WithTimeout(context.Background(), m.dnsTimeout)
+	defer cancel()
+	ips, err := m.lookupIP(ctx, hostname)
 	if err != nil || len(ips) == 0 {
 		return false, ""
 	}

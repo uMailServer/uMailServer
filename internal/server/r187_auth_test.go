@@ -116,7 +116,9 @@ func TestR187_CaseInsensitiveLogin(t *testing.T) {
 	variants := []string{"BOB@TEST.COM", "Bob@Test.Com"}
 	for _, v := range variants {
 		// SMTP AUTH via submission with mixed-case user and recipient.
-		e.submit(v, e.password, v, []string{v}, strings.Replace(e2eMsg, "<e2e1@", "<c"+fmt.Sprint(len(v))+v[:2]+"@", 1))
+		// F7265: the From header must belong to the authenticated user.
+		msg := strings.Replace(e2eMsg, "From: alice@test.com", "From: "+v, 1)
+		e.submit(v, e.password, v, []string{v}, strings.Replace(msg, "<e2e1@", "<c"+fmt.Sprint(len(v))+v[:2]+"@", 1))
 		// IMAP
 		ic := e2eDial(t, e.imap, true)
 		ic.line()
