@@ -30,3 +30,34 @@ export function forwardBody(from: string, date: string, subject: string, to: str
   const text = (/<\s*(?:p|div|br|html|body|table)\b/i.test(body) ? stripTags(body) : body).replace(/\r\n/g, "\n").trim()
   return `\n\n---------- Forwarded message ----------\nFrom: ${from}\nDate: ${date}\nSubject: ${subject}\nTo: ${to.join(", ")}\n\n${text}\n`
 }
+
+/** Bare lower-cased-for-compare address from "Name <a@b>" or "a@b". */
+function bareAddress(s: string): string {
+  const m = /<([^<>]+)>/.exec(s)
+  return (m ? m[1] : s).trim()
+}
+
+/**
+ * Reply-all recipients: To = sender + original To, Cc = original Cc, with the
+ * caller's own address removed and case-insensitive de-duplication
+ * (a recipient already in To is not repeated in Cc).
+ */
+export function replyAllRecipients(
+  from: string, to: string[] | undefined, cc: string[] | undefined, me: string | undefined,
+): { to: string[]; cc: string[] } {
+  const self = bareAddress(me || "").toLowerCase()
+  const seen = new Set<string>()
+  const pick = (list: string[]) => {
+    const out: string[] = []
+    for (const raw of list) {
+      const a = bareAddress(raw || "")
+      const k = a.toLowerCase()
+      if (!a || !a.includes("@") || k === self || seen.has(k)) continue
+      seen.add(k)
+      out.push(a)
+    }
+    return out
+  }
+  const toOut = pick([from, ...(to || [])])
+  return { to: toOut, cc: pick(cc || []) }
+}

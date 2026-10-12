@@ -433,7 +433,7 @@ func (c *LDAPClient) Authenticate(username, password string) (*LDAPUser, error) 
 	sr, err := conn.Search(searchRequest)
 	if err != nil {
 		c.pool.discard(conn)
-		slog.Error("ldap search failed", "error", err, "filter", filter)
+		slog.Error("ldap search failed", "error", err)
 		return nil, fmt.Errorf("user search failed")
 	}
 
@@ -557,11 +557,10 @@ func (c *LDAPClient) GetUser(username string) (*LDAPUser, error) {
 	}
 	c.pool.release(conn)
 
-	if len(sr.Entries) == 0 {
-		return nil, fmt.Errorf("user not found")
+	entry, err := singleLDAPEntry(sr.Entries)
+	if err != nil {
+		return nil, err
 	}
-
-	entry := sr.Entries[0]
 	user := &LDAPUser{
 		DN:          entry.DN,
 		Username:    username,
@@ -583,6 +582,19 @@ func (c *LDAPClient) GetUser(username string) (*LDAPUser, error) {
 	}
 
 	return user, nil
+}
+
+// singleLDAPEntry fails closed unless the search matched exactly one entry:
+// an ambiguous filter must not resolve to an arbitrary account (F7046).
+func singleLDAPEntry(entries []*ldap.Entry) (*ldap.Entry, error) {
+	switch len(entries) {
+	case 0:
+		return nil, fmt.Errorf("user not found")
+	case 1:
+		return entries[0], nil
+	default:
+		return nil, fmt.Errorf("multiple users found")
+	}
 }
 
 // IsEnabled returns whether LDAP authentication is enabled

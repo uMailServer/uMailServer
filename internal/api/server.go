@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	pathpkg "path"
@@ -434,6 +436,7 @@ func (s *Server) initRouter() {
 	// Authentication
 	mux.Handle("/api/v1/auth/login", s.limitBodyMiddleware(http.HandlerFunc(s.handleLogin)))
 	mux.Handle("/api/v1/account/password", s.limitBodyMiddleware(s.authMiddleware(http.HandlerFunc(s.handleAccountPassword))))
+	mux.Handle("/api/v1/account", s.limitBodyMiddleware(s.authMiddleware(http.HandlerFunc(s.handleSelfDelete))))
 	mux.Handle("/api/v1/account/totp", s.limitBodyMiddleware(s.authMiddleware(s.handleSelfTOTP(s.handleTOTPStatus))))
 	mux.Handle("/api/v1/account/totp/setup", s.limitBodyMiddleware(s.authMiddleware(s.handleSelfTOTP(s.handleTOTPSetup))))
 	mux.Handle("/api/v1/account/totp/verify", s.limitBodyMiddleware(s.authMiddleware(s.handleSelfTOTP(s.handleTOTPVerify))))
@@ -528,6 +531,7 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/delete", http.HandlerFunc(s.mailHandler.handleMailDelete).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/move", http.HandlerFunc(s.mailHandler.handleMailMove).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/message", http.HandlerFunc(s.mailHandler.handleMailMessage).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/attachment", http.HandlerFunc(s.mailHandler.handleMailAttachment).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/flags", http.HandlerFunc(s.mailHandler.handleMailFlags).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/draft", http.HandlerFunc(s.mailHandler.handleMailDraft).ServeHTTP)
 
@@ -730,12 +734,57 @@ func (s *Server) activeRequests() int {
 	return 0
 }
 
+// errUnsupportedMediaType is returned by decodeJSON when a request body is
+// present but declared with a non-JSON Content-Type (F7000).
+var errUnsupportedMediaType = errors.New("Content-Type must be application/json")
+
 // decodeJSON decodes JSON from request body with DisallowUnknownFields
-// to reject requests with unknown fields
+// to reject requests with unknown fields.
 func decodeJSON(r *http.Request, v interface{}) error {
+	return decodeJSONWith(r, v, true)
+}
+
+// decodeJSONWith is the single JSON body decoder. A body declared with a
+// non-JSON Content-Type yields errUnsupportedMediaType (415); a missing
+// Content-Type is tolerated for compatibility. Callers map the error with
+// jsonErrStatus/jsonErrMsg so oversized bodies (http.MaxBytesReader) are 413.
+func decodeJSONWith(r *http.Request, v interface{}, strict bool) error {
+	if ct := r.Header.Get("Content-Type"); ct != "" && r.ContentLength != 0 {
+		mt, _, err := mime.ParseMediaType(ct)
+		if err != nil || (mt != "application/json" && !strings.HasSuffix(mt, "+json")) {
+			return errUnsupportedMediaType
+		}
+	}
 	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
+	if strict {
+		decoder.DisallowUnknownFields()
+	}
 	return decoder.Decode(v)
+}
+
+// jsonErrStatus maps a decodeJSON error to its HTTP status: 415 for a wrong
+// Content-Type, 413 for an oversized body, 400 otherwise.
+func jsonErrStatus(err error) int {
+	var mbe *http.MaxBytesError
+	switch {
+	case errors.Is(err, errUnsupportedMediaType):
+		return http.StatusUnsupportedMediaType
+	case errors.As(err, &mbe):
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
+}
+
+// jsonErrMsg returns the client message for a decodeJSON error, falling back
+// to the handler's own 400 message.
+func jsonErrMsg(err error, fallback string) string {
+	switch jsonErrStatus(err) {
+	case http.StatusUnsupportedMediaType:
+		return errUnsupportedMediaType.Error()
+	case http.StatusRequestEntityTooLarge:
+		return "Request body too large"
+	}
+	return fallback
 }
 
 // Middleware

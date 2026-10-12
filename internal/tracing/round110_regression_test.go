@@ -6,7 +6,7 @@ import (
 )
 
 func TestR110_DisabledStartSpanDoesNotEndParent(t *testing.T) {
-	on, err := NewProvider(Config{Enabled: true, Exporter: "noop"})
+	on, err := NewProvider(Config{Enabled: true, SampleRate: 1, Exporter: "noop"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -343,7 +343,6 @@ var ignoredKeys = [][]string{
 	{"server", "force_close_after"},
 	{"spam", "quarantine_threshold"},
 	{"spam", "bayesian", "auto_train"},
-	{"spam", "greylisting", "delay"},
 	{"security", "rate_limit", "imap_connections"},
 	{"tls", "acme", "challenge"},
 	{"tls", "acme", "dns_provider"},

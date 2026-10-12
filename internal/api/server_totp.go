@@ -126,7 +126,7 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request, email 
 		Code string `json:"code"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 
@@ -224,7 +224,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request, email
 			Code string `json:"code"`
 		}
 		if err := decodeJSON(r, &req); err != nil || req.Code == "" {
-			s.sendError(w, http.StatusBadRequest, "current TOTP code required to disable 2FA")
+			s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "current TOTP code required to disable 2FA"))
 			return
 		}
 		if s.isTOTPLockedOut(email) {

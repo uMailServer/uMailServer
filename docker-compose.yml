@@ -26,11 +26,11 @@ services:
       # HTTP API and Web UI
       - "443:443"
     volumes:
-      - umail_data:/data
+      - umail_data:/var/lib/umailserver
       - ./config:/etc/umailserver:ro
     environment:
       - TZ=UTC
-      - UMAILSERVER_SERVER_DATA_DIR=/data
+      - UMAILSERVER_SERVER_DATA_DIR=/var/lib/umailserver
       - UMAILSERVER_SERVER_HOSTNAME=${HOSTNAME:-mail.example.com}
     security_opt:
       - no-new-privileges:true

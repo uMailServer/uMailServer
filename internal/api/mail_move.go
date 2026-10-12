@@ -141,8 +141,8 @@ func (h *MailHandler) handleMailMove(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxMoveBodySize)
 	var req MoveMailRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.sendError(w, http.StatusBadRequest, "Invalid request body")
+	if err := decodeJSONWith(r, &req, false); err != nil {
+		h.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "Invalid request body"))
 		return
 	}
 

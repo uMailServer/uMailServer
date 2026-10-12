@@ -25,11 +25,11 @@ services:
       # Prometheus metrics
       - "8080:8080"
     volumes:
-      - umail_data:/data
+      - umail_data:/var/lib/umailserver
       - ./config/umailserver.yaml:/etc/umailserver/umailserver.yaml:ro
     environment:
       - TZ=UTC
-      - UMAILSERVER_SERVER_DATA_DIR=/data
+      - UMAILSERVER_SERVER_DATA_DIR=/var/lib/umailserver
       - UMAILSERVER_SERVER_HOSTNAME=${UMAILSERVER_HOSTNAME:-mail.example.com}
       # JWT Secret - KEEP THIS SECRET IN PRODUCTION!
       - UMAILSERVER_SECURITY_JWTSECRET=${UMAILSERVER_JWT_SECRET:-}

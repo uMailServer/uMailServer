@@ -585,7 +585,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
-		s.sendError(w, http.StatusBadRequest, "invalid request body")
+		s.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "invalid request body"))
 		return
 	}
 

@@ -27,8 +27,8 @@ tls:
     email: admin@example.com
     provider: letsencrypt          # letsencrypt, zerossl, buypass
     accept_tos: true
-    http_challenge: true           # HTTP-01 challenge
-    tls_alpn: false                # TLS-ALPN-01 challenge
+    challenge: http-01             # accepted; issuance always uses TLS-ALPN-01 on the HTTPS port
+                                   # (no port-80 listener, no DNS-01; use cert_file/key_file otherwise)
 
   # Minimum TLS version
   min_version: "1.2"

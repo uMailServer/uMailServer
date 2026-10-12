@@ -126,7 +126,7 @@ func (h *MailHandler) handleMailMessage(w http.ResponseWriter, r *http.Request) 
 		h.sendError(w, http.StatusBadRequest, "Invalid folder")
 		return
 	}
-	mb, _, _, found := h.findAnywhere(user, folder, id)
+	mb, _, fmeta, found := h.findAnywhere(user, folder, id)
 	if !found {
 		h.sendError(w, http.StatusNotFound, "Email not found")
 		return
@@ -141,7 +141,11 @@ func (h *MailHandler) handleMailMessage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(w, h.draftResponse(user, mb, email))
+	storeID := id
+	if fmeta != nil {
+		storeID = fmeta.MessageID
+	}
+	h.writeJSON(w, h.draftResponse(user, mb, storeID, email))
 }
 
 // handleMailFlags sets or clears system flags on messages of the caller.
@@ -167,7 +171,7 @@ func (h *MailHandler) handleMailFlags(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFlagBodySize)
 	var req FlagsRequest
 	if err := decodeJSON(r, &req); err != nil {
-		h.sendError(w, http.StatusBadRequest, "Invalid request body")
+		h.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "Invalid request body"))
 		return
 	}
 	ids := make([]string, 0, len(req.IDs)+1)
@@ -306,7 +310,7 @@ func (h *MailHandler) handleMailDraft(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxDraftBodySize)
 	var req DraftRequest
 	if err := decodeJSON(r, &req); err != nil {
-		h.sendError(w, http.StatusBadRequest, "Invalid request body")
+		h.sendError(w, jsonErrStatus(err), jsonErrMsg(err, "Invalid request body"))
 		return
 	}
 	if r.Method == http.MethodPut && req.ID == "" {

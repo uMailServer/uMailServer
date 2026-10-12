@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/umailserver/umailserver/internal/audit"
 )
 
 // generateNonce creates a random nonce for CSP
@@ -200,38 +202,10 @@ func (s *Server) ipWhitelistMiddleware(allowedIPs []string) func(http.Handler) h
 // getClientIP extracts the client IP from the request
 // If trustedProxies is set, only trust X-Forwarded-For from those IPs
 func getClientIP(r *http.Request, trustedProxies []string) string {
-	remoteIP := getRemoteAddrIP(r)
-
-	// If trusted proxies are configured, only trust X-Forwarded-For if the request is from a trusted proxy
-	if len(trustedProxies) > 0 {
-		isFromTrustedProxy := false
-		for _, trusted := range trustedProxies {
-			if remoteIP == trusted {
-				isFromTrustedProxy = true
-				break
-			}
-		}
-
-		if isFromTrustedProxy {
-			// Only respect X-Forwarded-For from trusted proxies
-			xff := r.Header.Get("X-Forwarded-For")
-			if xff != "" {
-				ips := strings.Split(xff, ",")
-				if len(ips) > 0 {
-					return strings.TrimSpace(ips[0])
-				}
-			}
-
-			// Also check X-Real-Ip from trusted proxy
-			xri := r.Header.Get("X-Real-Ip")
-			if xri != "" {
-				return xri
-			}
-		}
+	if len(trustedProxies) == 0 {
+		return getRemoteAddrIP(r)
 	}
-
-	// No trusted proxies configured or request not from trusted proxy - use RemoteAddr
-	return remoteIP
+	return audit.ClientIP(r, trustedProxies)
 }
 
 // getRemoteAddrIP extracts the IP from RemoteAddr without port

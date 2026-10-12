@@ -43,6 +43,7 @@ func TestNewProvider_Enabled(t *testing.T) {
 func TestProvider_StartSpan(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -93,6 +94,7 @@ func TestProvider_StartSpan_Disabled(t *testing.T) {
 func TestProvider_StartSpanWithKind(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -129,6 +131,7 @@ func TestSpanFromContext_NoSpan(t *testing.T) {
 func TestContextWithSpan(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -156,6 +159,7 @@ func TestContextWithSpan(t *testing.T) {
 func TestSetAttributes(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -187,6 +191,7 @@ func TestSetAttributes(t *testing.T) {
 func TestSetStringAttribute(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -213,6 +218,7 @@ func TestSetStringAttribute(t *testing.T) {
 func TestSetIntAttribute(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -239,6 +245,7 @@ func TestSetIntAttribute(t *testing.T) {
 func TestSetInt64Attribute(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -265,6 +272,7 @@ func TestSetInt64Attribute(t *testing.T) {
 func TestSetBoolAttribute(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -291,6 +299,7 @@ func TestSetBoolAttribute(t *testing.T) {
 func TestRecordError(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -319,6 +328,7 @@ func TestRecordError(t *testing.T) {
 func TestRecordError_Nil(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -342,6 +352,7 @@ func TestRecordError_Nil(t *testing.T) {
 func TestAddEvent(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -370,6 +381,7 @@ func TestAddEvent(t *testing.T) {
 func TestSetStatus(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -451,6 +463,7 @@ func TestHTTPHeaderCarrier(t *testing.T) {
 func TestProvider_InjectExtract(t *testing.T) {
 	provider, err := NewProvider(Config{
 		Enabled:     true,
+		SampleRate:  1,
 		ServiceName: "test",
 		Exporter:    "noop",
 	})
@@ -549,7 +562,8 @@ func TestCreateResource(t *testing.T) {
 
 func TestDefaultConfigValues(t *testing.T) {
 	config := Config{
-		Enabled: true,
+		Enabled:    true,
+		SampleRate: 1,
 		// Leave other fields empty to test defaults
 	}
 

@@ -59,7 +59,7 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	limit := 20
 	offset := 0
-	mailbox := "INBOX"
+	mailbox := ""
 
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 100 {
@@ -73,8 +73,20 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// F7002: the mailbox (alias: folder) parameter selects the folder whose
+	// threads are listed; it was parsed and then ignored.
 	if m := r.URL.Query().Get("mailbox"); m != "" {
 		mailbox = m
+	} else if m := r.URL.Query().Get("folder"); m != "" {
+		mailbox = m
+	}
+	if mailbox != "" {
+		internal, ok := resolveFolderName(mailbox)
+		if !ok {
+			s.sendError(w, http.StatusBadRequest, "invalid mailbox")
+			return
+		}
+		mailbox = internal
 	}
 
 	// Get threads from database
@@ -83,6 +95,10 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("failed to get threads", "error", err, "user", user)
 		s.sendError(w, http.StatusInternalServerError, "failed to get threads")
 		return
+	}
+
+	if mailbox != "" {
+		threads = s.filterThreadsByMailbox(user, mailbox, threads)
 	}
 
 	total := len(threads)
@@ -337,6 +353,27 @@ func (s *Server) getThreadsForMailbox(user, mailbox string, limit, offset int) (
 	// Threads are keyed per user in storage, so the mailbox filter does not
 	// participate in this query.
 	return s.mailDB.GetThreads(user, limit, offset)
+}
+
+// filterThreadsByMailbox keeps only threads with at least one message in the
+// mailbox and rescopes their counts to that mailbox.
+func (s *Server) filterThreadsByMailbox(user, mailbox string, threads []*storage.Thread) []*storage.Thread {
+	out := make([]*storage.Thread, 0, len(threads))
+	for _, t := range threads {
+		msgs, err := s.mailDB.GetThreadMessages(user, mailbox, t.ThreadID)
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+		c := *t
+		c.MessageCount, c.UnreadCount = len(msgs), 0
+		for _, m := range msgs {
+			if !m.IsRead {
+				c.UnreadCount++
+			}
+		}
+		out = append(out, &c)
+	}
+	return out
 }
 
 // getThreadMessages retrieves messages for a specific thread

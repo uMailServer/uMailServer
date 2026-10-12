@@ -14,7 +14,7 @@ tls:
     enabled: true
     email: admin@example.com
     provider: letsencrypt     # letsencrypt or letsencrypt-staging
-    challenge: http-01        # http-01 or dns-01
+    challenge: http-01        # accepted, but issuance uses TLS-ALPN-01 on the HTTPS port (no port-80 listener, no DNS-01)
 
 # SMTP Server Configuration
 smtp:

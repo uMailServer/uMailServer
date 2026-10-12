@@ -27,6 +27,7 @@ type fakeRedis struct {
 	// between two of our round trips.
 	beforeCmd func(n int)
 	n         int
+	hashes    map[string]map[string]string
 }
 
 func newFakeRedis() *fakeRedis {
@@ -114,6 +115,22 @@ func (f *fakeRedis) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 			key := fakeStr(args[1])
 			x, _ := strconv.ParseInt(fakeStr(args[2]), 10, 64)
 			c.SetVal(f.expireLocked(key, name, x) == 1)
+			return nil
+		case "hset":
+			if f.hashes == nil {
+				f.hashes = map[string]map[string]string{}
+			}
+			key := fakeStr(args[1])
+			if f.hashes[key] == nil {
+				f.hashes[key] = map[string]string{}
+			}
+			for i := 2; i+1 < len(args); i += 2 {
+				f.hashes[key][fakeStr(args[i])] = fakeStr(args[i+1])
+			}
+			cmd.(*redis.IntCmd).SetVal(1)
+			return nil
+		case "sadd":
+			cmd.(*redis.IntCmd).SetVal(1)
 			return nil
 		case "evalsha":
 			cmd.SetErr(redis.ErrNoScript)

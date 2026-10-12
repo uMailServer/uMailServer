@@ -122,8 +122,8 @@ func TestExtractIP_WithXForwardedForMultiple(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "203.0.113.1, 10.0.0.1, 192.168.1.1")
 
 	ip := ExtractIP(req)
-	if ip != "203.0.113.1" {
-		t.Errorf("Expected 203.0.113.1, got %s", ip)
+	if ip != "192.168.1.1" {
+		t.Errorf("Expected 192.168.1.1 (rightmost untrusted), got %s", ip)
 	}
 }
 

@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { quoteForReply, forwardBody } from "@/utils/quote"
+import { quoteForReply, forwardBody, replyAllRecipients } from "@/utils/quote"
 import api, { FLAG_ANSWERED } from "@/utils/api"
 
 const EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
@@ -130,12 +130,17 @@ export function ComposePage() {
 
   // Reply/forward: prefill the quoted original once (never over user edits).
   useEffect(() => {
-    if (draftId || !origId || (mode !== "reply" && mode !== "forward")) return
+    if (draftId || !origId || (mode !== "reply" && mode !== "replyall" && mode !== "forward")) return
     let cancelled = false
     api.getMessage(origId, origFolder).then((m) => {
       if (cancelled || !m) return
       const who = m.fromName ? `${m.fromName} <${m.from}>` : m.from
-      const quoted = mode === "reply"
+      if (mode === "replyall") {
+        const r = replyAllRecipients(m.from, m.to, m.cc, m.account)
+        setTo((cur) => (cur.length ? cur : r.to))
+        setCc((cur) => (cur.length ? cur : r.cc))
+      }
+      const quoted = mode !== "forward"
         ? quoteForReply(who, m.date, m.body || "")
         : forwardBody(who, m.date, m.subject, m.to || [], m.body || "")
       setBody((cur) => (cur === "" ? quoted : cur))
@@ -231,7 +236,7 @@ export function ComposePage() {
         ...(cur.bcc.length ? { bcc: cur.bcc } : {}),
         subject: cur.subject,
         body: cur.body,
-        ...(mode === "reply" && inReplyTo ? { inReplyTo } : {}),
+        ...((mode === "reply" || mode === "replyall") && inReplyTo ? { inReplyTo } : {}),
       })
       // Best-effort follow-ups: the message is already sent.
       const tasks: Promise<unknown>[] = []

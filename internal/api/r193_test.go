@@ -42,14 +42,14 @@ func deleteSelf(server *Server, password string, withBody bool) *httptest.Respon
 	var req *http.Request
 	if withBody {
 		b, _ := json.Marshal(map[string]string{"password": password})
-		req = httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/user@example.com", bytes.NewReader(b))
+		req = httptest.NewRequest(http.MethodDelete, "/api/v1/account", bytes.NewReader(b))
 	} else {
-		req = httptest.NewRequest(http.MethodDelete, "/api/v1/accounts/user@example.com", nil)
+		req = httptest.NewRequest(http.MethodDelete, "/api/v1/account", nil)
 	}
 	ctx := context.WithValue(req.Context(), "user", "user@example.com")
 	ctx = context.WithValue(ctx, "isAdmin", false)
 	rec := httptest.NewRecorder()
-	server.deleteAccount(rec, req.WithContext(ctx), "user@example.com")
+	server.handleSelfDelete(rec, req.WithContext(ctx))
 	return rec
 }
 

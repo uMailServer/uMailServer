@@ -108,7 +108,7 @@ tls:
     enabled: true
     email: admin@example.com
     provider: letsencrypt
-    challenge: http-01
+    challenge: http-01   # accepted for compatibility; issuance uses TLS-ALPN-01 on the HTTPS port
 
 smtp:
   inbound:
@@ -476,7 +476,7 @@ example paths assume `server.data_dir: /var/lib/umailserver`.
 #### TLS certificate issues
 
 1. Check ACME status: `umailserver status`
-2. Verify port 80 is open for HTTP-01 challenge
+2. Verify port 443 is reachable from the internet: ACME uses TLS-ALPN-01 on the HTTPS port. uMailServer does not listen on port 80 (`http.http_port` is reserved, not bound) and has no DNS-01 support; if 443 cannot be exposed, use manual certificates (`tls.cert_file`/`tls.key_file`) and `SIGHUP` to re-check them
 3. Check certificate: `openssl s_client -connect mail.example.com:465`
 
 #### High memory usage
