@@ -340,7 +340,6 @@ func secretsFileTooOpen(path string, cfg *Config) (os.FileMode, bool) {
 // compatibility but are read by no runtime code. Load warns when a config file
 // sets one so operators are not misled into thinking it has an effect (F6890).
 var ignoredKeys = [][]string{
-	{"server", "force_close_after"},
 	{"spam", "quarantine_threshold"},
 	{"spam", "bayesian", "auto_train"},
 	{"security", "rate_limit", "imap_connections"},

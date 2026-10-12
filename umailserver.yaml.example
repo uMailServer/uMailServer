@@ -5,6 +5,7 @@
 server:
   hostname: mail.example.com
   data_dir: /var/lib/umailserver
+  force_close_after: 30       # Seconds before shutdown force-closes SMTP sessions and HTTP connections (default 30)
   graceful_timeout: 30        # Seconds shutdown waits for in-flight background tasks (default 10 when unset)
 
 # TLS Configuration
