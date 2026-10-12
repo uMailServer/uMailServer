@@ -138,6 +138,11 @@ type Server struct {
 	// Background task management
 	stopCh   chan struct{}
 	stopOnce sync.Once
+
+	// shutdownTimeout bounds the graceful HTTP shutdown in Stop; zero means
+	// 5s. shutdownAfter is the injectable timer (F7182).
+	shutdownTimeout time.Duration
+	shutdownAfter   func(time.Duration) <-chan time.Time
 }
 
 // Config holds API server configuration
@@ -699,11 +704,48 @@ func (s *Server) Stop() error {
 	httpServer := s.httpServer
 	s.serverMu.Unlock()
 	if httpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return httpServer.Shutdown(ctx)
+		return s.shutdownHTTP(httpServer)
 	}
 	return nil
+}
+
+// shutdownHTTP gracefully shuts srv down within the configured timeout and
+// force-closes the remaining connections when it elapses (F7182).
+func (s *Server) shutdownHTTP(srv *http.Server) error {
+	s.serverMu.Lock()
+	d, after := s.shutdownTimeout, s.shutdownAfter
+	s.serverMu.Unlock()
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	if after == nil {
+		after = time.After
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	timer := after(d)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-timer:
+			cancel()
+		case <-stop:
+		}
+	}()
+	err := srv.Shutdown(ctx)
+	if err != nil {
+		_ = srv.Close()
+	}
+	return err
+}
+
+// SetShutdownTimeout sets how long Stop lets in-flight requests drain before
+// the remaining connections are force-closed (server.force_close_after).
+func (s *Server) SetShutdownTimeout(d time.Duration) {
+	s.serverMu.Lock()
+	s.shutdownTimeout = d
+	s.serverMu.Unlock()
 }
 
 // StartDrain initiates graceful draining mode.

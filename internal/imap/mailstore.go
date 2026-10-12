@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -936,10 +935,8 @@ func (m *BboltMailstore) AppendMessage(user, mailbox string, flags []string, dat
 // UIDVALIDITY with the UID assigned, for the RFC 4315 APPENDUID response
 // code (F5641).
 func (m *BboltMailstore) AppendMessageUID(user, mailbox string, flags []string, date time.Time, data []byte) (uint32, uint32, error) {
-	// RFC 3629: validate UTF-8 well-formedness before storing
-	if !utf8.Valid(data) {
-		return 0, 0, fmt.Errorf("message contains invalid UTF-8 sequence")
-	}
+	// F7230: an APPEND literal is raw octets (RFC 3501 §4.3). Legacy 8-bit
+	// charsets and 8bit/binary parts are not UTF-8, so no validity check.
 
 	// Hold the user lock from reserve/store until the metadata row exists, so
 	// a concurrent expunge cannot free the blob in between (F5930).
