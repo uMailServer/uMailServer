@@ -650,6 +650,12 @@ func (s *Session) handleDATA() error {
 		if errors.Is(err, errBareCR) {
 			return s.WriteResponse(554, "5.6.0 Message contains bare CR")
 		}
+		if errors.Is(err, errLineTooLong) {
+			return s.WriteResponse(554, "5.6.0 Message contains a line over 1000 octets")
+		}
+		if errors.Is(err, errNullByte) {
+			return s.WriteResponse(554, "5.6.0 Message contains NUL byte")
+		}
 		return s.WriteResponse(451, "4.4.0 Requested action aborted: local error in processing")
 	}
 
@@ -1207,6 +1213,14 @@ func (s *Session) setReadDeadline(t time.Time) {
 // errBareCR is returned by readData for a message containing a bare CR.
 var errBareCR = errors.New("message contains bare CR")
 
+// Content errors that make a message permanently unacceptable. They are
+// answered with 554 (like a bare CR), not the temporary 451, which would make
+// the sender retry for days a message that can never be accepted (F7710).
+var (
+	errLineTooLong = errors.New("line exceeds maximum length")
+	errNullByte    = errors.New("message contains null bytes")
+)
+
 // hasBareCR reports whether line (one CRLF/LF-terminated line) has a CR that
 // is not immediately followed by LF.
 func hasBareCR(line []byte) bool {
@@ -1288,13 +1302,13 @@ func (s *Session) readData() ([]byte, error) {
 			lineLength--
 		}
 		if lineLength > maxLineLength {
-			contentErr = fmt.Errorf("line exceeds maximum length of %d bytes", maxLineLength)
+			contentErr = errLineTooLong
 			continue
 		}
 
 		// Check for null bytes (security: prevent header injection)
 		if bytes.Contains(line, []byte{0}) {
-			contentErr = fmt.Errorf("message contains null bytes")
+			contentErr = errNullByte
 			continue
 		}
 

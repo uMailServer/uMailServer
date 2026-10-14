@@ -109,7 +109,9 @@ func TestHandleDATA_RejectsNullBytesStill(t *testing.T) {
 		"Subject: null\r\nFrom: sender@example.com\r\nTo: rcpt@example.com\r\n\r\n",
 		"bad\x00byte\r\n",
 	)
-	if !strings.HasPrefix(finalResp, "451") {
+	// Permanent refusal (F7710): the message can never be accepted, so the
+	// sender must bounce it at once instead of retrying a 451 for days.
+	if !strings.HasPrefix(finalResp, "554") {
 		t.Fatalf("CONTROL FAILED (harness): null-byte body unexpectedly accepted: got %q", strings.TrimSpace(finalResp))
 	}
 	if data != nil {
