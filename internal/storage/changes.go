@@ -175,6 +175,7 @@ func (db *Database) PruneChanges(user string) error {
 		// Pass 1: delete entries older than cutoff.
 		c := b.Cursor()
 		var toDelete [][]byte
+		live := 0
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var e ChangeEntry
 			if err := json.Unmarshal(v, &e); err != nil {
@@ -185,6 +186,7 @@ func (db *Database) PruneChanges(user string) error {
 				toDelete = append(toDelete, append([]byte(nil), k...))
 				continue
 			}
+			live++
 		}
 		for _, k := range toDelete {
 			if err := b.Delete(k); err != nil {
@@ -193,11 +195,12 @@ func (db *Database) PruneChanges(user string) error {
 		}
 
 		// Pass 2: cap total entries.
-		total := b.Stats().KeyN
-		if total <= ChangesMaxEntriesPerUser {
+		// Count live entries during pass 1: Stats() reads committed pages and
+		// would still include the keys just deleted in this transaction (F7390).
+		if live <= ChangesMaxEntriesPerUser {
 			return nil
 		}
-		excess := total - ChangesMaxEntriesPerUser
+		excess := live - ChangesMaxEntriesPerUser
 		toDelete = toDelete[:0]
 		c = b.Cursor()
 		for k, _ := c.First(); k != nil && len(toDelete) < excess; k, _ = c.Next() {
