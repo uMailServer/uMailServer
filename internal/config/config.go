@@ -1012,8 +1012,9 @@ func (c *Config) Validate() error {
 // checkPortConflicts checks that the listeners server.Start binds are on
 // valid, distinct ports. It mirrors internal/server: a disabled service binds
 // nothing (F5360), the HTTP API always binds, and ManageSieve also binds
-// port+1 for implicit TLS. imap.starttls_port and http.http_port are not bound
-// today (no port-80 listener exists) but stay reserved.
+// port+1 for implicit TLS. imap.starttls_port is bound (server_imap.go);
+// http.http_port is not bound today (no port-80 listener exists) but stays
+// reserved.
 func (c *Config) checkPortConflicts() error {
 	manageSieveTLSPort := 0
 	if c.ManageSieve.Port > 0 && c.ManageSieve.Port < 65535 {
