@@ -1064,7 +1064,11 @@ func (s *Server) toolDeleteDomain(name string) (map[string]interface{}, error) {
 	} else if !exists {
 		return nil, fmt.Errorf("domain not found")
 	}
-	if err := s.db.DeleteDomain(name); err != nil {
+	// F7450: same last-active-administrator guard as the REST API.
+	if err := s.db.DeleteDomainKeepAdmin(name); err != nil {
+		if errors.Is(err, db.ErrLastActiveAdmin) {
+			return nil, fmt.Errorf("cannot delete the last active administrator")
+		}
 		slog.Error("mcp tool error", "tool", "delete_domain", "error", err)
 		return nil, errInternal
 	}
@@ -1172,7 +1176,11 @@ func (s *Server) toolDeleteAccount(email string) (map[string]interface{}, error)
 	} else if !exists {
 		return nil, fmt.Errorf("account not found")
 	}
-	if err := s.db.DeleteAccount(parts[1], parts[0]); err != nil {
+	// F7450: same last-active-administrator guard as the REST API.
+	if err := s.db.DeleteAccountKeepAdmin(parts[1], parts[0]); err != nil {
+		if errors.Is(err, db.ErrLastActiveAdmin) {
+			return nil, fmt.Errorf("cannot delete the last active administrator")
+		}
 		slog.Error("mcp tool error", "tool", "delete_account", "error", err)
 		return nil, errInternal
 	}
