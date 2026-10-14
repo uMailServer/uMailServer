@@ -1097,14 +1097,14 @@ func (d *DB) deleteDomain(name string, keepAdmin bool) error {
 			if ab != nil {
 				_ = ab.ForEach(func(_, v []byte) error {
 					var a AccountData
-					if json.Unmarshal(v, &a) == nil && a.IsAdmin && a.IsActive && a.Domain == name {
+					if json.Unmarshal(v, &a) == nil && a.IsAdmin && a.IsActive && strings.EqualFold(a.Domain, name) {
 						inDomain = true
 					}
 					return nil
 				})
 			}
 			if inDomain {
-				others, err := otherActiveAdminTx(tx, func(a *AccountData) bool { return a.Domain == name })
+				others, err := otherActiveAdminTx(tx, func(a *AccountData) bool { return strings.EqualFold(a.Domain, name) })
 				if err != nil {
 					return err
 				}
