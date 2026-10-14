@@ -403,7 +403,10 @@ func (rl *RateLimiter) userBucketLocked(user string, now time.Time) *userBucket 
 			switch {
 			case reset.IsZero(): // legacy record without a window end
 				bucket.sentToday = sent
-			case now.Before(reset):
+			case now.Before(reset) && reset.Sub(now) <= 24*time.Hour:
+				// A window ending more than 24h ahead was written while the
+				// clock was wrong; honouring it would lock the quota for
+				// years, so it is discarded and a new window starts (F7520).
 				bucket.sentToday = sent
 				bucket.dayReset = reset
 			}
