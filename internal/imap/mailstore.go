@@ -1515,6 +1515,11 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 			Date:         meta.Date,
 			From:         meta.From,
 			To:           meta.To,
+			// A copy is the same message in the same conversation (F7691).
+			InReplyTo:    meta.InReplyTo,
+			References:   meta.References,
+			ThreadID:     meta.ThreadID,
+			IsThreadRoot: meta.IsThreadRoot,
 		}
 		if err := m.db.StoreMessageMetadata(user, destMailbox, newUID, newMeta); err != nil {
 			m.releaseBlobsLocked(user, []blobRef{ref})
