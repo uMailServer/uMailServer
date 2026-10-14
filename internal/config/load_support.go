@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -218,6 +219,12 @@ func validateByReflection(v reflect.Value, path string) error {
 			if fv.Int() < 0 {
 				return fmt.Errorf("%s must not be negative", p)
 			}
+		case f.Type.Kind() == reflect.Float64:
+			// NaN passes every range/ordering comparison in Validate, so a
+			// ".nan" threshold would load and silently disable the check.
+			if math.IsNaN(fv.Float()) {
+				return fmt.Errorf("%s must be a number, not NaN", p)
+			}
 		case f.Type.Kind() == reflect.Int && (name == "port" || strings.HasSuffix(name, "_port")):
 			if n := fv.Int(); n < 0 || n > 65535 {
 				return fmt.Errorf("%s %d is out of range (0-65535)", p, n)
@@ -303,6 +310,11 @@ func configHasSecrets(v reflect.Value) bool {
 			name := strings.Split(f.Tag.Get("yaml"), ",")[0]
 			if name == "-" {
 				continue
+			}
+			// webhook_headers values are credentials (Authorization, ...);
+			// redact.go already treats them as secrets (F7481).
+			if name == "webhook_headers" && f.Type.Kind() == reflect.Map && v.Field(i).Len() > 0 {
+				return true
 			}
 			if f.Type.Kind() == reflect.String && secretFieldName(name) {
 				if v.Field(i).String() != "" {
