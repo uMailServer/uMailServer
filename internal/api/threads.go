@@ -439,9 +439,23 @@ func (s *Server) deleteThread(user, mailbox, threadID string) error {
 	if err != nil {
 		return err
 	}
+	var hashes []string
 	for _, m := range msgs {
+		meta, _ := s.mailDB.GetMessageMetadata(user, mailbox, m.UID)
 		if err := s.mailDB.DeleteMessage(user, mailbox, m.UID); err != nil {
 			return err
+		}
+		if meta != nil && meta.MessageID != "" {
+			hashes = append(hashes, meta.MessageID)
+		}
+	}
+	// F7420: like the mail delete endpoint, release each blob (and its quota
+	// bytes) once no other metadata row references it.
+	if s.msgStore != nil && s.mailHandler != nil {
+		for _, hash := range hashes {
+			if !s.mailHandler.blobStillReferenced(user, hash) {
+				s.mailHandler.removeBlob(user, hash)
+			}
 		}
 	}
 	count, unread, err := s.threadMessageCounts(user, threadID)
