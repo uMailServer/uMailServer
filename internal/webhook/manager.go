@@ -51,9 +51,11 @@ type Manager struct {
 	maxTotal    time.Duration // total delivery budget (all attempts + backoffs)
 	secretMu    sync.RWMutex  // guards secret (rotation)
 
-	wg           sync.WaitGroup // in-flight deliveries (F7200)
-	drainTimeout time.Duration  // bound on Stop waiting for in-flight deliveries
-	dnsTimeout   time.Duration  // bound on the validation-time DNS lookup (F7201)
+	wg           sync.WaitGroup     // in-flight deliveries (F7200)
+	baseCtx      context.Context    // parent of every delivery request; cancelled when Stop's drain times out (F7501)
+	baseCancel   context.CancelFunc // nil for a zero-value Manager
+	drainTimeout time.Duration      // bound on Stop waiting for in-flight deliveries
+	dnsTimeout   time.Duration      // bound on the validation-time DNS lookup (F7201)
 	lookupIP     func(ctx context.Context, host string) ([]net.IP, error)
 }
 
@@ -87,6 +89,10 @@ func (m *Manager) Stop() {
 	case <-done:
 	case <-t.C:
 		log.Printf("webhook: Stop timed out waiting for in-flight deliveries")
+		// Abort the stragglers so no request outlives Stop (F7501).
+		if m.baseCancel != nil {
+			m.baseCancel()
+		}
 	}
 }
 
@@ -297,7 +303,10 @@ const (
 
 // NewManager creates webhook manager
 func NewManager(database *db.DB, secret string) *Manager {
+	baseCtx, baseCancel := context.WithCancel(context.Background())
 	m := &Manager{
+		baseCtx:        baseCtx,
+		baseCancel:     baseCancel,
 		db:             database,
 		secret:         secret,
 		hooks:          make([]*Webhook, 0),
@@ -340,7 +349,13 @@ func NewManager(database *db.DB, secret string) *Manager {
 		// host that isValidWebhookURL never saw, so every hop is re-checked
 		// with the same guard. Returning nil leaves Go's own 10-redirect cap
 		// in force.
-		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// A 301/302/303 turns the signed POST into a body-less GET whose
+			// 2xx would be counted as a delivery that never carried the
+			// payload (F7500). Only method-preserving hops (307/308) pass.
+			if len(via) > 0 && req.Method != via[0].Method {
+				return fmt.Errorf("redirect would drop the event payload (%s -> %s)", via[0].Method, req.Method)
+			}
 			if valid, _ := m.isValidWebhookURL(req.URL.String()); !valid {
 				return fmt.Errorf("redirect target rejected by SSRF check: %s", req.URL.Redacted())
 			}
@@ -507,7 +522,11 @@ func (m *Manager) sendInner(hook *Webhook, event Event, attempts *int, finalErr 
 			}
 		}
 
-		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		parent := m.baseCtx
+		if parent == nil {
+			parent = context.Background()
+		}
+		ctx, cancel := context.WithDeadline(parent, deadline)
 		req, err := http.NewRequestWithContext(ctx, "POST", hook.URL, bytes.NewReader(payload))
 		if err != nil {
 			cancel()
