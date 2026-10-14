@@ -538,6 +538,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 
 	defer s.sessionWG.Done()
+	// F7470: release the socket when the session ends (QUIT, auth-failure cap,
+	// read timeout, oversized line); otherwise it lingered until GC finalised it.
+	defer session.Close()
 
 	s.logger.Info("New POP3 session", "session", session.ID(), "remote", conn.RemoteAddr())
 
