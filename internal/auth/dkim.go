@@ -56,7 +56,7 @@ func (r DKIMResult) String() string {
 // Package-level precompiled regex for canonicalization (hot path optimization)
 var (
 	whitespaceRegex = regexp.MustCompile(`[ \t]+`)
-	bTagRegex       = regexp.MustCompile(`(^|;)(\s*)b=[^;]*`)
+	bTagRegex       = regexp.MustCompile(`(^|;)(\s*)b(\s*)=[^;]*`)
 )
 
 // dkimDNSTimeout bounds a DKIM public key lookup (F5075).
@@ -848,7 +848,7 @@ func (s *DKIMSigner) computeSignature(headers map[string][]string, body []byte, 
 // dkimHeaderWithoutSig returns the DKIM header value without the signature
 func dkimHeaderWithoutSig(header string) string {
 	// Remove the b= value from the header
-	return bTagRegex.ReplaceAllString(header, "${1}${2}b=")
+	return bTagRegex.ReplaceAllString(header, "${1}${2}b${3}=")
 }
 
 // dkimSignatureFieldForHash returns the DKIM-Signature header field as it

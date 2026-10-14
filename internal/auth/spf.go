@@ -588,7 +588,9 @@ func (c *SPFChecker) evaluateInclude(ctx context.Context, ip net.IP, domain, sen
 		return false, false, &spfPermError{explanation}
 	}
 	if result == SPFTempError {
-		return false, false, errors.New("DNS lookup failed")
+		// F7430: keep the temporary classification so evaluate() reports
+		// temperror (RFC 7208 §5.2), not permerror.
+		return false, false, &spfTempError{explanation}
 	}
 
 	// Include returns true only if the included SPF passes
@@ -796,6 +798,10 @@ func isTemporaryError(err error) bool {
 	if errors.As(err, &pe) {
 		return false
 	}
+	var te *spfTempError
+	if errors.As(err, &te) {
+		return true
+	}
 	// F5702: a resolver error is classified by its type; its message embeds
 	// the queried name ("lookup timeout-corp.example: no such host").
 	var dnsErr *net.DNSError
@@ -826,6 +832,12 @@ func isTemporaryError(err error) bool {
 type spfPermError struct{ msg string }
 
 func (e *spfPermError) Error() string { return e.msg }
+
+// spfTempError carries a nested temporary DNS failure (RFC 7208 §2.6.6) up
+// through include evaluation (F7430).
+type spfTempError struct{ msg string }
+
+func (e *spfTempError) Error() string { return e.msg }
 
 // spfValidIPSpec reports whether value is a syntactically valid ip4/ip6
 // mechanism argument: an address of the right family with an optional
