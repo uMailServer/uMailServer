@@ -306,6 +306,14 @@ func cmdQuickstart(args []string) {
 		fmt.Fprintf(os.Stderr, "Invalid DKIM public key: %v\n", err)
 		os.Exit(1)
 	}
+	// The outbound queue signs with the key stored on the domain record, as
+	// `domain add` and the REST API do; a key file alone left quickstart
+	// installs sending unsigned mail (F7650).
+	privateKeyPEM, err := os.ReadFile(filepath.Clean(dkimKeyPath))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to read DKIM private key: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Write config
 	config := fmt.Sprintf(`# uMailServer Configuration
@@ -399,13 +407,14 @@ domains:
 
 	// Create domain
 	if err := database.CreateDomain(&db.DomainData{
-		Name:          domain,
-		MaxAccounts:   100,
-		IsActive:      true,
-		DKIMSelector:  "default",
-		DKIMPublicKey: publicKey,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		Name:           domain,
+		MaxAccounts:    100,
+		IsActive:       true,
+		DKIMSelector:   "default",
+		DKIMPublicKey:  publicKey,
+		DKIMPrivateKey: string(privateKeyPEM),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create domain: %v\n", err)
 		os.Exit(1)
