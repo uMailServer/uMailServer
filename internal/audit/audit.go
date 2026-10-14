@@ -135,7 +135,14 @@ func (r *rotatingWriter) Write(p []byte) (n int, err error) {
 	}
 	if r.size > 0 && r.size+int64(len(p)) > r.maxSize {
 		if err := r.rotate(); err != nil {
-			return 0, err
+			// F7560: rotation is best effort; an audit record must not be
+			// dropped because the rename failed. Keep appending to the
+			// current file (reopened if rotate released it).
+			if r.file == nil {
+				if oerr := r.open(); oerr != nil {
+					return 0, err
+				}
+			}
 		}
 	}
 
