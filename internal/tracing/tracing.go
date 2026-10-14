@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -70,7 +71,9 @@ func NewProvider(config Config) (*Provider, error) {
 	}
 	// F7040: 0 (or negative) means "sample nothing"; it used to silently
 	// become 100%. Absent config gets 1.0 from config defaults.
-	if config.SampleRate < 0 {
+	// F7631: NaN compares false with everything and used to slip through the
+	// clamps as 100% sampling; treat it like any other invalid rate.
+	if config.SampleRate < 0 || math.IsNaN(config.SampleRate) {
 		config.SampleRate = 0
 	}
 	if config.SampleRate > 1 {

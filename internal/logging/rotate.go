@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,10 @@ type RotatingWriter struct {
 }
 
 const defaultMaxSizeMB = 100
+
+// backupSuffix matches the timestamp rotate() appends to a backup name
+// ("20060102-150405.000000000"; the fraction is optional for older backups).
+var backupSuffix = regexp.MustCompile(`^\d{8}-\d{6}(\.\d+)?$`)
 
 // NewRotatingWriter creates a new RotatingWriter.
 // maxSizeMB: maximum file size in megabytes before rotation
@@ -178,7 +183,9 @@ func (w *RotatingWriter) cleanup() {
 	prefix := filepath.Base(w.filename) + "."
 	var matches []string
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), prefix) {
+		// F7630: only files carrying this writer's rotation timestamp are its
+		// backups; other files sharing the "<name>." prefix are not ours.
+		if strings.HasPrefix(entry.Name(), prefix) && backupSuffix.MatchString(entry.Name()[len(prefix):]) {
 			matches = append(matches, filepath.Join(dir, entry.Name()))
 		}
 	}
