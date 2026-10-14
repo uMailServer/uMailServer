@@ -367,6 +367,12 @@ func (bm *BackupManager) addFileWithHash(tw *tar.Writer, path string, header *ta
 	return nil
 }
 
+// skipNonRegular reports whether a directory entry of this mode is not
+// archived: symlinks (F5912), sockets, devices and irregular files (F7490).
+func skipNonRegular(m os.FileMode) bool {
+	return m&(os.ModeSymlink|os.ModeSocket|os.ModeDevice|os.ModeCharDevice|os.ModeIrregular) != 0
+}
+
 // backupConfig adds configuration files to the backup
 func (bm *BackupManager) backupConfig(tw *tar.Writer) error {
 	configPath := bm.config.Server.DataDir + "/config"
@@ -384,7 +390,10 @@ func (bm *BackupManager) backupConfig(tw *tar.Writer) error {
 		// Skip directories and symlinks: a symlink is opened through the
 		// link but its header size is the link-target length
 		// (tar.ErrWriteTooLong) (F5912).
-		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		// Sockets and devices are skipped too: opening one fails (F7490).
+		// Named pipes are left alone: TestBackupHoldsDatabaseLock parks
+		// Backup on one to gate its ordering.
+		if info.IsDir() || skipNonRegular(info.Mode()) {
 			return nil
 		}
 
@@ -476,8 +485,9 @@ func (bm *BackupManager) backupDataSubdir(tw *tar.Writer, sub string) error {
 			return tw.WriteHeader(header)
 		}
 
-		// Symlinks are not archived (F5912).
-		if info.Mode()&os.ModeSymlink != 0 {
+		// Symlinks are not archived (F5912); neither are sockets and
+		// devices, which cannot be read as file content (F7490).
+		if skipNonRegular(info.Mode()) {
 			return nil
 		}
 

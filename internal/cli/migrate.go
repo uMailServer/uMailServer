@@ -574,6 +574,14 @@ func (mm *MigrationManager) importMBOXFile(mboxFile string) error {
 		}
 
 		if atEOF {
+			// F7491: without a "From " separator line the file is not an
+			// MBOX; importing its text as one message would be garbage.
+			if !inMessage {
+				if len(strings.TrimSpace(string(currentMessage))) > 0 {
+					return fmt.Errorf("%s is not an MBOX file: no \"From \" separator line found", mboxFile)
+				}
+				break
+			}
 			if len(currentMessage) > 0 {
 				// Process last message
 				if err := mm.processMBOXMessage(currentMessage, folder); err != nil {
