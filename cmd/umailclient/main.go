@@ -101,6 +101,11 @@ func NewSMTPClient(host string, port int, user, pass string, tls, insecure bool)
 }
 
 func (c *SMTPClient) Send(from, to, subject, body string) error {
+	return c.sendMessage(from, to, buildMessage(from, to, subject, body))
+}
+
+// sendMessage delivers an already complete RFC 5322 message (headers included).
+func (c *SMTPClient) sendMessage(from, to, msg string) error {
 	addr := formatAddr(c.Host, c.Port)
 
 	var conn net.Conn
@@ -148,11 +153,14 @@ func (c *SMTPClient) Send(from, to, subject, body string) error {
 		return fmt.Errorf("DATA: %w", err)
 	}
 
-	msg := buildMessage(from, to, subject, body)
 	if _, err := w.Write([]byte(msg)); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
-	_ = w.Close()
+	// Close reads the server's reply to the end-of-data dot; a 4xx/5xx there
+	// means the message was NOT accepted (F7610).
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("end of DATA: %w", err)
+	}
 
 	return nil
 }
@@ -200,6 +208,18 @@ type benchResult struct {
 	err     error
 }
 
+// checkLoadArgs rejects counts that would make make(chan) panic or the
+// semaphore never admit a worker (concurrency 0 hangs forever) (F7612).
+func checkLoadArgs(count, concurrency int) error {
+	if count < 0 {
+		return fmt.Errorf("--count must be >= 0")
+	}
+	if concurrency < 1 {
+		return fmt.Errorf("--concurrency must be >= 1")
+	}
+	return nil
+}
+
 func runBench() {
 	cmd := flag.NewFlagSet("bench", flag.ExitOnError)
 	host := cmd.String("host", "localhost", "SMTP host")
@@ -210,6 +230,10 @@ func runBench() {
 	pass := cmd.String("pass", "", "Password")
 
 	_ = cmd.Parse(os.Args[2:])
+	if err := checkLoadArgs(*count, *concurrency); err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("Benchmark: %d emails, %d concurrent\n", *count, *concurrency)
 
@@ -292,6 +316,10 @@ func runStress() {
 	pass := cmd.String("pass", "", "Password")
 
 	_ = cmd.Parse(os.Args[2:])
+	if err := checkLoadArgs(*count, *concurrency); err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("STRESS TEST: %d emails, %d concurrent\n", *count, *concurrency)
 
@@ -545,8 +573,10 @@ func runMDN() {
 			"This message requests a read receipt.\r\n"+
 			"Please confirm receipt.\r\n", *to, *subject, time.Now().Format(time.RFC1123Z))
 
+	// body is already a full message with the Disposition-Notification-To
+	// header; Send would have wrapped it as the body of another message (F7611).
 	client := NewSMTPClient(*host, *port, "", "", false, false)
-	if err := client.Send("admin@localhost", *to, *subject, body); err != nil {
+	if err := client.sendMessage("admin@localhost", *to, body); err != nil {
 		fmt.Printf("Send failed: %v\n", err)
 		os.Exit(1)
 	}
