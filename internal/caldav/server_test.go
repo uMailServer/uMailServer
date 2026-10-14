@@ -434,7 +434,7 @@ func TestHandleMkCol(t *testing.T) {
 		return true, nil
 	})
 
-	req := httptest.NewRequest("MKCOL", "/dav/calendars/user@example.com/mkcol-cal", nil)
+	req := httptest.NewRequest("MKCOL", "/dav/calendars/mkcol-cal", nil) // calendars sit directly under the advertised calendar-home-set
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	w := httptest.NewRecorder()
 
@@ -1228,15 +1228,17 @@ func TestHandleMkCalendar_AlreadyExists(t *testing.T) {
   </D:set>
 </CALDAV:mkcalendar>`
 
-	req := httptest.NewRequest("MKCALENDAR", "/dav/calendars/user@example.com/test-cal", strings.NewReader(body))
+	req := httptest.NewRequest("MKCALENDAR", "/dav/calendars/test-cal", strings.NewReader(body))
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("user@example.com:pass")))
 	w := httptest.NewRecorder()
 
 	server.ServeHTTP(w, req)
 
-	// CreateCalendar overwrites existing, so this returns 201 Created
-	if w.Code != http.StatusCreated {
-		t.Errorf("Status = %d, want %d", w.Code, http.StatusCreated)
+	// An existing calendar is never re-created (F5584, RFC 4791 §5.3.1.2). The
+	// request used to carry the user in the path, which created a calendar
+	// named after that segment and so hid this behaviour (F7700).
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
 }
 

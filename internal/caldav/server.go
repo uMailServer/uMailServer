@@ -1263,6 +1263,14 @@ func (s *Server) handleMkCalendar(w http.ResponseWriter, r *http.Request, userna
 		return
 	}
 
+	// A calendar lives directly under /dav/calendars/. A deeper path names a
+	// collection whose parent does not exist (RFC 4918 §9.3.1: 409); creating
+	// the first segment's calendar instead would ignore the rest (F7700).
+	if len(parts) > 3 {
+		s.sendError(w, http.StatusConflict, "parent collection does not exist")
+		return
+	}
+
 	calendarID := parts[2]
 
 	// RFC 4791 §5.3.1.2 (DAV:resource-must-be-null), RFC 4918 §9.3.1: an
