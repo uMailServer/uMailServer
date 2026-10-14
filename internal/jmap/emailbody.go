@@ -460,6 +460,35 @@ func parseBodyFetchOpts(args map[string]interface{}) bodyFetchOpts {
 	return o
 }
 
+// parsedHeaderProps maps the RFC 8621 §4.1.2 parsed-header Email properties to
+// the header and parsed form they are defined by. They are not part of the
+// stored metadata, so Email/get reads them from the message (F7680).
+var parsedHeaderProps = map[string]headerProp{
+	"messageId":  {name: "Message-ID", form: "asMessageIds"},
+	"inReplyTo":  {name: "In-Reply-To", form: "asMessageIds"},
+	"references": {name: "References", form: "asMessageIds"},
+	"sender":     {name: "Sender", form: "asAddresses"},
+	"replyTo":    {name: "Reply-To", form: "asAddresses"},
+	"cc":         {name: "Cc", form: "asAddresses"},
+	"bcc":        {name: "Bcc", form: "asAddresses"},
+	"sentAt":     {name: "Date", form: "asDate"},
+}
+
+// applyParsedHeaders fills the parsed-header properties of the full Email form.
+func applyParsedHeaders(hs []rawHeader, e *Email) {
+	ids := func(prop string) []string {
+		v, _ := headerValue(hs, parsedHeaderProps[prop]).([]string)
+		return v
+	}
+	addrs := func(prop string) []EmailAddress {
+		v, _ := headerValue(hs, parsedHeaderProps[prop]).([]EmailAddress)
+		return v
+	}
+	e.MessageID, e.InReplyTo, e.References = ids("messageId"), ids("inReplyTo"), ids("references")
+	e.Sender, e.ReplyTo, e.CC, e.BCC = addrs("sender"), addrs("replyTo"), addrs("cc"), addrs("bcc")
+	e.SentAt, _ = headerValue(hs, parsedHeaderProps["sentAt"]).(string)
+}
+
 // augmentEmailBodyStruct fills textBody/htmlBody/bodyValues on a full-form
 // Email/get response (properties omitted ⇒ RFC 8621 §4.2 "all properties").
 // Round 50: the full form previously returned the bare storageToJMAPEmail
@@ -473,6 +502,7 @@ func (s *Server) augmentEmailBodyStruct(user, blobID string, args map[string]int
 		return
 	}
 	hs, body := splitHeaders(data)
+	applyParsedHeaders(hs, email)
 	tb, hb, atts, vals, preview, hasAtt := bodyProps(hs, body, parseBodyFetchOpts(args), blobID)
 	email.TextBody = tb
 	email.HTMLBody = hb
@@ -487,7 +517,7 @@ func (s *Server) augmentEmailBodyStruct(user, blobID string, args map[string]int
 func (s *Server) augmentEmailProps(user, blobID string, props []string, args map[string]interface{}, out map[string]interface{}) {
 	need := false
 	for _, p := range props {
-		if strings.HasPrefix(p, "header:") || p == "bodyValues" || p == "textBody" || p == "htmlBody" || p == "attachments" || p == "preview" || p == "hasAttachment" {
+		if _, parsed := parsedHeaderProps[p]; parsed || strings.HasPrefix(p, "header:") || p == "bodyValues" || p == "textBody" || p == "htmlBody" || p == "attachments" || p == "preview" || p == "hasAttachment" {
 			need = true
 		}
 	}
@@ -503,6 +533,8 @@ func (s *Server) augmentEmailProps(user, blobID string, props []string, args map
 	tb, hb, atts, vals, preview, hasAtt := bodyProps(hs, body, o, blobID)
 	for _, p := range props {
 		switch {
+		case parsedHeaderProps[p].name != "":
+			out[p] = headerValue(hs, parsedHeaderProps[p])
 		case strings.HasPrefix(p, "header:"):
 			if hp, ok := parseHeaderProp(p); ok {
 				out[p] = headerValue(hs, hp)

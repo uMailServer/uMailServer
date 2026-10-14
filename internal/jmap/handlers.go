@@ -1197,12 +1197,7 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		// Thread identity, mirroring SMTP delivery
 		// (internal/server/server_handlers.go) so drafts appear in
 		// Thread/get like delivered mail.
-		threadID, threadErr := s.db.GetOrCreateThreadID(user, targetNames[0], meta.Subject, meta.InReplyTo, meta.References)
-		if threadErr != nil {
-			threadID = "" // Continue without threading if it fails
-		}
-		meta.ThreadID = threadID
-		meta.IsThreadRoot = meta.InReplyTo == "" && len(meta.References) == 0
+		s.assignThread(user, targetNames[0], meta)
 
 		written, failDesc := s.storeEmailCopies(user, meta, targetNames)
 		if failDesc != "" {
@@ -1981,6 +1976,9 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 				return
 			}
 
+			// F7690: thread identity, as for Email/set create and delivery.
+			s.assignThread(user, targetNames[0], meta)
+
 			// Store the message in EVERY target mailbox, each with its own
 			// UID (round-49 extraction: shared with Email/set create).
 			written, failDesc := s.storeEmailCopies(user, meta, targetNames)
@@ -2048,6 +2046,20 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 		},
 		ID: call.ID,
 	}
+}
+
+// assignThread gives meta its conversation identity, as SMTP delivery and the
+// IMAP APPEND path do, so the message shows up in Thread/get with the messages
+// it replies to. A message imported without one would have the empty thread id
+// that every other unthreaded message shares (F7690). Threading is best
+// effort: on error the message is stored without one.
+func (s *Server) assignThread(user, mailbox string, meta *storage.MessageMetadata) {
+	threadID, err := s.db.GetOrCreateThreadID(user, mailbox, meta.Subject, meta.InReplyTo, meta.References)
+	if err != nil {
+		threadID = ""
+	}
+	meta.ThreadID = threadID
+	meta.IsThreadRoot = meta.InReplyTo == "" && len(meta.References) == 0
 }
 
 // parseEmailMetadata extracts metadata from email data
@@ -3104,8 +3116,14 @@ func storageToJMAPEmail(meta *storage.MessageMetadata, properties []string, mail
 		Size:       meta.Size,
 		ReceivedAt: meta.InternalDate.Format(time.RFC3339),
 		Subject:    meta.Subject,
-		From:       []EmailAddress{{Email: meta.From}},
-		To:         []EmailAddress{{Email: meta.To}},
+	}
+	// A message without a From/To header has no address to report; an empty
+	// address object is not a valid EmailAddress (F7680).
+	if meta.From != "" {
+		email.From = []EmailAddress{{Email: meta.From}}
+	}
+	if meta.To != "" {
+		email.To = []EmailAddress{{Email: meta.To}}
 	}
 
 	// Convert flags to keywords. The four system keywords map back from
