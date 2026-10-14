@@ -3,7 +3,7 @@
 ## Değerlendirme Tarihi
 2026-05-01 (Updated after implementation)
 
-> **2026-10-07 düzeltmesi:** Bu belgedeki bazı "✅" iddiaları kodla uyuşmuyordu (Helm chart hiç eklenmemiş). Gerçek eksikler aşağıdaki "Eksik Alanlar" tablosuna eklendi; güvenlik bulgularının güncel durumu için `SECURITY-REPORT.md`'deki Durum sütununa bakın.
+> **2026-10-07 düzeltmesi:** Bu belgedeki bazı "✅" iddiaları kodla uyuşmuyordu (Helm chart hiç eklenmemiş). Gerçek eksikler aşağıdaki "Eksik Alanlar" tablosuna eklendi (2026-10-14: webmail, push/vacation REST ve admin Settings satırları koda göre güncellendi); güvenlik bulgularının güncel durumu için `SECURITY-REPORT.md`'deki Durum sütununa bakın.
 
 ---
 
@@ -81,10 +81,9 @@ internal/imap/commands.go:
 | Eksik | Öncelik | Dosya/Konum | Açıklama |
 |-------|---------|-------------|----------|
 | IMAP SCORE Extension | 🟡 Orta | - | SCORE extension desteklenmiyor |
-| Webmail API bağlantısı | 🔴 Yüksek | `webmail/src/pages/` | Inbox, folder, email-detail, compose, contacts vb. mock veriyle çalışıyor |
-| Push / Vacation REST | 🔴 Yüksek | `internal/server/server_api.go` | `api.NewServer` push servisi ve vacation manager almıyor; uç noktalar hiçbir şey kaydetmiyor |
+| Webmail Contacts sayfası | 🟢 Düşük | `webmail/src/pages/contacts.tsx` | Sunucunun webmail API'sinde kişi ucu yok; sayfa yer tutucu (CardDAV istemcisi kullanın). Inbox, klasörler, mesaj görünümü, bayraklar, taslaklar, compose, çöp ve arama REST API'yi kullanıyor |
 | Kullanıcı filtreleri | 🔴 Yüksek | `internal/api/filters.go` | Filtreler kaydediliyor ama teslimat yolunda uygulanmıyor |
-| Admin Settings | 🟡 Orta | `web/admin/src/pages/Settings.tsx` | Kaydet butonu API çağırmıyor |
+| Admin Settings | 🟡 Orta | `web/admin/src/pages/Settings.tsx` | `internal/api`'de ayar ucu yok; sayfa salt-okunur önizleme (ayarlar `umailserver.yaml` + restart ile değişir) |
 | Okunup kullanılmayan config alanları | 🟡 Orta | `internal/config` | `Spam.Enabled`, `Spam.Bayesian.*`, `RateLimit.SMTPPerMinute/Hour`, `Storage.Sync` vb. |
 | Çok düğüm / HA | 🟡 Orta | `internal/cluster` | Cluster paketi hiç başlatılmıyor; bbolt tek düğüm. Issue #1 |
 | Helm chart | 🟢 Düşük | `deploy/` | Yok; tek düğüm kısıtıyla (replicas: 1, HPA yok) yazılmalı |
