@@ -139,12 +139,162 @@ func safeRegexMatch(pattern, value string, timeout time.Duration) (bool, error) 
 	return matchRegexp(pattern, value, timeout)
 }
 
-// globMatch matches a Sieve :matches key against value. F5241: the regexp
-// built by globToRegexp only holds literals, "." and ".*", which Go's linear
-// time RE2 engine evaluates without backtracking, so it must not go through
-// isSuspiciousPattern (which rejected keys with four or more "*" wildcards).
+// globMatch matches a Sieve :matches key against value. F5241: keys with
+// many "*" wildcards must not be rejected as suspicious. F7411: the match
+// runs inline in a bounded matcher (see globMatchBudget); the former RE2 run
+// in a goroutine could not be cancelled, so a timed-out match kept burning
+// CPU for seconds on a 1 MiB body. timeout is unused and kept for callers.
 func globMatch(glob, value string, timeout time.Duration) (bool, error) {
-	return matchRegexp(globToRegexp(glob), value, timeout)
+	return globMatchBudget(glob, value)
+}
+
+// maxGlobSteps bounds the work of one :matches evaluation (character
+// comparisons); a pathological "?" heavy key fails the script instead of
+// running unbounded. F7411.
+const maxGlobSteps = 64 << 20
+
+// globTok is one element of a parsed :matches key.
+type globTok struct {
+	star bool   // "*"
+	any  bool   // "?"
+	lit  string // one literal character (one UTF-8 sequence or a raw byte)
+}
+
+// globTokens splits a :matches key (RFC 5228 §2.7.1): "*" and "?" are
+// wildcards, "\\" escapes the next character, every other character is
+// literal. F7410: characters are whole UTF-8 sequences, never single bytes.
+func globTokens(glob string) []globTok {
+	var toks []globTok
+	for idx := 0; idx < len(glob); {
+		_, size := utf8.DecodeRuneInString(glob[idx:])
+		switch c := glob[idx]; c {
+		case '*':
+			toks = append(toks, globTok{star: true})
+			idx++
+		case '?':
+			toks = append(toks, globTok{any: true})
+			idx++
+		case '\\':
+			idx++
+			if idx < len(glob) {
+				_, size = utf8.DecodeRuneInString(glob[idx:])
+				toks = append(toks, globTok{lit: glob[idx : idx+size]})
+				idx += size
+			} else {
+				toks = append(toks, globTok{lit: "\\"})
+			}
+		default:
+			toks = append(toks, globTok{lit: glob[idx : idx+size]})
+			idx += size
+		}
+	}
+	return toks
+}
+
+// globSegment is a run of non-"*" tokens.
+type globSegment []globTok
+
+// matchAt matches the segment at v[pos:], returning the end offset or -1.
+func (g globSegment) matchAt(v string, pos int, steps *int) int {
+	for _, t := range g {
+		*steps++
+		if pos >= len(v) {
+			return -1
+		}
+		if t.any {
+			_, size := utf8.DecodeRuneInString(v[pos:])
+			pos += size
+			continue
+		}
+		if !strings.HasPrefix(v[pos:], t.lit) {
+			return -1
+		}
+		pos += len(t.lit)
+	}
+	return pos
+}
+
+// literal returns the segment as one string when it holds no "?".
+func (g globSegment) literal() (string, bool) {
+	var b strings.Builder
+	for _, t := range g {
+		if t.any {
+			return "", false
+		}
+		b.WriteString(t.lit)
+	}
+	return b.String(), true
+}
+
+// globMatchBudget is a linear-scan glob matcher: the first segment is
+// anchored at the start, the last at the end, and middle segments are matched
+// leftmost (which is sufficient for "*"/"?" globs). It fails with an error
+// once maxGlobSteps comparisons are spent.
+func globMatchBudget(glob, value string) (bool, error) {
+	var segs []globSegment
+	var cur globSegment
+	for _, t := range globTokens(glob) {
+		if t.star {
+			segs = append(segs, cur)
+			cur = nil
+			continue
+		}
+		cur = append(cur, t)
+	}
+	segs = append(segs, cur)
+	steps := 0
+	if len(segs) == 1 {
+		return segs[0].matchAt(value, 0, &steps) == len(value), nil
+	}
+	first, last := segs[0], segs[len(segs)-1]
+	pos := first.matchAt(value, 0, &steps)
+	if pos < 0 {
+		return false, nil
+	}
+	// The last segment must end exactly at len(value): walk back one
+	// character per token to find where it starts.
+	sStart := len(value)
+	for range last {
+		if sStart == 0 {
+			return false, nil
+		}
+		_, size := utf8.DecodeLastRuneInString(value[:sStart])
+		sStart -= size
+	}
+	if sStart < pos || last.matchAt(value, sStart, &steps) != len(value) {
+		return false, nil
+	}
+	for _, seg := range segs[1 : len(segs)-1] {
+		if len(seg) == 0 {
+			continue
+		}
+		found := -1
+		if lit, ok := seg.literal(); ok {
+			idx := strings.Index(value[pos:sStart], lit)
+			if idx < 0 {
+				return false, nil
+			}
+			steps += idx + len(lit)
+			found = pos + idx + len(lit)
+		} else {
+			for s := pos; s < sStart; {
+				if steps > maxGlobSteps {
+					return false, fmt.Errorf(":matches key exceeded the %d step limit", maxGlobSteps)
+				}
+				if end := seg.matchAt(value, s, &steps); end >= 0 && end <= sStart {
+					found = end
+					break
+				}
+				_, size := utf8.DecodeRuneInString(value[s:])
+				s += size
+			}
+		}
+		if found < 0 {
+			return false, nil
+		}
+		pos = found
+	}
+	return true, nil
 }
 
 // matchRegexp compiles pattern through the LRU cache and matches it against
@@ -616,20 +766,16 @@ func (i *Interpreter) evaluateTest(test Test) (bool, error) {
 func globToRegexp(glob string) string {
 	var b strings.Builder
 	b.WriteString("(?s)^")
-	for idx := 0; idx < len(glob); idx++ {
-		switch c := glob[idx]; c {
-		case '*':
+	for _, t := range globTokens(glob) {
+		switch {
+		case t.star:
 			b.WriteString(".*")
-		case '?':
+		case t.any:
 			b.WriteString(".")
-		case '\\':
-			if idx+1 < len(glob) {
-				idx++
-				c = glob[idx]
-			}
-			b.WriteString(regexp.QuoteMeta(string(c)))
 		default:
-			b.WriteString(regexp.QuoteMeta(string(c)))
+			// F7410: a byte-wise string(byte) turned every UTF-8 byte of a
+			// non-ASCII key into a separate Latin-1 character.
+			b.WriteString(regexp.QuoteMeta(t.lit))
 		}
 	}
 	b.WriteString("$")
