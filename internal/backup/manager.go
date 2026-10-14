@@ -60,7 +60,10 @@ func (m *Manager) messagesDir() string {
 // filesystem paths, so without this check "../victim" reads or writes
 // another user's mail.
 func validatePathPart(part string) error {
-	if part == "" || part == ".." || strings.ContainsAny(part, "/\\") {
+	// "." is rejected like storage.validatePathComponent does (F5721): it
+	// resolves to the message store root, so BackupUser(".") archived every
+	// user's mail and a "." restore target wrote into the store root (F7540).
+	if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "/\\") {
 		return fmt.Errorf("invalid path component: %q", part)
 	}
 	return nil
@@ -481,6 +484,13 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 		targetDir = m.messagesDir()
 	}
 
+	// Resolve every entry before extracting any: renaming members into the live
+	// tree one by one otherwise leaves a partially restored mailbox when a later
+	// entry names another user or escapes the target (F7541).
+	if err := preflightEntries(backupPath, opts.Mode, targetDir); err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(targetDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create target directory: %w", err)
 	}
@@ -495,32 +505,9 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 			return err
 		}
 
-		name := header.Name
-		if opts.Mode == RestoreModeDifferent {
-			name, err = relocateEntry(header.Name, &sourceUser)
-			if err != nil {
-				return err
-			}
-		}
-		targetPath := filepath.Join(targetDir, name)
-
-		// A tar entry must never resolve outside the target directory. Without
-		// this check an entry named "../escape.txt" is written outside it, which
-		// lets a crafted archive overwrite arbitrary files during restore. The
-		// CLI restore (internal/cli/backup.go) enforces the same rule.
-		absTargetPath, err := filepath.Abs(targetPath)
+		targetPath, err := resolveEntry(header.Name, opts.Mode, targetDir, &sourceUser)
 		if err != nil {
-			return fmt.Errorf("failed to resolve target path: %w", err)
-		}
-		absTargetDir, err := filepath.Abs(targetDir)
-		if err != nil {
-			return fmt.Errorf("failed to resolve target directory: %w", err)
-		}
-		absTargetPath = filepath.Clean(absTargetPath)
-		absTargetDir = filepath.Clean(absTargetDir)
-		if absTargetPath != absTargetDir &&
-			!strings.HasPrefix(absTargetPath, absTargetDir+string(filepath.Separator)) {
-			return fmt.Errorf("invalid entry in backup: %s - would extract outside target directory", header.Name)
+			return err
 		}
 
 		switch header.Typeflag {
@@ -558,6 +545,67 @@ func (m *Manager) Restore(backupPath string, opts RestoreOptions) error {
 	}
 
 	return nil
+}
+
+// resolveEntry maps an archive member name to its extraction path, rejecting
+// names that belong to another user (different-user restore) or resolve outside
+// targetDir. A tar entry must never leave the target directory: "../escape.txt"
+// would let a crafted archive overwrite arbitrary files. The CLI restore
+// (internal/cli/backup.go) enforces the same rule.
+func resolveEntry(name string, mode RestoreMode, targetDir string, sourceUser *string) (string, error) {
+	orig := name
+	if mode == RestoreModeDifferent {
+		var err error
+		name, err = relocateEntry(name, sourceUser)
+		if err != nil {
+			return "", err
+		}
+	}
+	targetPath := filepath.Join(targetDir, name)
+	absTargetPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve target path: %w", err)
+	}
+	absTargetDir, err := filepath.Abs(targetDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve target directory: %w", err)
+	}
+	absTargetPath = filepath.Clean(absTargetPath)
+	absTargetDir = filepath.Clean(absTargetDir)
+	if absTargetPath != absTargetDir &&
+		!strings.HasPrefix(absTargetPath, absTargetDir+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid entry in backup: %s - would extract outside target directory", orig)
+	}
+	return targetPath, nil
+}
+
+// preflightEntries reads the archive once and resolves every member name
+// without touching the filesystem (F7541).
+func preflightEntries(backupPath string, mode RestoreMode, targetDir string) error {
+	f, err := os.Open(backupPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("invalid gzip format: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	var sourceUser string
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := resolveEntry(header.Name, mode, targetDir, &sourceUser); err != nil {
+			return err
+		}
+	}
 }
 
 // relocateEntry strips the source user from a per-user archive entry
