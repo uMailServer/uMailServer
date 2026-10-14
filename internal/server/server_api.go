@@ -46,6 +46,11 @@ func (s *Server) startAPI() error {
 	if s.queue != nil {
 		s.apiServer.SetQueueManager(s.queue)
 	}
+	// F7640: webmail sends take the same local/relay routing as SMTP
+	// submission instead of queueing local recipients for an MX round trip.
+	s.apiServer.SetDeliverFunc(func(from string, to []string, data []byte) error {
+		return s.deliverMessageWithDSN(from, to, nil, nil, data)
+	})
 	// Set health monitor
 	if s.healthMonitor != nil {
 		s.apiServer.SetHealthMonitor(s.healthMonitor)

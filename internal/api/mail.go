@@ -61,6 +61,18 @@ type MailHandler struct {
 
 	// quotaAdjust mirrors blob bytes into the account quota counter (F6680).
 	quotaAdjust func(user string, delta int64) error
+
+	// deliver routes a sent message: mailboxes on this server are delivered
+	// locally, other recipients are queued for relay (F7640). When nil,
+	// handleMailSend queues every recipient on queueMgr.
+	deliver func(from string, to []string, data []byte) error
+}
+
+// SetDeliverFunc wires the server's delivery routing (local mailboxes versus
+// outbound relay) so sends to a mailbox on this server do not depend on a DNS
+// round trip to this server's own MX (F7640).
+func (h *MailHandler) SetDeliverFunc(fn func(from string, to []string, data []byte) error) {
+	h.deliver = fn
 }
 
 // SetQueueManager wires the outbound delivery queue so sent messages are
@@ -642,8 +654,13 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 	// (To, Cc, Bcc). Bcc addresses must not appear in the message headers
 	// but still receive the mail. Without a wired queue (direct-handler
 	// tests), keep the legacy store-to-Sent-only behavior.
-	if h.queueMgr != nil {
-		recipients := append(append(append([]string{}, safeTo...), safeCC...), safeBCC...)
+	recipients := append(append(append([]string{}, safeTo...), safeCC...), safeBCC...)
+	if h.deliver != nil {
+		if err := h.deliver(userEmail, recipients, []byte(rawEmail)); err != nil {
+			h.sendError(w, http.StatusInternalServerError, "Failed to deliver message")
+			return
+		}
+	} else if h.queueMgr != nil {
 		if _, err := h.queueMgr.Enqueue(userEmail, recipients, []byte(rawEmail)); err != nil {
 			h.sendError(w, http.StatusInternalServerError, "Failed to queue message for delivery")
 			return
