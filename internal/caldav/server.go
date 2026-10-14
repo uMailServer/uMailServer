@@ -1509,6 +1509,14 @@ func (s *Server) transferEvent(w http.ResponseWriter, r *http.Request, username 
 		return
 	}
 
+	// A destination deeper than /{calendar}/{name} (including an encoded "/"
+	// inside the name) names no resource; it must not be truncated to its
+	// first segment and written there (F7462).
+	if len(destParts) > 4 {
+		s.sendError(w, http.StatusConflict, "invalid destination path")
+		return
+	}
+
 	destCalendarID := destParts[2]
 	destEventUID := destParts[3]
 

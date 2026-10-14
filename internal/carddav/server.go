@@ -762,6 +762,18 @@ func (s *Server) handleMkCol(w http.ResponseWriter, r *http.Request, username st
 		Description: description,
 	}
 
+	// RFC 4918 §9.3.1 (DAV:resource-must-be-null): an existing address book
+	// is never re-created, which would reset its name, description and
+	// timestamps (and so its sync token). Check and create are atomic under
+	// writeMu (F7460).
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if existing, gerr := s.storage.GetAddressbook(username, addressbookID); gerr == nil && existing != nil {
+		w.Header().Set("Allow", "OPTIONS, GET, PUT, DELETE, PROPFIND, PROPPATCH, REPORT, MOVE, COPY")
+		s.sendError(w, http.StatusMethodNotAllowed, "address book already exists")
+		return
+	}
+
 	if err := s.storage.CreateAddressbook(username, ab); err != nil {
 		if errors.Is(err, errInvalidID) {
 			s.sendError(w, http.StatusBadRequest, "invalid addressbook ID")
@@ -846,6 +858,10 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request, username str
 
 	destAddressbookID := destParts[0]
 	destContactUID := trimVCardExt(destParts[1])
+	if destContactUID == "" || validateID(destContactUID) != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid destination contact name")
+		return
+	}
 
 	// Verify the destination address book belongs to this user
 	ab, err = s.storage.GetAddressbook(username, destAddressbookID)
@@ -954,6 +970,10 @@ func (s *Server) handleCopy(w http.ResponseWriter, r *http.Request, username str
 
 	destAddressbookID := destParts[0]
 	destContactUID := trimVCardExt(destParts[1])
+	if destContactUID == "" || validateID(destContactUID) != nil {
+		s.sendError(w, http.StatusBadRequest, "invalid destination contact name")
+		return
+	}
 
 	// Verify the destination address book belongs to this user
 	ab, err = s.storage.GetAddressbook(username, destAddressbookID)
