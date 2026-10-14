@@ -1355,6 +1355,22 @@ func readBoundedLine(r *bufio.Reader, keep int) (line []byte, total int, endsCRL
 	}
 }
 
+// hasOverlongLine reports whether any line of data (terminator included)
+// exceeds the RFC 5322 limit of 1000 octets that readData enforces (F7400).
+func hasOverlongLine(data []byte) bool {
+	for len(data) > 0 {
+		n := bytes.IndexByte(data, '\n') + 1
+		if n == 0 {
+			n = len(data)
+		}
+		if n > 1000 {
+			return true
+		}
+		data = data[n:]
+	}
+	return false
+}
+
 // normalizeBareLF returns data with every LF not preceded by CR turned into CRLF.
 func normalizeBareLF(data []byte) []byte {
 	var out []byte
@@ -1470,6 +1486,12 @@ func (s *Session) handleBDAT(arg string) error {
 			if hasBareCR(raw) { // F6151
 				s.resetTransaction()
 				return s.WriteResponse(554, "5.6.0 Message contains bare CR")
+			}
+			// DATA refuses NUL bytes and overlong lines; BDAT must hold
+			// the same content rules (F7400).
+			if bytes.IndexByte(raw, 0) >= 0 || hasOverlongLine(raw) {
+				s.resetTransaction()
+				return s.WriteResponse(554, "5.6.0 Message contains NUL byte or line over 1000 octets")
 			}
 			data = normalizeBareLF(raw) // F5670
 		}

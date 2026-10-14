@@ -94,8 +94,23 @@ func TestHandleBDAT_AcceptsChunksUpToLimit(t *testing.T) {
 	setupBDATSessionState(session)
 
 	chunks := []int{10, 10, limit - 20} // sums to exactly limit
+	offset := 0
 	for i, n := range chunks {
-		if _, err := clientConn.Write(make([]byte, n)); err != nil {
+		// CRLF-terminated lines every 10 octets: BDAT now refuses NUL bytes
+		// and lines over 1000 octets like DATA (F7400).
+		payload := make([]byte, n)
+		for j := range payload {
+			switch (offset + j) % 10 {
+			case 8:
+				payload[j] = '\r'
+			case 9:
+				payload[j] = '\n'
+			default:
+				payload[j] = 'A'
+			}
+		}
+		offset += n
+		if _, err := clientConn.Write(payload); err != nil {
 			t.Fatalf("write chunk %d: %v", i, err)
 		}
 		last := ""
