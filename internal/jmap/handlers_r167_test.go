@@ -189,28 +189,54 @@ func TestR167_SetArgTyping(t *testing.T) {
 	}
 }
 
-func TestR167_SetUnmodeledKeywordAndMailboxFalse(t *testing.T) {
+// Round 45 superseded the interim unmodeled-keyword rejection: arbitrary
+// RFC 8621 §2 keywords are stored (lowercase) by both patch forms. Still
+// rejected: a non-bool keyword value (invalidPatch) and a mailboxIds patch
+// that would leave the Email with no mailbox (invalidProperties).
+func TestR167_SetArbitraryKeywordAndMailboxFalse(t *testing.T) {
 	server, db, _, cleanup := setupTestServer(t)
 	defer cleanup()
 	seedSortMessages(t, db)
-	patches := []map[string]interface{}{
-		{"keywords/custom": true},
-		{"keywords": map[string]interface{}{"custom": true}},
-		{"keywords/$seen": "yes"},
-		{"mailboxIds": map[string]interface{}{"INBOX": false}},
+
+	// Arbitrary keyword via path form: applied and stored lowercase.
+	resp := server.processMethodCall(r167User, MethodCall{Name: "Email/set", ID: "c1",
+		Args: map[string]interface{}{"accountId": r167User,
+			"update": map[string]interface{}{"msg-a": map[string]interface{}{"keywords/custom": true}}}})
+	u, _ := resp.Args["updated"].(map[string]interface{})
+	if _, ok := u["msg-a"]; !ok {
+		t.Fatalf("arbitrary path keyword rejected (RFC 8621 §2): %v", resp.Args)
 	}
-	for _, p := range patches {
-		resp := server.processMethodCall(r167User, MethodCall{Name: "Email/set", ID: "c1",
-			Args: map[string]interface{}{"accountId": r167User,
-				"update": map[string]interface{}{"msg-a": p}}})
-		nu, _ := resp.Args["notUpdated"].(map[string]interface{})
-		e, _ := nu["msg-a"].(map[string]interface{})
-		if e == nil {
-			t.Fatalf("patch %v accepted: %v", p, resp.Args)
-		}
-		if tp := e["type"]; tp != "invalidProperties" && tp != "invalidPatch" {
-			t.Fatalf("patch %v: type %v", p, tp)
-		}
+	if !hasFlag(storedFlags(t, db, r167User, "msg-a"), "custom") {
+		t.Fatalf("custom keyword not stored: %v", storedFlags(t, db, r167User, "msg-a"))
+	}
+
+	// Arbitrary keyword via whole form: replaces the set.
+	resp = server.processMethodCall(r167User, MethodCall{Name: "Email/set", ID: "c2",
+		Args: map[string]interface{}{"accountId": r167User,
+			"update": map[string]interface{}{"msg-a": map[string]interface{}{"keywords": map[string]interface{}{"custom": true}}}}})
+	u, _ = resp.Args["updated"].(map[string]interface{})
+	if _, ok := u["msg-a"]; !ok {
+		t.Fatalf("arbitrary whole-form keyword rejected (RFC 8621 §2): %v", resp.Args)
+	}
+
+	// Non-bool keyword value: still invalidPatch.
+	resp = server.processMethodCall(r167User, MethodCall{Name: "Email/set", ID: "c3",
+		Args: map[string]interface{}{"accountId": r167User,
+			"update": map[string]interface{}{"msg-a": map[string]interface{}{"keywords/$seen": "yes"}}}})
+	nu, _ := resp.Args["notUpdated"].(map[string]interface{})
+	e, _ := nu["msg-a"].(map[string]interface{})
+	if e == nil || (e["type"] != "invalidPatch" && e["type"] != "invalidProperties") {
+		t.Fatalf("non-bool keyword value: %v", resp.Args)
+	}
+
+	// mailboxIds all-false (no mailbox left): still invalidProperties.
+	resp = server.processMethodCall(r167User, MethodCall{Name: "Email/set", ID: "c4",
+		Args: map[string]interface{}{"accountId": r167User,
+			"update": map[string]interface{}{"msg-a": map[string]interface{}{"mailboxIds": map[string]interface{}{"INBOX": false}}}}})
+	nu, _ = resp.Args["notUpdated"].(map[string]interface{})
+	e, _ = nu["msg-a"].(map[string]interface{})
+	if e == nil || e["type"] != "invalidProperties" {
+		t.Fatalf("mailboxIds false: %v", resp.Args)
 	}
 }
 

@@ -158,6 +158,8 @@ func (s *AdminServer) router() http.Handler {
 	api.HandleFunc("/api/v1/admin/ratelimits/config", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleRateLimitConfig))))
 	api.HandleFunc("/api/v1/admin/ratelimits/ip/", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleRateLimitIPStats))))
 	api.HandleFunc("/api/v1/admin/ratelimits/user/", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleRateLimitUserStats))))
+	// Round 62 (the round-60 plan's Option B): on-demand orphan-blob sweep.
+	api.HandleFunc("/api/v1/admin/blob-gc", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleBlobGC))))
 
 	// Metrics (admin only)
 	api.HandleFunc("/api/v1/metrics", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleMetrics))))

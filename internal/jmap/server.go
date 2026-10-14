@@ -65,6 +65,9 @@ type Server struct {
 	gc            uploadGC
 	uploadTTL     time.Duration // zero = defaultUploadTTL
 	uploadGCEvery time.Duration // zero = defaultUploadGCEvery
+
+	// Orphan-blob GC (blobgc.go, round 61).
+	blobGC uploadGC
 }
 
 // SetQuotaLimitFunc installs the per-user byte limit (<= 0 = unlimited)
@@ -140,6 +143,9 @@ type Config struct {
 	JWTSecret   string
 	TokenExpiry time.Duration
 	CorsOrigins []string // Allowed CORS origins; if empty, allows all
+	// BlobGCInterval is the cadence of the background orphan-blob sweep
+	// (round 61); zero = defaultBlobGCEvery (one hour).
+	BlobGCInterval time.Duration
 }
 
 // Session represents a JMAP session
@@ -157,6 +163,9 @@ func NewServer(db *storage.Database, msgStore *storage.MessageStore, logger *slo
 	}
 	if config.TokenExpiry == 0 {
 		config.TokenExpiry = 24 * time.Hour
+	}
+	if config.BlobGCInterval == 0 {
+		config.BlobGCInterval = defaultBlobGCEvery
 	}
 
 	if db != nil && msgStore != nil {
@@ -546,8 +555,18 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retrieve message from storage using blobID as messageID
-	data, err := s.msgStore.ReadMessage(user, blobID)
+	// Retrieve message from storage using blobID as messageID. Round 59: a
+	// composite per-part blob id "{messageBlobId}.{partId}" (RFC 8621
+	// §4.1.4 — real blob ids are 64-hex without dots, so the forms are
+	// unambiguous) resolves to the addressed MIME part's decoded content,
+	// parsed on the fly from the parent message; no extra bytes are stored.
+	var data []byte
+	var err error
+	if msgID, partID, isPart := splitPartBlobID(blobID); isPart {
+		data, err = s.readMIMEPart(user, msgID, partID)
+	} else {
+		data, err = s.msgStore.ReadMessage(user, blobID)
+	}
 	if err != nil {
 		s.logger.Debug("Blob not found",
 			"user", user,
@@ -577,6 +596,50 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	// #nosec G705 -- Content-Type is explicitly set to non-HTML via DetectContentType and nosniff
 	_, _ = w.Write(data)
+}
+
+// splitPartBlobID recognizes the round-59 composite per-part blob id
+// "{messageBlobId}.{partId}" (RFC 8621 §4.1.4): the message id must be a
+// 64-char lowercase-hex content address (real blob ids have no dots) and
+// the part id a non-empty decimal string.
+func splitPartBlobID(blobID string) (msgID, partID string, ok bool) {
+	dot := strings.LastIndexByte(blobID, '.')
+	if dot <= 0 || dot == len(blobID)-1 {
+		return "", "", false
+	}
+	msgID, partID = blobID[:dot], blobID[dot+1:]
+	if len(msgID) != 64 {
+		return "", "", false
+	}
+	for i := 0; i < len(msgID); i++ {
+		c := msgID[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return "", "", false
+		}
+	}
+	for i := 0; i < len(partID); i++ {
+		if partID[i] < '0' || partID[i] > '9' {
+			return "", "", false
+		}
+	}
+	return msgID, partID, true
+}
+
+// readMIMEPart resolves the round-59 composite per-part blob id (RFC 8621
+// §4.1.4): reads the parent message and returns the addressed part's
+// decoded content (§4.1.4 defines part size as the octets after decoding).
+func (s *Server) readMIMEPart(user, msgID, partID string) ([]byte, error) {
+	data, err := s.msgStore.ReadMessage(user, msgID)
+	if err != nil {
+		return nil, err
+	}
+	hs, body := splitHeaders(data)
+	for _, p := range collectMIMEParts(hs, body, msgID) {
+		if p.part.PartID == partID {
+			return []byte(p.value), nil
+		}
+	}
+	return nil, fmt.Errorf("part %s not found in blob %s", partID, msgID)
 }
 
 // handleEvents handles /jmap/events (EventSource for push)

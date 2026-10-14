@@ -33,6 +33,9 @@ func (s *Server) startJMAP() error {
 	jmapServer.SetClaimsValidator(s.jmapClaimsValidator)
 	// Clear orphaned uploads left from before a restart (F6280).
 	jmapServer.StartUploadGC()
+	// Round 61: schedule the background orphan-blob sweep (its interval
+	// comes from jmap.Config.BlobGCInterval, zero = one hour).
+	jmapServer.StartBlobGC()
 
 	srv := &http.Server{
 		Addr:              addr,

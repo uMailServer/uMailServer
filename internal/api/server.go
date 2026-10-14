@@ -88,6 +88,9 @@ type Server struct {
 
 	// HTTP router (cached)
 	router http.Handler
+	// routerOnce guards the lazy router initialization in ServeHTTP: two
+	// concurrent first requests must not both run initRouter (R72).
+	routerOnce sync.Once
 
 	// HTTP server lifecycle guard (protects httpServer field)
 	serverMu sync.Mutex
@@ -394,9 +397,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	}()
-	if s.router == nil {
+	s.routerOnce.Do(func() {
 		s.initRouter()
-	}
+	})
 	s.traceRequest(s.methodMiddleware(s.router)).ServeHTTP(w, r)
 }
 

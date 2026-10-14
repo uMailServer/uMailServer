@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -519,6 +520,28 @@ func (s *MessageStore) GCOrphanBlobs(user string) (int, error) {
 		_ = os.Remove(dirs[i]) // fails harmlessly when not empty
 	}
 	return removed, nil
+}
+
+// BlobOwners returns the users that have a blob directory in this store
+// (round 61): the layout is basePath/<user>/ab/cd/<64hex>, so the store
+// root's directory entries are the owner ids. Only directories are listed;
+// entries are sorted for deterministic sweeps.
+func (s *MessageStore) BlobOwners() ([]string, error) {
+	ents, err := os.ReadDir(s.basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var owners []string
+	for _, e := range ents {
+		if e.IsDir() {
+			owners = append(owners, e.Name())
+		}
+	}
+	sort.Strings(owners)
+	return owners, nil
 }
 
 func isLowerHex(s string) bool {

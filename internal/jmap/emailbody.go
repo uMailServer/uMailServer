@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -184,16 +185,63 @@ func headerValue(hs []rawHeader, hp headerProp) interface{} {
 	return parseHeaderForm(hp.form, matches[len(matches)-1])
 }
 
-type textPart struct {
-	part  EmailBodyPart
-	value string
-	bad   bool // charset/encoding problem
+type mimePart struct {
+	part         EmailBodyPart
+	value        string
+	bad          bool // charset/encoding problem
+	isAttachment bool // disposition attachment or non-text type
 }
 
-// collectTextParts walks the MIME tree and returns the text/* leaf parts
-// (partIds assigned in document order) with decoded content.
-func collectTextParts(hdrs []rawHeader, body []byte) []textPart {
-	var out []textPart
+// decodeTransfer decodes Content-Transfer-Encoding (base64 or
+// quoted-printable) into raw bytes; other encodings pass through unchanged.
+// bad reports a decode failure for the caller to flag; the original bytes
+// are returned so the caller can apply its own fallback (round 59
+// extraction — shared by text and non-text parts).
+func decodeTransfer(enc string, body []byte) ([]byte, bool) {
+	switch strings.ToLower(enc) {
+	case "base64":
+		clean := strings.Map(func(r rune) rune {
+			if r == '\r' || r == '\n' || r == ' ' {
+				return -1
+			}
+			return r
+		}, string(body))
+		b, err := base64.StdEncoding.DecodeString(clean)
+		if err != nil {
+			return body, true
+		}
+		return b, false
+	case "quoted-printable":
+		b, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(body)))
+		if err != nil {
+			return body, true
+		}
+		return b, false
+	}
+	return body, false
+}
+
+// partBlobID composes the round-59 per-part blob id "{blobID}.{partId}"
+// (real blob ids are 64-hex without dots, so the forms are unambiguous);
+// empty when the caller has no parent blob id.
+func partBlobID(blobID string, partID int) string {
+	if blobID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s.%d", blobID, partID)
+}
+
+// collectMIMEParts walks the MIME tree and returns EVERY leaf part (partIds
+// assigned in document order). Text parts carry decoded content; non-text
+// parts and Content-Disposition:attachment parts are flagged isAttachment
+// and have their transfer encoding decoded (no charset conversion — binary
+// content; §4.1.4 defines part size as the octets after decoding, and the
+// round-59 per-part blobId download serves exactly those bytes). Each part
+// exposes the composite per-part blobId "{blobID}.{partId}" (round 59) so
+// clients can fetch part content via the download endpoint; real blob ids
+// are 64-hex without dots, so the forms are unambiguous.
+func collectMIMEParts(hdrs []rawHeader, body []byte, blobID string) []mimePart {
+	var out []mimePart
 	n := 0
 	var walk func(hdrs []rawHeader, body []byte, depth int)
 	walk = func(hdrs []rawHeader, body []byte, depth int) {
@@ -230,36 +278,44 @@ func collectTextParts(hdrs []rawHeader, body []byte) []textPart {
 				walk(ph, pb, depth+1)
 			}
 		}
-		if !strings.HasPrefix(mt, "text/") {
-			return
+		dispType, dispParams := "", map[string]string{}
+		if dispRaw := get("Content-Disposition"); dispRaw != "" {
+			if dt, dp, derr := mime.ParseMediaType(dispRaw); derr == nil {
+				dispType, dispParams = strings.ToLower(dt), dp
+			}
 		}
-		if disp := strings.ToLower(get("Content-Disposition")); strings.HasPrefix(disp, "attachment") {
-			return
-		}
+		isText := strings.HasPrefix(mt, "text/")
+		isAttachment := dispType == "attachment" || !isText
 		n++
-		tp := textPart{part: EmailBodyPart{PartID: fmt.Sprint(n), Type: mt, Charset: params["charset"]}}
-		dec := body
-		switch strings.ToLower(get("Content-Transfer-Encoding")) {
-		case "base64":
-			clean := strings.Map(func(r rune) rune {
-				if r == '\r' || r == '\n' || r == ' ' {
-					return -1
-				}
-				return r
-			}, string(body))
-			b, err := base64.StdEncoding.DecodeString(clean)
-			if err != nil {
-				tp.bad = true
-			} else {
-				dec = b
-			}
-		case "quoted-printable":
-			b, err := io.ReadAll(quotedprintable.NewReader(bytes.NewReader(body)))
-			if err != nil {
-				tp.bad = true
-			}
-			dec = b
+		tp := mimePart{
+			part: EmailBodyPart{
+				PartID:      fmt.Sprint(n),
+				BlobID:      partBlobID(blobID, n),
+				Type:        mt,
+				Name:        params["name"],
+				Disposition: dispType,
+			},
+			isAttachment: isAttachment,
 		}
+		if fn := dispParams["filename"]; fn != "" {
+			tp.part.Name = fn
+		}
+		if !isText {
+			// Non-text leaf part (attachment): decode the transfer encoding
+			// (no charset conversion — binary content). §4.1.4 defines part
+			// size as the octets AFTER content-transfer decoding, and the
+			// per-part blobId download (round 59) serves exactly these
+			// bytes.
+			dec, bad := decodeTransfer(get("Content-Transfer-Encoding"), body)
+			tp.bad = bad
+			tp.value = string(dec)
+			tp.part.Size = int64(len(dec))
+			out = append(out, tp)
+			return
+		}
+		tp.part.Charset = params["charset"]
+		dec, bad := decodeTransfer(get("Content-Transfer-Encoding"), body)
+		tp.bad = bad
 		tp.part.Size = int64(len(dec))
 		cs := strings.ToLower(params["charset"])
 		switch cs {
@@ -304,12 +360,19 @@ type bodyFetchOpts struct {
 	maxBytes        int // -1 = unlimited
 }
 
-// bodyProps computes textBody, htmlBody and bodyValues for the raw message.
-func bodyProps(hs []rawHeader, body []byte, o bodyFetchOpts) (textBody, htmlBody []EmailBodyPart, values map[string]EmailBodyValue) {
-	parts := collectTextParts(hs, body)
-	pick := func(want string) []textPart {
-		var sel, other []textPart
-		for _, p := range parts {
+// bodyProps computes textBody, htmlBody, attachments, bodyValues, preview
+// and hasAttachment for the raw message.
+func bodyProps(hs []rawHeader, body []byte, o bodyFetchOpts, blobID string) (textBody, htmlBody, attachments []EmailBodyPart, values map[string]EmailBodyValue, preview string, hasAttachment bool) {
+	parts := collectMIMEParts(hs, body, blobID)
+	var textOnly []mimePart
+	for _, p := range parts {
+		if !p.isAttachment && strings.HasPrefix(p.part.Type, "text/") {
+			textOnly = append(textOnly, p)
+		}
+	}
+	pick := func(want string) []mimePart {
+		var sel, other []mimePart
+		for _, p := range textOnly {
 			if p.part.Type == want {
 				sel = append(sel, p)
 			} else {
@@ -322,10 +385,12 @@ func bodyProps(hs []rawHeader, body []byte, o bodyFetchOpts) (textBody, htmlBody
 		return sel
 	}
 	tb, hb := pick("text/plain"), pick("text/html")
-	textBody, htmlBody = []EmailBodyPart{}, []EmailBodyPart{}
+	textBody, htmlBody, attachments = []EmailBodyPart{}, []EmailBodyPart{}, []EmailBodyPart{}
 	values = map[string]EmailBodyValue{}
-	add := func(ps []textPart) {
+	selected := map[string]bool{}
+	add := func(ps []mimePart) {
 		for _, p := range ps {
+			selected[p.part.PartID] = true
 			v, trunc := p.value, false
 			if o.maxBytes >= 0 {
 				v, trunc = truncateUTF8(v, o.maxBytes)
@@ -335,9 +400,11 @@ func bodyProps(hs []rawHeader, body []byte, o bodyFetchOpts) (textBody, htmlBody
 	}
 	for _, p := range tb {
 		textBody = append(textBody, p.part)
+		selected[p.part.PartID] = true
 	}
 	for _, p := range hb {
 		htmlBody = append(htmlBody, p.part)
+		selected[p.part.PartID] = true
 	}
 	if o.text || o.all {
 		add(tb)
@@ -346,9 +413,73 @@ func bodyProps(hs []rawHeader, body []byte, o bodyFetchOpts) (textBody, htmlBody
 		add(hb)
 	}
 	if o.all {
-		add(parts)
+		add(textOnly)
+	}
+	// RFC 8621 §4.1.4: attachments = every part not in textBody/htmlBody
+	// (round 51 — non-text and Content-Disposition:attachment parts were
+	// previously dropped by collectTextParts).
+	for _, p := range parts {
+		if !selected[p.part.PartID] {
+			attachments = append(attachments, p.part)
+		}
+	}
+	// RFC 8621 §4.1.2 (round 52): hasAttachment SHOULD be true when the
+	// attachments list has at least one item that does not have
+	// "Content-Disposition: inline"; preview is a plaintext fragment of the
+	// body (white space collapsed; the server chooses the part) and MUST
+	// NOT exceed 256 characters.
+	for _, a := range attachments {
+		if a.Disposition != "inline" {
+			hasAttachment = true
+			break
+		}
+	}
+	if len(tb) > 0 {
+		src := tb[0].value
+		if tb[0].part.Type == "text/html" {
+			// §4.1.2 preview is a plaintext fragment: when the chosen text
+			// part is HTML (round 51's text-part fallback), strip tags and
+			// decode entities before the collapse+truncate (round 54).
+			src = htmlToPreviewText(src)
+		}
+		preview, _ = truncateUTF8(strings.Join(strings.Fields(src), " "), 256)
 	}
 	return
+}
+
+// parseBodyFetchOpts reads the §4.2 body-fetch arguments shared by the
+// projected (map) and full-form (struct) response paths.
+func parseBodyFetchOpts(args map[string]interface{}) bodyFetchOpts {
+	o := bodyFetchOpts{maxBytes: -1}
+	o.text, _ = args["fetchTextBodyValues"].(bool)
+	o.html, _ = args["fetchHTMLBodyValues"].(bool)
+	o.all, _ = args["fetchAllBodyValues"].(bool)
+	if m, ok := args["maxBodyValueBytes"].(float64); ok && m >= 0 {
+		o.maxBytes = int(m)
+	}
+	return o
+}
+
+// augmentEmailBodyStruct fills textBody/htmlBody/bodyValues on a full-form
+// Email/get response (properties omitted ⇒ RFC 8621 §4.2 "all properties").
+// Round 50: the full form previously returned the bare storageToJMAPEmail
+// struct with no body properties.
+func (s *Server) augmentEmailBodyStruct(user, blobID string, args map[string]interface{}, email *Email) {
+	if s.msgStore == nil {
+		return
+	}
+	data, err := s.msgStore.ReadMessage(user, blobID)
+	if err != nil {
+		return
+	}
+	hs, body := splitHeaders(data)
+	tb, hb, atts, vals, preview, hasAtt := bodyProps(hs, body, parseBodyFetchOpts(args), blobID)
+	email.TextBody = tb
+	email.HTMLBody = hb
+	email.Attachments = atts
+	email.BodyValues = vals
+	email.Preview = preview
+	email.HasAttachment = hasAtt
 }
 
 // augmentEmailProps adds the header:*, textBody, htmlBody and bodyValues
@@ -356,7 +487,7 @@ func bodyProps(hs []rawHeader, body []byte, o bodyFetchOpts) (textBody, htmlBody
 func (s *Server) augmentEmailProps(user, blobID string, props []string, args map[string]interface{}, out map[string]interface{}) {
 	need := false
 	for _, p := range props {
-		if strings.HasPrefix(p, "header:") || p == "bodyValues" || p == "textBody" || p == "htmlBody" {
+		if strings.HasPrefix(p, "header:") || p == "bodyValues" || p == "textBody" || p == "htmlBody" || p == "attachments" || p == "preview" || p == "hasAttachment" {
 			need = true
 		}
 	}
@@ -368,14 +499,8 @@ func (s *Server) augmentEmailProps(user, blobID string, props []string, args map
 		return
 	}
 	hs, body := splitHeaders(data)
-	o := bodyFetchOpts{maxBytes: -1}
-	o.text, _ = args["fetchTextBodyValues"].(bool)
-	o.html, _ = args["fetchHTMLBodyValues"].(bool)
-	o.all, _ = args["fetchAllBodyValues"].(bool)
-	if m, ok := args["maxBodyValueBytes"].(float64); ok && m >= 0 {
-		o.maxBytes = int(m)
-	}
-	tb, hb, vals := bodyProps(hs, body, o)
+	o := parseBodyFetchOpts(args)
+	tb, hb, atts, vals, preview, hasAtt := bodyProps(hs, body, o, blobID)
 	for _, p := range props {
 		switch {
 		case strings.HasPrefix(p, "header:"):
@@ -388,6 +513,111 @@ func (s *Server) augmentEmailProps(user, blobID string, props []string, args map
 			out[p] = hb
 		case p == "bodyValues":
 			out[p] = vals
+		case p == "attachments":
+			out[p] = atts
+		case p == "preview":
+			out[p] = preview
+		case p == "hasAttachment":
+			out[p] = hasAtt
 		}
 	}
+}
+
+// applyServerSetProps fills the RFC 8621 §4.1.2 server-set properties
+// (preview, hasAttachment) on a response Email object from the raw message
+// bytes. The created responses (Email/set create, Email/import) otherwise
+// carry storageToJMAPEmail's zero values — omitted on the wire via omitempty
+// — while Email/get of the same message reports them (rounds 50–52
+// machinery); RFC 8620 §5.3 returns the created object, so the server-set
+// properties must agree. bodyFetchOpts{} leaves bodyValues unset: the
+// created-response contract carries no body values.
+func applyServerSetProps(email *Email, data []byte, blobID string) {
+	if len(data) == 0 {
+		return
+	}
+	hs, body := splitHeaders(data)
+	_, _, _, _, preview, hasAtt := bodyProps(hs, body, bodyFetchOpts{}, blobID)
+	email.Preview = preview
+	email.HasAttachment = hasAtt
+}
+
+// htmlToPreviewText strips tags and decodes HTML entities from an HTML
+// fragment so a text/html part can serve as the §4.1.2 preview source
+// (round 54). Deterministic index-based scanner: text between tags is kept,
+// `<`…`>` runs are dropped (an unterminated trailing tag drops the
+// remainder), and the result is entity-decoded. Round 56: <script> and
+// <style> block CONTENTS are dropped too — an open tag skips to the
+// matching close tag (searched case-insensitively, like HTML parsers that
+// end script blocks at the first "</script"), and a missing close tag
+// drops the remainder, consistent with the unterminated-tag rule.
+func htmlToPreviewText(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		lt := strings.IndexByte(s[i:], '<')
+		if lt < 0 {
+			b.WriteString(s[i:])
+			break
+		}
+		lt += i
+		b.WriteString(s[i:lt])
+		gt := strings.IndexByte(s[lt:], '>')
+		if gt < 0 {
+			break
+		}
+		end := lt + gt + 1
+		name, block := htmlBlockOpen(strings.ToLower(s[lt:end]))
+		if !block {
+			i = end
+			continue
+		}
+		// Round 56: drop the block's contents up to the matching close
+		// tag; the close tag itself is then handled as a normal (dropped)
+		// tag by the main loop.
+		closed := false
+		off := end
+		for !closed {
+			c := strings.IndexByte(s[off:], '<')
+			if c < 0 {
+				return b.String()
+			}
+			c += off
+			g2 := strings.IndexByte(s[c:], '>')
+			if g2 < 0 {
+				return b.String()
+			}
+			e2 := c + g2 + 1
+			ct := strings.ToLower(s[c:e2])
+			if strings.HasPrefix(ct, "</"+name) && len(ct) > len(name)+2 {
+				switch ct[len(name)+2] {
+				case '>', ' ', '\t', '\n', '\r', '/':
+					i = c
+					closed = true
+					continue
+				}
+			}
+			off = e2
+		}
+	}
+	return html.UnescapeString(b.String())
+}
+
+// htmlBlockOpen reports whether the lowercased tag opens a <script> or
+// <style> block whose contents the preview must drop (round 56), returning
+// the block name. A word boundary is required: "<scripty>" is a plain
+// unknown tag, not a script block.
+func htmlBlockOpen(tag string) (string, bool) {
+	for _, name := range []string{"script", "style"} {
+		open := "<" + name
+		if !strings.HasPrefix(tag, open) {
+			continue
+		}
+		rest := tag[len(open):]
+		if rest != "" {
+			switch rest[0] {
+			case '>', ' ', '\t', '\n', '\r', '/':
+				return name, true
+			}
+		}
+	}
+	return "", false
 }

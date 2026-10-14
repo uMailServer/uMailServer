@@ -247,6 +247,17 @@ func (s *Server) Stop() {
 		close(stop)
 		<-done
 	}
+	// Round 61: the orphan-blob sweep goroutine shares the lifecycle.
+	b := &s.blobGC
+	b.mu.Lock()
+	b.stopped = true
+	bstop, bdone := b.stop, b.done
+	b.stop = nil
+	b.mu.Unlock()
+	if bstop != nil {
+		close(bstop)
+		<-bdone
+	}
 }
 
 // noStoreGuard serializes the (test-only) wiring that has no MessageStore.

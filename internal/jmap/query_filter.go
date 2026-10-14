@@ -2,7 +2,6 @@ package jmap
 
 import (
 	"encoding/json"
-	"strings"
 
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -227,8 +226,31 @@ func validateStringArray(v interface{}, name string) *queryError {
 	return nil
 }
 
-// keywordModeled reports whether the server can persist keyword kw.
+// validKeywordSyntax reports whether kw satisfies the RFC 8621 §2 keyword
+// syntax: 1-255 characters of %x21-%x7e, excluding ( ) { ] % * " \. The
+// check runs on the RAW name; callers lowercase accepted keywords at the
+// write boundary (§2: servers MUST return keywords in lowercase).
+func validKeywordSyntax(kw string) bool {
+	if len(kw) < 1 || len(kw) > 255 {
+		return false
+	}
+	for i := 0; i < len(kw); i++ {
+		c := kw[i]
+		if c < 0x21 || c > 0x7e {
+			return false
+		}
+		switch c {
+		case '(', ')', '{', ']', '%', '*', '"', '\\':
+			return false
+		}
+	}
+	return true
+}
+
+// keywordModeled reports whether the server can persist keyword kw. The
+// server stores ANY syntactically valid RFC 8621 §2 keyword (lowercased at
+// the write boundary), so "modeled" means syntax-valid; the four system
+// keywords additionally map to IMAP system flags via jmapKeywordToIMAPFlag.
 func keywordModeled(kw string) bool {
-	_, ok := jmapKeywordToIMAPFlag(strings.TrimSpace(kw))
-	return ok
+	return validKeywordSyntax(kw)
 }

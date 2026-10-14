@@ -260,16 +260,23 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 	for key, val := range create {
 		createData, ok := val.(map[string]interface{})
 		if !ok {
+			// RFC 8620 §2.6: the record given is invalid in some way — a
+			// Mailbox object is required — so the per-entry SetError type is
+			// "invalidProperties" ((create; update)). "invalidArguments" is a
+			// method-level error name (§3.6.1) and not a legal SetError type.
 			notCreated[key] = map[string]interface{}{
-				"type": "invalidArguments",
+				"type": "invalidProperties",
 			}
 			continue
 		}
 
 		name, _ := createData["name"].(string)
 		if name == "" {
+			// RFC 8620 §2.6: an invalid record is an "invalidProperties"
+			// SetError, which SHOULD list the invalid properties.
 			notCreated[key] = map[string]interface{}{
-				"type":        "invalidArguments",
+				"type":        "invalidProperties",
+				"properties":  []string{"name"},
 				"description": "Mailbox name is required",
 			}
 			continue
@@ -307,8 +314,13 @@ func (s *Server) handleMailboxSet(user string, call MethodCall) Response {
 	for key, val := range update {
 		updateData, ok := val.(map[string]interface{})
 		if !ok {
+			// RFC 8620 §4.3: the update argument is Id[PatchObject]; a value
+			// that is not an object means the PatchObject given is not a
+			// valid patch, so the per-entry SetError type is "invalidPatch"
+			// (§2.6). "invalidArguments" is a method-level error name (§3.6.1)
+			// and not a legal SetError type.
 			notUpdated[key] = map[string]interface{}{
-				"type": "invalidArguments",
+				"type": "invalidPatch",
 			}
 			continue
 		}
@@ -509,11 +521,15 @@ func (s *Server) handleEmailGet(user string, call MethodCall) Response {
 			for _, c := range copies[1:] {
 				email.MailboxIDs[getMailboxIDFromName(c.mailbox)] = true
 			}
-			emails = append(emails, email)
 			if wantProps != nil {
 				pe := projectEmail(email, wantProps)
 				s.augmentEmailProps(user, copies[0].meta.MessageID, wantProps, args, pe)
 				projected = append(projected, pe)
+			} else {
+				// RFC 8621 §4.2: properties omitted ⇒ all properties — the
+				// full form must carry body properties too (round 50).
+				s.augmentEmailBodyStruct(user, copies[0].meta.MessageID, args, &email)
+				emails = append(emails, email)
 			}
 		}
 	}
@@ -895,7 +911,9 @@ func metaHasKeyword(meta *storage.MessageMetadata, keyword string) bool {
 	if flag, ok := jmapKeywordToIMAPFlag(keyword); ok {
 		return hasIMAPFlag(meta.Flags, flag)
 	}
-	return hasIMAPFlag(meta.Flags, keyword)
+	// Arbitrary keywords are stored lowercase (§2 lowercase-return), so the
+	// fallback match lowercases the filter keyword.
+	return hasIMAPFlag(meta.Flags, strings.ToLower(keyword))
 }
 
 // clampQueryLimit maps a client-supplied /query limit to the page size
@@ -972,11 +990,22 @@ func sortMessagesBy(messages []struct {
 	})
 }
 
+// maxJMAPKeywordsPerEmail is the server-defined maximum number of keywords
+// per Email (RFC 8621 §4.6: "tooManyKeywords: The change to the Email's
+// keywords would exceed a server-defined maximum" — the cap itself is
+// explicitly server policy). Enforced on Email/set keyword updates and
+// Email/import creation.
+const maxJMAPKeywordsPerEmail = 100
+
 // jmapKeywordToIMAPFlag maps a JMAP keyword to its IMAP system flag.
+// RFC 8621 §2: keywords are case-insensitive ("a keyword is a
+// case-insensitive string") and servers MUST return them lowercase, so the
+// lookup case-folds the client-supplied name; storage keeps the fixed-case
+// IMAP flag and emission returns the lowercase JMAP form.
 // Keywords without a system-flag equivalent (and keywords this server does
 // not model) are reported as unmapped.
 func jmapKeywordToIMAPFlag(keyword string) (string, bool) {
-	switch keyword {
+	switch strings.ToLower(keyword) {
 	case "$seen":
 		return "\\Seen", true
 	case "$answered":
@@ -1059,12 +1088,146 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 	var destroyed []string
 	notDestroyed := make(map[string]interface{})
 
-	// Handle create (emails are typically imported, not created directly)
-	for key := range create {
-		notCreated[key] = map[string]interface{}{
-			"type":        "notSupported",
-			"description": "Use Email/import to create emails",
+	// Handle create: RFC 8621 §4.6 draft creation. The client submits Email
+	// properties; the server validates the §4.6 constraints, synthesizes
+	// the RFC 5322 message (generating Message-ID/Date when absent),
+	// applies the shared keyword machinery (rounds 41/45/47), and stores
+	// the Email in every target mailbox with delivery-style threading.
+	// Round 49 replaces the round-39 "forbidden" refusal, which had made
+	// the refusal RFC-compliant without implementing creation.
+	for key, val := range create {
+		createData, ok := val.(map[string]interface{})
+		if !ok {
+			notCreated[key] = map[string]interface{}{
+				"type":        "invalidProperties",
+				"description": "Create value must be an object (RFC 8621 §4.1.2)",
+			}
+			continue
 		}
+
+		raw, buildErr := buildRFC5322Email(user, createData, s.msgStore)
+		if buildErr != nil {
+			e := map[string]interface{}{
+				"type":        buildErr.setErrType,
+				"description": buildErr.description,
+			}
+			if len(buildErr.properties) > 0 {
+				e["properties"] = buildErr.properties
+			}
+			if len(buildErr.notFound) > 0 {
+				e["notFound"] = buildErr.notFound
+			}
+			notCreated[key] = e
+			continue
+		}
+
+		blobID, err := s.msgStore.StoreMessage(user, raw)
+		if err != nil {
+			notCreated[key] = map[string]interface{}{
+				"type":        "serverFail",
+				"description": s.safeError("StoreMessage", err),
+			}
+			continue
+		}
+		meta := parseEmailMetadata(raw, blobID)
+		meta.Size = int64(len(raw))
+		if receivedAt, has := createData["receivedAt"].(string); has && receivedAt != "" {
+			if t, err := time.Parse(time.RFC3339, receivedAt); err == nil {
+				meta.InternalDate = t
+			}
+		}
+
+		// Keywords share the import machinery: §2 syntax gate, lowercase
+		// storage, and the round-47 tooManyKeywords cap.
+		keywords, _ := createData["keywords"].(map[string]interface{})
+		if errMap := applyKeywordsToMeta(meta, keywords); errMap != nil {
+			notCreated[key] = errMap
+			s.releaseSyntheticBlob(user, blobID)
+			continue
+		}
+
+		// mailboxIds is required with at least one true entry (§4.1.2);
+		// unknown ids follow the round-21 import precedent (mailboxNotFound).
+		mailboxIDs, _ := createData["mailboxIds"].(map[string]interface{})
+		var targetNames []string
+		missingMailbox := false
+		for id, v := range mailboxIDs {
+			if b, ok := v.(bool); !ok || !b {
+				continue
+			}
+			name := getMailboxNameFromID(id)
+			if !s.mailboxExists(user, name) {
+				missingMailbox = true
+				break
+			}
+			targetNames = append(targetNames, name)
+		}
+		if missingMailbox {
+			notCreated[key] = map[string]interface{}{
+				"type": "mailboxNotFound",
+			}
+			s.releaseSyntheticBlob(user, blobID)
+			continue
+		}
+		if len(targetNames) == 0 {
+			notCreated[key] = map[string]interface{}{
+				"type":        "invalidProperties",
+				"properties":  []string{"mailboxIds"},
+				"description": "At least one mailbox is required on creation (RFC 8621 §4.1.2)",
+			}
+			s.releaseSyntheticBlob(user, blobID)
+			continue
+		}
+
+		// Round 55/57: reserve the account quota for the created Email —
+		// mirrors import's F5741 charge (RFC 8620 §1.6.2/§5.3; RFC 8621
+		// §4.6 overQuota) — placed AFTER the validation gates so a rejected
+		// create never leaks the charge (round 57). Released again if
+		// storing fails below; the synthesized blob is released at every
+		// rejection via releaseSyntheticBlob.
+		if err := s.adjustQuota(user, meta.Size); err != nil {
+			notCreated[key] = map[string]interface{}{
+				"type":        "overQuota",
+				"description": "Account quota exceeded",
+			}
+			s.releaseSyntheticBlob(user, blobID)
+			continue
+		}
+
+		// Thread identity, mirroring SMTP delivery
+		// (internal/server/server_handlers.go) so drafts appear in
+		// Thread/get like delivered mail.
+		threadID, threadErr := s.db.GetOrCreateThreadID(user, targetNames[0], meta.Subject, meta.InReplyTo, meta.References)
+		if threadErr != nil {
+			threadID = "" // Continue without threading if it fails
+		}
+		meta.ThreadID = threadID
+		meta.IsThreadRoot = meta.InReplyTo == "" && len(meta.References) == 0
+
+		written, failDesc := s.storeEmailCopies(user, meta, targetNames)
+		if failDesc != "" {
+			notCreated[key] = map[string]interface{}{
+				"type":        "serverFail",
+				"description": failDesc,
+			}
+			// Round 55: release the quota reservation — mirrors import's
+			// F5741 rollback. Round 57: release the synthesized blob too.
+			_ = s.adjustQuota(user, -meta.Size)
+			s.releaseSyntheticBlob(user, blobID)
+			for _, w := range written {
+				_ = s.db.DeleteMessage(user, w.mailbox, w.uid)
+			}
+			continue
+		}
+
+		email := storageToJMAPEmail(meta, nil, targetNames[0])
+		// RFC 8620 §5.3 + §4.1.2: the created object carries the server-set
+		// properties, agreeing with Email/get of the same message (round 53).
+		applyServerSetProps(&email, raw, blobID)
+		for _, targetName := range targetNames[1:] {
+			email.MailboxIDs[getMailboxIDFromName(targetName)] = true
+		}
+		created[key] = email
 	}
 
 	// Handle update - update keywords (flags) and mailboxIds. F5333/F5334:
@@ -1087,8 +1250,13 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		}
 		updateData, ok := val.(map[string]interface{})
 		if !ok {
+			// RFC 8620 §4.3: the update argument is Id[PatchObject]; a value
+			// that is not an object means the PatchObject given is not a
+			// valid patch, so the per-entry SetError type is "invalidPatch"
+			// (§2.6). "invalidArguments" is a method-level error name (§3.6.1)
+			// and not a legal SetError type.
 			notUpdated[emailID] = map[string]interface{}{
-				"type": "invalidArguments",
+				"type": "invalidPatch",
 			}
 			continue
 		}
@@ -1114,6 +1282,26 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 		if !ok {
 			notUpdated[emailID] = map[string]interface{}{
 				"type": "invalidPatch",
+			}
+			continue
+		}
+
+		// RFC 8621 §4.6 (create; update): "tooManyKeywords: The change to
+		// the Email's keywords would exceed a server-defined maximum."
+		// Pre-check EVERY copy's patched flags before any persistence so a
+		// rejection is atomic (the round-34 all-targets precedent); removals
+		// shrink the set and always pass.
+		overKeywordLimit := false
+		for _, c := range copies {
+			if len(patchFlags(append([]string(nil), c.meta.Flags...))) > maxJMAPKeywordsPerEmail {
+				overKeywordLimit = true
+				break
+			}
+		}
+		if overKeywordLimit {
+			notUpdated[emailID] = map[string]interface{}{
+				"type":        "tooManyKeywords",
+				"description": fmt.Sprintf("Update would exceed %d keywords", maxJMAPKeywordsPerEmail),
 			}
 			continue
 		}
@@ -1334,6 +1522,10 @@ func validateEmailPatch(update map[string]interface{}) (string, []string) {
 // (true) or removes (null/false) a single keyword and preserves the rest.
 // The returned function applies the patch to one copy's flags (F5334); ok is
 // false for an invalid patch value, which rejects the whole update.
+// Since the arbitrary-keyword feature, names beyond the four system
+// keywords are stored as lowercase IMAP keywords verbatim (RFC 8621 §2:
+// users may add arbitrary keywords); validateEmailPatch has already checked
+// their syntax.
 func emailKeywordPatch(updateData map[string]interface{}) (func([]string) []string, bool) {
 	var replace []string
 	keywords, hasReplace := updateData["keywords"].(map[string]interface{})
@@ -1343,7 +1535,10 @@ func emailKeywordPatch(updateData map[string]interface{}) (func([]string) []stri
 			if b, ok := val.(bool); ok && b {
 				if flag, ok := jmapKeywordToIMAPFlag(kw); ok {
 					replace = append(replace, flag)
+					continue
 				}
+				// Arbitrary RFC 8621 §2 keyword: lowercase verbatim.
+				replace = append(replace, strings.ToLower(kw))
 			}
 		}
 	}
@@ -1353,9 +1548,11 @@ func emailKeywordPatch(updateData map[string]interface{}) (func([]string) []stri
 		if !strings.HasPrefix(key, keywordPathPrefix) {
 			continue
 		}
-		flag, ok := jmapKeywordToIMAPFlag(strings.TrimPrefix(key, keywordPathPrefix))
-		if !ok {
-			continue
+		name := strings.ToLower(strings.TrimPrefix(key, keywordPathPrefix))
+		flag, isSystem := jmapKeywordToIMAPFlag(name)
+		if !isSystem {
+			// Arbitrary RFC 8621 §2 keyword: lowercase verbatim.
+			flag = name
 		}
 		// null (JSON null) or false removes the keyword; true adds it.
 		// Anything else is an invalid patch value (RFC 8620 §5.3).
@@ -1511,6 +1708,64 @@ func (s *Server) stateToken(user string) string {
 	return token
 }
 
+// applyKeywordsToMeta validates and stores JMAP keywords onto an Email's
+// flags (RFC 8621 §4.8 apply; §2 values MUST be true; arbitrary §2 keywords
+// stored lowercase per the round-45 feature; round-47 tooManyKeywords cap).
+// Shared by Email/import and Email/set create (round 49). Returns the
+// notCreated SetError map on rejection, nil on success.
+func applyKeywordsToMeta(meta *storage.MessageMetadata, keywords map[string]interface{}) map[string]interface{} {
+	for kw, val := range keywords {
+		b, isBool := val.(bool)
+		if !isBool || !b {
+			return map[string]interface{}{
+				"type":        "invalidProperties",
+				"properties":  []string{"keywords"},
+				"description": "Keyword values must be true",
+			}
+		}
+		if flag, isSystem := jmapKeywordToIMAPFlag(kw); isSystem {
+			meta.Flags = append(meta.Flags, flag)
+			continue
+		}
+		lower := strings.ToLower(kw)
+		if !validKeywordSyntax(lower) {
+			return map[string]interface{}{
+				"type":        "invalidProperties",
+				"properties":  []string{"keywords"},
+				"description": fmt.Sprintf("Keyword %q is not a valid keyword", kw),
+			}
+		}
+		meta.Flags = append(meta.Flags, lower)
+	}
+	if len(meta.Flags) > maxJMAPKeywordsPerEmail {
+		return map[string]interface{}{
+			"type":        "tooManyKeywords",
+			"description": fmt.Sprintf("The Email would exceed %d keywords", maxJMAPKeywordsPerEmail),
+		}
+	}
+	return nil
+}
+
+// storeEmailCopies stores meta in EVERY target mailbox, each with its own
+// UID (round-49 extraction, shared by Email/import and Email/set create).
+// Returns the written copies and a serverFail description on failure; the
+// caller owns quota handling and undo of any already-written copies.
+func (s *Server) storeEmailCopies(user string, meta *storage.MessageMetadata, targetNames []string) ([]emailCopy, string) {
+	var written []emailCopy
+	for _, targetName := range targetNames {
+		uid, err := s.db.GetNextUID(user, targetName)
+		if err != nil {
+			return written, s.safeError("GetNextUID", err)
+		}
+		meta.UID = uid
+		if err := s.db.StoreMessageMetadata(user, targetName, uid, meta); err != nil {
+			return written, s.safeError("StoreMessageMetadata", err)
+		}
+		written = append(written, emailCopy{mailbox: targetName, uid: uid})
+	}
+	return written, ""
+}
+
 // handleEmailImport handles Email/import method
 func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 	args := call.Args
@@ -1536,7 +1791,15 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 		}
 	}
 
-	emails, _ := args["emails"].(map[string]interface{})
+	// RFC 8621 §4.8: "emails: Id[EmailImport]" is a required argument (no
+	// default), and RFC 8620 §3.6.1 requires the method-level
+	// "invalidArguments" error when "One of the arguments is of the wrong
+	// type or is otherwise invalid, or a required argument is missing" —
+	// not a silent empty success.
+	emails, ok := args["emails"].(map[string]interface{})
+	if !ok {
+		return invalidArgumentsResponse(call.ID, "emails must be a map of creation ids to EmailImport objects")
+	}
 
 	created := make(map[string]Email)
 	notCreated := make(map[string]interface{})
@@ -1556,8 +1819,13 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			defer gmu.Unlock()
 			importData, ok := val.(map[string]interface{})
 			if !ok {
+				// RFC 8620 §2.6: the record given is invalid in some way —
+				// an EmailImport object is required — so the per-entry
+				// SetError type is "invalidProperties" ((create; update)).
+				// "invalidArguments" is a method-level error name (§3.6.1)
+				// and not a legal SetError type.
 				notCreated[key] = map[string]interface{}{
-					"type":        "invalidArguments",
+					"type":        "invalidProperties",
 					"description": "Invalid email import data",
 				}
 				return
@@ -1669,12 +1937,31 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			// Parse email headers to extract metadata
 			meta := parseEmailMetadata(data, blobID)
 
+			// Set received time if provided
+			if receivedAt != "" {
+				if t, err := time.Parse(time.RFC3339, receivedAt); err == nil {
+					meta.InternalDate = t
+				}
+			}
+
+			// Convert keywords to flags via the shared validate-and-store
+			// helper (round-49 extraction): §4.8 MUST apply, §2 values MUST
+			// be true, arbitrary §2 keywords stored lowercase, and the
+			// round-47 tooManyKeywords cap.
+			if errMap := applyKeywordsToMeta(meta, keywords); errMap != nil {
+				notCreated[key] = errMap
+				return
+			}
+
 			// F5741: reserve the account quota for this Email (RFC 8621 §4.6
 			// overQuota). Released again if storing fails below.
 			// The blob is content-addressed: every copy of this Email (other
 			// mailboxes, a repeated import of the same blob) shares one blob
 			// and destroy releases it once, so only the first reference is
 			// charged (no double charge, no leak on destroy).
+			// Round 58: the charge moved BELOW the validation gates (mirrors
+			// the round-57 create-loop placement) so a keyword-rejected
+			// import no longer leaks the charge.
 			priorCopies := s.findEmailCopies(user, blobID)
 			charged := len(priorCopies) == 0
 			priorBoxes := make(map[string]bool, len(priorCopies))
@@ -1694,56 +1981,14 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 				return
 			}
 
-			// Set received time if provided
-			if receivedAt != "" {
-				if t, err := time.Parse(time.RFC3339, receivedAt); err == nil {
-					meta.InternalDate = t
+			// Store the message in EVERY target mailbox, each with its own
+			// UID (round-49 extraction: shared with Email/set create).
+			written, failDesc := s.storeEmailCopies(user, meta, targetNames)
+			if failDesc != "" {
+				notCreated[key] = map[string]interface{}{
+					"type":        "serverFail",
+					"description": failDesc,
 				}
-			}
-
-			// Convert keywords to flags
-			for kw, val := range keywords {
-				if b, ok := val.(bool); ok && b {
-					switch kw {
-					case "$seen":
-						meta.Flags = append(meta.Flags, "\\Seen")
-					case "$answered":
-						meta.Flags = append(meta.Flags, "\\Answered")
-					case "$flagged":
-						meta.Flags = append(meta.Flags, "\\Flagged")
-					case "$draft":
-						meta.Flags = append(meta.Flags, "\\Draft")
-					}
-				}
-			}
-
-			// Store the message in EVERY target mailbox, each with its own UID.
-			stored := true
-			var written []emailCopy
-			for _, targetName := range targetNames {
-				uid, err := s.db.GetNextUID(user, targetName)
-				if err != nil {
-					notCreated[key] = map[string]interface{}{
-						"type":        "serverFail",
-						"description": s.safeError("GetNextUID", err),
-					}
-					stored = false
-					break
-				}
-				meta.UID = uid
-
-				// Store metadata in database
-				if err := s.db.StoreMessageMetadata(user, targetName, uid, meta); err != nil {
-					notCreated[key] = map[string]interface{}{
-						"type":        "serverFail",
-						"description": s.safeError("StoreMessageMetadata", err),
-					}
-					stored = false
-					break
-				}
-				written = append(written, emailCopy{mailbox: targetName, uid: uid})
-			}
-			if !stored {
 				if charged {
 					_ = s.adjustQuota(user, -meta.Size)
 				}
@@ -1757,8 +2002,10 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			s.untrackUpload(user, blobID)
 
 			// Convert to JMAP Email; the created object reports every mailbox
-			// the message was imported into, not just the first.
+			// the message was imported into, not just the first. §4.1.2
+			// server-set properties agree with Email/get (round 53).
 			email := storageToJMAPEmail(meta, nil, targetNames[0])
+			applyServerSetProps(&email, data, blobID)
 			for _, targetName := range targetNames[1:] {
 				email.MailboxIDs[getMailboxIDFromName(targetName)] = true
 			}
@@ -2832,6 +3079,19 @@ func (s *Server) handleIdentityQueryChanges(user string, call MethodCall) Respon
 	}
 }
 
+// releaseSyntheticBlob best-effort deletes the content-addressed blob a
+// rejected Email/set create synthesized (round 57): the client never
+// received its id, so an unreferenced leftover is unreachable dead weight.
+// DeleteMessage itself refuses via the blob reference checker when the blob
+// is referenced elsewhere (identical content shared with a live Email),
+// making this safe by construction; other errors are ignored (the
+// GCOrphanBlobs sweep remains the backstop).
+func (s *Server) releaseSyntheticBlob(user, blobID string) {
+	if s.msgStore != nil {
+		_ = s.msgStore.DeleteMessage(user, blobID)
+	}
+}
+
 // storageToJMAPEmail converts storage metadata to JMAP Email
 func storageToJMAPEmail(meta *storage.MessageMetadata, properties []string, mailbox string) Email {
 	mailboxID := getMailboxIDFromName(mailbox)
@@ -2848,7 +3108,11 @@ func storageToJMAPEmail(meta *storage.MessageMetadata, properties []string, mail
 		To:         []EmailAddress{{Email: meta.To}},
 	}
 
-	// Convert flags to keywords
+	// Convert flags to keywords. The four system keywords map back from
+	// their IMAP system flags; arbitrary RFC 8621 §2 keywords are stored as
+	// lowercase IMAP keywords and returned verbatim — lowercased again at
+	// emission so IMAP-written mixed-case flags still satisfy §2's
+	// lowercase-return rule.
 	for _, flag := range meta.Flags {
 		switch flag {
 		case "\\Seen":
@@ -2859,6 +3123,10 @@ func storageToJMAPEmail(meta *storage.MessageMetadata, properties []string, mail
 			email.Keywords["$flagged"] = true
 		case "\\Draft":
 			email.Keywords["$draft"] = true
+		default:
+			if validKeywordSyntax(flag) {
+				email.Keywords[strings.ToLower(flag)] = true
+			}
 		}
 	}
 
