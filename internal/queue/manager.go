@@ -201,7 +201,7 @@ func (r *realDNSResolver) LookupMX(domain string) ([]string, error) {
 type realMTASTSDNSResolver struct{}
 
 func (r *realMTASTSDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
-	return net.LookupTXT(name)
+	return net.DefaultResolver.LookupTXT(ctx, name)
 }
 
 func (r *realMTASTSDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
@@ -2289,7 +2289,7 @@ func extractMessageBody(message []byte) []byte {
 type dkimDNSResolver struct{}
 
 func (r *dkimDNSResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
-	return net.LookupTXT(name)
+	return net.DefaultResolver.LookupTXT(ctx, name)
 }
 
 func (r *dkimDNSResolver) LookupIP(ctx context.Context, host string) ([]net.IP, error) {
