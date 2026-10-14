@@ -1867,6 +1867,9 @@ func (s *Session) parseAppendParams(args []string, line string) ([]string, time.
 			if ferr != nil {
 				return flags, date, 0, ferr
 			}
+			if countKeywords(normalizeStoreFlags(nf)) > maxKeywordsPerMessage { // F7441
+				return flags, date, 0, fmt.Errorf("too many keywords (max %d)", maxKeywordsPerMessage)
+			}
 			flags = nf
 			break
 		}
@@ -3026,6 +3029,10 @@ func (s *Session) handleCopy(args []string) error {
 		return nil
 	}
 
+	if !s.seqSetInRange(args[0]) { // F7442, as FETCH/STORE (F6904)
+		s.WriteResponse(s.tag, "NO Invalid message sequence number")
+		return nil
+	}
 	seqSet, serr := s.seqToLive(args[0])
 	if serr != nil {
 		s.WriteResponse(s.tag, "BAD Invalid sequence set")
@@ -3130,6 +3137,10 @@ func (s *Session) handleMove(args []string) error {
 		return nil
 	}
 
+	if !s.seqSetInRange(args[0]) { // F7442, as FETCH/STORE (F6904)
+		s.WriteResponse(s.tag, "NO Invalid message sequence number")
+		return nil
+	}
 	seqSet, serr := s.seqToLive(args[0])
 	if serr != nil {
 		s.WriteResponse(s.tag, "BAD Invalid sequence set")
@@ -3520,6 +3531,13 @@ func (s *Session) handleSetACL(args []string) error {
 		return nil
 	}
 
+	// F7440: an ACL row for a name that is not a mailbox would attach itself
+	// to whatever mailbox is created under that name later.
+	if !s.ownMailboxExists(mb) {
+		s.WriteResponse(s.tag, "NO [NONEXISTENT] Mailbox does not exist")
+		return nil
+	}
+
 	// Parse rights string (e.g., "lrswipkxtecda" or "-lrswipkxtecda" or numeric)
 	rights, negative, err := storage.ParseACLRights(rightsStr)
 	if err != nil {
@@ -3548,6 +3566,24 @@ func (s *Session) handleSetACL(args []string) error {
 
 	s.WriteResponse(s.tag, "OK SETACL completed")
 	return nil
+}
+
+// ownMailboxExists reports whether the session user has a mailbox called name
+// (INBOX always exists).
+func (s *Session) ownMailboxExists(name string) bool {
+	if strings.EqualFold(name, "INBOX") {
+		return true
+	}
+	names, err := s.server.mailstore.ListMailboxes(s.user, name)
+	if err != nil {
+		return false
+	}
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // handleDeleteACL implements RFC 4314 DELETEACL command

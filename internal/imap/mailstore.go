@@ -3,6 +3,7 @@ package imap
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/mail"
 	"os"
@@ -656,6 +657,7 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		return fmt.Errorf("mailbox exceeds maximum message count")
 	}
 	total := uint32(uidCount)
+	var limitErr error
 
 	for i, uid := range uids {
 		// IMAP uses 1-based sequence numbers
@@ -677,6 +679,7 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		// Atomically update flags to prevent lost updates under concurrent access
 		var updatedFlags []string
 		err = m.db.UpdateMessageMetadataFunc(user, mailbox, uid, func(meta *storage.MessageMetadata) error {
+			before := countKeywords(meta.Flags)
 			switch op {
 			case FlagAdd:
 				for _, flag := range flags {
@@ -701,10 +704,17 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 				}
 				meta.Flags = repl
 			}
+			// F7441: same per-message keyword policy as JMAP; removals pass.
+			if n := countKeywords(meta.Flags); n > maxKeywordsPerMessage && n > before {
+				return errTooManyKeywords
+			}
 			updatedFlags = meta.Flags
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errTooManyKeywords) && limitErr == nil {
+				limitErr = err
+			}
 			continue
 		}
 
@@ -712,7 +722,26 @@ func (m *BboltMailstore) StoreFlags(user, mailbox string, seqSet string, flags [
 		GetNotificationHub().NotifyFlagsChanged(user, mailbox, uid, seqNum, updatedFlags)
 	}
 
-	return nil
+	return limitErr
+}
+
+// maxKeywordsPerMessage is the per-message keyword limit, the same server
+// policy JMAP enforces (maxJMAPKeywordsPerEmail) (F7441).
+const maxKeywordsPerMessage = 100
+
+// errTooManyKeywords is reported (as NO [LIMIT]) when a STORE would leave a
+// message with more than maxKeywordsPerMessage keywords.
+var errTooManyKeywords = errors.New("[LIMIT] Too many keywords on one message")
+
+// countKeywords counts the non-system flags (keywords) in flags.
+func countKeywords(flags []string) int {
+	n := 0
+	for _, f := range flags {
+		if !strings.HasPrefix(f, "\\") {
+			n++
+		}
+	}
+	return n
 }
 
 // normalizeStoreFlags drops \Recent (which clients cannot alter, RFC 3501

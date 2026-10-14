@@ -17,6 +17,10 @@ func newR23ACLSession(t *testing.T) (*Session, *BboltMailstore) {
 	if err != nil {
 		t.Fatalf("NewBboltMailstore: %v", err)
 	}
+	// F7440: SETACL requires the mailbox to exist.
+	if err := ms.CreateMailbox(r23Owner, r23Mailbox); err != nil {
+		t.Fatalf("CreateMailbox: %v", err)
+	}
 	client, srv := net.Pipe()
 	server := NewServer(&Config{Addr: ":0"}, ms)
 	sess := NewSession(srv, server)
