@@ -755,7 +755,12 @@ func (m *Manager) sweepPendingEntries() {
 	}
 	entries, err := m.db.GetPendingQueue(time.Now())
 	if err != nil {
-		return
+		// Corrupt rows are reported next to the valid entries; dispatching
+		// those must not wait for an operator to remove the bad row (F7570).
+		m.logger.Error("queue sweep: unreadable queue rows", "error", err, "valid_entries", len(entries))
+		if len(entries) == 0 {
+			return
+		}
 	}
 
 	for _, entry := range entries {

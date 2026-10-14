@@ -1384,25 +1384,41 @@ var errInvalidQueueEntry = errors.New("queue entry has invalid JSON")
 // skips the ~12 allocs/entry decode cost for non-pending rows.
 func (d *DB) GetPendingQueue(now time.Time) ([]*QueueEntry, error) {
 	var entries []*QueueEntry
+	// A corrupt row must not hide the valid entries around it (F7570): the
+	// scan continues, and the corruption is still surfaced as an error next
+	// to the entries that were found.
+	var badKey string
+	bad := 0
+	var badErr error
 
 	err := d.ForEach(BucketQueue, func(key string, value []byte) error {
 		if !bytes.Contains(value, pendingStatusMarker) {
 			// Cheap sniff: real entries always begin with `{` from json.Marshal.
 			// Anything else is corruption and is surfaced rather than silently skipped.
 			if len(value) == 0 || value[0] != '{' {
-				return errInvalidQueueEntry
+				if bad == 0 {
+					badKey, badErr = key, errInvalidQueueEntry
+				}
+				bad++
 			}
 			return nil
 		}
 		var entry QueueEntry
 		if err := json.Unmarshal(value, &entry); err != nil {
-			return err
+			if bad == 0 {
+				badKey, badErr = key, err
+			}
+			bad++
+			return nil
 		}
 		if entry.Status == "pending" && entry.NextRetry.Before(now) {
 			entries = append(entries, &entry)
 		}
 		return nil
 	})
+	if err == nil && bad > 0 {
+		err = fmt.Errorf("%d corrupt queue row(s), first key %q: %w", bad, badKey, badErr)
+	}
 
 	return entries, err
 }
