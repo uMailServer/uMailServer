@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/mimeutil"
 	"github.com/umailserver/umailserver/internal/storage"
 )
 
@@ -120,8 +121,8 @@ func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
 	for _, t := range threads {
 		response.Threads = append(response.Threads, ThreadResponse{
 			ThreadID:     t.ThreadID,
-			Subject:      t.Subject,
-			Participants: t.Participants,
+			Subject:      mimeutil.DecodeHeader(t.Subject),
+			Participants: decodeAll(t.Participants),
 			MessageCount: t.MessageCount,
 			UnreadCount:  t.UnreadCount,
 			LastActivity: t.LastActivity,
@@ -179,9 +180,9 @@ func (s *Server) handleThreadDetail(w http.ResponseWriter, r *http.Request) {
 			MessageID: m.MessageID,
 			UID:       m.UID,
 			Mailbox:   m.Mailbox,
-			From:      m.From,
-			To:        m.To,
-			Subject:   m.Subject,
+			From:      mimeutil.DecodeHeader(m.From),
+			To:        mimeutil.DecodeHeader(m.To),
+			Subject:   mimeutil.DecodeHeader(m.Subject),
 			Date:      m.Date,
 			IsRead:    m.IsRead,
 			Flags:     m.Flags,
@@ -225,8 +226,8 @@ func (s *Server) handleThreadSearch(w http.ResponseWriter, r *http.Request) {
 	for _, t := range threads {
 		response = append(response, ThreadResponse{
 			ThreadID:     t.ThreadID,
-			Subject:      t.Subject,
-			Participants: t.Participants,
+			Subject:      mimeutil.DecodeHeader(t.Subject),
+			Participants: decodeAll(t.Participants),
 			MessageCount: t.MessageCount,
 			UnreadCount:  t.UnreadCount,
 			LastActivity: t.LastActivity,
@@ -492,4 +493,13 @@ func (s *Server) threadMessageCounts(user, threadID string) (count, unread int, 
 		}
 	}
 	return count, unread, nil
+}
+
+// decodeAll returns values with their RFC 2047 encoded-words decoded (F7721).
+func decodeAll(values []string) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = mimeutil.DecodeHeader(v)
+	}
+	return out
 }

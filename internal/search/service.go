@@ -218,9 +218,9 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 				continue
 			}
 			if err == nil {
-				searchResult.From = meta.From
-				searchResult.To = meta.To
-				searchResult.Subject = meta.Subject
+				searchResult.From = decodeHeaderValue(meta.From)
+				searchResult.To = decodeHeaderValue(meta.To)
+				searchResult.Subject = decodeHeaderValue(meta.Subject)
 				searchResult.Preview = generatePreview(meta.Subject, 100)
 				searchResult.Date = meta.Date
 			}

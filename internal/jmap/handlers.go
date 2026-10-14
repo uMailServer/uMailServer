@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/mimeutil"
 	"github.com/umailserver/umailserver/internal/storage"
 )
 
@@ -832,33 +833,37 @@ func matchesFilter(meta *storage.MessageMetadata, filter *FilterCondition) bool 
 		}
 	}
 
+	// The stored Subject/From/To are the raw header values (RFC 2047
+	// encoded-words included): compare against the text people see (F7720).
+	subject := strings.ToLower(mimeutil.DecodeHeader(meta.Subject))
+	from := strings.ToLower(mimeutil.DecodeHeader(meta.From))
+	to := strings.ToLower(mimeutil.DecodeHeader(meta.To))
+
 	// Filter by text in subject/from/to
 	if filter.Text != "" {
 		text := strings.ToLower(filter.Text)
-		if !strings.Contains(strings.ToLower(meta.Subject), text) &&
-			!strings.Contains(strings.ToLower(meta.From), text) &&
-			!strings.Contains(strings.ToLower(meta.To), text) {
+		if !strings.Contains(subject, text) && !strings.Contains(from, text) && !strings.Contains(to, text) {
 			return false
 		}
 	}
 
 	// Filter by subject
 	if filter.Subject != "" {
-		if !strings.Contains(strings.ToLower(meta.Subject), strings.ToLower(filter.Subject)) {
+		if !strings.Contains(subject, strings.ToLower(filter.Subject)) {
 			return false
 		}
 	}
 
 	// Filter by from
 	if filter.From != "" {
-		if !strings.Contains(strings.ToLower(meta.From), strings.ToLower(filter.From)) {
+		if !strings.Contains(from, strings.ToLower(filter.From)) {
 			return false
 		}
 	}
 
 	// Filter by to
 	if filter.To != "" {
-		if !strings.Contains(strings.ToLower(meta.To), strings.ToLower(filter.To)) {
+		if !strings.Contains(to, strings.ToLower(filter.To)) {
 			return false
 		}
 	}
@@ -3104,6 +3109,25 @@ func (s *Server) releaseSyntheticBlob(user, blobID string) {
 	}
 }
 
+// jmapAddresses converts a stored From/To header value into EmailAddress
+// objects: parsed into name and addr-spec, display names decoded. A value that
+// does not parse is reported as a single address holding the raw text, and an
+// empty value as none (F7720).
+func jmapAddresses(raw string) []EmailAddress {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	list, ok := mimeutil.ParseAddresses(raw)
+	if !ok {
+		return []EmailAddress{{Email: raw}}
+	}
+	out := make([]EmailAddress, 0, len(list))
+	for _, a := range list {
+		out = append(out, EmailAddress{Name: a.Name, Email: a.Email})
+	}
+	return out
+}
+
 // storageToJMAPEmail converts storage metadata to JMAP Email
 func storageToJMAPEmail(meta *storage.MessageMetadata, properties []string, mailbox string) Email {
 	mailboxID := getMailboxIDFromName(mailbox)
@@ -3115,15 +3139,12 @@ func storageToJMAPEmail(meta *storage.MessageMetadata, properties []string, mail
 		Keywords:   make(map[string]bool),
 		Size:       meta.Size,
 		ReceivedAt: meta.InternalDate.Format(time.RFC3339),
-		Subject:    meta.Subject,
-	}
-	// A message without a From/To header has no address to report; an empty
-	// address object is not a valid EmailAddress (F7680).
-	if meta.From != "" {
-		email.From = []EmailAddress{{Email: meta.From}}
-	}
-	if meta.To != "" {
-		email.To = []EmailAddress{{Email: meta.To}}
+		// subject is the header as text (RFC 8621 §4.1.1): decode encoded-words.
+		Subject: mimeutil.DecodeHeader(meta.Subject),
+		// A message without a From/To header has no address to report; an
+		// empty address object is not a valid EmailAddress (F7680).
+		From: jmapAddresses(meta.From),
+		To:   jmapAddresses(meta.To),
 	}
 
 	// Convert flags to keywords. The four system keywords map back from

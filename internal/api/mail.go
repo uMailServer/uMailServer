@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/umailserver/umailserver/internal/mimeutil"
 	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -73,6 +74,17 @@ type MailHandler struct {
 // round trip to this server's own MX (F7640).
 func (h *MailHandler) SetDeliverFunc(fn func(from string, to []string, data []byte) error) {
 	h.deliver = fn
+}
+
+// displayRecipients turns a stored To header value into the recipient strings
+// the web client shows: parsed as an address list (so a quoted name such as
+// "Smoke, Admin" is not cut at its comma) with RFC 2047 names decoded (F7721).
+// The result is never nil, so it serializes as a JSON array.
+func displayRecipients(raw string) []string {
+	if l := mimeutil.DisplayList(raw); l != nil {
+		return l
+	}
+	return []string{}
 }
 
 // SetQueueManager wires the outbound delivery queue so sent messages are
@@ -359,9 +371,9 @@ func (h *MailHandler) getEmailsPageFiltered(userEmail, mailbox string, limit, of
 
 		email := Mail{
 			ID:      mailID,
-			From:    meta.From,
-			To:      strings.Split(meta.To, ","),
-			Subject: meta.Subject,
+			From:    mimeutil.DecodeHeader(meta.From),
+			To:      displayRecipients(meta.To),
+			Subject: mimeutil.DecodeHeader(meta.Subject),
 			Body:    body,
 			Preview: preview,
 			Date:    meta.InternalDate.Format(time.RFC1123Z),
@@ -471,9 +483,9 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 
 	return &Mail{
 		ID:      messageID, // F6645: echo the (possibly copy-qualified) id asked for
-		From:    meta.From,
-		To:      strings.Split(meta.To, ","),
-		Subject: meta.Subject,
+		From:    mimeutil.DecodeHeader(meta.From),
+		To:      displayRecipients(meta.To),
+		Subject: mimeutil.DecodeHeader(meta.Subject),
 		Body:    body,
 		Preview: body,
 		Date:    meta.InternalDate.Format(time.RFC1123Z),
