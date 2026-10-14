@@ -308,6 +308,26 @@ func (s *SSEServer) sendEvent(client *SSEClient, event string, data interface{})
 	client.flusher.Flush()
 }
 
+// deliver sends one event to every client concurrently (F7620). A stalled
+// consumer holds its own writeMu for up to sseWriteTimeout; delivering
+// sequentially made every client queued behind it wait that long as well.
+// It returns once all writes finished, so successive calls stay ordered.
+func (s *SSEServer) deliver(clients []*SSEClient, event string, data interface{}) {
+	if len(clients) == 1 {
+		s.sendEvent(clients[0], event, data)
+		return
+	}
+	var wg sync.WaitGroup
+	for _, client := range clients {
+		wg.Add(1)
+		go func(c *SSEClient) {
+			defer wg.Done()
+			s.sendEvent(c, event, data)
+		}(client)
+	}
+	wg.Wait()
+}
+
 // Broadcast sends an event to all connected clients
 func (s *SSEServer) Broadcast(event string, data interface{}) {
 	s.clientsMu.RLock()
@@ -317,9 +337,7 @@ func (s *SSEServer) Broadcast(event string, data interface{}) {
 	}
 	s.clientsMu.RUnlock()
 
-	for _, client := range clients {
-		s.sendEvent(client, event, data)
-	}
+	s.deliver(clients, event, data)
 }
 
 // SendToUser sends an event to all connections of a specific user
@@ -332,9 +350,7 @@ func (s *SSEServer) SendToUser(user, event string, data interface{}) error {
 		return fmt.Errorf("user not connected")
 	}
 
-	for _, client := range clients {
-		s.sendEvent(client, event, data)
-	}
+	s.deliver(clients, event, data)
 	return nil
 }
 
@@ -351,9 +367,7 @@ func (s *SSEServer) SendToAdmins(event string, data interface{}) {
 	}
 	s.clientsMu.RUnlock()
 
-	for _, client := range clients {
-		s.sendEvent(client, event, data)
-	}
+	s.deliver(clients, event, data)
 }
 
 // GetConnectedUsers returns a list of connected users

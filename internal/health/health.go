@@ -153,7 +153,14 @@ func (m *Monitor) Check(ctx context.Context) Report {
 			if !joined {
 				// The checker runs in its own goroutine so one that ignores
 				// its context cannot block the report (F5189).
+				// F7621: the run's context must not be the starter's. A probe
+				// that joined this flight would otherwise inherit the
+				// cancellation of the first caller's request (a probe client
+				// that disconnected) as a false "unhealthy". The run gets its
+				// own bounded context; each caller still bounds its wait.
+				runCtx, runCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				go func() {
+					defer runCancel()
 					defer func() {
 						m.inflightMu.Lock()
 						delete(m.inflight, n)
@@ -165,7 +172,7 @@ func (m *Monitor) Check(ctx context.Context) Report {
 							fl.check = Check{Status: StatusUnhealthy, Message: "health check panicked"}
 						}
 					}()
-					fl.check = c(checkCtx)
+					fl.check = c(runCtx)
 				}()
 			} else if testHookJoin != nil {
 				testHookJoin()

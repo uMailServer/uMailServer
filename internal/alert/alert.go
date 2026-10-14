@@ -228,7 +228,7 @@ func (m *Manager) sendKeyed(key, name string, severity Severity, message string,
 	}
 
 	// Check rate limiting
-	prev, hadPrev, reserved := m.reserve(key)
+	prev, hadPrev, at, reserved := m.reserveAt(key)
 	if !reserved {
 		return nil
 	}
@@ -270,17 +270,23 @@ func (m *Manager) sendKeyed(key, name string, severity Severity, message string,
 			attempted++
 		}
 		if len(errs) == attempted {
-			m.release(key, prev, hadPrev)
+			m.release(key, prev, hadPrev, at)
 		}
 		return errs[0]
 	}
 	return nil
 }
 
-// release undoes the cooldown reservation made by reserve.
-func (m *Manager) release(key string, prev time.Time, hadPrev bool) {
+// release undoes the cooldown reservation made by reserve at time at. It is a
+// no-op once a newer reservation replaced it (F7622): a slow failed delivery
+// that outlived MinInterval must not erase the cooldown of a later send of the
+// same alert that succeeded.
+func (m *Manager) release(key string, prev time.Time, hadPrev bool, at time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if cur, ok := m.lastAlert[key]; !ok || !cur.Equal(at) {
+		return
+	}
 	if hadPrev {
 		m.lastAlert[key] = prev
 	} else {
@@ -300,6 +306,13 @@ func (m *Manager) shouldSend(name string) bool {
 // reserve is shouldSend that also returns the previous cooldown entry so a
 // failed delivery can roll it back.
 func (m *Manager) reserve(name string) (prev time.Time, hadPrev, ok bool) {
+	prev, hadPrev, _, ok = m.reserveAt(name)
+	return prev, hadPrev, ok
+}
+
+// reserveAt is reserve that also returns the reservation timestamp, which
+// identifies the reservation to release.
+func (m *Manager) reserveAt(name string) (prev time.Time, hadPrev bool, at time.Time, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -311,7 +324,7 @@ func (m *Manager) reserve(name string) (prev time.Time, hadPrev, ok bool) {
 
 	// Check max alerts per hour
 	if m.hourlyCount >= m.config.MaxAlerts {
-		return time.Time{}, false, false
+		return time.Time{}, false, time.Time{}, false
 	}
 
 	// Drop expired cooldown entries so the map stays bounded (F6502).
@@ -326,15 +339,16 @@ func (m *Manager) reserve(name string) (prev time.Time, hadPrev, ok bool) {
 	// Check min interval for same alert type
 	if lastSent, ok := m.lastAlert[name]; ok {
 		if time.Since(lastSent) < m.config.MinInterval {
-			return time.Time{}, false, false
+			return time.Time{}, false, time.Time{}, false
 		}
 	}
 
 	prev, hadPrev = m.lastAlert[name]
-	m.lastAlert[name] = time.Now()
+	at = time.Now()
+	m.lastAlert[name] = at
 	m.hourlyCount++
 	m.saveStateLocked()
-	return prev, hadPrev, true
+	return prev, hadPrev, at, true
 }
 
 // SetStateFile enables persistence of alert cooldown times at path. Existing
