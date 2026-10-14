@@ -93,6 +93,16 @@ func (h *RedisHealthMonitor) GetInstanceHealth(ctx context.Context) ([]InstanceH
 		return nil, err
 	}
 
+	// Leadership comes from the live leader key, not the is_leader flag cached
+	// at each instance's last heartbeat: after a failover or lease expiry the
+	// cached flags are stale and would show the old leader (or two) (F7380).
+	currentLeader := ""
+	if cur, err := h.client.Get(ctx, leaderKey(HealthElectionKey)).Result(); err == nil {
+		currentLeader = cur
+	} else if !errors.Is(err, redis.Nil) {
+		return nil, err
+	}
+
 	var health []InstanceHealth
 	now := time.Now().Unix()
 	cutoff := now - int64(h.ttl.Seconds())
@@ -119,12 +129,10 @@ func (h *RedisHealthMonitor) GetInstanceHealth(ctx context.Context) ([]InstanceH
 			status = "offline"
 		}
 
-		isLeader := data["is_leader"] == "true" || data["is_leader"] == "1"
-
 		health = append(health, InstanceHealth{
 			InstanceID: id,
 			LastBeat:   time.Unix(lastBeat, 0),
-			IsLeader:   isLeader,
+			IsLeader:   id == currentLeader,
 			Status:     status,
 		})
 	}
