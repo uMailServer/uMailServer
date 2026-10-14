@@ -115,6 +115,9 @@ export function useApi<T>() {
 }
 
 // Domain API hooks
+// Mutations below refresh the list afterwards with .catch: the server already
+// accepted the change, so a failing refresh (recorded in the hook's error state)
+// must not make the mutation look failed and invite a duplicate retry (F7590).
 export function useDomains() {
   const [data, setData] = useState<Domain[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -142,7 +145,7 @@ export function useDomains() {
       method: "POST",
       body: JSON.stringify({ name, max_accounts: maxAccounts }),
     });
-    await fetchDomains();
+    await fetchDomains().catch(() => undefined);
     return result;
   }, [fetchDomains]);
 
@@ -151,13 +154,13 @@ export function useDomains() {
       method: "PUT",
       body: JSON.stringify(updates),
     });
-    await fetchDomains();
+    await fetchDomains().catch(() => undefined);
     return result;
   }, [fetchDomains]);
 
   const deleteDomain = useCallback(async (name: string) => {
     await apiRequest(`/domains/${encodeURIComponent(name)}`, { method: "DELETE" });
-    await fetchDomains();
+    await fetchDomains().catch(() => undefined);
   }, [fetchDomains]);
 
   return {
@@ -207,7 +210,7 @@ export function useAccounts() {
       method: "POST",
       body: JSON.stringify(body),
     });
-    await fetchAccounts();
+    await fetchAccounts().catch(() => undefined);
     return result;
   }, [fetchAccounts]);
 
@@ -216,13 +219,13 @@ export function useAccounts() {
       method: "PUT",
       body: JSON.stringify(updates),
     });
-    await fetchAccounts();
+    await fetchAccounts().catch(() => undefined);
     return result;
   }, [fetchAccounts]);
 
   const deleteAccount = useCallback(async (email: string) => {
     await apiRequest(`/accounts/${encodeURIComponent(email)}`, { method: "DELETE" });
-    await fetchAccounts();
+    await fetchAccounts().catch(() => undefined);
   }, [fetchAccounts]);
 
   return {
@@ -297,12 +300,12 @@ export function useQueue() {
 
   const retryEntry = useCallback(async (id: string) => {
     await apiRequest(`/queue/${encodeURIComponent(id)}`, { method: "POST" });
-    await fetchQueue();
+    await fetchQueue().catch(() => undefined);
   }, [fetchQueue]);
 
   const dropEntry = useCallback(async (id: string) => {
     await apiRequest(`/queue/${encodeURIComponent(id)}`, { method: "DELETE" });
-    await fetchQueue();
+    await fetchQueue().catch(() => undefined);
   }, [fetchQueue]);
 
   return {
