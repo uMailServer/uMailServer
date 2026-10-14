@@ -16,7 +16,10 @@ function cleanStyle(style: string): string {
     .join(';')
 }
 
-const REMOTE_URL = /^\s*(?:https?:)?\/\//i
+// Browsers drop tab/CR/LF anywhere in a URL and read "\" as "/", and an
+// http(s): scheme without slashes still resolves to the remote host.
+const REMOTE_URL = /^(?:https?:|\/\/)/i
+const isRemoteSrc = (src: string) => REMOTE_URL.test(src.replace(/[\t\n\r]/g, '').trim().replace(/\\/g, '/'))
 
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A' && node.getAttribute('target') === '_blank') {
@@ -30,7 +33,7 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   // Block remote content (tracking pixels) unless explicitly allowed.
   if (!allowRemote && node.tagName === 'IMG') {
     const src = node.getAttribute('src')
-    if (src !== null && REMOTE_URL.test(src)) node.removeAttribute('src')
+    if (src !== null && isRemoteSrc(src)) node.removeAttribute('src')
   }
 })
 
@@ -68,7 +71,7 @@ function sanitizeInner(dirty: string): string {
       'details', 'summary',
     ],
     ALLOWED_ATTR: [
-      'href', 'src', 'alt', 'title', 'class', 'id',
+      'href', 'src', 'alt', 'title', 'id',
       'width', 'height', 'colspan', 'rowspan',
       'target', 'rel',
       'style',
