@@ -107,6 +107,27 @@ func decodeCharset(b []byte, charset string) string {
 			r[i] = rune(c)
 		}
 		return string(r)
+	case "iso-8859-9", "iso8859-9", "latin5", "windows-1254", "cp1254":
+		// Turkish: Latin-1 except six code points (F7511).
+		r := make([]rune, len(b))
+		for i, c := range b {
+			r[i] = rune(c)
+			switch c {
+			case 0xD0:
+				r[i] = 'Ğ'
+			case 0xDD:
+				r[i] = 'İ'
+			case 0xDE:
+				r[i] = 'Ş'
+			case 0xF0:
+				r[i] = 'ğ'
+			case 0xFD:
+				r[i] = 'ı'
+			case 0xFE:
+				r[i] = 'ş'
+			}
+		}
+		return string(r)
 	}
 	if utf8.Valid(b) {
 		return string(b)

@@ -35,6 +35,9 @@ type Index struct {
 // the same Regexp — recompiling per-query is a measurable hot path.
 var queryFieldPattern = regexp.MustCompile(`(\w+):(\S+)`)
 
+// queryFields are the field operators understood in queries (F7510).
+var queryFields = map[string]bool{"from": true, "to": true, "subject": true, "has": true}
+
 // NewIndex creates a new search index
 func NewIndex() *Index {
 	return &Index{
@@ -252,23 +255,23 @@ type QueryTerm struct {
 func parseQuery(query string) []QueryTerm {
 	var terms []QueryTerm
 
-	// Find all field:value pairs (regex compiled once at package level)
-	matches := queryFieldPattern.FindAllStringSubmatch(query, -1)
-	for _, match := range matches {
-		if len(match) == 3 {
-			field := strings.ToLower(match[1])
-			for _, value := range tokenize(match[2]) {
-				terms = append(terms, QueryTerm{
-					Field: field,
-					Value: value,
-					Boost: 2.0, // Field-specific matches get higher boost
-				})
-			}
+	// Only real fields are operators; any other "word:rest" (a time like
+	// 10:30, a URL) is ordinary text and must stay searchable (F7510).
+	remaining := queryFieldPattern.ReplaceAllStringFunc(query, func(pair string) string {
+		match := queryFieldPattern.FindStringSubmatch(pair)
+		if len(match) != 3 || !queryFields[strings.ToLower(match[1])] {
+			return pair
 		}
-	}
-
-	// Remove field:value pairs from query to get remaining terms
-	remaining := queryFieldPattern.ReplaceAllString(query, "")
+		field := strings.ToLower(match[1])
+		for _, value := range tokenize(match[2]) {
+			terms = append(terms, QueryTerm{
+				Field: field,
+				Value: value,
+				Boost: 2.0, // Field-specific matches get higher boost
+			})
+		}
+		return ""
+	})
 	remaining = strings.TrimSpace(remaining)
 
 	// Tokenize remaining text
