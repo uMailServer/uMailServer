@@ -152,7 +152,9 @@ function TwoFactorPage() {
   }
 
   const onCodeChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setCode(e.target.value)
+    // Authenticator apps group the code ("123 456"): drop whitespace so a
+    // pasted code reaches the server as exactly six digits.
+    setCode(e.target.value.replace(/\s+/g, '').slice(0, 6))
   }
 
   if (phase === 'loading') {
@@ -178,7 +180,7 @@ function TwoFactorPage() {
             type="text"
             value={code}
             onChange={onCodeChange}
-            maxLength={6}
+            maxLength={10}
             aria-label="Current authenticator code"
             placeholder="123456"
             className="mt-3 block w-32 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
@@ -212,7 +214,7 @@ function TwoFactorPage() {
               type="text"
               value={code}
               onChange={onCodeChange}
-              maxLength={6}
+              maxLength={10}
               aria-label="6-digit verification code"
               placeholder="123456"
               className="w-32 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
