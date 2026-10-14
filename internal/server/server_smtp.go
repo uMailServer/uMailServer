@@ -97,6 +97,7 @@ func (s *Server) startInboundSMTP() error {
 
 	smtpServer := smtp.NewServer(smtpCfg, s.logger)
 	smtpServer.SetAuthHandler(s.authenticate)
+	smtpServer.SetRecipientExistsHandler(s.recipientExists) // F7670
 	// Refuse relaying to foreign domains at RCPT time (F6042).
 	smtpServer.SetLocalDomainHandler(s.isLocalDomain)
 	// Inbound mail honours the pipeline's spam verdict (F4975).
@@ -251,6 +252,22 @@ func (spamHeaderGuardStage) Process(ctx *smtp.MessageContext) smtp.PipelineResul
 	return smtp.ResultAccept
 }
 
+// recipientExists reports whether mail for addr can be delivered, for the RCPT
+// stage (F7670). It follows the routing deliverMessage uses (aliases, user+tag,
+// catch-all). Addresses outside the hosted domains and postmaster (RFC 5321
+// section 4.5.1) are not judged here, so they keep their previous handling.
+func (s *Server) recipientExists(addr string) bool {
+	user, domain, external, err := s.routeRecipient(addr)
+	if err != nil || external != "" || user == "postmaster" {
+		return true
+	}
+	if a, aerr := s.database.GetAccount(domain, user); aerr == nil && a != nil && a.IsActive {
+		return true
+	}
+	d, derr := s.database.GetDomain(domain)
+	return derr == nil && d != nil && d.CatchAllTarget != ""
+}
+
 // isLocalDomain reports whether mail for domain is delivered locally, using
 // the same test as deliverMessageWithNotify (an existing, active domain).
 func (s *Server) isLocalDomain(domain string) bool {
@@ -280,6 +297,7 @@ func (s *Server) startSubmissionSMTP() error {
 
 	submissionServer := smtp.NewServer(submissionCfg, s.logger)
 	submissionServer.SetAuthHandler(s.authenticate)
+	submissionServer.SetRecipientExistsHandler(s.recipientExists) // F7670
 	submissionServer.SetDeliveryHandlerWithDSN(s.deliverMessageWithDSN)
 	submissionServer.SetSenderAllowedHandler(s.senderAllowed)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken
@@ -320,6 +338,7 @@ func (s *Server) startSubmissionTLSSMTP() error {
 
 	submissionTLSServer := smtp.NewServer(submissionTLSCfg, s.logger)
 	submissionTLSServer.SetAuthHandler(s.authenticate)
+	submissionTLSServer.SetRecipientExistsHandler(s.recipientExists) // F7670
 	submissionTLSServer.SetDeliveryHandlerWithDSN(s.deliverMessageWithDSN)
 	submissionTLSServer.SetSenderAllowedHandler(s.senderAllowed)
 	// CRAM-MD5 disabled: HMAC-MD5 is cryptographically broken

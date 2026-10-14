@@ -49,6 +49,7 @@ type Server struct {
 	onValidate          func(from string, to []string) error
 	onSenderAllowed     func(username, from string) bool
 	onLocalDomain       func(domain string) bool
+	onRecipientExists   func(addr string) bool // F7670
 	rcptPerHour         int
 	userRcpt            map[string][]time.Time
 	userRcptMu          sync.Mutex
@@ -301,6 +302,15 @@ func (s *Server) SetSenderAllowedHandler(handler func(username, from string) boo
 // to a non-local domain is refused at once with 554 5.7.1 (F6042).
 func (s *Server) SetLocalDomainHandler(handler func(domain string) bool) {
 	s.onLocalDomain = handler
+}
+
+// SetRecipientExistsHandler installs the predicate telling whether a recipient
+// address is deliverable on this server. With it set, RCPT to a mailbox that
+// does not exist is refused at once with 550 5.1.1 instead of being accepted
+// and failing after DATA with a temporary error (F7670). The predicate must
+// return true for addresses it does not handle (other domains, postmaster).
+func (s *Server) SetRecipientExistsHandler(handler func(addr string) bool) {
+	s.onRecipientExists = handler
 }
 
 // SetUserRecipientLimit caps the recipients one authenticated user may have
@@ -626,6 +636,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 		_ = conn.SetDeadline(time.Time{})
+		// The connection is already encrypted: EHLO must not offer STARTTLS
+		// and must offer AUTH, as on a connection upgraded by STARTTLS
+		// (F7660). Without this, implicit-TLS submission (port 465) could not
+		// authenticate at all.
+		session.mutex.Lock()
+		session.isTLS = true
+		session.mutex.Unlock()
 	}
 
 	// Send greeting

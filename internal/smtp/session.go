@@ -570,6 +570,12 @@ func (s *Session) handleRCPT(arg string) error {
 		}
 	}
 
+	// A mailbox that does not exist is a permanent failure: say so now rather
+	// than accepting the message and failing after DATA (F7670).
+	if s.server.onRecipientExists != nil && !s.server.onRecipientExists(validated) {
+		return s.WriteResponse(550, "5.1.1 Recipient address rejected: user unknown")
+	}
+
 	// Apply the envelope policy installed with SetValidateHandler. (F4907)
 	if s.server.onValidate != nil {
 		if err := s.server.onValidate(s.mailFrom, []string{validated}); err != nil {
