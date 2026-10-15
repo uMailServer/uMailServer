@@ -248,6 +248,51 @@ func (h *MailHandler) getEmailsFromStorage(userEmail, mailbox string) ([]Mail, e
 	return emails, err
 }
 
+// saveSentCopy files a sent message under the sender's Sent folder and returns
+// its id. On failure status is the HTTP status describing it (0 means success).
+func (h *MailHandler) saveSentCopy(userEmail, rawEmail string, now time.Time, dateStr, subject string, to []string, req SendMailRequest) (msgID string, status int, errMsg string) {
+	// Ensure Sent mailbox exists
+	_ = h.mailDB.CreateMailbox(userEmail, "Sent")
+
+	// Store message file - msgID is the hash-based ID returned by StoreMessage
+	storedMsgID, err := h.msgStore.StoreMessage(userEmail, []byte(rawEmail))
+	if err != nil {
+		return "", http.StatusInternalServerError, "Failed to store message"
+	}
+	if storedMsgID == "" {
+		return "", http.StatusInternalServerError, "Failed to store message: no ID returned"
+	}
+	if err := h.chargeNewBlob(userEmail, storedMsgID, int64(len(rawEmail))); err != nil {
+		return "", http.StatusInsufficientStorage, "Quota exceeded"
+	}
+
+	// Get next UID for Sent mailbox
+	uid, err := h.mailDB.GetNextUID(userEmail, "Sent")
+	if err != nil {
+		return "", http.StatusInternalServerError, "Failed to get next UID"
+	}
+
+	// Store metadata with the hash-based message ID
+	meta := &storage.MessageMetadata{
+		MessageID:    storedMsgID,
+		UID:          uid,
+		Flags:        []string{"\\Seen"},
+		InternalDate: now,
+		Size:         int64(len(rawEmail)),
+		Subject:      subject,
+		Date:         dateStr,
+		From:         userEmail,
+		To:           strings.Join(to, ", "),
+		InReplyTo:    threadingHeaderValue(req.InReplyTo),
+		References:   threadingHeaderValues(req.References, req.InReplyTo),
+	}
+	if err := h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta); err != nil {
+		fmt.Printf("ERROR: failed to store message metadata: %v\n", err)
+		return "", http.StatusInternalServerError, "Failed to store message metadata"
+	}
+	return storedMsgID, 0, ""
+}
+
 // getEmailsPage returns up to limit emails (0 = all), skipping the offset
 // newest messages, plus the mailbox's total message count.
 func (h *MailHandler) getEmailsPage(userEmail, mailbox string, limit, offset int) ([]Mail, int, error) {
@@ -679,57 +724,21 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Store the message
+	// Store the message in the sender's Sent folder. Once the message has been
+	// delivered or queued, a failure here (sender over quota, storage error)
+	// must not turn the send into an error: the recipients already have the
+	// mail, and a user who sees a failure sends it again (F7740).
+	delivered := h.deliver != nil || h.queueMgr != nil
 	var msgID string
 	if h.msgStore != nil && h.mailDB != nil {
-		// Ensure Sent mailbox exists
-		_ = h.mailDB.CreateMailbox(userEmail, "Sent")
-
-		// Store message file - msgID is the hash-based ID returned by StoreMessage
-		storedMsgID, err := h.msgStore.StoreMessage(userEmail, []byte(rawEmail))
-		if err != nil {
-			h.sendError(w, http.StatusInternalServerError, "Failed to store message")
-			return
-		}
-		if storedMsgID == "" {
-			h.sendError(w, http.StatusInternalServerError, "Failed to store message: no ID returned")
-			return
-		}
-		msgID = storedMsgID
-		if err := h.chargeNewBlob(userEmail, storedMsgID, int64(len(rawEmail))); err != nil {
-			h.sendError(w, http.StatusInsufficientStorage, "Quota exceeded")
-			return
-		}
-
-		// Get next UID for Sent mailbox
-		uid, err := h.mailDB.GetNextUID(userEmail, "Sent")
-		if err != nil {
-			h.sendError(w, http.StatusInternalServerError, "Failed to get next UID")
-			return
-		}
-
-		// Parse headers for metadata
-		subject := safeSubject
-		from := userEmail
-		to := strings.Join(safeTo, ", ")
-
-		// Store metadata with the hash-based message ID
-		meta := &storage.MessageMetadata{
-			MessageID:    msgID,
-			UID:          uid,
-			Flags:        []string{"\\Seen"},
-			InternalDate: now,
-			Size:         int64(len(rawEmail)),
-			Subject:      subject,
-			Date:         dateStr,
-			From:         from,
-			To:           to,
-			InReplyTo:    threadingHeaderValue(req.InReplyTo),
-			References:   threadingHeaderValues(req.References, req.InReplyTo),
-		}
-		if err := h.mailDB.StoreMessageMetadata(userEmail, "Sent", uid, meta); err != nil {
-			fmt.Printf("ERROR: failed to store message metadata: %v\n", err)
-			h.sendError(w, http.StatusInternalServerError, "Failed to store message metadata")
+		id, status, errMsg := h.saveSentCopy(userEmail, rawEmail, now, dateStr, safeSubject, safeTo, req)
+		switch {
+		case status == 0:
+			msgID = id
+		case delivered:
+			fmt.Printf("ERROR: message sent but the Sent copy was not saved: %s\n", errMsg)
+		default:
+			h.sendError(w, status, errMsg)
 			return
 		}
 	}
