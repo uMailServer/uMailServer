@@ -180,8 +180,8 @@ func (s *Server) handleThreadDetail(w http.ResponseWriter, r *http.Request) {
 			MessageID: m.MessageID,
 			UID:       m.UID,
 			Mailbox:   m.Mailbox,
-			From:      mimeutil.DecodeHeader(m.From),
-			To:        mimeutil.DecodeHeader(m.To),
+			From:      mimeutil.DisplayText(m.From),
+			To:        mimeutil.DisplayText(m.To),
 			Subject:   mimeutil.DecodeHeader(m.Subject),
 			Date:      m.Date,
 			IsRead:    m.IsRead,
@@ -499,7 +499,7 @@ func (s *Server) threadMessageCounts(user, threadID string) (count, unread int, 
 func decodeAll(values []string) []string {
 	out := make([]string, len(values))
 	for i, v := range values {
-		out[i] = mimeutil.DecodeHeader(v)
+		out[i] = mimeutil.DisplayText(v)
 	}
 	return out
 }

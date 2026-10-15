@@ -1056,40 +1056,7 @@ func parseThreadHeaders(data []byte) (inReplyTo string, references []string) {
 // updateThreadAggregate refreshes the Thread summary row after a local
 // delivery (best-effort), mirroring the IMAP APPEND path's updateThreadInfo.
 func (s *Server) updateThreadAggregate(email, subject, from string, meta *storage.MessageMetadata, threadID string) {
-	thread, err := s.storageDB.GetThread(email, threadID)
-	if err != nil || thread == nil {
-		thread = &storage.Thread{
-			ThreadID:     threadID,
-			Subject:      storage.NormalizeSubject(subject),
-			Participants: []string{},
-			MessageCount: 0,
-			UnreadCount:  0,
-			LastActivity: meta.InternalDate,
-			CreatedAt:    time.Now(),
-		}
-	}
-
-	thread.MessageCount++
-	thread.LastActivity = meta.InternalDate
-
-	if from != "" {
-		found := false
-		for _, p := range thread.Participants {
-			if p == from {
-				found = true
-				break
-			}
-		}
-		if !found {
-			thread.Participants = append(thread.Participants, from)
-		}
-	}
-
-	if !storage.HasFlag(meta.Flags, "\\Seen") {
-		thread.UnreadCount++
-	}
-
-	if err := s.storageDB.UpdateThread(email, thread); err != nil {
+	if err := s.storageDB.RecordMessageInThread(email, threadID, subject, from, meta.InternalDate, meta.Flags); err != nil {
 		s.logger.Error("Failed to update thread aggregate", "email", email, "thread_id", threadID, "error", err)
 	}
 }

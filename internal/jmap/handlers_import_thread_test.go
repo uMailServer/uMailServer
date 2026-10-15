@@ -45,3 +45,23 @@ func TestEmailImportAssignsThreadIDs(t *testing.T) {
 		t.Fatalf("unrelated message thread %q (root %q)", other.ThreadID, root.ThreadID)
 	}
 }
+
+// The imported conversation also appears in the thread summary the REST thread
+// list reads (F7690 review follow-up): the import used to set a threadId but
+// never wrote the summary row, so /api/v1/threads did not list it.
+func TestEmailImportRecordsThreadSummary(t *testing.T) {
+	server, db, ms, cleanup := setupTestServer(t)
+	defer cleanup()
+	if err := db.CreateMailbox(r295JUser, "INBOX"); err != nil {
+		t.Fatal(err)
+	}
+	root := r295JImport(t, server, ms, "From: a@x.test\r\nTo: b@y.test\r\nSubject: Plan\r\nMessage-ID: <s1@x.test>\r\n\r\nroot\r\n")
+	r295JImport(t, server, ms, "From: b@y.test\r\nTo: a@x.test\r\nSubject: Re: Plan\r\nMessage-ID: <s2@y.test>\r\nIn-Reply-To: <s1@x.test>\r\nReferences: <s1@x.test>\r\n\r\nreply\r\n")
+	th, err := db.GetThread(r295JUser, root.ThreadID)
+	if err != nil {
+		t.Fatalf("no thread summary for %s: %v", root.ThreadID, err)
+	}
+	if th.MessageCount != 2 || len(th.Participants) != 2 {
+		t.Fatalf("summary = %+v, want 2 messages and 2 participants", th)
+	}
+}

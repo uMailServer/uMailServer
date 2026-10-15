@@ -1078,44 +1078,7 @@ func (m *BboltMailstore) AppendMessageUID(user, mailbox string, flags []string, 
 
 // updateThreadInfo updates the thread summary information
 func (m *BboltMailstore) updateThreadInfo(user, mailbox, threadID, subject, from string, meta *storage.MessageMetadata) {
-	// Get or create thread
-	thread, err := m.db.GetThread(user, threadID)
-	if err != nil {
-		// Create new thread
-		thread = &storage.Thread{
-			ThreadID:     threadID,
-			Subject:      storage.NormalizeSubject(subject),
-			Participants: []string{from},
-			MessageCount: 0,
-			UnreadCount:  0,
-			LastActivity: meta.InternalDate,
-			CreatedAt:    time.Now(),
-		}
-	}
-
-	// Update thread info
-	thread.MessageCount++
-	thread.LastActivity = meta.InternalDate
-
-	// Check if sender is already in participants
-	found := false
-	for _, p := range thread.Participants {
-		if p == from {
-			found = true
-			break
-		}
-	}
-	if !found {
-		thread.Participants = append(thread.Participants, from)
-	}
-
-	// Update unread count
-	if !storage.HasFlag(meta.Flags, "\\Seen") {
-		thread.UnreadCount++
-	}
-
-	// Save thread
-	_ = m.db.UpdateThread(user, thread)
+	_ = m.db.RecordMessageInThread(user, threadID, subject, from, meta.InternalDate, meta.Flags)
 }
 
 // SearchMessages searches for messages matching criteria

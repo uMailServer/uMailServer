@@ -89,17 +89,22 @@ func knownCharset(charset string) bool {
 }
 
 // wordDecoder decodes encoded-words for display. A charset it cannot convert
-// is accepted only when the bytes are valid UTF-8 (a mislabelled word);
-// otherwise decoding fails and the encoded-word stays visible instead of
-// turning into replacement characters.
-func wordDecoder() *mime.WordDecoder {
+// is accepted when the bytes are valid UTF-8 (a mislabelled word). Otherwise a
+// strict decoder fails, so the whole header stays visibly encoded instead of
+// turning into replacement characters; a lenient one (display names in an
+// address list) substitutes U+FFFD, because one unreadable name must not make
+// the whole list unparseable and hide the other recipients.
+func wordDecoder(lenient bool) *mime.WordDecoder {
 	return &mime.WordDecoder{CharsetReader: func(charset string, in io.Reader) (io.Reader, error) {
 		bs, err := io.ReadAll(in)
 		if err != nil {
 			return nil, err
 		}
 		if !knownCharset(charset) && !utf8.Valid(bs) {
-			return nil, errUnknownCharset
+			if !lenient {
+				return nil, errUnknownCharset
+			}
+			return strings.NewReader(strings.ToValidUTF8(string(bs), "\uFFFD")), nil
 		}
 		return strings.NewReader(DecodeCharset(bs, charset)), nil
 	}}
@@ -107,16 +112,32 @@ func wordDecoder() *mime.WordDecoder {
 
 var errUnknownCharset = errors.New("mimeutil: unsupported charset")
 
+// cleanText replaces control characters (other than tab) with a space: a
+// decoded header can carry CR, LF or NUL that were encoded to hide them.
+func cleanText(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 0x20 && c != '\t') || c == 0x7f {
+			return strings.Map(func(r rune) rune {
+				if (r < 0x20 && r != '\t') || r == 0x7f {
+					return ' '
+				}
+				return r
+			}, s)
+		}
+	}
+	return s
+}
+
 // DecodeHeader decodes the RFC 2047 encoded-words of a header value. A value
 // that cannot be decoded is returned unchanged.
 func DecodeHeader(v string) string {
 	if !strings.Contains(v, "=?") {
-		return v
+		return cleanText(v)
 	}
-	if out, err := wordDecoder().DecodeHeader(v); err == nil {
-		return out
+	if out, err := wordDecoder(false).DecodeHeader(v); err == nil {
+		return cleanText(out)
 	}
-	return v
+	return cleanText(v)
 }
 
 // ParseAddresses parses an address-list header value (To, Cc, From, ...) and
@@ -127,14 +148,14 @@ func ParseAddresses(raw string) ([]Address, bool) {
 	if raw == "" {
 		return nil, true
 	}
-	p := mail.AddressParser{WordDecoder: wordDecoder()}
+	p := mail.AddressParser{WordDecoder: wordDecoder(true)}
 	list, err := p.ParseList(raw)
 	if err != nil || len(list) == 0 {
 		return nil, false
 	}
 	out := make([]Address, 0, len(list))
 	for _, a := range list {
-		out = append(out, Address{Name: a.Name, Email: a.Address})
+		out = append(out, Address{Name: cleanText(a.Name), Email: a.Address})
 	}
 	return out, true
 }
@@ -145,7 +166,10 @@ func (a Address) Display() string {
 	if a.Name == "" {
 		return a.Email
 	}
-	name := a.Name
+	// Angle brackets in a name would give the displayed address a second
+	// <...>: a client that takes the first one would reply to the wrong
+	// address. Typographic brackets keep the name readable.
+	name := strings.NewReplacer("<", "‹", ">", "›").Replace(a.Name)
 	if strings.ContainsAny(name, `()<>[]:;@\,."`) {
 		name = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(name) + `"`
 	}
@@ -172,4 +196,19 @@ func DisplayList(raw string) []string {
 		out = append(out, a.Display())
 	}
 	return out
+}
+
+// DisplayText formats an address-list header value for people as one string:
+// the addresses in display form joined by ", ". A value that does not parse is
+// returned decoded (DecodeHeader).
+func DisplayText(raw string) string {
+	list, ok := ParseAddresses(raw)
+	if !ok || len(list) == 0 {
+		return DecodeHeader(raw)
+	}
+	parts := make([]string, len(list))
+	for i, a := range list {
+		parts[i] = a.Display()
+	}
+	return strings.Join(parts, ", ")
 }

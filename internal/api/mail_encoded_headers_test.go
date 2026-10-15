@@ -93,3 +93,23 @@ func TestThreadViewsDecodeEncodedHeaders(t *testing.T) {
 		t.Errorf("thread detail not decoded: %s", detail)
 	}
 }
+
+// Review follow-ups: a display name in a charset we cannot convert must not
+// collapse the recipient list, and a name must not be able to carry a second
+// <address> that a client could take for the real one.
+func TestMailListToSurvivesUnsupportedCharsetAndSmuggledAddress(t *testing.T) {
+	h, db, id := mailConversionFixture(t, "From: x@y.test\r\nSubject: s\r\n\r\nbody\r\n", nil)
+	meta := &storage.MessageMetadata{UID: 1, MessageID: id, InternalDate: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+		Subject: "s", From: "=?utf-8?B?RXZlIDx2aWN0aW1AeC50ZXN0Pg==?= <attacker@evil.test>",
+		To: "=?gb2312?B?1tDOxA==?= <a@x.test>, Bob <b@x.test>"}
+	if err := db.StoreMessageMetadata("reader@example.com", "INBOX", 1, meta); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := h.getEmailsFromStorage("reader@example.com", "INBOX")
+	if len(list[0].To) != 2 || !strings.HasSuffix(list[0].To[0], "<a@x.test>") || list[0].To[1] != "Bob <b@x.test>" {
+		t.Errorf("To = %q, want the two recipients", list[0].To)
+	}
+	if strings.Count(list[0].From, "<") != 1 || !strings.HasSuffix(list[0].From, "<attacker@evil.test>") {
+		t.Errorf("From = %q carries a second <address>", list[0].From)
+	}
+}

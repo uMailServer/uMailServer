@@ -1220,6 +1220,8 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			continue
 		}
 
+		s.recordThread(user, meta)
+
 		email := storageToJMAPEmail(meta, nil, targetNames[0])
 		// RFC 8620 §5.3 + §4.1.2: the created object carries the server-set
 		// properties, agreeing with Email/get of the same message (round 53).
@@ -2003,6 +2005,7 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 				return
 			}
 			s.untrackUpload(user, blobID)
+			s.recordThread(user, meta)
 
 			// Convert to JMAP Email; the created object reports every mailbox
 			// the message was imported into, not just the first. §4.1.2
@@ -2050,6 +2053,18 @@ func (s *Server) handleEmailImport(user string, call MethodCall) Response {
 			"notCreated": notCreated,
 		},
 		ID: call.ID,
+	}
+}
+
+// recordThread adds a stored message to its thread's summary row, which is what
+// the REST thread list reads; SMTP delivery and IMAP APPEND do the same. It
+// runs after the message was stored, so a failed store leaves no phantom count.
+func (s *Server) recordThread(user string, meta *storage.MessageMetadata) {
+	if meta.ThreadID == "" {
+		return
+	}
+	if err := s.db.RecordMessageInThread(user, meta.ThreadID, meta.Subject, meta.From, meta.InternalDate, meta.Flags); err != nil {
+		s.logger.Warn("jmap: thread summary not updated", "thread", meta.ThreadID, "error", err)
 	}
 }
 

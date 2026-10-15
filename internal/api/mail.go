@@ -371,7 +371,7 @@ func (h *MailHandler) getEmailsPageFiltered(userEmail, mailbox string, limit, of
 
 		email := Mail{
 			ID:      mailID,
-			From:    mimeutil.DecodeHeader(meta.From),
+			From:    mimeutil.DisplayText(meta.From),
 			To:      displayRecipients(meta.To),
 			Subject: mimeutil.DecodeHeader(meta.Subject),
 			Body:    body,
@@ -483,7 +483,7 @@ func (h *MailHandler) getEmailFromStorage(userEmail, mailbox, messageID string) 
 
 	return &Mail{
 		ID:      messageID, // F6645: echo the (possibly copy-qualified) id asked for
-		From:    mimeutil.DecodeHeader(meta.From),
+		From:    mimeutil.DisplayText(meta.From),
 		To:      displayRecipients(meta.To),
 		Subject: mimeutil.DecodeHeader(meta.Subject),
 		Body:    body,

@@ -33,7 +33,11 @@ export function forwardBody(from: string, date: string, subject: string, to: str
 
 /** Bare lower-cased-for-compare address from "Name <a@b>" or "a@b". */
 function bareAddress(s: string): string {
-  const m = /<([^<>]+)>/.exec(s)
+  // The addr-spec is the LAST <...>: a display name may itself contain one
+  // ("Eve <victim@x.test>" <attacker@evil.test>), and reply-all must go to the
+  // real address, not the one the name merely mentions.
+  const all = Array.from(s.matchAll(/<([^<>]+)>/g))
+  const m = all.length ? all[all.length - 1] : null
   return (m ? m[1] : s).trim()
 }
 

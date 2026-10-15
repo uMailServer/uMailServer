@@ -2,6 +2,7 @@ package mimeutil
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,53 @@ func TestDisplayList(t *testing.T) {
 	// Unparseable: one decoded element, never split on the comma inside a quoted name.
 	if got := DisplayList(`"Unclosed, Name <a@x.test>`); len(got) != 1 {
 		t.Errorf("unparseable list was split: %#v", got)
+	}
+}
+
+// One display name in a charset we cannot convert must not make the whole
+// address list unparseable: that collapsed a To list into one element and
+// dropped every recipient but the first from a reply-all (review finding).
+func TestAddressListSurvivesUnsupportedCharsetName(t *testing.T) {
+	got := DisplayList("=?gb2312?B?1tDOxA==?= <a@x.test>, Bob <b@x.test>")
+	if len(got) != 2 {
+		t.Fatalf("DisplayList = %#v, want 2 recipients", got)
+	}
+	list, ok := ParseAddresses("=?shift_jis?B?k/qWe4zq?= <a@x.test>, Bob <b@x.test>")
+	if !ok || len(list) != 2 || list[0].Email != "a@x.test" || list[1].Email != "b@x.test" {
+		t.Fatalf("ParseAddresses = %#v ok=%v", list, ok)
+	}
+	// A subject is different: it stays visibly encoded rather than garbled.
+	if d := DecodeHeader("=?gb2312?B?1tDOxA==?="); d != "=?gb2312?B?1tDOxA==?=" {
+		t.Errorf("subject in an unsupported charset = %q", d)
+	}
+}
+
+// A decoded display name must not be able to carry a second address: a client
+// that takes the first <...> of a displayed From would reply to the wrong one.
+func TestDisplayNameCannotSmuggleAnAddress(t *testing.T) {
+	list, ok := ParseAddresses("=?utf-8?B?RXZlIDx2aWN0aW1AeC50ZXN0Pg==?= <attacker@evil.test>")
+	if !ok || len(list) != 1 || list[0].Email != "attacker@evil.test" {
+		t.Fatalf("ParseAddresses = %#v ok=%v", list, ok)
+	}
+	d := list[0].Display()
+	if strings.Count(d, "<") != 1 || !strings.HasSuffix(d, "<attacker@evil.test>") {
+		t.Errorf("Display = %q: the name carries its own <address>", d)
+	}
+}
+
+// Control characters in a decoded header never reach the output.
+func TestDecodedHeadersDropControlCharacters(t *testing.T) {
+	for in, want := range map[string]string{
+		"=?utf-8?q?a=0D=0AX-Evil:_1?=": "a  X-Evil: 1",
+		"=?us-ascii?q?a=00b?=":         "a b",
+		"tab\tkept =?utf-8?q?ok?=":     "tab\tkept ok",
+	} {
+		if got := DecodeHeader(in); got != want {
+			t.Errorf("DecodeHeader(%q) = %q, want %q", in, got, want)
+		}
+	}
+	list, _ := ParseAddresses("=?utf-8?q?Ev=0D=0Ail?= <e@x.test>")
+	if len(list) != 1 || strings.ContainsAny(list[0].Name, "\r\n\x00") {
+		t.Errorf("name keeps control characters: %#v", list)
 	}
 }
