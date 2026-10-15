@@ -77,3 +77,36 @@ func TestRCPTExternalDomainStillRelayDenied(t *testing.T) {
 		t.Fatalf("external recipient: DATA reached=%v; transcript:\n%s", data, tr)
 	}
 }
+
+// F7730: a catch-all domain accepts unknown local parts only while its target
+// mailbox exists and is active; otherwise delivery would fail after DATA with a
+// temporary error.
+func TestRCPTCatchAllNeedsAUsableTarget(t *testing.T) {
+	for name, target := range map[string]string{"missing target": "ghost@test.com", "malformed target": "no-at-sign"} {
+		srv := newRelayAuditInbound(t)
+		d, err := srv.database.GetDomain("test.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.CatchAllTarget = target
+		if err := srv.database.UpdateDomain(d); err != nil {
+			t.Fatal(err)
+		}
+		if tr, data := r293Rcpt(t, srv, "anything@test.com"); data || !strings.Contains(tr, "550 5.1.1") {
+			t.Errorf("%s: DATA reached=%v; transcript:\n%s", name, data, tr)
+		}
+	}
+	// inactive target
+	srv := newRelayAuditInbound(t)
+	if err := srv.database.CreateAccount(&db.AccountData{Email: "off@test.com", LocalPart: "off", Domain: "test.com", PasswordHash: "x", IsActive: false}); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := srv.database.GetDomain("test.com")
+	d.CatchAllTarget = "off@test.com"
+	if err := srv.database.UpdateDomain(d); err != nil {
+		t.Fatal(err)
+	}
+	if tr, data := r293Rcpt(t, srv, "anything@test.com"); data || !strings.Contains(tr, "550 5.1.1") {
+		t.Errorf("inactive target: DATA reached=%v; transcript:\n%s", data, tr)
+	}
+}

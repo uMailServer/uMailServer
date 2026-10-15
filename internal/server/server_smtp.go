@@ -264,8 +264,19 @@ func (s *Server) recipientExists(addr string) bool {
 	if a, aerr := s.database.GetAccount(domain, user); aerr == nil && a != nil && a.IsActive {
 		return true
 	}
+	// A catch-all only helps when its target mailbox exists: delivery redirects
+	// to it, and a missing or inactive target fails after DATA with a temporary
+	// error (F7730).
 	d, derr := s.database.GetDomain(domain)
-	return derr == nil && d != nil && d.CatchAllTarget != ""
+	if derr != nil || d == nil || d.CatchAllTarget == "" {
+		return false
+	}
+	tUser, tDomain := normalizeRcpt(d.CatchAllTarget)
+	if tUser == "" || tDomain == "" {
+		return false
+	}
+	a, aerr := s.database.GetAccount(tDomain, tUser)
+	return aerr == nil && a != nil && a.IsActive
 }
 
 // isLocalDomain reports whether mail for domain is delivered locally, using
