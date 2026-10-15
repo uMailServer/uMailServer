@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func audit5724Limit(t *testing.T, limit uint64) func() {
+func audit5724Limit(t *testing.T, limit uint64) {
 	t.Helper()
 	var old syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_FSIZE, &old); err != nil {
@@ -22,7 +22,16 @@ func audit5724Limit(t *testing.T, limit uint64) func() {
 	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &nl); err != nil {
 		t.Fatalf("INVALID: %v", err)
 	}
-	return func() { _ = syscall.Setrlimit(syscall.RLIMIT_FSIZE, &old) }
+	t.Cleanup(func() {
+		// The restore error must never be silently discarded: RLIMIT_FSIZE
+		// is process-wide, and a leaked 4096-byte limit breaks every later
+		// file write in this process — including the testing framework's
+		// exit-time testlog write, which surfaced as a package FAIL despite
+		// all tests passing (round 26; CI run 38816451227).
+		if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &old); err != nil {
+			t.Errorf("failed to restore RLIMIT_FSIZE to Cur=%d Max=%d: %v", old.Cur, old.Max, err)
+		}
+	})
 }
 
 func audit5724Tmp(t *testing.T, s *MaildirStore) []string {
@@ -51,10 +60,9 @@ func TestAudit5724Control(t *testing.T) {
 func TestAudit5724Failure(t *testing.T) {
 	s := NewMaildirStore(t.TempDir())
 	big := bytes.Repeat([]byte("x"), 200000)
-	restore := audit5724Limit(t, 4096)
+	audit5724Limit(t, 4096)
 	_, err := s.Deliver("example.com", "u", "INBOX", big)
 	_, err2 := s.DeliverWithFlags("example.com", "u", "INBOX", big, "S")
-	restore()
 	if !errors.Is(err, syscall.EFBIG) || !errors.Is(err2, syscall.EFBIG) {
 		t.Fatalf("INVALID: expected EFBIG, got %v / %v", err, err2)
 	}

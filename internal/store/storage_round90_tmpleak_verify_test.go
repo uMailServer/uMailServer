@@ -17,9 +17,8 @@ func TestVerify5724Edges(t *testing.T) {
 	if n := audit5724Tmp(t, s); len(n) != 0 {
 		t.Fatalf("success left tmp %v", n)
 	}
-	restore := audit5724Limit(t, 1024)
+	audit5724Limit(t, 1024)
 	_, err := s.Deliver("example.com", "u", "INBOX", bytes.Repeat([]byte("y"), 50000))
-	restore()
 	if err == nil {
 		t.Fatal("expected failure")
 	}
