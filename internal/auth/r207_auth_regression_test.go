@@ -67,7 +67,15 @@ func TestSPFCacheEvictionIsFast_F6841(t *testing.T) {
 	}
 	start := time.Now()
 	c.set("trigger.example", "v=spf1 -all", time.Hour)
-	if d := time.Since(start); d > 100*time.Millisecond {
+	// The bound catches an eviction regression holding the lock; it must stay
+	// tight for normal builds but tolerate the race detector's 5-20x
+	// instrumentation overhead, which otherwise makes it fail under load even
+	// with a correct O(1) eviction (observed at 104ms, F7760).
+	limit := 100 * time.Millisecond
+	if raceEnabled {
+		limit = time.Second
+	}
+	if d := time.Since(start); d > limit {
 		t.Fatalf("eviction held the lock for %v", d)
 	}
 	if len(c.records) > 18001 {
