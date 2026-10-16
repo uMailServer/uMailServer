@@ -110,6 +110,25 @@ tls:
   serverProc.stdout.on('data', (data) => process.stdout.write(data));
   serverProc.stderr.on('data', (data) => process.stderr.write(data));
 
+  // Mirror the server's audit log into this process's output: the audit
+  // reason (account_not_found / invalid_password / account_inactive) is the
+  // only discriminator for auth.setup login 401s, and the file is not
+  // uploaded with the test results.
+  const auditPath = path.join(DATA_DIR, 'logs', 'audit.log');
+  let auditSeen = 0;
+  const auditTimer = setInterval(() => {
+    try {
+      if (!fs.existsSync(auditPath)) return;
+      const lines = fs.readFileSync(auditPath, 'utf8').split('\n').filter(Boolean);
+      for (; auditSeen < lines.length; auditSeen++) {
+        console.log('[audit]', lines[auditSeen]);
+      }
+    } catch (e) {
+      // best-effort diagnostics only
+    }
+  }, 1000);
+  global.__umailserverAuditTimer = auditTimer;
+
   // Wait for server to be ready
   await waitForServer(120000);
 
