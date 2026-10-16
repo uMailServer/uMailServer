@@ -64,13 +64,13 @@ async function main() {
   // Create test config
   const testConfig = `server:
   hostname: localhost
-  data_dir: ./data
+  data_dir: ${DATA_DIR}
 database:
-  path: ./data/umailserver.db
+  path: ${DATA_DIR}/umailserver.db
 security:
   max_login_attempts: 1000
   audit_log:
-    path: ./data/logs/audit.log
+    path: ${DATA_DIR}/logs/audit.log
 http:
   enabled: true
   port: 8080
