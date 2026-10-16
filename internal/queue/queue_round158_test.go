@@ -97,7 +97,8 @@ func TestRegressionF6394_DomainSlotCap(t *testing.T) {
 	m, _, database := setupManager(t)
 	defer database.Close()
 	m.SetMaxConcurrentPerDomain(2)
-	if !m.acquireDomainSlot("d") || !m.acquireDomainSlot("d") || m.acquireDomainSlot("d") {
+	a, b, c := m.acquireDomainSlot("d"), m.acquireDomainSlot("d"), m.acquireDomainSlot("d")
+	if !a || !b || c {
 		t.Fatal("cap of 2 not enforced")
 	}
 	if !m.acquireDomainSlot("other") {

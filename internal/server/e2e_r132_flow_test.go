@@ -299,7 +299,7 @@ func TestE2E_CrossProtocolVisibilityAndDisk(t *testing.T) {
 	t.Log(out)
 	n, files = e.diskBytes("bob@test.com")
 	t.Logf("after COPY: quota=%d disk=%d files=%v", e.quotaUsed("bob"), n, files)
-	out = c.imapCmd("a5", "SELECT Archive")
+	_ = c.imapCmd("a5", "SELECT Archive")
 	c.imapCmd("a6", "STORE 1:2 +FLAGS (\\Deleted)")
 	c.imapCmd("a7", "EXPUNGE")
 	n, files = e.diskBytes("bob@test.com")

@@ -457,13 +457,6 @@ func SetTrustedProxies(list []string) {
 	trustedMu.Unlock()
 }
 
-func isTrustedProxy(ip string) bool {
-	trustedMu.RLock()
-	list := trustedProxies
-	trustedMu.RUnlock()
-	return inProxyList(ip, list)
-}
-
 func inProxyList(ip string, list []string) bool {
 	parsed := net.ParseIP(ip)
 	for _, t := range list {

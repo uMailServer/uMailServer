@@ -52,7 +52,7 @@ func FuzzGenerateDSN(f *testing.F) {
 			return
 		}
 		ParseDSNNotify(diag)
-		ParseDSNRet(diag)
+		_ = ParseDSNRet(diag)
 		diagnosticText(diag)
 		extractHeaders(orig)
 		if got := diagnosticText(diag); len(got) > maxDiagnosticLen || strings.ContainsAny(got, "\r\n") {

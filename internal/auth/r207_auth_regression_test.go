@@ -189,7 +189,10 @@ func TestMTASTSDefaultClientBlocksPrivateDial_F6846(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	req, _ := newReq(ctx, "https://127.0.0.1:1/x")
-	_, err := v.httpClient.Do(req)
+	resp, err := v.httpClient.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
 	if err == nil || !strings.Contains(err.Error(), "blocked") {
 		t.Fatalf("err=%v, want blocked-address error", err)
 	}

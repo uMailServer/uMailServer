@@ -426,13 +426,13 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 			if err != nil {
 				return nil, fmt.Errorf("invalid t= tag: %w", err)
 			}
-			sig.Timestamp = int64(n)
+			sig.Timestamp = n
 		case "x":
 			n, err := parseStrictUint(value)
 			if err != nil {
 				return nil, fmt.Errorf("invalid x= tag: %w", err)
 			}
-			sig.Expiration = int64(n)
+			sig.Expiration = n
 		case "h":
 			sig.SignedHeaders = parseHeaderList(value)
 		case "bh":

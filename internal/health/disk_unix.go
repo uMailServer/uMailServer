@@ -26,7 +26,7 @@ func DiskSpaceCheck(path string, warningThreshold, criticalThreshold float64) Ch
 			return check
 		}
 
-		usagePercent, ok := diskUsagePercent(uint64(stat.Blocks), uint64(stat.Bfree), uint64(stat.Bavail))
+		usagePercent, ok := diskUsagePercent(stat.Blocks, stat.Bfree, stat.Bavail)
 		if !ok {
 			check.Status = StatusUnhealthy
 			check.Message = "filesystem reports zero capacity"

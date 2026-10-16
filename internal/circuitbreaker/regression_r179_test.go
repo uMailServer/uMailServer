@@ -12,7 +12,8 @@ func TestR179HalfOpenMixedRoundDoesNotWedge(t *testing.T) {
 	cb := New(Config{MaxFailures: 1, Timeout: time.Minute, SuccessThreshold: 2, FailureThreshold: 2})
 	cb.RecordFailure() // open
 	cb.lastFailure = time.Now().Add(-2 * time.Minute)
-	if !cb.Allow() || !cb.Allow() || cb.Allow() {
+	a, b, c := cb.Allow(), cb.Allow(), cb.Allow()
+	if !a || !b || c {
 		t.Fatal("expected exactly SuccessThreshold probes")
 	}
 	cb.RecordSuccess()

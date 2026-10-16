@@ -84,7 +84,11 @@ func TestF5760_EndpointValidation(t *testing.T) {
 // F5760: the dialer blocks private addresses (covers DNS rebinding / redirects).
 func TestF5760_DialerBlocksLoopback(t *testing.T) {
 	c := &http.Client{Transport: newPushTransport(), Timeout: 3 * time.Second}
-	if _, err := c.Get("https://127.0.0.1:1/"); err == nil || !strings.Contains(err.Error(), "not allowed") {
+	resp, err := c.Get("https://127.0.0.1:1/")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("expected blocked dial, got %v", err)
 	}
 }

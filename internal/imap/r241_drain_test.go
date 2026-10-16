@@ -38,7 +38,7 @@ func r241EOF(c net.Conn, r *bufio.Reader) bool {
 	for {
 		if _, err := r.ReadString('\n'); err != nil {
 			ne, ok := err.(net.Error)
-			return !(ok && ne.Timeout())
+			return !ok || !ne.Timeout()
 		}
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"encoding/base64"
 	"strconv"
 	"strings"
-
-	"github.com/umailserver/umailserver/internal/storage"
 )
 
 // F6645: an Email id is the content hash of its blob, so byte-identical
@@ -70,13 +68,4 @@ func (s *Server) extraCopy(user, id string) []emailCopy {
 		return nil
 	}
 	return []emailCopy{{mailbox: mbox, uid: uid, meta: meta}}
-}
-
-// emailIDOf is the Email id a copy is reported under, given the mailboxes in
-// which the primary Email of this blob already has its copy.
-func emailIDOf(meta *storage.MessageMetadata, mailbox string, uid uint32, primaryBoxes map[string]bool) string {
-	if primaryBoxes[mailbox] {
-		return extraCopyID(meta.MessageID, mailbox, uid)
-	}
-	return meta.MessageID
 }

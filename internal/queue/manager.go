@@ -241,12 +241,12 @@ type deadlineConn struct {
 }
 
 func (c *deadlineConn) Read(p []byte) (int, error) {
-	_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
+	_ = c.SetReadDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Read(p)
 }
 
 func (c *deadlineConn) Write(p []byte) (int, error) {
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	_ = c.SetWriteDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Write(p)
 }
 

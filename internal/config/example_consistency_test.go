@@ -13,7 +13,7 @@ import (
 
 // yamlPaths collects every yaml key path reachable from a struct type.
 func yamlPaths(t reflect.Type, prefix string, out map[string]bool) {
-	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {

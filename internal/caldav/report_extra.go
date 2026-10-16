@@ -120,8 +120,8 @@ func (s *Server) reportSyncCollection(w http.ResponseWriter, r *http.Request, us
 	}
 	token := strings.TrimSpace(q.SyncToken)
 	ms := &Multistatus{SyncToken: syncTokenPrefix + ctag}
-	switch {
-	case token == "":
+	switch token {
+	case "":
 		events, err := s.storage.GetEventEntries(username, calendarID)
 		if err != nil {
 			s.sendError(w, http.StatusInternalServerError, "failed to query calendar events")
@@ -134,7 +134,7 @@ func (s *Server) reportSyncCollection(w http.ResponseWriter, r *http.Request, us
 		}
 		sort.Slice(ms.Responses, func(i, j int) bool { return ms.Responses[i].Href < ms.Responses[j].Href })
 		applyPropSelection(ms, requestedProps(&Propfind{Prop: q.Prop}))
-	case token == syncTokenPrefix+ctag:
+	case syncTokenPrefix + ctag:
 		// nothing changed
 	default:
 		w.Header().Set("Content-Type", "application/xml; charset=utf-8")

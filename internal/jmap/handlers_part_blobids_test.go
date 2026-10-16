@@ -83,7 +83,7 @@ func r59DurFullForm(t *testing.T, server *Server, id string) Email {
 	return list[0]
 }
 
-func r59DurDownload(t *testing.T, server *Server, blobID string) (*http.Response, string) {
+func r59DurDownload(t *testing.T, server *Server, blobID string) (int, string, string) {
 	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": "user@example.com",
@@ -97,7 +97,9 @@ func r59DurDownload(t *testing.T, server *Server, blobID string) (*http.Response
 	req.Header.Set("Authorization", "Bearer "+signed)
 	w := httptest.NewRecorder()
 	server.handleDownload(w, req)
-	return w.Result(), w.Body.String()
+	resp := w.Result()
+	defer resp.Body.Close()
+	return resp.StatusCode, resp.Header.Get("Content-Type"), w.Body.String()
 }
 
 func TestPartBlobIDsExposedAndDownloadable(t *testing.T) {
@@ -132,21 +134,21 @@ func TestPartBlobIDsExposedAndDownloadable(t *testing.T) {
 	}
 
 	// Download the attachment by its per-part blob id.
-	resp, body := r59DurDownload(t, server, att.BlobID)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("FAIL: attachment download status = %d (body: %s)", resp.StatusCode, body)
+	status, contentType, body := r59DurDownload(t, server, att.BlobID)
+	if status != http.StatusOK {
+		t.Fatalf("FAIL: attachment download status = %d (body: %s)", status, body)
 	}
 	if body != r59DurPDF {
 		t.Fatalf("FAIL: attachment download body = %q; want the decoded part content", body)
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "application/pdf") {
-		t.Fatalf("FAIL: attachment download Content-Type = %q", ct)
+	if !strings.Contains(contentType, "application/pdf") {
+		t.Fatalf("FAIL: attachment download Content-Type = %q", contentType)
 	}
 
 	// Download the text part by its per-part blob id.
-	respT, bodyT := r59DurDownload(t, server, textBlob)
-	if respT.StatusCode != http.StatusOK {
-		t.Fatalf("FAIL: text part download status = %d (body: %s)", respT.StatusCode, bodyT)
+	statusT, _, bodyT := r59DurDownload(t, server, textBlob)
+	if statusT != http.StatusOK {
+		t.Fatalf("FAIL: text part download status = %d (body: %s)", statusT, bodyT)
 	}
 	if bodyT != "Plain body for the round-59 durable proof." {
 		t.Fatalf("FAIL: text part download body = %q", bodyT)
@@ -183,9 +185,9 @@ func TestWholeMessageDownloadUnchanged(t *testing.T) {
 	if email.BlobID == "" {
 		t.Fatalf("CONTROL FAILED: created object carries no whole-message blobId")
 	}
-	resp, body := r59DurDownload(t, server, email.BlobID)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("CONTROL FAILED: whole-message download status = %d (body: %s)", resp.StatusCode, body)
+	status, _, body := r59DurDownload(t, server, email.BlobID)
+	if status != http.StatusOK {
+		t.Fatalf("CONTROL FAILED: whole-message download status = %d (body: %s)", status, body)
 	}
 	if !strings.Contains(body, "Plain body for the round-59 durable proof.") {
 		t.Fatalf("CONTROL FAILED: whole-message download body = %q", body)

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -157,16 +156,4 @@ func (e *r187Env) httpGet(url, token string) (int, []byte) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, b
-}
-
-// r187Known reports whether checks guarding a confirmed, still-unfixed product
-// defect should run. They are skipped by default so the suite stays green;
-// set R187_KNOWN=1 to reproduce (ledger .temp_files/ledger_e2e_r187.md).
-func r187Known(t *testing.T, id string) bool {
-	t.Helper()
-	if os.Getenv("R187_KNOWN") == "1" {
-		return true
-	}
-	t.Logf("%s: known product defect, check skipped (R187_KNOWN=1 to reproduce)", id)
-	return false
 }

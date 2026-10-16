@@ -194,7 +194,7 @@ func starttlsDialer(cert *tls.Certificate) func(string) (net.Conn, error) {
 func fakeSTARTTLSPeer(conn net.Conn, cert *tls.Certificate) {
 	go func() {
 		defer func() { _ = conn.Close() }()
-		var c net.Conn = conn
+		c := conn
 		buf := make([]byte, 0, 512)
 		readLine := func() (string, bool) {
 			buf = buf[:0]

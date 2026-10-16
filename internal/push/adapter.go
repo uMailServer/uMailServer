@@ -10,5 +10,5 @@ func NewAPIAdapter(svc *Service) *APIAdapter { return &APIAdapter{Service: svc} 
 
 // SendNotification delivers notif to every subscription of userID.
 func (a *APIAdapter) SendNotification(userID string, notif *Notification) error {
-	return a.Service.SendToUser(userID, notif)
+	return a.SendToUser(userID, notif)
 }

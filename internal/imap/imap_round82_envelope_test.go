@@ -36,8 +36,8 @@ func (p *round82Parser) value() interface{} {
 	if p.err != nil || p.pos >= len(p.s) {
 		return p.fail("unexpected end")
 	}
-	switch c := p.s[p.pos]; {
-	case c == '(':
+	switch c := p.s[p.pos]; c {
+	case '(':
 		p.pos++
 		list := []interface{}{}
 		for {
@@ -54,7 +54,7 @@ func (p *round82Parser) value() interface{} {
 				return nil
 			}
 		}
-	case c == '"':
+	case '"':
 		p.pos++
 		var b strings.Builder
 		for p.pos < len(p.s) {
@@ -79,7 +79,7 @@ func (p *round82Parser) value() interface{} {
 			p.pos++
 		}
 		return p.fail("unterminated quoted string")
-	case c == '{':
+	case '{':
 		end := strings.Index(p.s[p.pos:], "}\r\n")
 		if end < 0 {
 			return p.fail("bad literal")

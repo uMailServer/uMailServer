@@ -141,7 +141,7 @@ func TestR187_ShutdownDuringIdleAndData(t *testing.T) {
 	n, err := ic.r.Read(buf)
 	t.Logf("idle client after stop: %q err=%v", buf[:n], err)
 	if err == nil && !strings.Contains(string(buf[:n]), "BYE") {
-		_, err = io.Copy(io.Discard, ic.r)
+		_, _ = io.Copy(io.Discard, ic.r)
 	}
 	select {
 	case <-stopped:

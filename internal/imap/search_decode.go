@@ -134,7 +134,7 @@ func collectText(out *strings.Builder, ctype, cte string, body io.Reader, depth 
 	if !strings.HasPrefix(mt, "text/") && ctype != "" {
 		return
 	}
-	var r io.Reader = body
+	r := body
 	switch strings.ToLower(strings.TrimSpace(cte)) {
 	case "base64":
 		r = base64.NewDecoder(base64.StdEncoding, &stripWS{r: body})

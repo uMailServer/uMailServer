@@ -78,10 +78,10 @@ func skipWords(line string, n int) string {
 func splitQuotedArgs(rest string) []string {
 	var out []string
 	for i := 0; i < len(rest); {
-		switch c := rest[i]; {
-		case c == ' ' || c == '\t':
+		switch c := rest[i]; c {
+		case ' ', '\t':
 			i++
-		case c == '"':
+		case '"':
 			var b strings.Builder
 			i++
 			for i < len(rest) && rest[i] != '"' {
@@ -137,24 +137,24 @@ func canonMailbox(name string) string {
 func checkNewMailboxName(name string) (string, error) {
 	name = canonMailbox(strings.TrimRight(name, "/"))
 	if name == "" {
-		return "", fmt.Errorf("Invalid mailbox name")
+		return "", fmt.Errorf("invalid mailbox name")
 	}
 	if strings.ContainsAny(name, "*%") {
-		return "", fmt.Errorf("Mailbox name must not contain wildcards")
+		return "", fmt.Errorf("mailbox name must not contain wildcards")
 	}
 	for _, seg := range strings.Split(name, "/") {
 		if seg == "" {
-			return "", fmt.Errorf("Invalid mailbox name: empty hierarchy level")
+			return "", fmt.Errorf("invalid mailbox name: empty hierarchy level")
 		}
 		// F6605: "." / ".." levels are path-traversal syntax for any store
 		// or export that maps names onto directories.
 		if seg == "." || seg == ".." {
-			return "", fmt.Errorf("Invalid mailbox name: relative hierarchy level")
+			return "", fmt.Errorf("invalid mailbox name: relative hierarchy level")
 		}
 	}
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {
-			return "", fmt.Errorf("Invalid mailbox name: control character")
+			return "", fmt.Errorf("invalid mailbox name: control character")
 		}
 	}
 	return name, nil

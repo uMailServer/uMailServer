@@ -66,7 +66,7 @@ func findUnknownKeys(n *yaml.Node, t reflect.Type, prefix string, out *[]string)
 	if n == nil {
 		return
 	}
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch n.Kind {
@@ -177,7 +177,7 @@ func parseDurationStrict(s string) (time.Duration, error) {
 func validateByReflection(v reflect.Value, path string) error {
 	t := v.Type()
 	switch t.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return nil
 		}
@@ -271,7 +271,7 @@ func validateBind(b string) error {
 			return fmt.Errorf("invalid bind host name %q", b)
 		}
 		for _, r := range label {
-			if !(r == '-' || r == '_' || r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
+			if r != '-' && r != '_' && (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
 				return fmt.Errorf("invalid bind host name %q", b)
 			}
 		}
@@ -292,7 +292,7 @@ func secretFieldName(name string) bool {
 // configHasSecrets reports whether any credential field of v is non-empty.
 func configHasSecrets(v reflect.Value) bool {
 	switch v.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return !v.IsNil() && configHasSecrets(v.Elem())
 	case reflect.Slice:
 		for i := 0; i < v.Len(); i++ {

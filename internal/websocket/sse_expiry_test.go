@@ -31,11 +31,10 @@ func TestSSEClosesWhenTokenInvalidated(t *testing.T) {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
 	req.Header.Set("X-Auth-Token", "t")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:bodyclose // the SSE body is drained by a goroutine to detect server-side close, then closed below
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
 	time.Sleep(60 * time.Millisecond) // a few valid heartbeats
 	revoked.Store(true)
 	done := make(chan struct{})
@@ -45,6 +44,7 @@ func TestSSEClosesWhenTokenInvalidated(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("stream still open after token invalidated")
 	}
+	resp.Body.Close()
 	if n := s.GetConnectedCount(); n != 0 {
 		t.Fatalf("client not removed: %d", n)
 	}

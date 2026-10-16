@@ -237,10 +237,6 @@ type matchSpec struct {
 	Comparator string // i;ascii-casemap, i;octet, i;ascii-numeric
 }
 
-func (m matchSpec) numeric() bool {
-	return m.Comparator == "i;ascii-numeric" || m.Type == "count"
-}
-
 func normComparator(c string) (string, error) {
 	switch c {
 	case "":

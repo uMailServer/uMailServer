@@ -1582,7 +1582,7 @@ func (s *Server) transferEvent(w http.ResponseWriter, r *http.Request, username 
 			s.sendError(w, http.StatusInternalServerError, "failed to read destination calendar")
 			return
 		}
-		if other != "" && !(move && sourceCalendarID == destCalendarID && other == sourceEventUID) {
+		if other != "" && (!move || sourceCalendarID != destCalendarID || other != sourceEventUID) {
 			eventData = rewriteUID(eventData, srcUID, uuid.New().String())
 		}
 	}

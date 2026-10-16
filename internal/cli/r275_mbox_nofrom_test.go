@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func r275Import(t *testing.T, content string) (error, int) {
+func r275Import(t *testing.T, content string) (int, error) {
 	t.Helper()
 	mm, base, _ := r250Setup(t)
 	f := filepath.Join(t.TempDir(), "bob@example.com.mbox")
@@ -24,20 +24,20 @@ func r275Import(t *testing.T, content string) (error, int) {
 		}
 		return nil
 	})
-	return err, n
+	return n, err
 }
 
 func TestR275F7491MboxWithoutFromLineRejected(t *testing.T) {
-	if err, n := r275Import(t, "plain text, not an mbox\nline two\n"); err == nil || n != 0 {
+	if n, err := r275Import(t, "plain text, not an mbox\nline two\n"); err == nil || n != 0 {
 		t.Fatalf("non-mbox: err=%v stored=%d, want error and 0", err, n)
 	}
 	// control: genuine mbox with preamble garbage before the first From_ line.
-	if err, n := r275Import(t, "\n\nFrom a@b x\nSubject: x\n\nbody\n"); err != nil || n != 1 {
+	if n, err := r275Import(t, "\n\nFrom a@b x\nSubject: x\n\nbody\n"); err != nil || n != 1 {
 		t.Fatalf("mbox: err=%v stored=%d, want nil and 1", err, n)
 	}
 	// empty and whitespace-only files import nothing without error.
 	for _, c := range []string{"", "\n\n"} {
-		if err, n := r275Import(t, c); err != nil || n != 0 {
+		if n, err := r275Import(t, c); err != nil || n != 0 {
 			t.Fatalf("blank %q: err=%v stored=%d", c, err, n)
 		}
 	}

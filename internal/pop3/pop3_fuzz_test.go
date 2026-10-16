@@ -36,7 +36,7 @@ func FuzzPOP3Helpers(f *testing.F) {
 			}
 			if atStart && c == '.' {
 				// stuffed output must never leave a bare leading period
-				if !(i+1 < len(out)) || out[i+1] != '.' {
+				if i+1 >= len(out) || out[i+1] != '.' {
 					t.Fatalf("unstuffed leading period in %q -> %q", line, out)
 				}
 			}

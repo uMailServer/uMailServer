@@ -321,7 +321,7 @@ func TestR150_IdleConcurrentSessionsRace(t *testing.T) {
 		// EXPUNGE and wait until it converges to the final (empty) state
 		// after having observed at least one change.
 		size, seen := 0, false
-		for !(seen && size == 0) {
+		for !seen || size != 0 {
 			_ = idler.conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 			l, err := idler.rd.ReadString('\n')
 			if err != nil {

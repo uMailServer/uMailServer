@@ -218,15 +218,15 @@ func newStreamDecryptReader(r *bufio.Reader, password string) (*streamDecryptRea
 func (s *streamDecryptReader) next() error {
 	n, err := io.ReadFull(s.r, s.in)
 	final := false
-	switch {
-	case err == nil:
+	switch err {
+	case nil:
 		// Full-size chunk: final only if nothing follows.
 		if _, perr := s.r.Peek(1); perr == io.EOF {
 			final = true
 		} else if perr != nil {
 			return perr
 		}
-	case err == io.ErrUnexpectedEOF || err == io.EOF:
+	case io.ErrUnexpectedEOF, io.EOF:
 		final = true
 	default:
 		return err

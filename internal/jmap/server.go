@@ -613,7 +613,7 @@ func splitPartBlobID(blobID string) (msgID, partID string, ok bool) {
 	}
 	for i := 0; i < len(msgID); i++ {
 		c := msgID[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return "", "", false
 		}
 	}

@@ -1156,12 +1156,12 @@ func parseListRequest(toks []imapToken) (*listRequest, error) {
 		}
 	}
 	if i >= len(toks) {
-		return nil, errors.New("Missing reference or pattern")
+		return nil, errors.New("missing reference or pattern")
 	}
 	ref := toks[i].val
 	i++
 	if i >= len(toks) {
-		return nil, errors.New("Missing reference or pattern")
+		return nil, errors.New("missing reference or pattern")
 	}
 	var pats []string
 	if toks[i].val == "(" && !toks[i].quoted {
@@ -2338,9 +2338,7 @@ func (s *Session) handleExpunge() error {
 				s.server.onExpunge(s.user, s.selected.Name, uid)
 			}
 		}
-
 	}
-
 	// Send untagged EXPUNGE responses in reverse order (highest seq first)
 	// so that subsequent sequence numbers remain valid during output.
 	// F6600: with a session snapshot the numbers come from the snapshot (own
@@ -3944,13 +3942,13 @@ type imapToken struct {
 func tokenizeIMAPArgs(s string) []imapToken {
 	var toks []imapToken
 	for i := 0; i < len(s); {
-		switch c := s[i]; {
-		case c == ' ' || c == '\t':
+		switch c := s[i]; c {
+		case ' ', '\t':
 			i++
-		case c == '(' || c == ')':
+		case '(', ')':
 			toks = append(toks, imapToken{val: string(c)})
 			i++
-		case c == '"':
+		case '"':
 			var b strings.Builder
 			i++
 			for i < len(s) && s[i] != '"' {
@@ -4425,7 +4423,7 @@ func parseSearchReturn(toks []imapToken) ([]string, []imapToken, error) {
 		case "MIN", "MAX", "ALL", "COUNT":
 			opts = append(opts, o)
 		default:
-			return nil, toks, fmt.Errorf("Unsupported SEARCH RETURN option %s", toks[i].val)
+			return nil, toks, fmt.Errorf("unsupported SEARCH RETURN option %s", toks[i].val)
 		}
 	}
 	if i >= len(toks) {

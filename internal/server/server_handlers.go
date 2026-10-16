@@ -238,20 +238,6 @@ func relayDSN(dsn *smtp.DSNInfo, orcpt string) *queue.DSNParams {
 	return &queue.DSNParams{Ret: dsn.Ret, EnvID: dsn.EnvID, ORCPT: []string{orcpt}}
 }
 
-// deliverInboundWithNotify is the delivery handler of the inbound (MX)
-// server. Its pipeline marks spam-verdict mail with X-Spam-Status: Yes
-// after spamHeaderGuardStage has renamed any such header the sender
-// supplied, so the header is the server's own verdict here and the message
-// is filed into the recipient's Junk folder (F4975). Submission servers keep
-// deliverMessageWithNotify, which never reads the header.
-func (s *Server) deliverInboundWithNotify(from string, to []string, notify []string, data []byte) error {
-	folder := ""
-	if hasSpamVerdict(data) {
-		folder = "Junk"
-	}
-	return s.deliverMessageToFolder(from, to, notify, data, folder)
-}
-
 // isSpamHeaderName reports whether a header field name belongs to the
 // X-Spam-* family whose values only this server may set.
 func isSpamHeaderName(name string) bool {
@@ -433,11 +419,6 @@ func (s *Server) bounceFailedRecipients(from string, data []byte, failed []rcptF
 		}
 	}
 	return nil
-}
-
-// relayMessageWithNotify relays a message with per-recipient DSN notify preferences.
-func (s *Server) relayMessageWithNotify(from, to string, notify []string, data []byte) error {
-	return s.relayMessageWithDSN(from, to, notify, nil, data)
 }
 
 // relayMessageWithDSN also stores the RET/ENVID/ORCPT parameters (F7310).

@@ -61,14 +61,14 @@ func sanitizeAttachmentName(s string) string {
 // validateAttachments enforces the caps and decodes the payloads.
 func validateAttachments(in []SendAttachment) ([]decodedAttachment, error) {
 	if len(in) > maxSendAttachments {
-		return nil, fmt.Errorf("Too many attachments (max %d)", maxSendAttachments)
+		return nil, fmt.Errorf("too many attachments (max %d)", maxSendAttachments)
 	}
 	out := make([]decodedAttachment, 0, len(in))
 	total := 0
 	for _, a := range in {
 		name := sanitizeAttachmentName(a.Filename)
 		if name == "" {
-			return nil, errors.New("Attachment filename required")
+			return nil, errors.New("attachment filename required")
 		}
 		ct := strings.TrimSpace(a.ContentType)
 		if ct == "" {
@@ -76,22 +76,22 @@ func validateAttachments(in []SendAttachment) ([]decodedAttachment, error) {
 		}
 		mt, _, err := mime.ParseMediaType(ct)
 		if err != nil || !strings.Contains(mt, "/") || strings.ContainsAny(ct, "\r\n") {
-			return nil, errors.New("Invalid attachment content type")
+			return nil, errors.New("invalid attachment content type")
 		}
 		// Reject before decoding so oversized payloads cost no memory.
 		if base64.StdEncoding.DecodedLen(len(a.Data)) > maxSendAttachmentBytes+3 {
-			return nil, errors.New("Attachment too large")
+			return nil, errors.New("attachment too large")
 		}
 		data, err := base64.StdEncoding.DecodeString(a.Data)
 		if err != nil {
-			return nil, errors.New("Invalid attachment encoding")
+			return nil, errors.New("invalid attachment encoding")
 		}
 		if len(data) > maxSendAttachmentBytes {
-			return nil, errors.New("Attachment too large")
+			return nil, errors.New("attachment too large")
 		}
 		total += len(data)
 		if total > maxSendAttachmentTotal {
-			return nil, errors.New("Attachments too large in total")
+			return nil, errors.New("attachments too large in total")
 		}
 		out = append(out, decodedAttachment{name, mt, data})
 	}
@@ -120,7 +120,7 @@ func buildMixedBody(text string, atts []decodedAttachment) (string, []byte, erro
 	for _, a := range atts {
 		cd := mime.FormatMediaType("attachment", map[string]string{"filename": a.filename})
 		if cd == "" {
-			return "", nil, errors.New("Invalid attachment filename")
+			return "", nil, errors.New("invalid attachment filename")
 		}
 		b.WriteString("--" + boundary + "\r\n")
 		b.WriteString("Content-Type: " + a.contentType + "\r\n")

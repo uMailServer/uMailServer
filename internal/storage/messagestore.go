@@ -41,7 +41,7 @@ func isValidMessageID(messageID string) bool {
 	}
 	for i := 0; i < 64; i++ {
 		c := messageID[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}
@@ -65,7 +65,7 @@ func isValidMessageID(messageID string) bool {
 	}
 	for i := sep + 1; i < len(rest); i++ {
 		c := rest[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-' || c == '_') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && c != '-' && c != '_' {
 			return false
 		}
 	}
@@ -547,7 +547,7 @@ func (s *MessageStore) BlobOwners() ([]string, error) {
 func isLowerHex(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

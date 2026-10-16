@@ -934,19 +934,6 @@ func clampQueryLimit(limit float64) int {
 	return int(limit)
 }
 
-// sortMessages sorts messages based on comparator
-func sortMessages(messages []struct {
-	id      string
-	mailbox string
-	uid     uint32
-	meta    *storage.MessageMetadata
-}, comp Comparator) {
-	if comp.Property == "" {
-		comp.Property = "receivedAt"
-	}
-	sortMessagesBy(messages, []Comparator{comp})
-}
-
 // compareByProperty is the three-way comparison for one comparator property,
 // before direction is applied.
 func compareByProperty(a, b *storage.MessageMetadata, property string) int {

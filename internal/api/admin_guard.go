@@ -1,14 +1,11 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/mail"
 	"strings"
 	"sync"
-
-	"github.com/umailserver/umailserver/internal/db"
 )
 
 // adminGuardMu serialises the check-then-write sequences that must keep at
@@ -79,25 +76,6 @@ const retryAfterSeconds = "60"
 func (s *Server) methodNotAllowed(w http.ResponseWriter, allow string) {
 	w.Header().Set("Allow", allow)
 	s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-}
-
-// otherActiveAdmins reports whether an active admin exists outside the
-// excluded accounts. skip is consulted with (domain, localPart).
-func (s *Server) otherActiveAdmins(skip func(domain, local string) bool) (bool, error) {
-	// Scan the accounts bucket directly: accounts of a domain that was never
-	// registered are still able to log in.
-	found := false
-	err := s.db.ForEach(db.BucketAccounts, func(_ string, value []byte) error {
-		var a db.AccountData
-		if json.Unmarshal(value, &a) != nil {
-			return nil
-		}
-		if a.IsAdmin && a.IsActive && !skip(a.Domain, a.LocalPart) {
-			found = true
-		}
-		return nil
-	})
-	return found, err
 }
 
 // normalizeForwardTo validates an admin-supplied forwarding target the same

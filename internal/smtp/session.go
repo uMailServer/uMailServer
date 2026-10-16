@@ -465,7 +465,7 @@ func (s *Session) checkMailParams(arg string) (mp mailParams, code int, msg stri
 		case "ENVID", "AUTH":
 			// xtext (RFC 3461 §4.4, RFC 4954 §5); AUTH may be "<>"; ENVID <= 100 (F7262).
 			bad := val == ""
-			if !bad && !(strings.EqualFold(key, "AUTH") && val == "<>") {
+			if !bad && (!strings.EqualFold(key, "AUTH") || val != "<>") {
 				bad = !validXtext(val)
 			}
 			if strings.EqualFold(key, "ENVID") && len(val) > 100 {

@@ -107,7 +107,7 @@ func FuzzDMARCParse(f *testing.F) {
 		if err == nil && (rec.Percentage < 0 || rec.Percentage > 100) {
 			t.Fatalf("pct out of range: %d for %q", rec.Percentage, s)
 		}
-		isDMARCRecord(s)
+		_ = isDMARCRecord(s)
 		parseURIList(s)
 		parseFailureOptions(s)
 		checkAlignment(s, "example.com", DMARCAlignmentRelaxed)

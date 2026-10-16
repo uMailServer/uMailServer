@@ -71,7 +71,7 @@ func (c *admClient) cmd(s string) string {
 func admConn(t *testing.T, srv *Server, wrap func(net.Conn) net.Conn) (*admClient, chan struct{}) {
 	t.Helper()
 	s, c := net.Pipe()
-	var sc net.Conn = s
+	sc := s
 	if wrap != nil {
 		sc = wrap(s)
 	}

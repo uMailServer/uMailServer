@@ -996,7 +996,7 @@ func (s *Session) handleAuthorizationCommand(command string, args []string) erro
 		s.WriteResponse("+OK Capability list follows")
 		// USER/PASS are refused until TLS is active when TLS is required;
 		// do not advertise a capability that cannot be used (F7073).
-		if !(s.server.requireTLS && !s.isTLS) {
+		if !s.server.requireTLS || s.isTLS {
 			s.WriteDataLine("USER")
 			s.WriteDataLine("PASS")
 		}

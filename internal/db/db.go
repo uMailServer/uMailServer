@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.etcd.io/bbolt"
+	bbolterrors "go.etcd.io/bbolt/errors"
 
 	"github.com/umailserver/umailserver/internal/db/migrations"
 )
@@ -208,7 +209,7 @@ func Open(path string) (*DB, error) {
 		Timeout: 1 * time.Second,
 	})
 	if err != nil {
-		if errors.Is(err, bbolt.ErrTimeout) {
+		if errors.Is(err, bbolterrors.ErrTimeout) {
 			// F6565: name the file and the cause instead of a bare "timeout".
 			return nil, fmt.Errorf("failed to open database %s: file is locked by another process (is another uMailServer instance running?): %w", path, err)
 		}
@@ -659,7 +660,7 @@ func (d *DB) mutateAccount(domain, localPart string, keepAdmin bool, fn func(*Ac
 		if err := fn(&acct); err != nil {
 			return err
 		}
-		if keepAdmin && wasAdmin && !(acct.IsAdmin && acct.IsActive) {
+		if keepAdmin && wasAdmin && (!acct.IsAdmin || !acct.IsActive) {
 			others, err := otherActiveAdminTx(tx, func(a *AccountData) bool {
 				return a.Domain == ident[0] && a.LocalPart == ident[1]
 			})
@@ -1134,28 +1135,6 @@ func (d *DB) deleteDomain(name string, keepAdmin bool) error {
 			return len(t) > len(suffix) && strings.EqualFold(t[len(t)-len(suffix):], suffix)
 		})
 	})
-}
-
-// deletePrefix removes every key in bucket that starts with prefix. Keys are
-// collected first and deleted afterwards so the cursor is never mutated
-// mid-iteration.
-func deletePrefix(tx *bbolt.Tx, bucket, prefix string) error {
-	b := tx.Bucket([]byte(bucket))
-	if b == nil {
-		return fmt.Errorf("bucket not found: %s", bucket)
-	}
-	p := []byte(prefix)
-	var keys [][]byte
-	c := b.Cursor()
-	for k, _ := c.Seek(p); k != nil && bytes.HasPrefix(k, p); k, _ = c.Next() {
-		keys = append(keys, append([]byte(nil), k...))
-	}
-	for _, k := range keys {
-		if err := b.Delete(k); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // deletePrefixFold removes every key of bucket that equals (exact=true) or

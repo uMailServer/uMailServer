@@ -408,15 +408,6 @@ func (m *Manager) saveStateLocked() {
 	}
 }
 
-// recordAlert records that an alert was sent
-func (m *Manager) recordAlert(name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.lastAlert[name] = time.Now()
-	m.hourlyCount++
-}
-
 // sendWebhook sends alert via HTTP webhook
 func (m *Manager) sendWebhook(alert Alert) error {
 	// Validate webhook URL to prevent SSRF attacks

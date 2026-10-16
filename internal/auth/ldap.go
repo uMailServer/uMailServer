@@ -350,8 +350,8 @@ func dialLDAP(scheme, host string, startTLS bool, tlsConfig *tls.Config, timeout
 	var conn *ldap.Conn
 	var err error
 	if scheme == "ldaps" {
-		conn, err = ldap.DialURL("ldaps://"+host,
-			ldap.DialWithTLSDialer(tlsConfig, dialer))
+		conn, err = ldap.DialURL("ldaps://"+host, ldap.DialWithDialer(dialer),
+			ldap.DialWithTLSConfig(tlsConfig))
 	} else {
 		conn, err = ldap.DialURL("ldap://"+host, ldap.DialWithDialer(dialer))
 		if err == nil {

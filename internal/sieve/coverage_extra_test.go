@@ -1657,11 +1657,6 @@ func TestInterpreter_EvaluateBooleanTest_AllFalse(t *testing.T) {
 	}
 }
 
-// mockTest is a test type that is not handled by evaluateTest
-type mockTest struct{}
-
-func (m *mockTest) Test() {}
-
 func TestInterpreter_ParseTest_StringValue(t *testing.T) {
 	script := `keep;`
 	p := NewParser(script)
