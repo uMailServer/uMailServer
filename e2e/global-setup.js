@@ -147,7 +147,7 @@ async function provisionFixtureUsers(serverBin) {
   const u = users.user;
   console.log('Provisioning ' + u.email + '...');
   await new Promise((resolve, reject) => {
-    const proc = spawn(serverBin, ['account', 'add', u.email, '-data-dir', './data'], {
+    const proc = spawn(serverBin, ['account', 'add', u.email], {
       cwd: E2E_DIR,
       stdio: ['pipe', 'inherit', 'inherit'],
       shell: isWindows ? 'cmd' : false
