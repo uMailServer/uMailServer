@@ -236,7 +236,7 @@ func TestF6245_RelationalRegexNumeric(t *testing.T) {
 		`if header :regex "subject" "^hel+o\\s+W.*d$"`:                      "Y",
 		`if header :regex :comparator "i;octet" "subject" "^hello"`:         "",
 		`if header :regex "subject" ["^zzz", "WORLD$"]`:                     "Y",
-		`if size :over 500`: "Y",
+		`if size :over 500`:                                                 "Y",
 	}
 	for cond, want := range cases {
 		got := r142Folder(t, `require ["fileinto", "relational", "regex", "comparator-i;ascii-numeric"]; `+cond+` { fileinto "Y"; }`)
