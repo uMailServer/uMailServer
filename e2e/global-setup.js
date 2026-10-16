@@ -69,8 +69,8 @@ database:
   path: ./data/umailserver.db
 security:
   max_login_attempts: 1000
-audit:
-  path: ./data/logs/audit.log
+  audit_log:
+    path: ./data/logs/audit.log
 http:
   enabled: true
   port: 8080
