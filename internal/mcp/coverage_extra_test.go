@@ -85,8 +85,8 @@ func TestToolAddDomain_MissingName(t *testing.T) {
 	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
 	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -205,8 +205,8 @@ func TestToolAddAccount_MissingFields(t *testing.T) {
 	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
 	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -242,8 +242,8 @@ func TestToolAddAccount_InvalidEmail(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true))
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -540,8 +540,8 @@ func TestToolCheckDNS_MissingDomain(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -837,8 +837,8 @@ func TestHandleResourceRead_Unknown(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", rr.Code)
 	}
 }
 
@@ -1014,8 +1014,8 @@ func TestHandlePromptGet_Unknown(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -1042,8 +1042,8 @@ func TestHandlePromptGet_InvalidParams(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -1070,8 +1070,8 @@ func TestHandleResourceRead_InvalidParams(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -1102,8 +1102,8 @@ func TestWriteError(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 
 	var resp map[string]interface{}
@@ -1136,7 +1136,7 @@ func TestHandleToolCall_InvalidParams(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }

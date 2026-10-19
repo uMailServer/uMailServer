@@ -384,7 +384,16 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errAdminRequired):
 			s.writeError(w, http.StatusForbidden, rpcAccessDenied, req.ID, err.Error())
 		case errors.As(err, &re):
-			s.writeError(w, http.StatusInternalServerError, re.code, req.ID, re.msg)
+			// Bad arguments and unknown resources are the caller's error, not a
+			// server fault: a 5xx makes clients retry or flag the server down.
+			status := http.StatusInternalServerError
+			switch re.code {
+			case rpcInvalidParams:
+				status = http.StatusBadRequest
+			case rpcResourceNotFound:
+				status = http.StatusNotFound
+			}
+			s.writeError(w, status, re.code, req.ID, re.msg)
 		default:
 			s.writeError(w, http.StatusInternalServerError, rpcInternalError, req.ID, err.Error())
 		}

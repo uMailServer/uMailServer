@@ -297,8 +297,8 @@ func TestMCPServerUnknownTool(t *testing.T) {
 	handler := http.HandlerFunc(server.HandleHTTP)
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
@@ -332,8 +332,8 @@ func TestMCPServerInvalidToolCallParams(t *testing.T) {
 	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
 
 	// Should return error due to invalid params
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", rr.Code)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", rr.Code)
 	}
 }
 
