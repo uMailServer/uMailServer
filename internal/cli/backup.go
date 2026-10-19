@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -508,6 +509,23 @@ func (bm *BackupManager) backupDataSubdir(tw *tar.Writer, sub string) error {
 	})
 }
 
+// archivedParts lists the top-level directories the archive really holds,
+// so the manifest does not advertise a config/ that was never written.
+func (bm *BackupManager) archivedParts() []string {
+	seen := map[string]bool{}
+	parts := []string{}
+	for _, h := range bm.hashes {
+		top, _, found := strings.Cut(h.Path, "/")
+		if !found || seen[top] {
+			continue
+		}
+		seen[top] = true
+		parts = append(parts, top+"/")
+	}
+	sort.Strings(parts)
+	return parts
+}
+
 // createManifest creates a backup manifest
 func (bm *BackupManager) createManifest(tw *tar.Writer, timestamp string) error {
 	manifest := map[string]interface{}{
@@ -515,12 +533,8 @@ func (bm *BackupManager) createManifest(tw *tar.Writer, timestamp string) error 
 		"timestamp": timestamp,
 		"hostname":  bm.config.Server.Hostname,
 		"data_dir":  bm.config.Server.DataDir,
-		"contents": []string{
-			"config/",
-			"database/",
-			"messages/",
-		},
-		"files": bm.hashes,
+		"contents":  bm.archivedParts(),
+		"files":     bm.hashes,
 	}
 
 	data, err := json.MarshalIndent(manifest, "", "  ")
