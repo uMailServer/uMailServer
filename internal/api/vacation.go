@@ -285,6 +285,12 @@ func (m productionVacationManager) ListActive() ([]string, error) {
 	return list, nil
 }
 
+// SetVacationManager makes the vacation endpoints persist through m, the same
+// manager mail delivery consults.
+func (s *Server) SetVacationManager(m *vacation.Manager) {
+	s.vacationMgr = productionVacationManager{m}
+}
+
 // newProductionVacationManager builds the disk-backed vacation store rooted
 // at <dataDir>/vacation. Used by NewServer so the vacation endpoints
 // persist through the real store instead of the in-file placeholders.

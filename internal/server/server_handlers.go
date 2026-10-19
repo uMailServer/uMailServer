@@ -922,7 +922,8 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 	metrics.Get().DeliverySuccess()
 
 	// Send vacation auto-reply if configured
-	if account.VacationSettings != "" && s.queue != nil && folder != "Junk" && autoReplyAllowed(from, data) && (st == nil || !st.vacationSent) {
+	vacSettings := s.effectiveVacationSettings(email, account.VacationSettings)
+	if vacSettings != "" && s.queue != nil && folder != "Junk" && autoReplyAllowed(from, data) && (st == nil || !st.vacationSent) {
 		if st != nil {
 			st.vacationSent = true
 		}
@@ -937,7 +938,7 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 						s.logger.Error("Panic in vacation reply", "error", r)
 					}
 				}()
-				s.sendVacationReplyCtx(email, from, origRcpt, vacationInfoFromMessage(data), account.VacationSettings)
+				s.sendVacationReplyCtx(email, from, origRcpt, vacationInfoFromMessage(data), vacSettings)
 			}()
 		default:
 			s.logger.Warn("Background task semaphore full, dropping vacation reply", "email", email)

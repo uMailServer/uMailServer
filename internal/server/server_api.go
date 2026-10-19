@@ -36,6 +36,10 @@ func (s *Server) startAPI() error {
 	if s.jmapServer != nil {
 		s.jmapServer.SetKeyFunc(s.apiServer.JWTKeyFunc)
 	}
+	// F7770: share the store delivery reads, so a PUT /api/v1/vacation takes effect.
+	if s.vacationMgr != nil {
+		s.apiServer.SetVacationManager(s.vacationMgr)
+	}
 	s.apiServer.SetSearchService(s.searchSvc)
 	s.apiServer.SetAccountPurger(accountPurger{srv: s}) // F6649c
 	s.apiServer.SetQuotaAdjustFunc(s.quotaAdjust)       // F6680

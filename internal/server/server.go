@@ -33,6 +33,7 @@ import (
 	"github.com/umailserver/umailserver/internal/storage"
 	umailTLS "github.com/umailserver/umailserver/internal/tls"
 	"github.com/umailserver/umailserver/internal/tracing"
+	"github.com/umailserver/umailserver/internal/vacation"
 	"github.com/umailserver/umailserver/internal/webhook"
 )
 
@@ -84,6 +85,11 @@ type Server struct {
 	// Vacation reply deduplication: key = recipient+"|"+sender -> last sent time
 	vacationReplies   map[string]time.Time
 	vacationRepliesMu sync.Mutex
+
+	// vacationMgr is the store behind the user-facing /api/v1/vacation
+	// endpoints; delivery consults it so those settings actually answer mail
+	// (F7770). Nil when no data dir is configured.
+	vacationMgr *vacation.Manager
 
 	// Background task semaphore to limit concurrent goroutines spawned per delivery
 	bgSem chan struct{}
@@ -243,6 +249,10 @@ func New(cfg *config.Config) (*Server, error) {
 	// Initialize alert manager from config (disabled by default unless cfg.Alert.Enabled)
 	s.alertMgr = alert.NewManager(buildAlertConfig(cfg.Alert), s.logger)
 	s.alertMgr.SetAllowPrivateIP(cfg.Alert.AllowPrivateIP)
+
+	if cfg.Server.DataDir != "" {
+		s.vacationMgr = vacation.NewManager(filepath.Join(cfg.Server.DataDir, "vacation"), logger)
+	}
 
 	// Initialize push notification service (subject + optional VAPID keys
 	// come from `cfg.Push`; on-disk fallback handles the unconfigured case).

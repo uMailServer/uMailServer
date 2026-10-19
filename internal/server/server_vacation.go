@@ -501,3 +501,36 @@ func (s *Server) routesToMailbox(addr, mailbox string) bool {
 	u, d, ext, err := s.routeRecipient(addr)
 	return err == nil && ext == "" && strings.EqualFold(u+"@"+d, mailbox)
 }
+
+// effectiveVacationSettings returns the settings JSON that drives the
+// auto-reply for a mailbox: the admin-managed account setting when present,
+// otherwise the user's own /api/v1/vacation configuration (F7770).
+func (s *Server) effectiveVacationSettings(email, accountSettings string) string {
+	if accountSettings != "" || s.vacationMgr == nil {
+		return accountSettings
+	}
+	cfg, err := s.vacationMgr.GetConfig(email)
+	if err != nil || cfg == nil || !cfg.Enabled {
+		return ""
+	}
+	m := map[string]any{
+		"enabled":           true,
+		"subject":           cfg.Subject,
+		"message":           cfg.Message,
+		"send_interval":     cfg.SendInterval,
+		"exclude_addresses": cfg.ExcludeAddresses,
+		"ignore_lists":      cfg.IgnoreLists,
+		"ignore_bulk":       cfg.IgnoreBulk,
+	}
+	if !cfg.StartDate.IsZero() {
+		m["start_date"] = cfg.StartDate.Format(time.RFC3339)
+	}
+	if !cfg.EndDate.IsZero() {
+		m["end_date"] = cfg.EndDate.Format(time.RFC3339)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
