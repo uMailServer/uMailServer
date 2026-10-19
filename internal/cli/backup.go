@@ -795,15 +795,36 @@ func (bm *BackupManager) Restore(backupFile string) error {
 	}
 	published = true
 
-	fmt.Println("Backup extracted to restore_temp/")
-	fmt.Println("To complete restore:")
-	fmt.Println("1. Stop uMailServer")
-	fmt.Println("2. Copy restore_temp/config/* to data directory")
-	fmt.Println("3. Copy restore_temp/database/* to data directory")
-	fmt.Println("4. Copy restore_temp/messages/* to data directory (mail, queue, calendars, contacts, push, vacation, DKIM keys)")
-	fmt.Println("5. Start uMailServer")
+	printRestoreSteps(restoreDir, bm.config.Server.DataDir)
 
 	return nil
+}
+
+// printRestoreSteps tells the operator where the archive was extracted (the
+// real path: restore_temp sits next to data_dir, not in the working directory)
+// and which of its parts to copy into the data directory. Only the parts the
+// archive holds are listed; a backup has no config/ directory unless one
+// existed in the data directory (F7760).
+func printRestoreSteps(restoreDir, dataDir string) {
+	shown := restoreDir
+	if abs, err := filepath.Abs(restoreDir); err == nil {
+		shown = abs
+	}
+	fmt.Printf("Backup extracted to %s\n", shown)
+	fmt.Println("To complete restore:")
+	fmt.Println("1. Stop uMailServer")
+	step := 2
+	for _, part := range []struct{ dir, note string }{
+		{"config", ""},
+		{"database", ""},
+		{"messages", " (mail, queue, calendars, contacts, push, vacation, DKIM keys)"},
+	} {
+		if info, err := os.Stat(filepath.Join(restoreDir, part.dir)); err == nil && info.IsDir() {
+			fmt.Printf("%d. Copy %s/* to the data directory %s%s\n", step, filepath.Join(shown, part.dir), dataDir, part.note)
+			step++
+		}
+	}
+	fmt.Printf("%d. Start uMailServer\n", step)
 }
 
 // Verify checks backup integrity without extracting files

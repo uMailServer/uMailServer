@@ -58,7 +58,9 @@ server first and start it again afterwards.
 
 ```bash
 sudo systemctl stop umailserver
-# Full backup (config + database + messages)
+# Full backup: accounts database, mail store, queue, CalDAV/CardDAV, push keys,
+# vacation state and DKIM keys. The YAML config file is NOT in the archive: keep
+# /etc/umailserver/umailserver.yaml in your own config management or copy it too.
 # (the argument is a DIRECTORY; a timestamped umailserver_backup_<TS>.tar.gz is created inside)
 umailserver backup /path/to/backups --config /etc/umailserver/umailserver.yaml
 
