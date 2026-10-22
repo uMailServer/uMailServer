@@ -36,7 +36,12 @@ class FakeEventSource {
 
 it('F-sse-transport the realtime hook connects via EventSource to /api/v1/events and never via WebSocket', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  const eventSourceCtor = vi.fn((url: string) => new FakeEventSource(url))
+  const eventSourceCtor = vi.fn(function (url: string) {
+    // vitest 5: a constructed vi.fn mock only invokes implementations declared
+    // as `function`/`class` — an arrow implementation is skipped on `new`,
+    // which would leave FakeEventSource.instances empty.
+    return new FakeEventSource(url)
+  })
   const webSocketCtor = vi.fn()
   vi.stubGlobal('EventSource', eventSourceCtor as unknown as typeof EventSource)
   vi.stubGlobal('WebSocket', webSocketCtor as unknown as typeof WebSocket)
