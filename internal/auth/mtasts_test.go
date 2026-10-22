@@ -103,6 +103,7 @@ max_age: 86400`
 func TestParseMTASTSPolicyMinMaxAge(t *testing.T) {
 	policyText := `version: STSv1
 mode: enforce
+mx: mail.example.com
 max_age: 100`
 
 	policy, err := parseMTASTSPolicy(policyText)

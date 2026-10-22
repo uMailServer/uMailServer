@@ -382,6 +382,7 @@ func parseMTASTSPolicy(policyText string) (*MTASTSPolicy, error) {
 	}
 
 	lines := strings.Split(policyText, "\n")
+	maxAgeSeen := false
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -401,9 +402,11 @@ func parseMTASTSPolicy(policyText string) (*MTASTSPolicy, error) {
 				policy.Mode = MTASTSMode(strings.ToLower(value))
 			case "max_age":
 				maxAge, err := strconv.Atoi(value)
-				if err == nil {
-					policy.MaxAge = maxAge
+				if err != nil {
+					return nil, fmt.Errorf("invalid max_age %q", value)
 				}
+				maxAgeSeen = true
+				policy.MaxAge = maxAge
 			case "mx":
 				policy.MX = append(policy.MX, value)
 			}
@@ -420,6 +423,18 @@ func parseMTASTSPolicy(policyText string) (*MTASTSPolicy, error) {
 		policy.Mode != MTASTSModeTesting &&
 		policy.Mode != MTASTSModeNone {
 		return nil, errors.New("invalid policy mode")
+	}
+
+	// RFC 8461 §4.2 ABNF: mx is "required at least once, except when mode
+	// is none". An accepted enforce/testing policy without mx would fail
+	// every MX match while being treated as valid; reject it instead.
+	if policy.Mode != MTASTSModeNone && len(policy.MX) == 0 {
+		return nil, errors.New("policy requires at least one mx pattern")
+	}
+
+	// RFC 8461 §4.2 ABNF: max_age is "required once" with a numeric value.
+	if !maxAgeSeen {
+		return nil, errors.New("policy missing required max_age")
 	}
 
 	// Validate max_age (must be at least 86400 seconds)
