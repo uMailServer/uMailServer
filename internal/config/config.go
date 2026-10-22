@@ -796,11 +796,50 @@ func (c *Config) Validate() error {
 	if c.Security.RateLimit.HTTPRequestsPerMinute > 1_000_000 {
 		return fmt.Errorf("security.rate_limit.http_requests_per_minute must be <= 1000000 (effectively unlimited)")
 	}
+	// The Global pair needs the same non-negativity rule as its siblings:
+	// ratelimit.globalLimit treats limit <= 0 as disabled, so a negative
+	// value would silently turn the global backstop off.
+	if c.Security.RateLimit.GlobalPerMinute < 0 {
+		return fmt.Errorf("security.rate_limit.global_per_minute must be non-negative")
+	}
 	if c.Security.RateLimit.GlobalPerMinute > 1_000_000 {
 		return fmt.Errorf("security.rate_limit.global_per_minute must be <= 1000000")
 	}
+	if c.Security.RateLimit.GlobalPerHour < 0 {
+		return fmt.Errorf("security.rate_limit.global_per_hour must be non-negative")
+	}
 	if c.Security.RateLimit.GlobalPerHour > 10_000_000 {
 		return fmt.Errorf("security.rate_limit.global_per_hour must be <= 10000000")
+	}
+	// The per-IP/per-user fields share the limit<=0-disabled semantics
+	// (every internal/ratelimit gate is "limit > 0 && ..."): a negative
+	// value reachable via env override or YAML would silently disable an
+	// abuse control — the persisted daily sending quota, the per-IP
+	// connection cap, the inbound message throttles, or the recipient cap.
+	// 0 remains the documented "disabled" value (round-32 adjudication).
+	if c.Security.RateLimit.IPPerMinute < 0 {
+		return fmt.Errorf("security.rate_limit.ip_per_minute must be non-negative")
+	}
+	if c.Security.RateLimit.IPPerHour < 0 {
+		return fmt.Errorf("security.rate_limit.ip_per_hour must be non-negative")
+	}
+	if c.Security.RateLimit.IPPerDay < 0 {
+		return fmt.Errorf("security.rate_limit.ip_per_day must be non-negative")
+	}
+	if c.Security.RateLimit.IPConnections < 0 {
+		return fmt.Errorf("security.rate_limit.ip_connections must be non-negative")
+	}
+	if c.Security.RateLimit.UserPerMinute < 0 {
+		return fmt.Errorf("security.rate_limit.user_per_minute must be non-negative")
+	}
+	if c.Security.RateLimit.UserPerHour < 0 {
+		return fmt.Errorf("security.rate_limit.user_per_hour must be non-negative")
+	}
+	if c.Security.RateLimit.UserPerDay < 0 {
+		return fmt.Errorf("security.rate_limit.user_per_day must be non-negative")
+	}
+	if c.Security.RateLimit.UserMaxRecipients < 0 {
+		return fmt.Errorf("security.rate_limit.user_max_recipients must be non-negative")
 	}
 
 	// Validate timeouts
