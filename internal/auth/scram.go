@@ -246,22 +246,21 @@ func ClientProof(storedKey []byte, clientFirstMessageBare string, serverFirstMes
 	return h.Sum(nil)
 }
 
-// BuildClientFirstMessage builds the client-first message (RFC 7677)
+// BuildClientFirstMessage builds the client-first message (RFC 5802 §5.1,
+// RFC 7677): gs2-header client-first-message-bare, with the GS2 header
+// "n,," (no channel binding), "n,a=<authzid>," or "p=<cb-name>,[,a=<authzid>,]"
+// (channel binding). The c= attribute is a client-final attribute and never
+// appears here.
 func BuildClientFirstMessage(authzID, username, channelBind, nonce string) string {
-	// Format: n=,a=<authzid>,n=<username>,r=<nonce>  (no channel binding)
-	// or: c=<channel-bind>,r=<nonce>,n=<username> (with channel binding)
+	cbFlag := "n"
 	if channelBind != "" {
-		cB64 := base64.StdEncoding.EncodeToString([]byte(channelBind))
-		if authzID != "" {
-			return fmt.Sprintf("a=%s,n=%s,r=%s", authzID, username, nonce)
-		}
-		return fmt.Sprintf("c=%s,r=%s,n=%s", cB64, nonce, username)
+		cbFlag = "p=" + channelBind
 	}
-	// Without channel binding
+	authz := ""
 	if authzID != "" {
-		return fmt.Sprintf("a=%s,n=%s,r=%s", authzID, username, nonce)
+		authz = "a=" + authzID
 	}
-	return fmt.Sprintf("n=%s,r=%s", username, nonce)
+	return cbFlag + "," + authz + ",n=" + username + ",r=" + nonce
 }
 
 // ParseClientFirstMessage parses the client-first message (RFC 7677)
