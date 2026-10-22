@@ -1140,11 +1140,22 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 
 		// mailboxIds is required with at least one true entry (§4.1.2);
 		// unknown ids follow the round-21 import precedent (mailboxNotFound).
+		// RFC 8621 §4.1.2 types mailboxIds as Id[Boolean]: a non-boolean
+		// value is a wrong-typed property and must be rejected with
+		// invalidProperties (the round-35 import gate), not silently
+		// skipped — a silent skip would deliver to fewer mailboxes than
+		// requested while the response reports the Email as created.
 		mailboxIDs, _ := createData["mailboxIds"].(map[string]interface{})
 		var targetNames []string
 		missingMailbox := false
+		wrongType := false
 		for id, v := range mailboxIDs {
-			if b, ok := v.(bool); !ok || !b {
+			b, ok := v.(bool)
+			if !ok {
+				wrongType = true
+				continue
+			}
+			if !b {
 				continue
 			}
 			name := getMailboxNameFromID(id)
@@ -1153,6 +1164,15 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 				break
 			}
 			targetNames = append(targetNames, name)
+		}
+		if wrongType {
+			notCreated[key] = map[string]interface{}{
+				"type":        "invalidProperties",
+				"properties":  []string{"mailboxIds"},
+				"description": "mailboxIds values must be booleans (RFC 8621 §4.1.2)",
+			}
+			s.releaseSyntheticBlob(user, blobID)
+			continue
 		}
 		if missingMailbox {
 			notCreated[key] = map[string]interface{}{
@@ -2387,13 +2407,15 @@ func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 	update, _ := args["update"].(map[string]interface{})
 	destroy, _ := args["destroy"].([]interface{})
 
-	// Identity is currently read-only - derived from account settings
-	// Return notSupported error for any write operations
+	// Identity is currently read-only - derived from account settings.
+	// Every write is rejected with the RFC 8620 §2.6 SetError type
+	// "forbidden" (notSupported is not a §2.6 SetError type — the round-35
+	// Email/set adjudication; cf. the INBOX-rename refusal in Mailbox/set).
 
 	notCreated := make(map[string]interface{})
 	for id := range create {
 		notCreated[id] = map[string]interface{}{
-			"type":    "notSupported",
+			"type":    "forbidden",
 			"message": "Identity creation is not supported. Identities are derived from account settings.",
 		}
 	}
@@ -2401,7 +2423,7 @@ func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 	notUpdated := make(map[string]interface{})
 	for id := range update {
 		notUpdated[id] = map[string]interface{}{
-			"type":    "notSupported",
+			"type":    "forbidden",
 			"message": "Identity modification is not supported. Identities are derived from account settings.",
 		}
 	}
@@ -2415,7 +2437,7 @@ func (s *Server) handleIdentitySet(user string, call MethodCall) Response {
 		// response entirely.
 		if idStr, ok := id.(string); ok {
 			notDestroyed[idStr] = map[string]interface{}{
-				"type":    "notSupported",
+				"type":    "forbidden",
 				"message": "Identity deletion is not supported. Identities are derived from account settings.",
 			}
 		}

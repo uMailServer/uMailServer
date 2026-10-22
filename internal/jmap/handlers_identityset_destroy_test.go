@@ -1,13 +1,13 @@
 package jmap
 
 // Regression test for the Identity/set destroy-response defect: the handler
-// (a read-only stub — create and update answer notSupported) populated
+// (a read-only stub — create and update answer forbidden) populated
 // notDestroyed only for the literal "default" id, so destroying any other
 // identity id put it in NEITHER destroyed nor notDestroyed. RFC 8620 §5.3
 // requires every id from the destroy array to appear in exactly one of the
 // two; a client otherwise cannot determine the outcome. Since identities are
 // derived from account settings, every destroy must be rejected as
-// notSupported — the default special case contradicted the handler's own
+// forbidden — the default special case contradicted the handler's own
 // read-only semantics.
 
 import (
@@ -47,8 +47,8 @@ func TestIdentitySet_EveryDestroyedIDIsReportedNotSupported(t *testing.T) {
 			t.Fatalf("FAIL: destroy id %q got no response entry (destroyed=%v notDestroyed=%v) — RFC 8620 §5.3 requires one of destroyed/notDestroyed per id", id, resp.Args["destroyed"], nd)
 		}
 		entry, _ := nd[id].(map[string]interface{})
-		if entry["type"] != "notSupported" {
-			t.Fatalf("FAIL: destroy id %q reported as %v, want notSupported (identities are read-only)", id, entry)
+		if entry["type"] != "forbidden" {
+			t.Fatalf("FAIL: destroy id %q reported as %v, want forbidden (identities are read-only; RFC 8620 §2.6)", id, entry)
 		}
 	}
 
