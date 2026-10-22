@@ -698,10 +698,11 @@ func isBlockedIP(ip net.IP) bool {
 
 // blockedNets lists non-routable ranges net.IP's helpers do not cover: CGNAT
 // (100.64/10, which hosts e.g. cloud metadata endpoints), benchmarking,
-// IETF protocol assignments and reserved space (F5923).
+// IETF protocol assignments, reserved space, and the deprecated
+// IPv4-compatible IPv6 range ::/96 (F5923).
 var blockedNets = func() []*net.IPNet {
 	var nets []*net.IPNet
-	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4", "64:ff9b::/96", "2002::/16", "fec0::/10", "100::/64"} {
+	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4", "::/96", "64:ff9b::/96", "2002::/16", "fec0::/10", "100::/64"} {
 		_, n, _ := net.ParseCIDR(c)
 		nets = append(nets, n)
 	}

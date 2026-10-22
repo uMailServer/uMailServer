@@ -116,6 +116,7 @@ func newPushTransport() http.RoundTripper {
 }
 
 var forbiddenV6 = []netip.Prefix{
+	netip.MustParsePrefix("::/96"), // IPv4-compatible (deprecated): ::127.0.0.1 etc.
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("2002::/16"),
 	netip.MustParsePrefix("fec0::/10"),
@@ -142,8 +143,9 @@ func isForbiddenAddr(addr netip.Addr) bool {
 			return true
 		}
 	}
-	// NAT64, 6to4, deprecated site-local and discard-only IPv6 space can
-	// embed or route to internal IPv4 hosts.
+	// IPv4-compatible (deprecated RFC 4291 ::/96), NAT64, 6to4, deprecated
+	// site-local and discard-only IPv6 space can embed or route to internal
+	// IPv4 hosts.
 	if addr.Is6() {
 		for _, p := range forbiddenV6 {
 			if p.Contains(addr) {

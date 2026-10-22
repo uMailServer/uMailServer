@@ -456,10 +456,11 @@ func (m *Manager) sendWebhook(alert Alert) error {
 	return nil
 }
 
-// blockedNets lists non-routable ranges net.IP's helpers do not cover.
+// blockedNets lists non-routable ranges net.IP's helpers do not cover,
+// including the deprecated IPv4-compatible IPv6 range ::/96.
 var blockedNets = func() []*net.IPNet {
 	var nets []*net.IPNet
-	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4", "64:ff9b::/96", "2002::/16", "fec0::/10", "100::/64"} {
+	for _, c := range []string{"100.64.0.0/10", "198.18.0.0/15", "192.0.0.0/24", "240.0.0.0/4", "::/96", "64:ff9b::/96", "2002::/16", "fec0::/10", "100::/64"} {
 		_, n, _ := net.ParseCIDR(c)
 		nets = append(nets, n)
 	}
