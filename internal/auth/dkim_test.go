@@ -450,15 +450,13 @@ func TestParseInt64(t *testing.T) {
 }
 
 func TestDKIMSignatureDefaults(t *testing.T) {
-	// Test that defaults are applied correctly
-	header := "d=example.com; s=selector; bh=abc123; b=xyz789"
+	// c= is optional with documented defaults (RFC 6376 §3.5): absent means
+	// simple/simple. Its other tags are only there to satisfy the required
+	// ones.
+	header := "v=1; a=rsa-sha256; d=example.com; s=selector; bh=abc123; b=xyz789"
 	sig, err := parseDKIMSignature(header)
 	if err != nil {
 		t.Fatalf("Failed to parse signature: %v", err)
-	}
-
-	if sig.Algorithm != "rsa-sha256" {
-		t.Errorf("Default algorithm should be rsa-sha256, got %s", sig.Algorithm)
 	}
 
 	if sig.HeaderCanon != "simple" {
@@ -467,6 +465,17 @@ func TestDKIMSignatureDefaults(t *testing.T) {
 
 	if sig.BodyCanon != "simple" {
 		t.Errorf("Default body canon should be simple, got %s", sig.BodyCanon)
+	}
+
+	// v= and a= are REQUIRED (RFC 6376 §3.5); a signature missing either
+	// must be rejected, not completed by defaults.
+	for _, tc := range []struct{ name, header string }{
+		{"missing v=", "a=rsa-sha256; d=example.com; s=selector; bh=abc123; b=xyz789"},
+		{"missing a=", "v=1; d=example.com; s=selector; bh=abc123; b=xyz789"},
+	} {
+		if _, err := parseDKIMSignature(tc.header); err == nil {
+			t.Errorf("%s should be rejected as a missing required tag (RFC 6376 §3.5/§6.1.1)", tc.name)
+		}
 	}
 }
 
@@ -518,15 +527,15 @@ func TestParseCopiedHeaders(t *testing.T) {
 		expected map[string]string
 	}{
 		{
-			"from=test@example.com|to=recipient@example.com",
+			"from:test@example.com|to:recipient@example.com",
 			map[string]string{"from": "test@example.com", "to": "recipient@example.com"},
 		},
 		{
-			"subject=Hello World",
+			"subject:Hello World",
 			map[string]string{"subject": "Hello World"},
 		},
 		{
-			"From=Test@Example.Com", // case insensitive
+			"From:Test@Example.Com", // case insensitive
 			map[string]string{"from": "Test@Example.Com"},
 		},
 		{
@@ -534,7 +543,7 @@ func TestParseCopiedHeaders(t *testing.T) {
 			map[string]string{},
 		},
 		{
-			"noequalsign", // no = sign
+			"nocolonsign", // no = or : separator
 			map[string]string{},
 		},
 	}
@@ -703,9 +712,9 @@ func TestParseDKIMPublicKey(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "valid key without version",
+			name:    "missing version tag",
 			record:  "k=rsa; p=" + pubKeyDNS,
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "unsupported key type",
@@ -1155,7 +1164,7 @@ func TestDKIMSignatureWithDKIMPrefix(t *testing.T) {
 
 // TestDKIMSignatureAllTags tests parsing a DKIM signature with all possible tags.
 func TestDKIMSignatureAllTags(t *testing.T) {
-	header := "v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=mysel; q=dns/txt; t=1609459200; x=1609545600; h=from:to:subject:date; bh=Y2FmZmVl; b=c3lnbmF0dXJl; l=1234; z=from=sender@example.com|to=recv@example.com"
+	header := "v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=mysel; q=dns/txt; t=1609459200; x=1609545600; h=from:to:subject:date; bh=Y2FmZmVl; b=c3lnbmF0dXJl; l=1234; z=from:sender@example.com|to:recv@example.com"
 	sig, err := parseDKIMSignature(header)
 	if err != nil {
 		t.Fatalf("Failed to parse DKIM signature with all tags: %v", err)

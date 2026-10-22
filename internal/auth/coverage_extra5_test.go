@@ -413,7 +413,7 @@ func TestDKIMParseSignature_MissingSignature_Cov5(t *testing.T) {
 
 // TestDKIMParseSignature_AllTags tests parsing with all possible tags.
 func TestDKIMParseSignature_AllTags_Cov5(t *testing.T) {
-	header := "v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=mysel; q=dns/txt; t=1609459200; x=1609545600; h=from:to:subject; bh=Y2FmZmVl; b=c3lnbmF0dXJl; l=1234; z=from=sender@example.com|to=recv@example.com"
+	header := "v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=mysel; q=dns/txt; t=1609459200; x=1609545600; h=from:to:subject; bh=Y2FmZmVl; b=c3lnbmF0dXJl; l=1234; z=from:sender@example.com|to:recv@example.com"
 
 	sig, err := parseDKIMSignature(header)
 	if err != nil {

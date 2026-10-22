@@ -441,13 +441,9 @@ func TestParseMTASTSPolicy_MaxAgeTooLarge_Cov3(t *testing.T) {
 
 func TestParseMTASTSPolicy_InvalidMaxAge_Cov3(t *testing.T) {
 	policyText := "version: STSv1\nmode: enforce\nmax_age: notanumber\nmx: mail.example.com\n"
-	policy, err := parseMTASTSPolicy(policyText)
-	if err != nil {
-		t.Fatalf("parseMTASTSPolicy: %v", err)
-	}
-	// Invalid max_age -> Atoi fails -> keeps default 0 -> clamped to min 86400
-	if policy.MaxAge != 86400 {
-		t.Errorf("expected max_age clamped to 86400, got %d", policy.MaxAge)
+	_, err := parseMTASTSPolicy(policyText)
+	if err == nil {
+		t.Fatal("expected error for malformed max_age (RFC 8461 §4.2: max_age is required and numeric)")
 	}
 }
 
@@ -493,7 +489,7 @@ func TestParseMTASTSPolicy_MissingVersion_Cov3(t *testing.T) {
 }
 
 func TestParseMTASTSPolicy_LineWithoutColon_Cov3(t *testing.T) {
-	policyText := "version: STSv1\nmode: enforce\nthis line has no colon\nmax_age: 86400\n"
+	policyText := "version: STSv1\nmode: enforce\nthis line has no colon\nmax_age: 86400\nmx: mail.example.com\n"
 	policy, err := parseMTASTSPolicy(policyText)
 	if err != nil {
 		t.Fatalf("parseMTASTSPolicy: %v", err)

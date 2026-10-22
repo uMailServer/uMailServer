@@ -463,11 +463,18 @@ func parseDKIMSignature(header string) (*DKIMSignature, error) {
 	if sig.Signature == "" {
 		return nil, errors.New("missing required tag: b=")
 	}
+	// RFC 6376 §3.5: v= and a= are REQUIRED tags; §6.1.1 has the verifier
+	// reject signatures missing required tags. (h= is required too; the
+	// From-included check below covers it.) An absent a= must not fall back
+	// to a default algorithm.
+	if _, ok := tagValues["v"]; !ok {
+		return nil, errors.New("missing required tag: v=")
+	}
+	if _, ok := tagValues["a"]; !ok {
+		return nil, errors.New("missing required tag: a=")
+	}
 
 	// Set defaults
-	if sig.Algorithm == "" {
-		sig.Algorithm = "rsa-sha256"
-	}
 	if sig.HeaderCanon == "" {
 		sig.HeaderCanon = "simple"
 	}
@@ -583,13 +590,14 @@ func parseHeaderList(s string) []string {
 
 func parseCopiedHeaders(s string) map[string]string {
 	result := make(map[string]string)
-	// Format: header=value|header2=value2
+	// RFC 6376 §3.5 z=: pairs are "hdr-name:hdr-value" separated by "|".
+	// The former "=" split matched no conforming pair and silently dropped
+	// every entry. The value stays verbatim after the first colon.
 	pairs := strings.Split(s, "|")
 	for _, pair := range pairs {
-		if idx := strings.Index(pair, "="); idx > 0 {
+		if idx := strings.Index(pair, ":"); idx > 0 {
 			header := strings.TrimSpace(strings.ToLower(pair[:idx]))
-			value := pair[idx+1:]
-			result[header] = value
+			result[header] = pair[idx+1:]
 		}
 	}
 	return result
@@ -993,7 +1001,11 @@ func parseDKIMPublicKey(record string) (any, string, error) {
 	tags := parseTagValueList(record)
 
 	// Check version
-	if v, ok := tags["v"]; ok && v != "DKIM1" {
+	// RFC 6376 §3.6.1: v= is required in a key record and MUST be "DKIM1";
+	// an absent tag used to slip through the conditional.
+	if v, ok := tags["v"]; !ok {
+		return nil, "", errors.New("missing DKIM key version tag v= (RFC 6376 §3.6.1)")
+	} else if v != "DKIM1" {
 		return nil, "", fmt.Errorf("unsupported DKIM key version: %s", v)
 	}
 
