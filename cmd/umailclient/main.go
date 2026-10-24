@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/smtp"
@@ -438,9 +439,12 @@ func fetchAndPrint(url string) {
 		os.Exit(1)
 	}
 
-	buf := make([]byte, 8192)
-	n, _ := resp.Body.Read(buf)
-	fmt.Printf("\nResponse:\n%s\n", string(buf[:n]))
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("Read failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("\nResponse:\n%s\n", string(body))
 }
 
 // ========== AUTOCONFIG ==========
