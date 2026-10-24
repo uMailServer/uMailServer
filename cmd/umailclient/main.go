@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// dialTimeout budgets the TCP connect and, via tls.DialWithDialer, the whole
+// TLS handshake: tls.Dial alone has no deadline, so a server that accepts TCP
+// and never completes the handshake (accept-and-silent black hole) blocks the
+// caller forever. The plain path already bounded net.DialTimeout with 10s.
+var dialTimeout = 10 * time.Second
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -116,9 +122,9 @@ func (c *SMTPClient) sendMessage(from, to, msg string) error {
 		if c.InsecureSkipVerify {
 			tlsConfig.InsecureSkipVerify = true
 		}
-		conn, err = tls.Dial("tcp", addr, tlsConfig)
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: dialTimeout}, "tcp", addr, tlsConfig)
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
+		conn, err = net.DialTimeout("tcp", addr, dialTimeout)
 	}
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -402,9 +408,9 @@ func runInbox() {
 		if *insecure {
 			tlsConfig.InsecureSkipVerify = true
 		}
-		conn, err = tls.Dial("tcp", addr, tlsConfig)
+		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: dialTimeout}, "tcp", addr, tlsConfig)
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
+		conn, err = net.DialTimeout("tcp", addr, dialTimeout)
 	}
 	if err != nil {
 		fmt.Printf("Connection failed: %v\n", err)
