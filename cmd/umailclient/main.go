@@ -376,7 +376,7 @@ func runAuth() {
 		os.Exit(1)
 	}
 
-	addr := fmt.Sprintf("%s:%d", *host, *port)
+	addr := formatAddr(*host, *port)
 	auth := smtp.PlainAuth("", *user, *pass, *host)
 
 	fmt.Printf("Testing AUTH PLAIN against %s...\n", addr)
