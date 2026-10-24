@@ -36,7 +36,12 @@ describe('typecheck gate config', () => {
 
 // Local matcher keeps the accepted-value table in exactly one place.
 declare module 'vitest' {
-  interface Assertion<T> {
+  // The type parameters must mirror vitest's own Assertion declaration
+  // exactly (R extends void | Promise<void> = void, T = unknown): declaration
+  // merging rejects any other parameter list with TS2428, which kills the
+  // whole `npm run typecheck` gate. The pre-vitest-5 shape `Assertion<T>` is
+  // no longer compatible.
+  interface Assertion<R extends void | Promise<void> = void, T = unknown> {
     toBeInValidIgnoreDeprecationsSet(): T;
   }
 }
