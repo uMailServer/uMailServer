@@ -62,6 +62,11 @@ function VacationPage() {
 
   useEffect(() => {
     loadConfig()
+    // Mount-only by design: re-running on t/i18nLoading identity changes
+    // would re-issue the GET and clobber in-progress edits, and the
+    // i18n-leak spec pins the load-once semantics (defaults guard on
+    // i18nLoading).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const loadConfig = async () => {

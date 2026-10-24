@@ -37,7 +37,7 @@ function Layout() {
     return () => {
       stale = true
     }
-  }, [isLoginRoute])
+  }, [isLoginRoute, navigate])
 
   // Revoke the server session: without this the HttpOnly cookie stays valid
   // and "Sign out" only hides the UI. Best-effort — a failing request must
