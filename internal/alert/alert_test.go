@@ -712,7 +712,7 @@ func TestSend_WebhookNetworkError(t *testing.T) {
 	}
 }
 
-func TestShouldSend_HourlyReset(t *testing.T) {
+func TestSend_HourlyBudgetResetsHourly(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Enabled = true
 	cfg.MaxAlerts = 1
@@ -720,21 +720,27 @@ func TestShouldSend_HourlyReset(t *testing.T) {
 
 	mgr := NewManager(cfg, nil)
 
-	// Send first alert
-	err := mgr.Send("reset_test", SeverityInfo, "first", nil)
-	if err != nil {
-		t.Errorf("first send failed: %v", err)
+	// First send consumes the hourly budget.
+	if err := mgr.Send("hourly_reset", SeverityInfo, "first", nil); err != nil {
+		t.Fatalf("first send failed: %v", err)
 	}
 
-	// Directly manipulate hourStart to trigger reset
-	mgr.hourStart = time.Now().Add(-2 * time.Hour)
-	mgr.hourlyCount = 1 // At max
+	// Second send inside the window must be silently suppressed by the
+	// migrated budget gate (reserveAt returns not-granted; Send returns nil).
+	if err := mgr.Send("hourly_reset", SeverityInfo, "suppressed", nil); err != nil {
+		t.Fatalf("second send must be silently suppressed, got error: %v", err)
+	}
 
-	// shouldSend should reset the count and allow sending
-	// This tests the hourly reset branch
-	result := mgr.shouldSend("reset_test")
-	if !result {
-		t.Error("expected shouldSend to return true after hourly reset")
+	// Rewind past the hourly window to force the budget reset.
+	mgr.mu.Lock()
+	mgr.hourStart = time.Now().Add(-2 * time.Hour)
+	mgr.hourlyCount = 1
+	mgr.mu.Unlock()
+
+	// Third send after the window must be allowed again by the migrated
+	// hourly-reset branch.
+	if err := mgr.Send("hourly_reset", SeverityInfo, "after window", nil); err != nil {
+		t.Fatalf("post-window send failed (hourly budget did not reset): %v", err)
 	}
 }
 

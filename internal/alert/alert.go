@@ -295,49 +295,30 @@ func (m *Manager) release(key string, prev time.Time, hadPrev bool, at time.Time
 	m.saveStateLocked()
 }
 
-// shouldSend checks rate limiting and, when sending is allowed, atomically
-// reserves the slot (cooldown + hourly count) so concurrent callers with the
-// same key cannot all pass the check (F5790).
-func (m *Manager) shouldSend(name string) bool {
-	_, _, ok := m.reserve(name)
-	return ok
-}
-
-// reserve is shouldSend that also returns the previous cooldown entry so a
-// failed delivery can roll it back.
-func (m *Manager) reserve(name string) (prev time.Time, hadPrev, ok bool) {
-	prev, hadPrev, _, ok = m.reserveAt(name)
-	return prev, hadPrev, ok
-}
-
-// reserveAt is reserve that also returns the reservation timestamp, which
-// identifies the reservation to release.
+// reserveAt reserves the next alert slot for name, enforcing the MinInterval
+// cooldown per alert name. It records the reservation and returns the previous
+// send time, whether one existed, the new send time, and whether the slot was
+// granted. Send routes alert deliveries through this gate.
 func (m *Manager) reserveAt(name string) (prev time.Time, hadPrev bool, at time.Time, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	// Reset hourly count if hour has passed
-	if time.Since(m.hourStart) > time.Hour {
+	// F6502: prune expired cooldown entries so the map stays bounded, and
+	// roll the hourly budget window (MaxAlerts) exactly as the pre-migration
+	// shouldSend gate did.
+	now := time.Now()
+	if now.Sub(m.hourStart) >= time.Hour {
+		m.hourStart = now
 		m.hourlyCount = 0
-		m.hourStart = time.Now()
 	}
-
-	// Check max alerts per hour
-	if m.hourlyCount >= m.config.MaxAlerts {
-		return time.Time{}, false, time.Time{}, false
-	}
-
-	// Drop expired cooldown entries so the map stays bounded (F6502).
-	if len(m.lastAlert) > 256 {
-		for k, t := range m.lastAlert {
-			if time.Since(t) >= m.config.MinInterval {
-				delete(m.lastAlert, k)
-			}
+	for k, v := range m.lastAlert {
+		if now.Sub(v) >= m.config.MinInterval {
+			delete(m.lastAlert, k)
 		}
 	}
-
-	// Check min interval for same alert type
-	if lastSent, ok := m.lastAlert[name]; ok {
+	if m.config.MaxAlerts > 0 && m.hourlyCount >= m.config.MaxAlerts {
+		return time.Time{}, false, time.Time{}, false
+	}
+	if lastSent, exists := m.lastAlert[name]; exists {
 		if time.Since(lastSent) < m.config.MinInterval {
 			return time.Time{}, false, time.Time{}, false
 		}

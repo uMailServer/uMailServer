@@ -83,7 +83,7 @@ func TestF6502_CooldownMapPruned(t *testing.T) {
 	for i := 0; i < 5000; i++ {
 		m.lastAlert[string(rune('a'+i%26))+time.Duration(i).String()] = old
 	}
-	m.shouldSend("fresh")
+	m.reserveAt("fresh")
 	m.mu.RLock()
 	n := len(m.lastAlert)
 	m.mu.RUnlock()

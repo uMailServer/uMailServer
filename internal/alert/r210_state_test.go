@@ -50,7 +50,7 @@ func TestF6871_CorruptStateIgnored(t *testing.T) {
 	if err := m.SetStateFile(path); err == nil {
 		t.Fatal("expected error for corrupt state")
 	}
-	if !func() bool { m.config.Enabled = true; return m.shouldSend("a") }() {
+	if !func() bool { m.config.Enabled = true; _, _, _, granted := m.reserveAt("a"); return granted }() {
 		t.Fatal("corrupt state must not block alerts")
 	}
 }
