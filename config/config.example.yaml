@@ -87,6 +87,14 @@ security:
     smtp_per_hour: 500        # SMTP connections per hour per IP
     imap_connections: 50      # Max concurrent IMAP connections per IP
     http_requests_per_minute: 120  # API requests per minute per IP
+    ip_per_minute: 30         # Messages per minute per IP (0 = disabled)
+    ip_per_hour: 500          # Messages per hour per IP (0 = disabled)
+    ip_per_day: 5000          # Messages per day per IP (0 = disabled)
+    ip_connections: 10        # Max concurrent connections per IP
+    user_per_minute: 60       # Messages per minute per user (0 = disabled)
+    user_per_hour: 1000       # Messages per hour per user (0 = disabled)
+    user_per_day: 5000        # Messages per day per user (quota; 0 = disabled)
+    user_max_recipients: 100  # Max recipients per message
 
 # Spam Filter Configuration
 spam:
