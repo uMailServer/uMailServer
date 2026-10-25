@@ -193,6 +193,25 @@ func TestSCRAMSHA256RejectsChannelBindingRequired(t *testing.T) {
 	}
 }
 
+// A SCRAM client whose gs2 authzid names a DIFFERENT user asks to act as
+// someone else; no proxy authorization is implemented, so the exchange must
+// fail exactly as PLAIN does (RFC 5802 §5.1, RFC 4616 §2, F6158). Before
+// the fix the server ignored the authzid and authenticated the authcid
+// anyway — a 235 for a=bob@example.com authenticating alice@example.com.
+func TestSCRAMSHA256RejectsForeignAuthzid(t *testing.T) {
+	conn, rd := newAuthIDSession(t, &authIDRecorder{})
+	defer conn.Close()
+	clientFirst := "n,a=bob@example.com,,n=alice@example.com,r=abc123"
+	authIDSendCmd(t, conn, "AUTH SCRAM-SHA-256 "+base64.StdEncoding.EncodeToString([]byte(clientFirst)))
+	resp := authIDReadLine(t, rd)
+	if strings.HasPrefix(resp, "334") || strings.HasPrefix(resp, "235") {
+		t.Fatalf("DEFECT: server accepted an unverified foreign authzid (a=bob@example.com for authcid alice@example.com): %q", resp)
+	}
+	if !strings.HasPrefix(resp, "535") {
+		t.Fatalf("expected 535 Authorization identity not permitted, got %q", resp)
+	}
+}
+
 // authMech5321Session mirrors the production submission wiring.
 func authMech5321Session(t *testing.T) (*Server, net.Conn, *bufio.Reader, []string) {
 	t.Helper()

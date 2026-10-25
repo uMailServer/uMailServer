@@ -2046,6 +2046,16 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 		return s.WriteResponse(535, "5.7.8 Too many failed authentication attempts")
 	}
 
+	// An authzid other than the authenticating identity asks to act as
+	// someone else; no proxy authorization is implemented, so refuse it
+	// exactly as PLAIN does (RFC 5802 §5.1, RFC 4616 §2, F6158) rather
+	// than silently dropping it.
+	if authzid := strings.TrimPrefix(gs2[1], "a="); authzid != "" && strings.ToLower(authzid) != usernameNormalized {
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		s.server.recordUserFailure(usernameNormalized)
+		return s.WriteResponse(535, "5.7.8 Authorization identity not permitted")
+	}
+
 	// Generate server nonce and salt
 	serverNonce, err := auth.GenerateNonce()
 	if err != nil {
