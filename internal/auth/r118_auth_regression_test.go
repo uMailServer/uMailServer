@@ -58,28 +58,42 @@ func TestR118_F6001_MatchMXTrailingDot(t *testing.T) {
 
 func r118DNS(t *testing.T, udp, tcp dns.HandlerFunc) string {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := pc.LocalAddr().String()
-	started := make(chan struct{})
-	us := &dns.Server{PacketConn: pc, Handler: udp, NotifyStartedFunc: func() { close(started) }}
-	go func() { _ = us.ActivateAndServe() }()
-	<-started
-	t.Cleanup(func() { _ = us.Shutdown() })
-	if tcp != nil {
-		l, err := net.Listen("tcp", addr)
+	// The UDP and TCP listeners must share a port. An ephemeral UDP port can
+	// collide with a TCP socket held by another concurrently running test
+	// process (observed under full-suite parallelism: "bind: address already
+	// in use"), so retry the pair on a fresh ephemeral port instead of
+	// failing the test.
+	for attempt := 1; ; attempt++ {
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
-		st := make(chan struct{})
-		ts := &dns.Server{Listener: l, Handler: tcp, NotifyStartedFunc: func() { close(st) }}
-		go func() { _ = ts.ActivateAndServe() }()
-		<-st
-		t.Cleanup(func() { _ = ts.Shutdown() })
+		addr := pc.LocalAddr().String()
+		var l net.Listener
+		if tcp != nil {
+			l, err = net.Listen("tcp", addr)
+			if err != nil {
+				_ = pc.Close()
+				if attempt >= 5 {
+					t.Fatalf("no free udp+tcp port pair after %d attempts: %v", attempt, err)
+				}
+				continue
+			}
+		}
+		started := make(chan struct{})
+		us := &dns.Server{PacketConn: pc, Handler: udp, NotifyStartedFunc: func() { close(started) }}
+		go func() { _ = us.ActivateAndServe() }()
+		<-started
+		t.Cleanup(func() { _ = us.Shutdown() })
+		if tcp != nil {
+			st := make(chan struct{})
+			ts := &dns.Server{Listener: l, Handler: tcp, NotifyStartedFunc: func() { close(st) }}
+			go func() { _ = ts.ActivateAndServe() }()
+			<-st
+			t.Cleanup(func() { _ = ts.Shutdown() })
+		}
+		return addr
 	}
-	return addr
 }
 
 // F6002: SERVFAIL must be an error, not "no TLSA records".
