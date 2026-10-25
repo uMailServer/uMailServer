@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 # Node is required to build the three embedded web UIs before `go build`
 # (embed.go references webmail/dist, web/admin/dist, web/account/dist).
