@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -213,4 +214,27 @@ func (db *Database) PruneChanges(user string) error {
 		}
 		return nil
 	})
+}
+
+// ChangesUsers returns the users that own a change journal bucket. The
+// journal pruning iterates these directly: keyUser escaping is inverted with
+// the same unescaper the ACL listing uses, so users whose journals exist but
+// who have no stored blobs yet are still covered.
+func (db *Database) ChangesUsers() ([]string, error) {
+	if db.bolt == nil {
+		return nil, nil
+	}
+	var users []string
+	prefix := []byte("changes:")
+	err := db.bolt.View(func(tx *bbolt.Tx) error {
+		c := tx.Cursor()
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			if !bytes.HasPrefix(k, prefix) {
+				continue
+			}
+			users = append(users, userKeyUnescaper.Replace(string(k[len(prefix):])))
+		}
+		return nil
+	})
+	return users, err
 }

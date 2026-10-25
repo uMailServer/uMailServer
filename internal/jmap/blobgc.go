@@ -71,6 +71,22 @@ func (s *Server) sweepBlobGC() (int, error) {
 		}
 		total += n
 	}
+	// PruneChanges enforces the 30-day retention and the per-user entry cap
+	// on the change journals (F7390's in-transaction live count). Before
+	// this wiring it had no production caller, so journals grew unbounded
+	// despite the implemented policy; the sweep iterates the journal owners
+	// directly (ChangesUsers), not the blob owners, so journal-only users
+	// are covered too.
+	changesUsers, err := s.db.ChangesUsers()
+	if err != nil {
+		s.logger.Warn("changes gc: user enumeration failed", "error", err)
+		return total, err
+	}
+	for _, owner := range changesUsers {
+		if err := s.db.PruneChanges(owner); err != nil {
+			s.logger.Warn("changes gc: journal prune failed", "owner", owner, "error", err)
+		}
+	}
 	if total > 0 {
 		s.logger.Info("blob gc sweep complete", "owners", len(owners), "removed", total)
 	}

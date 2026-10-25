@@ -11,10 +11,14 @@ package jmap
 // the sweep covers every user (per-user scoping).
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	bbolt "go.etcd.io/bbolt"
 
 	"github.com/umailserver/umailserver/internal/storage"
 )
@@ -181,4 +185,85 @@ func TestBlobGCLifecycleIdempotent(t *testing.T) {
 	server.StartBlobGC()
 	server.StartBlobGC() // second call must be a no-op, not a second goroutine
 	server.Stop()        // must end both GC goroutines and return
+}
+
+// The sweep also prunes each blob owner's change journal: PruneChanges
+// implements the 30-day retention and the per-user entry cap but had no
+// production caller (the same wiring gap round 61 closed for GCOrphanBlobs).
+func ageChanges(t *testing.T, db *storage.Database, user string, age time.Duration) {
+	t.Helper()
+	stamp := time.Now().Add(-age)
+	if err := db.Bolt().Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte("changes:" + user))
+		if b == nil {
+			return nil
+		}
+		var keys [][]byte
+		var vals [][]byte
+		if err := b.ForEach(func(k, v []byte) error {
+			var e storage.ChangeEntry
+			if err := json.Unmarshal(v, &e); err != nil {
+				return nil // skip foreign rows
+			}
+			e.At = stamp
+			nv, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			keys = append(keys, append([]byte(nil), k...))
+			vals = append(vals, nv)
+			return nil
+		}); err != nil {
+			return err
+		}
+		for i, k := range keys {
+			if err := b.Put(k, vals[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("age change journal: %v", err)
+	}
+}
+
+func TestBlobGCSweepPrunesChangeJournals(t *testing.T) {
+	server, _, _ := r61Setup(t)
+	const alice, bob = "alice@example.com", "bob@example.com"
+
+	// Seed both journals and age every entry past the 30-day retention.
+	for i := 0; i < 3; i++ {
+		if err := server.db.RecordChange(alice, storage.ChangeTypeEmail, storage.ChangeKindCreated, fmt.Sprintf("m%d", i), "INBOX"); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.db.RecordChange(bob, storage.ChangeTypeEmail, storage.ChangeKindCreated, fmt.Sprintf("n%d", i), "INBOX"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ageChanges(t, server.db, alice, 31*24*time.Hour)
+	ageChanges(t, server.db, bob, 31*24*time.Hour)
+
+	// Control: a fresh entry recorded after the aging must survive the sweep.
+	if err := server.db.RecordChange(alice, storage.ChangeTypeEmail, storage.ChangeKindUpdated, "mfresh", "INBOX"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := server.sweepBlobGC(); err != nil {
+		t.Fatalf("FAIL: sweep error: %v", err)
+	}
+
+	entries, _, _, err := server.db.GetChangesSince(alice, storage.ChangeTypeEmail, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("FAIL: alice journal kept %d entries, want 1 (only the fresh change survives)", len(entries))
+	}
+	entries, _, _, err = server.db.GetChangesSince(bob, storage.ChangeTypeEmail, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("FAIL: bob journal kept %d entries, want 0 (all aged past retention)", len(entries))
+	}
 }
