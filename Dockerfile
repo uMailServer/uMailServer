@@ -20,7 +20,16 @@ RUN (cd webmail    && npm ci --legacy-peer-deps && npm run build) && \
     (cd web/account && npm install --legacy-peer-deps && npm run build)
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o umailserver ./cmd/umailserver
+# Release metadata, wired from .goreleaser.yml build_flag_templates
+# (VERSION/BUILD_DATE/COMMIT); without these ARGs goreleaser's values are
+# silently dropped and the image ships a binary reporting "dev (unknown)".
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+ARG COMMIT=unknown
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildDate=${BUILD_DATE} -X main.GitCommit=${COMMIT}" \
+    -o umailserver ./cmd/umailserver
 
 # Runtime stage
 FROM alpine:3.20
