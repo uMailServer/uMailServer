@@ -2019,6 +2019,20 @@ func (s *Session) handleAuthSCRAMSHA256(parts []string) error {
 	}
 	clientFirstBare := gs2[2]
 
+	// gs2-header = "n,," / "y,," / "p=cb-name,[,a=authzid]," (RFC 5802 §5.1,
+	// §7). This server implements no channel binding, so a client that
+	// REQUIRES it (p=cb-name) MUST fail authentication; anything else is not
+	// a GS2 flag.
+	switch {
+	case gs2[0] == "n" || gs2[0] == "y":
+	case strings.HasPrefix(gs2[0], "p="):
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		return s.WriteResponse(501, "5.5.4 Channel binding not supported")
+	default:
+		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))
+		return s.WriteResponse(501, "5.5.4 Invalid SCRAM-SHA-256 client-first message")
+	}
+
 	username := clientFirstMsg.AuthCID
 	if username == "" {
 		s.server.recordAuthFailure(getIPFromAddr(s.conn.RemoteAddr().String()))

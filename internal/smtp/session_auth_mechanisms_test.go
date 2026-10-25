@@ -174,6 +174,25 @@ func TestSCRAMSHA256ProofEdges(t *testing.T) {
 	}
 }
 
+// A SCRAM client that REQUIRES channel binding (gs2 flag p=cb-name) must be
+// rejected: this server implements no channel binding, and RFC 5802 §5.1
+// makes failing the authentication mandatory in that case. Before the fix
+// the server accepted the exchange and served the server-first challenge
+// (a full authentication could succeed over a plain connection).
+func TestSCRAMSHA256RejectsChannelBindingRequired(t *testing.T) {
+	conn, rd := newAuthIDSession(t, &authIDRecorder{})
+	defer conn.Close()
+	clientFirst := "p=tls-server-end-point,,n=alice@example.com,r=abc123"
+	authIDSendCmd(t, conn, "AUTH SCRAM-SHA-256 "+base64.StdEncoding.EncodeToString([]byte(clientFirst)))
+	resp := authIDReadLine(t, rd)
+	if strings.HasPrefix(resp, "334") {
+		t.Fatalf("DEFECT: server accepted a channel-binding-required SCRAM exchange (gs2 p=) without channel binding: %q", resp)
+	}
+	if !strings.HasPrefix(resp, "5") {
+		t.Fatalf("expected a 5xx rejection, got %q", resp)
+	}
+}
+
 // authMech5321Session mirrors the production submission wiring.
 func authMech5321Session(t *testing.T) (*Server, net.Conn, *bufio.Reader, []string) {
 	t.Helper()
