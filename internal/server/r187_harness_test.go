@@ -5,6 +5,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,7 +17,8 @@ import (
 
 type r187Env struct {
 	*e2eEnv
-	http int
+	http   int
+	client *http.Client
 }
 
 func newR187(t *testing.T) *r187Env {
@@ -26,7 +28,12 @@ func newR187(t *testing.T) *r187Env {
 	e.cfg.HTTP.Enabled = true
 	e.cfg.HTTP.Bind = "127.0.0.1"
 	e.cfg.HTTP.Port = h
-	return &r187Env{e2eEnv: e, http: h}
+	// The HTTP port now enforces the TLS contract: the r132 harness's certs
+	// (self-signed, serving the protocol listeners) turn it into HTTPS. The
+	// R187 REST helpers speak TLS and skip verification — test-only.
+	return &r187Env{e2eEnv: e, http: h, client: &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}}
 }
 
 // rest performs an HTTP API call; returns status and raw body.
@@ -37,12 +44,12 @@ func (e *r187Env) rest(token, method, path string, body any) (int, []byte) {
 		b, _ := json.Marshal(body)
 		rd = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", e.http, path), rd)
+	req, _ := http.NewRequest(method, fmt.Sprintf("https://127.0.0.1:%d%s", e.http, path), rd)
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := e.client.Do(req)
 	if err != nil {
 		e.t.Fatalf("rest %s %s: %v", method, path, err)
 	}

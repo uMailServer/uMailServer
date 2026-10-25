@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net/http"
@@ -78,6 +79,20 @@ func (s *Server) startAPI() error {
 	apiLn, err := s.apiServer.Listen(apiCfg.Addr)
 	if err != nil {
 		return fmt.Errorf("failed to start API server: %w", err)
+	}
+	// Enforce the TLS contract on the HTTP port: when the operator
+	// explicitly configures TLS (cert_file/key_file, or ACME enabled — its
+	// certificates are obtained at handshake time), the listener must speak
+	// TLS. Without this the configured certs were ignored and the port
+	// served plaintext. Nothing configured keeps the historical plaintext
+	// behavior (and note: the manager's availability probe alone is NOT the
+	// gate — GetCertificate returns nil-error for unconfigured managers).
+	// Mirrors the IMAP/SMTP listener semantics for explicitly configured TLS.
+	if (s.config.TLS.CertFile != "" && s.config.TLS.KeyFile != "") || s.config.TLS.ACME.Enabled {
+		apiLn = tls.NewListener(apiLn, s.tlsManager.GetTLSConfig())
+		s.logger.Info("API server serving TLS", "addr", apiCfg.Addr)
+	} else {
+		s.logger.Warn("No TLS certificate configured; API server serving plaintext", "addr", apiCfg.Addr)
 	}
 	apiServer := s.apiServer
 	go func() {
