@@ -183,14 +183,15 @@ spam:
   # Greylisting
   greylisting:
     enabled: true
-    # Note: the greylist delay is fixed at 5 minutes; a `delay` key is ignored (warned at load)
-    max_record_age: 24h            # How long to remember good senders
+    delay: 5m                      # Minimum wait before a retried sender is accepted (max 6h)
 
   # Bayesian classifier
   bayesian:
     enabled: true
-    auto_learn: true               # Learn from user actions
-    min_tokens: 10                 # Minimum tokens to classify
+    # Train from user actions: a message moved or copied into Junk is
+    # learned as spam, one moved out of Junk (except into Trash) as ham.
+    # The classifier scores nothing until it has learned 10 messages of each.
+    auto_train: true
 ```
 
 ## DKIM Signing

@@ -353,7 +353,6 @@ func secretsFileTooOpen(path string, cfg *Config) (os.FileMode, bool) {
 // sets one so operators are not misled into thinking it has an effect (F6890).
 var ignoredKeys = [][]string{
 	{"spam", "quarantine_threshold"},
-	{"spam", "bayesian", "auto_train"},
 	{"security", "rate_limit", "imap_connections"},
 	{"tls", "acme", "challenge"},
 	{"tls", "acme", "dns_provider"},

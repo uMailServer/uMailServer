@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/mail"
+	"strings"
 	"sync"
 
 	"go.etcd.io/bbolt"
@@ -177,4 +178,25 @@ func MessageTokens(raw []byte) []string {
 	}
 	tokens := ExtractTokensFromHeaders(headers)
 	return append(tokens, ExtractTokensFromBody(raw)...)
+}
+
+// JunkMoveVerdict reports what moving or copying a message from mailbox
+// from to mailbox to tells the classifier: filing it into Junk reports spam,
+// taking it out of Junk (other than into Trash) reports ham. report is false
+// for any other move.
+func JunkMoveVerdict(from, to string) (spam, report bool) {
+	fromJunk, toJunk := isJunkMailbox(from), isJunkMailbox(to)
+	switch {
+	case toJunk && !fromJunk:
+		return true, true
+	case fromJunk && !toJunk && !strings.EqualFold(to, "Trash"):
+		return false, true
+	}
+	return false, false
+}
+
+// isJunkMailbox matches the server's Junk folder and the "Spam" name some
+// clients use for it.
+func isJunkMailbox(name string) bool {
+	return strings.EqualFold(name, "Junk") || strings.EqualFold(name, "Spam")
 }

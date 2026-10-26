@@ -171,6 +171,7 @@ func (s *Server) Stop() error {
 
 	// Wait for search index workers to drain before closing databases
 	s.wg.Wait()
+	s.stopSpamLearner()
 
 	// Close message store
 	if s.msgStore != nil {

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/spam"
 	"github.com/umailserver/umailserver/internal/storage"
 )
 
@@ -37,6 +38,10 @@ type BboltMailstore struct {
 	// quotaAdjust mirrors blob-store usage into the accounts database
 	// (QuotaUsed), the counter SMTP and JMAP already maintain (F5930).
 	quotaAdjust func(user string, delta int64) error
+
+	// junkReport is told about messages the user files into or out of
+	// Junk, to train the spam classifier (nil: not reported).
+	junkReport func(user, messageID string, spam bool)
 
 	// userLocks serialises "does the blob exist / reserve / store" against
 	// "is the blob still referenced / free" per user, so the reserved and
@@ -93,6 +98,12 @@ func (m *BboltMailstore) adjustQuota(user string, delta int64) error {
 		return m.quotaAdjust(user, delta)
 	}
 	return nil
+}
+
+// SetJunkReportFunc installs the hook told about every message a COPY or
+// MOVE files into Junk (spam) or out of it (ham), see spam.JunkMoveVerdict.
+func (m *BboltMailstore) SetJunkReportFunc(f func(user, messageID string, spam bool)) {
+	m.junkReport = f
 }
 
 // SetQuotaLimitFunc installs the per-user quota lookup used by APPEND, COPY
@@ -1509,6 +1520,12 @@ func (m *BboltMailstore) CopyMessagesUIDs(user, sourceMailbox, destMailbox strin
 
 		if err := copyOne(uid); err != nil {
 			return fail(uid, err)
+		}
+	}
+
+	if isSpam, report := spam.JunkMoveVerdict(sourceMailbox, destMailbox); report && m.junkReport != nil {
+		for _, ref := range newIDs {
+			m.junkReport(user, ref.id, isSpam)
 		}
 	}
 

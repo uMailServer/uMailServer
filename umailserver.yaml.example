@@ -79,6 +79,7 @@ spam:
   junk_threshold: 3.0         # Score at/above which mail goes to Junk
   bayesian:
     enabled: true
+    auto_train: true          # learn from mail users move into / out of Junk
   greylisting:
     enabled: true
     delay: 5m             # minimum wait before a retried sender is accepted (max 6h)

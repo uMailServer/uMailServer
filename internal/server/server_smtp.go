@@ -10,7 +10,6 @@ import (
 	"github.com/umailserver/umailserver/internal/auth"
 	"github.com/umailserver/umailserver/internal/av"
 	"github.com/umailserver/umailserver/internal/smtp"
-	"github.com/umailserver/umailserver/internal/spam"
 )
 
 // startSMTP starts the configured SMTP listeners: the inbound MX server,
@@ -209,13 +208,8 @@ func (s *Server) spamStages() []smtp.PipelineStage {
 	stages = append(stages, smtp.NewHeuristicStage())
 
 	// Bayesian spam classification (if storage available)
-	if cfg.Bayesian.Enabled && s.storageDB != nil {
-		classifier := spam.NewClassifier(s.storageDB.Bolt())
-		if err := classifier.Initialize(); err != nil {
-			s.logger.Error("failed to initialize Bayesian classifier", "error", err)
-		} else {
-			stages = append(stages, smtp.NewBayesianStage(classifier))
-		}
+	if classifier := s.bayesClassifier(); classifier != nil {
+		stages = append(stages, smtp.NewBayesianStage(classifier))
 	}
 
 	return append(stages, smtp.NewScoreStage(cfg.RejectThreshold, cfg.JunkThreshold))

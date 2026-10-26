@@ -60,6 +60,8 @@ func (s *Server) Start() (err error) {
 	s.mailstore = imap.NewBboltMailstoreWithInterfaces(s.storageDB, s.msgStore)
 	s.mailstore.SetQuotaLimitFunc(s.quotaLimit)
 	s.mailstore.SetQuotaAdjustFunc(s.quotaAdjust)
+	s.startSpamLearner()
+	s.mailstore.SetJunkReportFunc(s.reportJunk)
 
 	// Set MDN handler for read receipts
 	s.mailstore.SetMDNHandler(s.sendMDN)

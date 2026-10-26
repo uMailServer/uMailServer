@@ -30,6 +30,7 @@ import (
 	"github.com/umailserver/umailserver/internal/search"
 	"github.com/umailserver/umailserver/internal/sieve"
 	"github.com/umailserver/umailserver/internal/smtp"
+	"github.com/umailserver/umailserver/internal/spam"
 	"github.com/umailserver/umailserver/internal/storage"
 	umailTLS "github.com/umailserver/umailserver/internal/tls"
 	"github.com/umailserver/umailserver/internal/tracing"
@@ -39,38 +40,43 @@ import (
 
 // Server is the main uMailServer instance
 type Server struct {
-	config            *config.Config
-	logger            *slog.Logger
-	database          *db.DB
-	queue             *queue.Manager
-	msgStore          *storage.MessageStore
-	smtpServer        *smtp.Server
-	imapServer        *imap.Server
-	apiServer         *api.Server
-	adminServer       *api.AdminServer
-	tlsManager        *umailTLS.Manager
-	webhookMgr        *webhook.Manager
-	deliveryLocks     sync.Map // lowercase mailbox -> *sync.Mutex (see lockDeliveryUser)
-	alertMgr          *alert.Manager
-	pushSvc           *push.Service
-	imapAuth          *imap.AuthTracker // shared failed-login counters across IMAP listeners (F5844)
-	searchSvc         *search.Service
-	sieveManager      *sieve.Manager
-	storageDB         *storage.Database
-	mailstore         *imap.BboltMailstore
-	pop3Server        *pop3.Server
-	mcpHTTPServer     *http.Server
-	healthMonitor     *health.Monitor
-	rateLimiter       *ratelimit.RateLimiter
-	tracingProvider   *tracing.Provider
-	manageSieveServer *sieve.ManageSieveServer
-	caldavServer      *caldav.Server
-	caldavHTTPServer  *http.Server
-	carddavServer     *carddav.Server
-	carddavHTTPServer *http.Server
-	jmapServer        *jmap.Server
-	jmapHTTPServer    *http.Server
-	metricsHTTPServer *http.Server
+	config        *config.Config
+	logger        *slog.Logger
+	database      *db.DB
+	queue         *queue.Manager
+	msgStore      *storage.MessageStore
+	smtpServer    *smtp.Server
+	imapServer    *imap.Server
+	apiServer     *api.Server
+	adminServer   *api.AdminServer
+	tlsManager    *umailTLS.Manager
+	webhookMgr    *webhook.Manager
+	deliveryLocks sync.Map // lowercase mailbox -> *sync.Mutex (see lockDeliveryUser)
+	alertMgr      *alert.Manager
+	pushSvc       *push.Service
+	imapAuth      *imap.AuthTracker // shared failed-login counters across IMAP listeners (F5844)
+	searchSvc     *search.Service
+	sieveManager  *sieve.Manager
+	storageDB     *storage.Database
+	// spamClassifier is shared by the Bayesian stage and spamLearner,
+	// created once by bayesClassifier (nil when disabled).
+	spamClassifier     *spam.Classifier
+	spamClassifierOnce sync.Once
+	spamLearner        *spam.Learner // nil unless spam.bayesian.auto_train
+	mailstore          *imap.BboltMailstore
+	pop3Server         *pop3.Server
+	mcpHTTPServer      *http.Server
+	healthMonitor      *health.Monitor
+	rateLimiter        *ratelimit.RateLimiter
+	tracingProvider    *tracing.Provider
+	manageSieveServer  *sieve.ManageSieveServer
+	caldavServer       *caldav.Server
+	caldavHTTPServer   *http.Server
+	carddavServer      *carddav.Server
+	carddavHTTPServer  *http.Server
+	jmapServer         *jmap.Server
+	jmapHTTPServer     *http.Server
+	metricsHTTPServer  *http.Server
 
 	// LDAP authentication client (optional, nil if LDAP disabled)
 	ldapClient *auth.LDAPClient
