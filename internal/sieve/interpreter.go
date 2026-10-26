@@ -396,10 +396,13 @@ func (i *Interpreter) Execute(msg *MessageContext) (actions []Action, err error)
 	if err := checkActions(all); err != nil {
 		return nil, err
 	}
+	// RFC 5232 §3: the implicit keep files the message with the final
+	// value of the internal flags variable (addflag/setflag/removeflag).
+	implicitFlags := strings.Join(i.flags, " ")
 	if len(all) == 0 {
-		return []Action{KeepAction{}}, nil
+		return []Action{KeepAction{Flags: implicitFlags}}, nil
 	}
-	return keepWithCopies(all), nil
+	return keepWithCopies(all, implicitFlags), nil
 }
 
 // checkActions rejects action sets RFC 5228/5429 forbid together and bounds
@@ -430,9 +433,9 @@ func checkActions(all []Action) error {
 	return nil
 }
 
-// keepWithCopies restores the implicit keep when the only deliveries are
-// :copy actions (RFC 3894 §3): they do not cancel it.
-func keepWithCopies(all []Action) []Action {
+// keepWithCopies restores the implicit keep, carrying flags, when the only
+// deliveries are :copy actions (RFC 3894 §3): they do not cancel it.
+func keepWithCopies(all []Action, flags string) []Action {
 	hasCopy := false
 	for _, a := range all {
 		switch v := a.(type) {
@@ -451,7 +454,7 @@ func keepWithCopies(all []Action) []Action {
 		}
 	}
 	if hasCopy {
-		all = append(all, KeepAction{Flags: ""})
+		all = append(all, KeepAction{Flags: flags})
 	}
 	return all
 }

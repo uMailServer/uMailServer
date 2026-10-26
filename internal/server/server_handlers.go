@@ -644,6 +644,9 @@ type copyState struct {
 	forwardHandled bool
 	dropLocal      bool // the forward consumed the message (no keep-copy)
 	vacationSent   bool
+	// flags are the IMAP flags the next copy is stored with, besides
+	// \Recent (set per folder by Sieve imap4flags, RFC 5232).
+	flags []string
 }
 
 // deliverLocalCopies is deliverLocalFor for one of several copies of a
@@ -837,10 +840,14 @@ func (s *Server) deliverLocalHop(origRcpt, user, domain, from string, data []byt
 			if threadErr != nil {
 				threadID = "" // Continue without threading if it fails
 			}
+			flags := []string{"\\Recent"}
+			if st != nil {
+				flags = append(flags, st.flags...)
+			}
 			meta := &storage.MessageMetadata{
 				MessageID:    messageID,
 				UID:          uid,
-				Flags:        []string{"\\Recent"},
+				Flags:        flags,
 				InternalDate: time.Now(),
 				Size:         int64(len(data)),
 				Subject:      subject,

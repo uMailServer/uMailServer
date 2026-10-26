@@ -16,11 +16,15 @@ const maxSieveRedirects = 10
 // message (RFC 5228 §2.10.2 implicit keep, §4 actions).
 type sieveOutcome struct {
 	keep      bool     // explicit keep, or the implicit keep was not cancelled
+	keepFlags []string // IMAP flags for the kept copy (RFC 5232)
 	folders   []string // fileinto targets, in script order
-	redirects []string
-	rejected  bool
-	rejectMsg string
-	vacation  *sieve.VacationAction
+	// folderFlags holds the IMAP flags each fileinto target is stored
+	// with (RFC 5232 :flags or the internal variable).
+	folderFlags map[string][]string
+	redirects   []string
+	rejected    bool
+	rejectMsg   string
+	vacation    *sieve.VacationAction
 }
 
 // activeSieveUser returns the key under which mailbox's active script is
@@ -65,13 +69,25 @@ func (s *Server) runUserSieve(scriptUser, rcpt, from string, data []byte) (out s
 		s.logger.Warn("Sieve script failed, keeping message", "user", scriptUser, "error", err)
 		return sieveOutcome{}, false
 	}
+	return sieveOutcomeOf(actions), true
+}
+
+// sieveOutcomeOf folds the actions of one script run into a sieveOutcome.
+// The interpreter already emits the implicit keep (also after :copy
+// actions, RFC 3894), so only an empty action list keeps by default.
+func sieveOutcomeOf(actions []sieve.Action) (out sieveOutcome) {
 	implicitKeep := true
 	for _, action := range actions {
 		switch a := action.(type) {
 		case sieve.KeepAction:
 			out.keep = true
+			out.keepFlags = mergeFlags(out.keepFlags, a.Flags)
 		case sieve.FileintoAction:
 			out.folders = append(out.folders, a.Folder)
+			if out.folderFlags == nil {
+				out.folderFlags = map[string][]string{}
+			}
+			out.folderFlags[a.Folder] = mergeFlags(out.folderFlags[a.Folder], a.Flags)
 			implicitKeep = false
 		case sieve.RedirectAction:
 			out.redirects = append(out.redirects, a.Address)
@@ -88,7 +104,25 @@ func (s *Server) runUserSieve(scriptUser, rcpt, from string, data []byte) (out s
 		}
 	}
 	out.keep = out.keep || implicitKeep
-	return out, true
+	return out
+}
+
+// mergeFlags adds the space separated IMAP flags in list to flags, skipping
+// ones already present (flag names are case-insensitive, RFC 3501 §2.3.2).
+func mergeFlags(flags []string, list string) []string {
+	for _, f := range strings.Fields(list) {
+		dup := false
+		for _, have := range flags {
+			if strings.EqualFold(have, f) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			flags = append(flags, f)
+		}
+	}
+	return flags
 }
 
 // deliverLocalFiltered delivers a message for recipient rcpt (resolved to
@@ -134,24 +168,26 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 	}
 
 	targets := make([]string, 0, len(out.folders)+1)
-	seen := map[string]bool{}
-	add := func(f string) {
+	targetFlags := map[string][]string{}
+	add := func(f string, flags []string) {
 		if strings.EqualFold(f, "INBOX") {
 			f = ""
 		}
-		if !seen[f] {
-			seen[f] = true
+		have, seen := targetFlags[f]
+		if !seen {
 			targets = append(targets, f)
 		}
+		targetFlags[f] = mergeFlags(have, strings.Join(flags, " "))
 	}
 	if keep {
-		add(folder)
+		add(folder, out.keepFlags)
 	}
 	for _, f := range out.folders {
+		flags := out.folderFlags[f]
 		if f == "" {
 			f = folder
 		}
-		add(f)
+		add(f, flags)
 	}
 	// F6591: deliver every target even when one fails. Reporting a failure
 	// after earlier copies were stored makes the sender retry and duplicate
@@ -164,6 +200,7 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 	for _, f := range targets {
 		err := s.sieveFolderFault(f)
 		if err == nil {
+			st.flags = targetFlags[f]
 			err = s.deliverLocalCopies(rcpt, user, domain, from, data, st, f)
 		}
 		if err != nil {
@@ -192,6 +229,7 @@ func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, d
 	if !inboxStored {
 		err := s.sieveFolderFault("")
 		if err == nil {
+			st.flags = targetFlags[""]
 			err = s.deliverLocalCopies(rcpt, user, domain, from, data, st, "")
 		}
 		if err != nil {
