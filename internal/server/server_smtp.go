@@ -156,26 +156,9 @@ func (s *Server) startInboundSMTP() error {
 		pipeline.AddStage(smtp.NewRateLimitStage(s.rateLimiter))
 	}
 
-	// Spam filtering stages
-	if s.config.Spam.Greylisting.Enabled {
-		pipeline.AddStage(smtp.NewGreylistStage(smtp.WithGreylistDelay(s.config.Spam.Greylisting.Delay.ToDuration())))
+	for _, stage := range s.spamStages() {
+		pipeline.AddStage(stage)
 	}
-	if len(s.config.Spam.RBLServers) > 0 {
-		pipeline.AddStage(smtp.NewRBLStage(s.config.Spam.RBLServers, smtp.NewRealRBLDNSResolver()))
-	}
-	pipeline.AddStage(smtp.NewHeuristicStage())
-
-	// Bayesian spam classification (if storage available)
-	if s.storageDB != nil {
-		classifier := spam.NewClassifier(s.storageDB.Bolt())
-		if err := classifier.Initialize(); err != nil {
-			s.logger.Error("failed to initialize Bayesian classifier", "error", err)
-		} else {
-			pipeline.AddStage(smtp.NewBayesianStage(classifier))
-		}
-	}
-
-	pipeline.AddStage(smtp.NewScoreStage(s.config.Spam.RejectThreshold, s.config.Spam.JunkThreshold))
 
 	// Sieve mail filtering (if sieve manager available)
 	if s.sieveManager != nil {
@@ -201,6 +184,41 @@ func (s *Server) startInboundSMTP() error {
 	s.smtpServer = smtpServer
 	s.logger.Info("SMTP server started", "addr", smtpAddr)
 	return nil
+}
+
+// spamStages returns the spam filtering stages of the inbound pipeline, in
+// order. spam.enabled: false disables all of them, so no spam verdict is
+// produced and mail is never rejected or filed into Junk for its score; the
+// sender authentication stages are not affected. spam.bayesian.enabled
+// gates the Bayesian classifier alone. Before this both switches were read
+// by no runtime code.
+func (s *Server) spamStages() []smtp.PipelineStage {
+	cfg := s.config.Spam
+	if !cfg.Enabled {
+		s.logger.Info("spam filtering disabled by configuration")
+		return nil
+	}
+
+	var stages []smtp.PipelineStage
+	if cfg.Greylisting.Enabled {
+		stages = append(stages, smtp.NewGreylistStage(smtp.WithGreylistDelay(cfg.Greylisting.Delay.ToDuration())))
+	}
+	if len(cfg.RBLServers) > 0 {
+		stages = append(stages, smtp.NewRBLStage(cfg.RBLServers, smtp.NewRealRBLDNSResolver()))
+	}
+	stages = append(stages, smtp.NewHeuristicStage())
+
+	// Bayesian spam classification (if storage available)
+	if cfg.Bayesian.Enabled && s.storageDB != nil {
+		classifier := spam.NewClassifier(s.storageDB.Bolt())
+		if err := classifier.Initialize(); err != nil {
+			s.logger.Error("failed to initialize Bayesian classifier", "error", err)
+		} else {
+			stages = append(stages, smtp.NewBayesianStage(classifier))
+		}
+	}
+
+	return append(stages, smtp.NewScoreStage(cfg.RejectThreshold, cfg.JunkThreshold))
 }
 
 // relayPolicyStage refuses to relay for unauthenticated clients: without
