@@ -67,6 +67,10 @@ type MailHandler struct {
 	// locally, other recipients are queued for relay (F7640). When nil,
 	// handleMailSend queues every recipient on queueMgr.
 	deliver func(from string, to []string, data []byte) error
+
+	// junkReport is told about messages moved into or out of Junk, to
+	// train the spam classifier (nil: not reported).
+	junkReport func(user, messageID string, spam bool)
 }
 
 // SetDeliverFunc wires the server's delivery routing (local mailboxes versus

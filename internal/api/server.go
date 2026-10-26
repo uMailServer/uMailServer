@@ -50,6 +50,7 @@ type Server struct {
 	mailDB     *storage.Database
 	queueMgr   *queue.Manager
 	deliverFn  func(from string, to []string, data []byte) error // webmail send routing (F7640)
+	junkReport func(user, messageID string, spam bool)           // spam training from Junk moves
 	httpServer *http.Server
 	healthMon  HealthMonitor
 
@@ -532,6 +533,9 @@ func (s *Server) initRouter() {
 	}
 	if s.deliverFn != nil {
 		s.mailHandler.SetDeliverFunc(s.deliverFn)
+	}
+	if s.junkReport != nil {
+		s.mailHandler.SetJunkReportFunc(s.junkReport)
 	}
 
 	api.HandleFunc("/api/v1/mail/inbox", s.mailHandler.handleMailList)
@@ -1233,6 +1237,9 @@ func (s *Server) initMailHandler() {
 	if s.mailHandler != nil && s.deliverFn != nil {
 		s.mailHandler.SetDeliverFunc(s.deliverFn)
 	}
+	if s.mailHandler != nil && s.junkReport != nil {
+		s.mailHandler.SetJunkReportFunc(s.junkReport)
+	}
 }
 
 // SetDeliverFunc injects the server's delivery routing for webmail sends:
@@ -1240,6 +1247,13 @@ func (s *Server) initMailHandler() {
 // the outbound queue (F7640). Safe in any setter order.
 func (s *Server) SetDeliverFunc(fn func(from string, to []string, data []byte) error) {
 	s.deliverFn = fn
+	s.initMailHandler()
+}
+
+// SetJunkReportFunc installs the spam-training hook told about webmail moves
+// into or out of Junk. Safe in any setter order.
+func (s *Server) SetJunkReportFunc(f func(user, messageID string, spam bool)) {
+	s.junkReport = f
 	s.initMailHandler()
 }
 

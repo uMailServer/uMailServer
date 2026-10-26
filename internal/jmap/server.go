@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/umailserver/umailserver/internal/spam"
 	"github.com/umailserver/umailserver/internal/storage"
 	"github.com/umailserver/umailserver/internal/tracing"
 )
@@ -59,6 +60,9 @@ type Server struct {
 	// quotaLimit / quotaAdjust are the optional quota seams (F5740-F5742).
 	quotaLimit  atomic.Pointer[func(user string) int64]
 	quotaAdjust atomic.Pointer[func(user string, delta int64) error]
+	// junkReport trains the spam classifier from Emails filed into or out
+	// of Junk (nil: not reported).
+	junkReport atomic.Pointer[func(user, messageID string, spam bool)]
 
 	// Unreferenced-upload GC (uploads.go).
 	uploadLocks   sync.Map // user -> *sync.Mutex
@@ -90,6 +94,40 @@ func (s *Server) SetQuotaAdjustFunc(f func(user string, delta int64) error) {
 		return
 	}
 	s.quotaAdjust.Store(&f)
+}
+
+// SetJunkReportFunc installs the hook told about every Email/set that files
+// an Email into Junk (spam) or takes it out of Junk other than into Trash
+// (ham).
+func (s *Server) SetJunkReportFunc(f func(user, messageID string, spam bool)) {
+	if f == nil {
+		s.junkReport.Store(nil)
+		return
+	}
+	s.junkReport.Store(&f)
+}
+
+// reportJunkMove reports an Email whose mailbox set changed from current to
+// desired, when that moved it into or out of Junk.
+func (s *Server) reportJunkMove(user, messageID string, current []string, desired map[string]bool) {
+	f := s.junkReport.Load()
+	if f == nil {
+		return
+	}
+	wasJunk, nowJunk, toTrash := false, false, false
+	for _, mbox := range current {
+		wasJunk = wasJunk || spam.IsJunkMailbox(mbox)
+	}
+	for mbox := range desired {
+		nowJunk = nowJunk || spam.IsJunkMailbox(mbox)
+		toTrash = toTrash || strings.EqualFold(mbox, "Trash")
+	}
+	switch {
+	case nowJunk && !wasJunk:
+		(*f)(user, messageID, true)
+	case wasJunk && !nowJunk && !toTrash:
+		(*f)(user, messageID, false)
+	}
 }
 
 func (s *Server) adjustQuota(user string, delta int64) error {

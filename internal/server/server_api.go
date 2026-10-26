@@ -44,6 +44,7 @@ func (s *Server) startAPI() error {
 	s.apiServer.SetSearchService(s.searchSvc)
 	s.apiServer.SetAccountPurger(accountPurger{srv: s}) // F6649c
 	s.apiServer.SetQuotaAdjustFunc(s.quotaAdjust)       // F6680
+	s.apiServer.SetJunkReportFunc(s.reportJunk)
 	if s.pushSvc != nil {
 		s.apiServer.SetPushService(push.NewAPIAdapter(s.pushSvc))
 	}

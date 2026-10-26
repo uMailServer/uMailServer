@@ -185,7 +185,7 @@ func MessageTokens(raw []byte) []string {
 // taking it out of Junk (other than into Trash) reports ham. report is false
 // for any other move.
 func JunkMoveVerdict(from, to string) (spam, report bool) {
-	fromJunk, toJunk := isJunkMailbox(from), isJunkMailbox(to)
+	fromJunk, toJunk := IsJunkMailbox(from), IsJunkMailbox(to)
 	switch {
 	case toJunk && !fromJunk:
 		return true, true
@@ -195,8 +195,8 @@ func JunkMoveVerdict(from, to string) (spam, report bool) {
 	return false, false
 }
 
-// isJunkMailbox matches the server's Junk folder and the "Spam" name some
+// IsJunkMailbox matches the server's Junk folder and the "Spam" name some
 // clients use for it.
-func isJunkMailbox(name string) bool {
+func IsJunkMailbox(name string) bool {
 	return strings.EqualFold(name, "Junk") || strings.EqualFold(name, "Spam")
 }

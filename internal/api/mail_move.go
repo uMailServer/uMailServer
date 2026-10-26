@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/umailserver/umailserver/internal/spam"
 	"github.com/umailserver/umailserver/internal/storage"
 )
 
@@ -214,6 +215,7 @@ func (h *MailHandler) handleMailMove(w http.ResponseWriter, r *http.Request) {
 	}
 	moved := make([]string, 0, len(plan))
 	newUIDs := make(map[string]uint32, len(plan))
+	isSpam, report := spam.JunkMoveVerdict(from, to)
 	var moveErr error
 	for _, p := range plan {
 		if moveErr = h.moveOne(userEmail, from, to, p.uid, p.meta); moveErr != nil {
@@ -221,6 +223,9 @@ func (h *MailHandler) handleMailMove(w http.ResponseWriter, r *http.Request) {
 		}
 		moved = append(moved, p.id)
 		newUIDs[p.id] = p.meta.UID
+		if report && h.junkReport != nil {
+			h.junkReport(userEmail, p.meta.MessageID, isSpam)
+		}
 	}
 	if moveErr != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -239,6 +244,12 @@ func (h *MailHandler) handleMailMove(w http.ResponseWriter, r *http.Request) {
 		"to":    req.To,
 		"uids":  newUIDs,
 	})
+}
+
+// SetJunkReportFunc installs the hook told about every message moved into
+// Junk (spam) or out of it (ham), see spam.JunkMoveVerdict.
+func (h *MailHandler) SetJunkReportFunc(f func(user, messageID string, spam bool)) {
+	h.junkReport = f
 }
 
 // moveOne copies the metadata into the destination under a fresh UID and

@@ -29,6 +29,7 @@ func (s *Server) startJMAP() error {
 	jmapServer.SetTracingProvider(s.tracingProvider)
 	jmapServer.SetQuotaLimitFunc(s.quotaLimit)
 	jmapServer.SetQuotaAdjustFunc(s.quotaAdjust)
+	jmapServer.SetJunkReportFunc(s.reportJunk)
 	jmapServer.SetTokenValidator(s.jmapTokenValidator)
 	jmapServer.SetClaimsValidator(s.jmapClaimsValidator)
 	// Clear orphaned uploads left from before a restart (F6280).

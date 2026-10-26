@@ -1392,6 +1392,7 @@ func (s *Server) handleEmailSet(user string, call MethodCall) Response {
 			continue
 		}
 
+		s.reportJunkMove(user, copies[0].meta.MessageID, current, desired)
 		updated[emailID] = map[string]interface{}{}
 	}
 
