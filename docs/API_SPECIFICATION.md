@@ -479,7 +479,14 @@ paths:
     get:
       tags: [Filters]
       summary: List filters
-      description: Get all Sieve filter rules for the current user
+      description: >-
+        Get all filter rules for the current user. At delivery the enabled
+        rules are compiled to Sieve and applied in priority order, all
+        matching rules taking effect; an active ManageSieve script takes
+        precedence, and mail with a spam verdict stays in Junk. Comparisons
+        are case-insensitive and `matches` is a regular expression; `delete`
+        moves to Trash, `forward` redirects a copy and keeps the local one,
+        and `markRead`/`flag` apply wherever the message is filed.
       responses:
         '200':
           description: List of filters

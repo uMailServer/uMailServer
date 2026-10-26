@@ -82,7 +82,6 @@ internal/imap/commands.go:
 |-------|---------|-------------|----------|
 | IMAP SCORE Extension | 🟡 Orta | - | SCORE extension desteklenmiyor |
 | Webmail Contacts sayfası | 🟢 Düşük | `webmail/src/pages/contacts.tsx` | Sunucunun webmail API'sinde kişi ucu yok; sayfa yer tutucu (CardDAV istemcisi kullanın). Inbox, klasörler, mesaj görünümü, bayraklar, taslaklar, compose, çöp ve arama REST API'yi kullanıyor |
-| Kullanıcı filtreleri | 🔴 Yüksek | `internal/api/filters.go` | Filtreler kaydediliyor ama teslimat yolunda uygulanmıyor |
 | Admin Settings | 🟡 Orta | `web/admin/src/pages/Settings.tsx` | `internal/api`'de ayar ucu yok; sayfa salt-okunur önizleme (ayarlar `umailserver.yaml` + restart ile değişir) |
 | Okunup kullanılmayan config alanları | 🟡 Orta | `internal/config` | `RateLimit.SMTPPerMinute/Hour`, `Storage.Sync` vb. (`spam.enabled` ve `spam.bayesian.enabled` 2026-10-26'da pipeline'a bağlandı) |
 | Bayesian sınıflandırıcı eğitilmiyor | 🔴 Yüksek | `internal/spam/bayesian.go` | `TrainFromEmail` hiçbir yerden çağrılmıyor; eğitim verisi olmadan `Classify` hep 0.5 döner, aşama puana katkı vermez. Junk'a taşıma / "spam değil" işaretlemesi eğitime bağlanmalı |

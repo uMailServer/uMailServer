@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/sieve"
 )
 
@@ -49,6 +50,46 @@ func (s *Server) activeSieveUser(mailbox string) string {
 // ok is false when the script fails at run time; the caller then keeps the
 // message (RFC 5228 §2.10.6).
 func (s *Server) runUserSieve(scriptUser, rcpt, from string, data []byte) (out sieveOutcome, ok bool) {
+	actions, err := s.sieveManager.ProcessMessage(scriptUser, sieveMessageContext(rcpt, from, data))
+	if err != nil {
+		s.logger.Warn("Sieve script failed, keeping message", "user", scriptUser, "error", err)
+		return sieveOutcome{}, false
+	}
+	return sieveOutcomeOf(actions), true
+}
+
+// runUserFilters applies the webmail filters of mailbox (stored through
+// /api/v1/filters), compiled to Sieve. ok is false when the mailbox has no
+// filter to apply or the run fails; the caller then keeps the message.
+func (s *Server) runUserFilters(mailbox, rcpt, from string, data []byte) (out sieveOutcome, ok bool) {
+	if s.database == nil {
+		return sieveOutcome{}, false
+	}
+	filters, err := api.LoadUserFilters(s.database, strings.ToLower(mailbox))
+	if err != nil {
+		s.logger.Warn("Loading mail filters failed, keeping message", "mailbox", mailbox, "error", err)
+		return sieveOutcome{}, false
+	}
+	src := api.FiltersToSieve(filters)
+	if src == "" {
+		return sieveOutcome{}, false
+	}
+	script, err := sieve.Compile(src)
+	if err != nil {
+		s.logger.Warn("Mail filters do not compile, keeping message", "mailbox", mailbox, "error", err)
+		return sieveOutcome{}, false
+	}
+	actions, err := sieve.NewInterpreter(script).Execute(sieveMessageContext(rcpt, from, data))
+	if err != nil {
+		s.logger.Warn("Mail filters failed, keeping message", "mailbox", mailbox, "error", err)
+		return sieveOutcome{}, false
+	}
+	return sieveOutcomeOf(actions), true
+}
+
+// sieveMessageContext is the Sieve view of a message to rcpt from the
+// envelope sender from ("" for the null sender).
+func sieveMessageContext(rcpt, from string, data []byte) *sieve.MessageContext {
 	headers := map[string][]string{}
 	if msg, err := mail.ReadMessage(strings.NewReader(string(data))); err == nil {
 		headers = msg.Header
@@ -57,19 +98,14 @@ func (s *Server) runUserSieve(scriptUser, rcpt, from string, data []byte) (out s
 	if env == "" {
 		env = "<>"
 	}
-	actions, err := s.sieveManager.ProcessMessage(scriptUser, &sieve.MessageContext{
+	return &sieve.MessageContext{
 		From:              env,
 		To:                []string{rcpt},
 		Headers:           headers,
 		Body:              data,
 		Size:              int64(len(data)),
 		BodyIsFullMessage: true,
-	})
-	if err != nil {
-		s.logger.Warn("Sieve script failed, keeping message", "user", scriptUser, "error", err)
-		return sieveOutcome{}, false
 	}
-	return sieveOutcomeOf(actions), true
 }
 
 // sieveOutcomeOf folds the actions of one script run into a sieveOutcome.
@@ -131,13 +167,20 @@ func mergeFlags(flags []string, list string) []string {
 // reached delivery: fileinto, redirect, discard and reject were ignored and
 // every message landed in INBOX (or Junk). folder is the default folder
 // ("" for INBOX, "Junk" for a spam verdict) used by keep.
+//
+// Without an active script the owner's webmail filters apply instead (an
+// active script takes precedence: it is the more expressive of the two).
+// They are not applied to mail with a spam verdict, so a spammer cannot
+// match a filter to move a message out of Junk.
 func (s *Server) deliverLocalFiltered(user, domain, rcpt, from, notify string, data []byte, folder string) error {
 	mailbox := user + "@" + domain
-	scriptUser := s.activeSieveUser(mailbox)
-	if scriptUser == "" {
-		return s.deliverLocalFor(rcpt, user, domain, from, data, folder)
+	var out sieveOutcome
+	ok := false
+	if scriptUser := s.activeSieveUser(mailbox); scriptUser != "" {
+		out, ok = s.runUserSieve(scriptUser, rcpt, from, data)
+	} else if folder != "Junk" {
+		out, ok = s.runUserFilters(mailbox, rcpt, from, data)
 	}
-	out, ok := s.runUserSieve(scriptUser, rcpt, from, data)
 	if !ok {
 		return s.deliverLocalFor(rcpt, user, domain, from, data, folder)
 	}

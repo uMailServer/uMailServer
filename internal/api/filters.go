@@ -1,11 +1,9 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"path"
-	"sort"
 	"strings"
 	"time"
 
@@ -136,7 +134,7 @@ func validateFilterFields(name string, conditions []FilterCondition, actions []F
 			return fmt.Sprintf("condition %d requires headerName", i+1)
 		}
 	}
-	return ""
+	return validateFilterRule(conditions, actions)
 }
 
 // handleCreateFilter creates a new filter
@@ -408,38 +406,7 @@ func (s *Server) getUserFilters(userID string) ([]*EmailFilter, error) {
 		return []*EmailFilter{}, nil
 	}
 
-	var filters []*EmailFilter
-	prefix := userID + ":"
-
-	err := s.db.ForEachPrefix(db.BucketFilters, prefix, func(key string, value []byte) error {
-		var filter EmailFilter
-		if err := json.Unmarshal(value, &filter); err != nil {
-			return nil // Skip invalid entries
-		}
-		filters = append(filters, &filter)
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	// F5694: order by the stored priority (set by reorder), then creation time;
-	// the key order (random UUIDs) used to be returned and the priority ignored.
-	sort.SliceStable(filters, func(i, j int) bool {
-		if filters[i].Priority != filters[j].Priority {
-			return filters[i].Priority < filters[j].Priority
-		}
-		if !filters[i].CreatedAt.Equal(filters[j].CreatedAt) {
-			return filters[i].CreatedAt.Before(filters[j].CreatedAt)
-		}
-		return filters[i].ID < filters[j].ID
-	})
-	for i := range filters {
-		filters[i].Priority = i
-	}
-
-	return filters, nil
+	return LoadUserFilters(s.db, userID)
 }
 
 // getFilter gets a single filter by ID
