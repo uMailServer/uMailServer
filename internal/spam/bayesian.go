@@ -23,6 +23,10 @@ const HamBucket = "ham_tokens"
 // StatsBucket is the bbolt bucket name for total counts
 const StatsBucket = "spam_stats"
 
+// MinTrainedMessages is how many messages of each class must be trained
+// before Classify gives a verdict other than neutral.
+const MinTrainedMessages = 10
+
 // Classifier performs Bayesian spam classification
 type Classifier struct {
 	bolt      *bbolt.DB
@@ -72,19 +76,23 @@ func (c *Classifier) GetTotalCounts() (totalHam uint64, totalSpam uint64, err er
 		hamBucket := tx.Bucket([]byte(HamBucket))
 		statsBucket := tx.Bucket([]byte(StatsBucket))
 
-		if spamBucket != nil {
-			totalSpam = countAllTokens(spamBucket)
-		}
-		if hamBucket != nil {
-			totalHam = countAllTokens(hamBucket)
-		}
+		// The stored totals are kept current by every training; the bucket
+		// scan (O(vocabulary), formerly run on every Classify) is only the
+		// fallback for a database without them.
+		var haveHam, haveSpam bool
 		if statsBucket != nil {
 			if v := statsBucket.Get([]byte("total_ham")); len(v) == 8 {
-				totalHam = binary.BigEndian.Uint64(v)
+				totalHam, haveHam = binary.BigEndian.Uint64(v), true
 			}
 			if v := statsBucket.Get([]byte("total_spam")); len(v) == 8 {
-				totalSpam = binary.BigEndian.Uint64(v)
+				totalSpam, haveSpam = binary.BigEndian.Uint64(v), true
 			}
+		}
+		if !haveSpam && spamBucket != nil {
+			totalSpam = countAllTokens(spamBucket)
+		}
+		if !haveHam && hamBucket != nil {
+			totalHam = countAllTokens(hamBucket)
 		}
 		return nil
 	})
@@ -165,22 +173,126 @@ func updateStatsTx(tx *bbolt.Tx) error {
 	return statsBucket.Put([]byte("total_spam"), spamBuf[:])
 }
 
-// train applies every token of one message and the stats refresh in a single
+// train applies every token of one message and the stats update in a single
 // write transaction, so a failing token rolls back the whole message instead
 // of leaving it partially trained (F5300).
 func (c *Classifier) train(bucketName string, tokens []string) error {
 	if c.bolt == nil {
 		return nil
 	}
-	tokens = dedupTokens(tokens)
 	return c.bolt.Update(func(tx *bbolt.Tx) error {
-		for _, token := range tokens {
-			if err := incrementTokenTx(tx, bucketName, token, 1); err != nil {
+		return trainTx(tx, bucketName, tokens, false)
+	})
+}
+
+// statKeys returns the stats keys holding the token total and the message
+// count of the class stored in bucketName.
+func statKeys(bucketName string) (total, msgs []byte) {
+	if bucketName == SpamBucket {
+		return []byte("total_spam"), []byte("msgs_spam")
+	}
+	return []byte("total_ham"), []byte("msgs_ham")
+}
+
+// trainTx adds one message's tokens to (or, with untrain, removes them from)
+// the class in bucketName inside an open write transaction. The totals are
+// updated incrementally instead of rescanning the buckets.
+func trainTx(tx *bbolt.Tx, bucketName string, tokens []string, untrain bool) error {
+	tokens = dedupTokens(tokens)
+	var applied uint64
+	for _, token := range tokens {
+		if untrain {
+			ok, err := decrementTokenTx(tx, bucketName, token)
+			if err != nil {
 				return err
 			}
+			if ok {
+				applied++
+			}
+			continue
 		}
-		return updateStatsTx(tx)
+		if err := incrementTokenTx(tx, bucketName, token, 1); err != nil {
+			return err
+		}
+		applied++
+	}
+	stats := tx.Bucket([]byte(StatsBucket))
+	if stats == nil {
+		return nil
+	}
+	totalKey, msgsKey := statKeys(bucketName)
+	if stats.Get(totalKey) == nil {
+		// A database trained before the totals were stored: seed them.
+		if err := updateStatsTx(tx); err != nil {
+			return err
+		}
+		applied = 0 // the rescan already reflects this message's tokens
+	}
+	if err := addStat(stats, totalKey, applied, untrain); err != nil {
+		return err
+	}
+	return addStat(stats, msgsKey, 1, untrain)
+}
+
+// addStat adds (or subtracts, saturating at zero) delta to a stats counter.
+func addStat(stats *bbolt.Bucket, key []byte, delta uint64, subtract bool) error {
+	var n uint64
+	if v := stats.Get(key); len(v) == 8 {
+		n = binary.BigEndian.Uint64(v)
+	}
+	switch {
+	case subtract && delta > n:
+		n = 0
+	case subtract:
+		n -= delta
+	default:
+		n += delta
+	}
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], n)
+	return stats.Put(key, buf[:])
+}
+
+// decrementTokenTx lowers a token count by one, deleting it at zero. It
+// reports whether the token was present.
+func decrementTokenTx(tx *bbolt.Tx, bucketName string, token string) (bool, error) {
+	bucket := tx.Bucket([]byte(bucketName))
+	if bucket == nil {
+		return false, fmt.Errorf("bucket %s not found", bucketName)
+	}
+	key := tokenKey(token)
+	v := bucket.Get(key)
+	if len(v) < 4 {
+		return false, nil
+	}
+	count := binary.BigEndian.Uint32(v)
+	if count <= 1 {
+		return true, bucket.Delete(key)
+	}
+	var buf [4]byte
+	binary.BigEndian.PutUint32(buf[:], count-1)
+	return true, bucket.Put(key, buf[:])
+}
+
+// GetMessageCounts returns how many ham and spam messages were trained.
+func (c *Classifier) GetMessageCounts() (hamMsgs, spamMsgs uint64, err error) {
+	if c.bolt == nil {
+		return 0, 0, nil
+	}
+	err = c.bolt.View(func(tx *bbolt.Tx) error {
+		stats := tx.Bucket([]byte(StatsBucket))
+		if stats == nil {
+			return nil
+		}
+		if v := stats.Get([]byte("msgs_ham")); len(v) == 8 {
+			hamMsgs = binary.BigEndian.Uint64(v)
+		}
+		if v := stats.Get([]byte("msgs_spam")); len(v) == 8 {
+			spamMsgs = binary.BigEndian.Uint64(v)
+		}
+		return nil
 	})
+	return
 }
 
 // TrainSpam trains the classifier with a spam email
@@ -240,9 +352,14 @@ func (c *Classifier) Classify(tokens []string) (*ClassifyResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	hamMsgs, spamMsgs, err := c.GetMessageCounts()
+	if err != nil {
+		return nil, err
+	}
 
-	// If we have no training data, return neutral
-	if totalHam < 10 || totalSpam < 10 {
+	// Stay neutral until both classes have a minimal corpus. The gate used
+	// to compare token totals with 10, which one trained message passes.
+	if hamMsgs < MinTrainedMessages || spamMsgs < MinTrainedMessages || totalHam == 0 || totalSpam == 0 {
 		return &ClassifyResult{
 			SpamProbability: 0.5,
 			IsSpam:          false,
