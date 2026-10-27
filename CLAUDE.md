@@ -73,7 +73,7 @@ The lifecycle is split across `server.New()` and `server.Start()`:
 13. JMAP server
 14. HTTP API server (webmail + admin)
 
-The `Server` struct and its methods are split across many files in `internal/server/`: `server.go` (struct/New), `server_start.go`, `server_stop.go`, `server_smtp.go`, `server_imap.go`, `server_pop3.go`, `server_api.go`, `server_mcp.go`, `server_managesieve.go`, `server_caldav.go`, `server_carddav.go`, `server_jmap.go`, `server_handlers.go`, `server_vacation.go`, `server_alerts.go`, `server_mdav.go`, `adapters.go`, `drain.go`, `resources.go`.
+The `Server` struct and its methods are split across many files in `internal/server/`: `server.go` (struct/New), `server_start.go`, `server_stop.go`, `server_smtp.go`, `server_imap.go`, `server_pop3.go`, `server_api.go`, `server_mcp.go`, `server_managesieve.go`, `server_caldav.go`, `server_carddav.go`, `server_jmap.go`, `server_handlers.go`, `server_vacation.go`, `server_alerts.go`, `server_mdav.go`, `adapters.go`.
 
 ### Port Reference
 
