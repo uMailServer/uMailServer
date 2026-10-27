@@ -565,6 +565,35 @@ Server statistics (admin only, `internal/api/server_stats.go`).
 `messages` is currently always `0`. There is no IP blocklist API; IP rate
 limits are managed under `/api/v1/admin/ratelimits/*`.
 
+## Server Settings (Admin)
+
+### GET /api/v1/admin/settings
+
+The configuration the server is running with, as shown on the admin
+Settings page. Read-only: settings change in the config file and take effect
+on restart. Secrets (JWT and TOTP keys, passwords, tokens, alert targets) are
+never included.
+
+```json
+{
+  "config_file": "/etc/umailserver/umailserver.yaml",
+  "hostname": "mail.example.com",
+  "data_dir": "/var/lib/umailserver",
+  "listeners": [{"name": "SMTP (MX)", "enabled": true, "bind": "0.0.0.0", "port": 25}],
+  "max_message_size": 52428800,
+  "max_recipients": 100,
+  "tls": {"min_version": "1.2", "acme": true, "manual_cert": false, "client_auth": false},
+  "security": {"max_login_attempts": 5, "lockout_duration": "15m0s", "submission_require_tls": true,
+               "ip_per_hour": 500, "user_per_hour": 1000, "http_requests_per_minute": 120, "audit_log": true},
+  "spam": {"enabled": true, "reject_threshold": 9, "junk_threshold": 3, "greylisting": true,
+           "bayesian": true, "auto_train": true, "rbl_servers": ["zen.spamhaus.org"],
+           "antivirus": false, "dmarc_reports": false},
+  "notifications": {"alerts": false, "alert_email": false, "alert_webhook": false, "push": true}
+}
+```
+
+`config_file` is empty when the server runs on built-in defaults.
+
 ## Error Responses
 
 Errors are a JSON object with a human-readable message string

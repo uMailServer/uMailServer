@@ -82,7 +82,6 @@ internal/imap/commands.go:
 |-------|---------|-------------|----------|
 | IMAP SCORE Extension | 🟡 Orta | - | SCORE extension desteklenmiyor |
 | Webmail Contacts sayfası | 🟢 Düşük | `webmail/src/pages/contacts.tsx` | Sunucunun webmail API'sinde kişi ucu yok; sayfa yer tutucu (CardDAV istemcisi kullanın). Inbox, klasörler, mesaj görünümü, bayraklar, taslaklar, compose, çöp ve arama REST API'yi kullanıyor |
-| Admin Settings | 🟡 Orta | `web/admin/src/pages/Settings.tsx` | `internal/api`'de ayar ucu yok; sayfa salt-okunur önizleme (ayarlar `umailserver.yaml` + restart ile değişir) |
 | Çok düğüm / HA | 🟡 Orta | `internal/cluster` | Cluster paketi hiç başlatılmıyor; bbolt tek düğüm. Issue #1 |
 | Helm chart | 🟢 Düşük | `deploy/` | Yok; tek düğüm kısıtıyla (replicas: 1, HPA yok) yazılmalı |
 

@@ -82,3 +82,53 @@ export interface Activity {
   timestamp: string;
   severity?: 'info' | 'warning' | 'error' | 'success';
 }
+
+// GET /api/v1/admin/settings: the effective, secret-free server configuration.
+// Read-only: settings change in the config file and apply on restart.
+export interface ListenerSetting {
+  name: string;
+  enabled: boolean;
+  bind: string;
+  port: number;
+}
+
+export interface ServerSettings {
+  config_file: string;
+  hostname: string;
+  data_dir: string;
+  listeners: ListenerSetting[];
+  max_message_size: number;
+  max_recipients: number;
+  tls: {
+    min_version: string;
+    acme: boolean;
+    manual_cert: boolean;
+    client_auth: boolean;
+  };
+  security: {
+    max_login_attempts: number;
+    lockout_duration: string;
+    submission_require_tls: boolean;
+    ip_per_hour: number;
+    user_per_hour: number;
+    http_requests_per_minute: number;
+    audit_log: boolean;
+  };
+  spam: {
+    enabled: boolean;
+    reject_threshold: number;
+    junk_threshold: number;
+    greylisting: boolean;
+    bayesian: boolean;
+    auto_train: boolean;
+    rbl_servers: string[] | null;
+    antivirus: boolean;
+    dmarc_reports: boolean;
+  };
+  notifications: {
+    alerts: boolean;
+    alert_email: boolean;
+    alert_webhook: boolean;
+    push: boolean;
+  };
+}
