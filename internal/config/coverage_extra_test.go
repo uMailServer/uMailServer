@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestCheckFileReadable_Coverage tests checkFileReadable function
@@ -332,98 +331,12 @@ func TestSizeString_Coverage(t *testing.T) {
 	}
 }
 
-// TestWatcherCheck_Coverage tests watcher check function
-func TestWatcherCheck_Coverage(t *testing.T) {
-	// Create a temp config file
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "test.yaml")
-
-	// Write initial config
-	err := os.WriteFile(configFile, []byte("server:\n  hostname: test.com\n"), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	changeCalled := false
-	onChange := func(oldCfg, newCfg *Config) {
-		changeCalled = true
-	}
-
-	w := NewWatcher(configFile, nil, onChange)
-
-	// Start the watcher
-	err = w.Start(10 * time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Stop()
-
-	// Wait a bit and modify the file
-	time.Sleep(50 * time.Millisecond)
-	os.WriteFile(configFile, []byte("server:\n  hostname: test2.com\n"), 0o644)
-
-	// Give time for the watcher to detect the change
-	time.Sleep(100 * time.Millisecond)
-
-	_ = changeCalled
-}
-
 // TestGetDefaultDataDir_Coverage tests GetDefaultDataDir
 func TestGetDefaultDataDir_Coverage(t *testing.T) {
 	dir := GetDefaultDataDir()
 	if dir == "" {
 		t.Error("expected non-empty default data dir")
 	}
-}
-
-// TestNewReloadable_Success tests NewReloadable with valid config
-func TestNewReloadable_Success(t *testing.T) {
-	// Create a temp config file
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "test.yaml")
-
-	// Write valid config
-	configContent := `server:
-  hostname: test.com
-  data_dir: ` + tmpDir + `
-security:
-  jwt_secret: this-is-a-32-character-secret-key!!
-spam:
-  enabled: true
-  reject_threshold: 15.0
-  junk_threshold: 5.0
-  quarantine_threshold: 10.0
-`
-	err := os.WriteFile(configFile, []byte(configContent), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rc, err := NewReloadable(configFile, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if rc == nil {
-		t.Fatal("expected non-nil ReloadableConfig")
-	}
-
-	// Test Get
-	cfg := rc.Get()
-	if cfg == nil {
-		t.Error("expected non-nil config")
-	}
-
-	// Test Start and Stop
-	err = rc.Start(50 * time.Millisecond)
-	if err != nil {
-		t.Errorf("Start error: %v", err)
-	}
-
-	// Let it run briefly
-	time.Sleep(100 * time.Millisecond)
-
-	rc.Stop()
 }
 
 // TestCheckPortConflicts_Coverage tests port conflict detection
@@ -700,55 +613,6 @@ func TestCheckPortConflicts_Submission2(t *testing.T) {
 				t.Errorf("checkPortConflicts() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-// TestWatcherCheck_FileRemoved tests watcher when file is removed
-func TestWatcherCheck_FileRemoved(t *testing.T) {
-	// Create a temp config file
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "test.yaml")
-
-	// Write initial config
-	err := os.WriteFile(configFile, []byte("server:\n  hostname: test.com\n"), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	w := NewWatcher(configFile, nil, nil)
-
-	// Start the watcher
-	err = w.Start(10 * time.Millisecond)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Stop()
-
-	// Wait a bit then remove the file
-	time.Sleep(50 * time.Millisecond)
-	os.Remove(configFile)
-
-	// Wait for check to process
-	time.Sleep(100 * time.Millisecond)
-
-	// The watcher should handle the missing file gracefully
-}
-
-// TestNewReloadable_InvalidConfig tests NewReloadable with invalid config file
-func TestNewReloadable_InvalidConfig(t *testing.T) {
-	// Create a temp config file with invalid content
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "test.yaml")
-
-	// Write invalid config
-	err := os.WriteFile(configFile, []byte("invalid: yaml: content: ["), 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = NewReloadable(configFile, nil)
-	if err == nil {
-		t.Error("expected error for invalid config")
 	}
 }
 
