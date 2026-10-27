@@ -76,3 +76,39 @@ it('still takes typed addresses when contacts cannot be loaded', async () => {
   expect(chips(container)).toEqual(['x@example.com'])
   await act(async () => root.unmount())
 })
+
+it('keeps a complete typed address instead of a contact that contains it', async () => {
+  const joann: Contact = { uid: 'u3', addressbook: 'contacts', name: 'Joann', emails: ['joann@corp.example'], phones: null }
+  vi.spyOn(API, 'getContacts').mockResolvedValue([joann])
+  const { container, root } = await mount()
+  const to = container.querySelector('input[aria-label="To"]') as HTMLInputElement
+  await act(async () => type(to, 'ann@corp.example'))
+  // The contact is still offered, but nothing is highlighted.
+  expect(container.querySelectorAll('[role="option"]').length).toBe(1)
+  expect(container.querySelector('[aria-selected="true"]')).toBeNull()
+  await act(async () => { key(to, 'Enter') })
+  expect(chips(container)).toEqual(['ann@corp.example'])
+
+  // Choosing it with the arrows still works.
+  await act(async () => type(to, 'ann@corp.example'))
+  await act(async () => { key(to, 'ArrowDown') })
+  await act(async () => { key(to, 'Enter') })
+  expect(chips(container)).toEqual(['ann@corp.example', 'joann@corp.example'])
+  await act(async () => root.unmount())
+})
+
+it('offers an address once when several contacts share it', () => {
+  const all = [{ name: 'Jane', email: 'jane@example.com' }, { name: 'Jane (phone)', email: 'JANE@example.com' }]
+  expect(suggestionsFor(all, 'jane', []).map((s) => s.name)).toEqual(['Jane'])
+})
+
+it('leaves Enter to the IME while composing', async () => {
+  vi.spyOn(API, 'getContacts').mockResolvedValue([jane])
+  const { container, root } = await mount()
+  const to = container.querySelector('input[aria-label="To"]') as HTMLInputElement
+  await act(async () => type(to, 'jane'))
+  await act(async () => { to.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true })) })
+  expect(chips(container)).toEqual([])
+  expect(to.value).toBe('jane')
+  await act(async () => root.unmount())
+})

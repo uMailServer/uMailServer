@@ -206,14 +206,14 @@ export function ContactsPage() {
           <li key={`${c.addressbook}/${c.uid}`} className="flex flex-wrap items-start justify-between gap-2 p-3">
             <div className="min-w-0 space-y-1">
               <div className="font-medium">{c.name || c.emails?.[0]}</div>
-              {(c.emails ?? []).map((e) => (
-                <div key={e} className="flex items-center gap-1 text-sm text-muted-foreground break-all">
+              {(c.emails ?? []).map((e, i) => (
+                <div key={`${i}-${e}`} className="flex items-center gap-1 text-sm text-muted-foreground break-all">
                   <Mail className="h-3 w-3 shrink-0" />
                   {e}
                 </div>
               ))}
-              {(c.phones ?? []).map((p) => (
-                <div key={p} className="flex items-center gap-1 text-sm text-muted-foreground">
+              {(c.phones ?? []).map((p, i) => (
+                <div key={`${i}-${p}`} className="flex items-center gap-1 text-sm text-muted-foreground">
                   <Phone className="h-3 w-3 shrink-0" />
                   {p}
                 </div>

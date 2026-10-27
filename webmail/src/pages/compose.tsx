@@ -23,11 +23,17 @@ function RecipientField({
 }: { label: string; values: string[]; onChange: (v: string[]) => void; contacts?: Suggestion[] }) {
   const [text, setText] = useState("")
   const [open, setOpen] = useState(false)
-  const [active, setActive] = useState(0)
+  // The suggestion chosen with the arrow keys; -1 until the user moves.
+  const [browsed, setBrowsed] = useState(-1)
 
   // The word being typed is the text after the last separator.
   const word = text.split(/[,;\s]+/).pop() ?? ""
   const matches = open ? suggestionsFor(contacts, word, values) : []
+  // Enter takes the highlighted suggestion. Without arrow-key movement a
+  // complete address is kept as typed (a substring match must not swap it
+  // for another contact); otherwise the first suggestion is highlighted.
+  const active = browsed >= 0 ? Math.min(browsed, matches.length - 1)
+    : matches.length > 0 && !EMAIL_RE.test(word) ? 0 : -1
   const listId = `recipients-${label.toLowerCase()}`
 
   // Accept comma/semicolon/space separated addresses; keep invalid text so the
@@ -51,7 +57,7 @@ function RecipientField({
     onChange([...values, ...good.filter((p) => p !== s.email), ...(values.includes(s.email) ? [] : [s.email])])
     setText(bad.join(", "))
     setOpen(false)
-    setActive(0)
+    setBrowsed(-1)
   }
 
   return (
@@ -74,23 +80,27 @@ function RecipientField({
             aria-autocomplete="list"
             aria-expanded={matches.length > 0}
             aria-controls={listId}
-            aria-activedescendant={matches.length > 0 ? `${listId}-${active}` : undefined}
+            aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
             className="h-8 w-full border-0 shadow-none focus-visible:ring-0 px-1"
             placeholder="name@example.com"
             value={text}
-            onChange={(e) => { setText(e.target.value); setOpen(true); setActive(0) }}
+            onChange={(e) => { setText(e.target.value); setOpen(true); setBrowsed(-1) }}
             onBlur={commit}
             onKeyDown={(e) => {
+              // Keys that confirm an IME composition belong to the IME.
+              if (e.nativeEvent.isComposing) return
               if (matches.length > 0) {
                 if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                   e.preventDefault()
                   const step = e.key === "ArrowDown" ? 1 : -1
-                  setActive((a) => (a + step + matches.length) % matches.length)
+                  setBrowsed(active < 0 ? (step > 0 ? 0 : matches.length - 1) : (active + step + matches.length) % matches.length)
                   return
                 }
-                if (e.key === "Enter" || e.key === "Tab") {
+                // Tab takes only a suggestion chosen with the arrows; otherwise
+                // focus moves on and blur commits the typed text.
+                if ((e.key === "Enter" && active >= 0) || (e.key === "Tab" && browsed >= 0)) {
                   e.preventDefault()
-                  pick(matches[Math.min(active, matches.length - 1)])
+                  pick(matches[active])
                   return
                 }
                 if (e.key === "Escape") {
@@ -113,7 +123,7 @@ function RecipientField({
                   className={cn("cursor-pointer rounded px-2 py-1 text-sm", i === active && "bg-accent text-accent-foreground")}
                   // mousedown, not click: the input's blur would commit the typed text first.
                   onMouseDown={(e) => { e.preventDefault(); pick(s) }}
-                  onMouseEnter={() => setActive(i)}>
+                  onMouseEnter={() => setBrowsed(i)}>
                   {s.name ? <><span className="font-medium">{s.name}</span>{" "}<span className="text-muted-foreground">{s.email}</span></> : s.email}
                 </li>
               ))}
