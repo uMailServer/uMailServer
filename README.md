@@ -59,9 +59,9 @@
 
 ## Known Limitations
 
-- **Webmail:** login, inbox and other folders, message view, flags, drafts, compose, trash and search use the REST API. The Contacts page is a stub (use a CardDAV client).
+- **Webmail:** login, inbox and other folders, message view, flags, drafts, compose, trash, search and contacts (the CardDAV address books) use the REST API.
 - **Admin panel:** the Settings page is read-only (edit `umailserver.yaml` and restart).
-- **Account portal:** the Profile page is a read-only placeholder.
+- **Account portal:** served at `/account/` on the web port (password, two-factor, forwarding, vacation, filters); the Profile page is a read-only placeholder.
 - **Config reload:** `SIGHUP` only re-checks manually configured TLS certificates; every other config change needs `umailserver restart`.
 - **CLI and the running server:** `account`, `domain`, `queue`, `backup`, `restore` (read), and `migrate` open the bbolt databases directly and fail with "file is locked" while the server runs. `backup` explicitly refuses a live server; use the REST API for live administration.
 - **S/MIME and OpenPGP:** not supported. Messages pass through unmodified and unverified.
@@ -128,7 +128,7 @@ docker run -d \
 | 8080 | HTTP | Prometheus metrics (`/metrics`) and `/healthz`; `127.0.0.1` by default |
 | 3000 | HTTP | MCP Server (loopback by default; a non-loopback bind requires `mcp.auth_token`) |
 
-Health checks for orchestrators are `GET /health` and `GET /health/ready` on the web port (443, plain HTTP); there is no `/health/live` there. The web/API/admin listeners do not terminate TLS themselves (`tls.*` applies to SMTP, IMAP, POP3 and ManageSieve): put Nginx, Caddy or Traefik in front for HTTPS and list it in `http.trusted_proxies`. A `docker run -p 8080:8080` mapping only reaches the metrics listener if `metrics.bind` is set to `0.0.0.0`.
+Health checks for orchestrators are `GET /health` and `GET /health/ready` on the web port (443, plain HTTP); there is no `/health/live` there. The web port serves HTTPS itself when `tls.cert_file`/`tls.key_file` are set or ACME is enabled, and plain HTTP otherwise; with a reverse proxy (Nginx, Caddy, Traefik) in front, list it in `http.trusted_proxies`. A `docker run -p 8080:8080` mapping only reaches the metrics listener if `metrics.bind` is set to `0.0.0.0`.
 
 ## Configuration
 

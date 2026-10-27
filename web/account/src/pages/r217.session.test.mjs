@@ -64,7 +64,7 @@ test('F6940 vacation load 401 redirects to /login', async () => {
   const win = { location: { href: '/vacation' } }
   const { h, Page } = run('./Vacation.tsx', { window: win, fetch: unauth })
   h.reset(); Page(); await h.mount()
-  assert.strictEqual(win.location.href, '/login', 'PROBLEM CONFIRMED: expired session not redirected')
+  assert.strictEqual(win.location.href, '/account/login', 'PROBLEM CONFIRMED: expired session not redirected')
 })
 
 test('F6940 vacation save 401 redirects to /login', async () => {
@@ -76,14 +76,14 @@ test('F6940 vacation save 401 redirects to /login', async () => {
   h.reset(); Page(); await h.mount()
   h.reset(); const t = Page()
   await find(t, (n) => n.type === 'form').props.onSubmit({ preventDefault() {} })
-  assert.strictEqual(win.location.href, '/login', 'PROBLEM CONFIRMED: save 401 not redirected')
+  assert.strictEqual(win.location.href, '/account/login', 'PROBLEM CONFIRMED: save 401 not redirected')
 })
 
 test('F6941 filters load 401 redirects to /login', async () => {
   const win = { location: { href: '/filters' } }
   const { h, Page } = run('./Filters.tsx', { window: win, fetch: unauth })
   h.reset(); Page(); await h.mount()
-  assert.strictEqual(win.location.href, '/login', 'PROBLEM CONFIRMED: expired session not redirected')
+  assert.strictEqual(win.location.href, '/account/login', 'PROBLEM CONFIRMED: expired session not redirected')
 })
 
 function layout(pathname, fetchImpl) {

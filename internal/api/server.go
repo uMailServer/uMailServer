@@ -75,6 +75,7 @@ type Server struct {
 	// File system abstraction for embed.FS
 	webmailFS FileSystem
 	adminFS   FileSystem
+	accountFS FileSystem
 
 	// Mail handler for user email operations
 	mailHandler *MailHandler
@@ -254,6 +255,7 @@ func NewServer(database *db.DB, logger *slog.Logger, config Config) *Server {
 		sseServer:      sseServer,
 		webmailFS:      newEmbedFSSub(umailserver.WebmailFS, "webmail/dist"),
 		adminFS:        newEmbedFSSub(umailserver.AdminFS, "web/admin/dist"),
+		accountFS:      newEmbedFSSub(umailserver.AccountFS, "web/account/dist"),
 		auditLogger:    auditLogger,
 		tokenBlacklist: make(map[string]time.Time),
 		jwtSecrets:     jwtSecrets,
@@ -412,6 +414,10 @@ func (s *Server) initRouter() {
 
 	// Admin panel (static files) - admin interface
 	mux.HandleFunc("/admin/", s.handleAdmin)
+
+	// Account self-service portal (static files)
+	mux.HandleFunc("/account", s.handleAccountPortal)
+	mux.HandleFunc("/account/", s.handleAccountPortal)
 
 	// Mozilla-style autoconfig
 	mux.HandleFunc("/.well-known/autoconfig/mail/config-v1.1.xml", s.handleAutoconfig)

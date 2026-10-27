@@ -11,7 +11,7 @@ import DeleteAccountPage from './pages/DeleteAccount'
 
 function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/account">
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<ProfilePage />} />

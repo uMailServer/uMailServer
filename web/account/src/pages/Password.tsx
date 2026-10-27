@@ -63,7 +63,7 @@ function PasswordPage() {
       })
       if (res.status === 401) {
         // Session expired or revoked: the cookie is no longer valid.
-        if (typeof window !== 'undefined') window.location.href = '/login'
+        if (typeof window !== 'undefined') window.location.href = '/account/login'
         return
       }
       if (!res.ok) {

@@ -6,7 +6,7 @@ import { useI18n } from '../hooks/useI18n'
 // showing a generic failure.
 function redirectIfUnauthorized(res: { status: number }): boolean {
   if (res.status !== 401) return false
-  if (typeof window !== 'undefined') window.location.href = '/login'
+  if (typeof window !== 'undefined') window.location.href = '/account/login'
   return true
 }
 

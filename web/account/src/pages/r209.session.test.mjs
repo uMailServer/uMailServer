@@ -74,5 +74,5 @@ test('F6867 forwarding 401 redirects to /login', async () => {
     fetch: async () => ({ ok: false, status: 401, json: async () => ({ error: 'unauthorized' }) }),
   })
   h.reset(); Page(); await h.mount()
-  assert.strictEqual(win.location.href, '/login', 'PROBLEM CONFIRMED: expired session not redirected')
+  assert.strictEqual(win.location.href, '/account/login', 'PROBLEM CONFIRMED: expired session not redirected')
 })

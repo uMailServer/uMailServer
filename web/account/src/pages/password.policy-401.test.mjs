@@ -39,5 +39,5 @@ for (const [pw, frag] of [['alllowercase1!', 'uppercase'], ['ALLUPPER1!', 'lower
 calls.length = 0; status = 401;
 await submit('GoodPass123!');
 assert.equal(calls.length, 1);
-assert.equal(win.location.href, '/login', '401 must redirect to /login');
+assert.equal(win.location.href, '/account/login', '401 must redirect to /account/login');
 console.log('ok');

@@ -54,7 +54,7 @@ function LoginPage() {
 
     try {
       await loginApi(email, password, totpCode, (seconds) => t('auth.retryAfter', { seconds }))
-      window.location.href = '/'
+      window.location.href = '/account/'
     } catch (err) {
       if (err instanceof LoginError && err.status === 401 && /totp/i.test(err.message) && !totpCode) {
         // Two-factor is enabled: ask for the authenticator code.
