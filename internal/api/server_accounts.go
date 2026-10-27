@@ -612,6 +612,60 @@ func (s *Server) deleteAccount(w http.ResponseWriter, r *http.Request, email str
 
 // handleSelfDelete implements DELETE /api/v1/account: the authenticated user
 // deletes their own account after re-entering the current password (F6981).
+// SelfAccount is what GET /api/v1/account returns about the signed-in
+// account: no credentials (password hash, TOTP secret) and no admin-only
+// settings.
+type SelfAccount struct {
+	Email            string    `json:"email"`
+	Domain           string    `json:"domain"`
+	QuotaUsed        int64     `json:"quota_used"`
+	QuotaLimit       int64     `json:"quota_limit"` // 0 = unlimited
+	MaxMessageSize   int64     `json:"max_message_size"`
+	TwoFactorEnabled bool      `json:"two_factor_enabled"`
+	ForwardTo        string    `json:"forward_to,omitempty"`
+	IsAdmin          bool      `json:"is_admin"`
+	CreatedAt        time.Time `json:"created_at"`
+	LastLoginAt      time.Time `json:"last_login_at,omitempty"`
+}
+
+// handleSelfAccount serves GET (the signed-in account) and DELETE
+// (handleSelfDelete) on /api/v1/account. The account portal's Profile page
+// had no way to learn who was signed in.
+func (s *Server) handleSelfAccount(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodDelete:
+		s.handleSelfDelete(w, r)
+		return
+	case http.MethodGet, http.MethodHead:
+	default:
+		s.methodNotAllowed(w, "GET, HEAD, DELETE")
+		return
+	}
+	authUser, _ := r.Context().Value("user").(string)
+	if authUser == "" {
+		s.sendError(w, http.StatusUnauthorized, "missing authentication")
+		return
+	}
+	user, domain := parseEmail(authUser)
+	acct, err := s.db.GetAccount(domain, user)
+	if err != nil || acct == nil {
+		s.sendError(w, http.StatusNotFound, "account not found")
+		return
+	}
+	s.sendJSON(w, http.StatusOK, SelfAccount{
+		Email:            acct.Email,
+		Domain:           acct.Domain,
+		QuotaUsed:        acct.QuotaUsed,
+		QuotaLimit:       acct.QuotaLimit,
+		MaxMessageSize:   acct.MaxMessageSize,
+		TwoFactorEnabled: acct.TOTPEnabled,
+		ForwardTo:        acct.ForwardTo,
+		IsAdmin:          acct.IsAdmin,
+		CreatedAt:        acct.CreatedAt,
+		LastLoginAt:      acct.LastLoginAt,
+	})
+}
+
 func (s *Server) handleSelfDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		s.methodNotAllowed(w, "DELETE")

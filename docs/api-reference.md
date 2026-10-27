@@ -203,6 +203,28 @@ Endpoints for the **authenticated account** to manage its own credentials
 and settings. Authentication accepts the session cookie (set by
 `POST /api/v1/auth/login`) or a bearer token.
 
+### GET /api/v1/account
+
+The authenticated account, without credentials. `DELETE` on the same path
+deletes the account (password re-entry required).
+
+```json
+{
+  "email": "jane@example.com",
+  "domain": "example.com",
+  "quota_used": 524288,
+  "quota_limit": 1073741824,
+  "max_message_size": 26214400,
+  "two_factor_enabled": true,
+  "forward_to": "jane@elsewhere.example",
+  "is_admin": false,
+  "created_at": "2026-01-02T03:04:05Z",
+  "last_login_at": "2026-10-27T08:00:00Z"
+}
+```
+
+`quota_limit` 0 means no limit; `forward_to` is omitted when forwarding is off.
+
 ### POST /api/v1/account/password
 
 Change the authenticated account's password. The current password must be

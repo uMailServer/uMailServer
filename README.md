@@ -61,7 +61,7 @@
 
 - **Webmail:** login, inbox and other folders, message view, flags, drafts, compose, trash, search and contacts (the CardDAV address books) use the REST API.
 - **Admin panel:** the Settings page is read-only (edit `umailserver.yaml` and restart).
-- **Account portal:** served at `/account/` on the web port (password, two-factor, forwarding, vacation, filters); the Profile page is a read-only placeholder.
+- **Account portal:** served at `/account/` on the web port (profile, password, two-factor, forwarding, vacation, filters). The profile is read-only: the address and limits are set by an administrator.
 - **Config reload:** `SIGHUP` only re-checks manually configured TLS certificates; every other config change needs `umailserver restart`.
 - **CLI and the running server:** `account`, `domain`, `queue`, `backup`, `restore` (read), and `migrate` open the bbolt databases directly and fail with "file is locked" while the server runs. `backup` explicitly refuses a live server; use the REST API for live administration.
 - **S/MIME and OpenPGP:** not supported. Messages pass through unmodified and unverified.

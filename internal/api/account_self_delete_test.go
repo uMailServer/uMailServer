@@ -108,9 +108,10 @@ func TestR221_SelfDeleteUnauthenticatedAndMethod(t *testing.T) {
 	if c := r221Do(s, http.MethodDelete, "/api/v1/account", "", `{"password":"Passw0rd!x"}`).Code; c != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated=%d want 401", c)
 	}
-	rec := r221Do(s, http.MethodGet, "/api/v1/account", a5028Session(t), "")
+	// GET reads the signed-in account; other methods are refused.
+	rec := r221Do(s, http.MethodPut, "/api/v1/account", a5028Session(t), "{}")
 	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") == "" {
-		t.Fatalf("GET=%d allow=%q want 405 with Allow", rec.Code, rec.Header().Get("Allow"))
+		t.Fatalf("PUT=%d allow=%q want 405 with Allow", rec.Code, rec.Header().Get("Allow"))
 	}
 }
 

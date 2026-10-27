@@ -1,149 +1,80 @@
-// Regression: account-portal ProfilePage must not fabricate the user's
-// identity or present a save flow that persists nothing.
-// Root cause (fixed 2026-10-07 round 7): the page — which is also the
-// portal's landing page (App.tsx renders it on the index route AND
-// /profile) — displayed a HARDCODED email 'user@example.com' as the signed-in
-// user's address regardless of who was logged in, and a Save button whose
-// handler only awaited a placeholder setTimeout(1000) — no network call, no
-// feedback, no persistence. The server has no profile fields at all (no
-// displayName/timezone in the account API or DB models) and no self-service
-// profile endpoint (the account routes are admin-gated), so the page cannot
-// show or edit anything real. It must state the limitation instead.
-// Convention: plain-node spec, transpiles the real component (no vitest in
-// this package). The page performs no network or timer work once honest, so
-// no boundaries are stubbed beyond the module scope.
-import fs from 'node:fs';
-import vm from 'node:vm';
-import assert from 'node:assert';
-import { createRequire } from 'node:module';
+// The Profile page once showed a hardcoded 'user@example.com' and a Save
+// button that persisted nothing; then a placeholder because no endpoint told
+// it who was signed in. It now shows GET /api/v1/account, read-only.
+// Run: cd web/account && node --test src/pages/profile.false-identity.test.mjs
+import fs from 'node:fs'
+import vm from 'node:vm'
+import assert from 'node:assert'
+import test from 'node:test'
+import { createRequire } from 'node:module'
 
-const require_ = createRequire(new URL('../../package.json', import.meta.url));
-const ts = require_('typescript');
-
-const sourceURL = new URL('./Profile.tsx', import.meta.url);
-const source = fs.readFileSync(sourceURL, 'utf8');
-const js = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    target: ts.ScriptTarget.ES2020,
-    jsx: ts.JsxEmit.React,
-  },
-}).outputText;
-
-// --- hooks shim ---
-const states = [];
-function renderComponent(ProfilePage) {
-  states.cursor = 0;
-  return ProfilePage();
+const require_ = createRequire(new URL('../../package.json', import.meta.url))
+const ts = require_('typescript')
+const js = ts.transpileModule(fs.readFileSync(new URL('./Profile.tsx', import.meta.url), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.React },
+}).outputText
+const el = (type, props, ...children) => ({ type, props: props ?? {}, children })
+function text(n, out = []) {
+  if (n == null || n === false || n === true) return out
+  if (typeof n === 'string' || typeof n === 'number') { out.push(String(n)); return out }
+  if (Array.isArray(n)) { n.forEach((c) => text(c, out)); return out }
+  text(n.children, out); if (n.props?.children) text(n.props.children, out)
+  return out
 }
-const hooks = {
-  useState(init) {
-    const index = states.cursor++;
-    if (!(index in states)) states[index] = typeof init === 'function' ? init() : init;
-    return [
-      states[index],
-      (value) => {
-        states[index] = value;
-      },
-    ];
-  },
-};
-
-// --- element-tree builder (classic JSX runtime) ---
-function el(type, props, ...children) {
-  return { type, props: props ?? {}, children };
-}
-function findNode(node, predicate) {
-  if (node == null || node === false || node === true) return null;
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const hit = findNode(child, predicate);
-      if (hit) return hit;
-    }
-    return null;
+function render(fetchImpl, win = { location: { href: '/account/' } }) {
+  const states = []; const effects = []; let cursor = 0
+  const h = {
+    useState(init) { const i = cursor++; if (!(i in states)) states[i] = typeof init === 'function' ? init() : init; return [states[i], (v) => { states[i] = typeof v === 'function' ? v(states[i]) : v }] },
+    useEffect(cb) { effects.push(cb) },
   }
-  if (typeof node === 'object' && 'type' in node) {
-    if (predicate(node)) return node;
-    return findNode(node.children, predicate);
+  const exports = {}
+  const ctx = vm.createContext({
+    exports, console, React: { createElement: el }, fetch: fetchImpl, window: win,
+    require(name) {
+      if (name === 'react') return h
+      if (name === 'lucide-react') return new Proxy({}, { get: (_t, p) => String(p) })
+      throw new Error('import ' + name)
+    },
+  })
+  vm.runInContext(js, ctx)
+  const Page = exports.default
+  return {
+    win,
+    async mount() { cursor = 0; Page(); for (const e of effects.splice(0)) await e(); await new Promise((r) => setImmediate(r)); await new Promise((r) => setImmediate(r)) },
+    text() { cursor = 0; return text(Page()).join(' ') },
   }
-  return null;
 }
-function collectText(node, out = []) {
-  if (node == null || node === false || node === true) return out;
-  if (typeof node === 'string' || typeof node === 'number') {
-    out.push(String(node));
-    return out;
-  }
-  if (Array.isArray(node)) {
-    for (const child of node) collectText(child, out);
-    return out;
-  }
-  if (typeof node === 'object' && 'children' in node) collectText(node.children, out);
-  return out;
-}
-
-const fetchCalls = [];
-async function fetchStub(url, options) {
-  fetchCalls.push({ url, options });
-  return { ok: false, status: 404, json: async () => ({ error: 'not found' }) };
+const okJSON = (body) => async (url) => {
+  assert.strictEqual(url, '/api/v1/account')
+  return { ok: true, status: 200, json: async () => body }
 }
 
-const contextified = vm.createContext({
-  exports: {},
-  require(name) {
-    if (name === 'react') return { useState: hooks.useState };
-    if (name === 'lucide-react') {
-      return { User: 'lucide-User', Camera: 'lucide-Camera' };
-    }
-    throw new Error('Unexpected import: ' + name);
-  },
-  React: { createElement: el },
-  fetch: fetchStub,
-  setTimeout,
-  console,
-});
-vm.runInContext(js, contextified, { filename: sourceURL.pathname });
+test('shows the signed-in account, read-only', async () => {
+  const p = render(okJSON({
+    email: 'jane@example.org', quota_used: 512 * 1024, quota_limit: 1024 * 1024 * 1024, max_message_size: 25 * 1024 * 1024,
+    two_factor_enabled: true, forward_to: 'j@elsewhere.test', created_at: '2026-01-02T03:04:05Z', last_login_at: '0001-01-01T00:00:00Z',
+  }))
+  await p.mount()
+  const out = p.text()
+  for (const want of ['jane@example.org', '512 KB of 1.0 GB', '25 MB', 'On', 'To j@elsewhere.test', 'Never']) {
+    assert.ok(out.includes(want), `missing ${want}: ${out}`)
+  }
+  assert.ok(!out.includes('user@example.com'), 'fabricated identity')
+  assert.ok(!/Save/.test(out), 'a save flow that persists nothing')
+})
 
-const ProfilePage = contextified.exports.default;
-assert.equal(typeof ProfilePage, 'function', 'CONTROL FAILED: ProfilePage not loaded');
+test('unlimited quota and no forwarding', async () => {
+  const p = render(okJSON({ email: 'a@b.test', quota_used: 10, quota_limit: 0, max_message_size: 0, two_factor_enabled: false, created_at: '2026-01-02T03:04:05Z' }))
+  await p.mount()
+  const out = p.text()
+  assert.ok(out.includes('10 B (no limit)') && out.includes('Off'), out)
+})
 
-// CONTROL: the page renders its heading.
-const tree = renderComponent(ProfilePage);
-const text = collectText(tree).join('');
-assert.ok(text.includes('Profile Settings'), 'CONTROL FAILED: heading missing');
-console.log('CONTROL EXPECTED: Profile Settings page renders | ACTUAL: shown');
-
-// CONTRACT: no fabricated identity (a hardcoded address shown as the user's
-// own), no save flow that persists nothing, and the portal's limitation is
-// stated — the server has no profile fields or self-service endpoint.
-const fabricatedEmail =
-  findNode(tree, (node) => node.type === 'input' && node.props?.value === 'user@example.com') !== null;
-const fakeSaveFlow = text.includes('Save Changes');
-console.log(
-  'EXPECTED: no fabricated identity, no fake save flow, limitation explained | ACTUAL: fabricated email:',
-  fabricatedEmail,
-  '| fake save flow:',
-  fakeSaveFlow,
-  '| server calls:',
-  fetchCalls.length
-);
-assert.equal(
-  fabricatedEmail,
-  false,
-  "PROBLEM CONFIRMED: ProfilePage displayed the hardcoded placeholder 'user@example.com' as the user's email address"
-);
-assert.equal(
-  fakeSaveFlow,
-  false,
-  'PROBLEM CONFIRMED: ProfilePage presents a Save flow that persists nothing'
-);
-assert.equal(
-  fetchCalls.length,
-  0,
-  'CONTROL FAILED: the page hit the network unexpectedly (no self-service profile endpoint exists)'
-);
-assert.ok(
-  text.includes('administrator'),
-  'PROBLEM CONFIRMED: the unavailability of portal profile management is not explained to the user'
-);
-console.log('FIX VERIFIED: no fabricated identity or fake save flow; the limitation is stated');
+test('an expired session goes to the login page; a failure says so', async () => {
+  const p = render(async () => ({ ok: false, status: 401, json: async () => ({}) }))
+  await p.mount()
+  assert.strictEqual(p.win.location.href, '/account/login')
+  const q = render(async () => ({ ok: false, status: 500, json: async () => ({}) }))
+  await q.mount()
+  assert.ok(q.text().includes('Could not load your account'), q.text())
+})
