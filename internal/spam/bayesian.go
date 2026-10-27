@@ -502,12 +502,43 @@ func ExtractTokensFromHeaders(headers map[string][]string) []string {
 	var tokens []string
 	tokenizer := NewTokenizer()
 
-	for key, values := range headers {
-		key = strings.ToLower(key)
-		for _, value := range values {
-			switch key {
-			case "subject":
-				tokens = append(tokens, tokenizer.Tokenize(value)...)
+	// F7779: like the body, bound the header text read and the distinct
+	// tokens kept; padded headers otherwise yield tens of thousands of
+	// tokens per message. Headers are taken in a fixed order, the ones that
+	// say most about a message first, so the bound drops padding.
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	rank := func(k string) int {
+		switch strings.ToLower(k) {
+		case "subject":
+			return 0
+		case "from":
+			return 1
+		case "to", "cc", "bcc", "reply-to":
+			return 2
+		}
+		return 3
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if ri, rj := rank(keys[i]), rank(keys[j]); ri != rj {
+			return ri < rj
+		}
+		return strings.ToLower(keys[i]) < strings.ToLower(keys[j])
+	})
+	budget := maxHeaderBytes
+	for _, key := range keys {
+		lower := strings.ToLower(key)
+		for _, value := range headers[key] {
+			if budget <= 0 {
+				break
+			}
+			if len(value) > budget {
+				value = value[:budget]
+			}
+			budget -= len(value)
+			switch lower {
 			case "from", "to", "cc", "bcc":
 				tokens = append(tokens, extractEmails(value)...)
 			default:
@@ -516,6 +547,10 @@ func ExtractTokensFromHeaders(headers map[string][]string) []string {
 		}
 	}
 
+	tokens = dedupTokens(tokens)
+	if len(tokens) > maxHeaderTokens {
+		tokens = tokens[:maxHeaderTokens]
+	}
 	return tokens
 }
 
@@ -537,6 +572,10 @@ const (
 	maxBodyBytes = 1 << 20
 	// maxBodyTokens caps the distinct tokens taken from one body.
 	maxBodyTokens = 5000
+	// maxHeaderBytes caps the header text that is tokenized.
+	maxHeaderBytes = 64 << 10
+	// maxHeaderTokens caps the distinct tokens taken from the headers.
+	maxHeaderTokens = 1000
 )
 
 // dedupTokens drops repeated tokens, keeping first-seen order, so a message
