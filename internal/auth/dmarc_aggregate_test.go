@@ -18,6 +18,7 @@ import (
 	"mime/multipart"
 	"net/mail"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -29,11 +30,14 @@ type sentReport struct {
 }
 
 func newTestReporter(res DNSResolver, sent *[]sentReport) *DMARCReporter {
+	var mu sync.Mutex // Flush sends domains in parallel
 	r := NewDMARCReporter(res, nil, DMARCReporterConfig{
 		OrgName:   "Test Org",
 		FromEmail: "dmarc@mx.receiver.test",
 		Receiver:  "mx.receiver.test",
 		Send: func(from string, to []string, msg []byte) error {
+			mu.Lock()
+			defer mu.Unlock()
 			*sent = append(*sent, sentReport{from, to, msg})
 			return nil
 		},
@@ -305,5 +309,48 @@ func TestDMARCReportPublishesSpAndFo(t *testing.T) {
 		if !strings.Contains(string(xmlData), want) {
 			t.Errorf("report lacks %s:\n%s", want, xmlData)
 		}
+	}
+}
+
+// Flush sent domains one at a time; with DNS verification of up to 10 s per
+// destination a full reporter could take longer than its interval.
+func TestDMARCAggregateFlushSendsDomainsInParallel(t *testing.T) {
+	res := newMockDNSResolver()
+	e := NewDMARCEvaluator(res)
+	var (
+		mu     sync.Mutex
+		active int
+		peak   int
+	)
+	both := make(chan struct{})
+	r := NewDMARCReporter(res, nil, DMARCReporterConfig{FromEmail: "d@r.test", Send: func(string, []string, []byte) error {
+		mu.Lock()
+		active++
+		if active > peak {
+			peak = active
+		}
+		if active == 2 {
+			close(both)
+		}
+		mu.Unlock()
+		// Hold the send until a second one is running (or give up).
+		select {
+		case <-both:
+		case <-time.After(2 * time.Second):
+		}
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil
+	}})
+	for _, d := range []string{"a.test", "b.test"} {
+		res.txtRecords["_dmarc."+d] = []string{"v=DMARC1; p=none; rua=mailto:agg@" + d}
+		r.Record(evaluate(t, e, d, SPFPass, d, DKIMNone, ""), ReportSample{SourceIP: "192.0.2.1"})
+	}
+	if n := r.Flush(context.Background()); n != 2 {
+		t.Fatalf("Flush sent %d, want 2", n)
+	}
+	if peak < 2 {
+		t.Fatalf("at most %d report sent at a time, want parallel sends", peak)
 	}
 }

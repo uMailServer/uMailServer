@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,9 @@ const (
 	maxReportRowsTotal        = 100000
 	maxReportFieldLen         = 253
 )
+
+// flushConcurrency is how many domains' reports Flush sends at once.
+const flushConcurrency = 8
 
 // ReportSendFunc delivers a report message from from to the to addresses.
 type ReportSendFunc func(from string, to []string, msg []byte) error
@@ -192,7 +196,14 @@ func (r *DMARCReporter) Flush(ctx context.Context) int {
 		return 0
 	}
 	now := r.now()
-	sent := 0
+	var (
+		sent atomic.Int64
+		wg   sync.WaitGroup
+	)
+	// Each report verifies its destinations in DNS (up to 10 s each), so
+	// domains are sent in parallel; one at a time, a full reporter could
+	// take longer than the interval.
+	sem := make(chan struct{}, flushConcurrency)
 	for _, p := range r.drain() {
 		end := p.data.End
 		if end.Before(p.data.Begin) || end.Equal(p.data.Begin) {
@@ -208,9 +219,15 @@ func (r *DMARCReporter) Flush(ctx context.Context) int {
 			End:      end,
 			Rows:     p.data.Rows,
 		}
-		sent += r.sendReport(ctx, in, now)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			sent.Add(int64(r.sendReport(ctx, in, now)))
+		}()
 	}
-	return sent
+	wg.Wait()
+	return int(sent.Load())
 }
 
 // sendReport mails one domain's report to each authorized rua= address.
