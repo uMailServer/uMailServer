@@ -224,6 +224,26 @@ queue:
 Deferred messages are retried on a built-in schedule that spans 105 hours,
 which is why `max_age` cannot be shorter.
 
+## DMARC Reports
+
+```yaml
+dmarc:
+  enabled: true
+  org_name: Example Mail          # Reporting organization named in reports
+  from_email: dmarc-reports@example.com  # Sender of report messages (required)
+  report_email: ""                # Contact address in reports (default: from_email)
+  interval: 24h                   # How often reports are sent (minimum 1h)
+```
+
+Inbound mail is evaluated against the sender's DMARC policy either way.
+With reporting enabled, the results for domains whose record has a
+`rua=mailto:` address are collected and, every `interval`, sent there as
+RFC 7489 aggregate reports (gzip-compressed XML). A report for a domain goes
+to an address in another domain only if that domain publishes the
+`<domain>._report._dmarc.<dest>` authorization record. Results are kept in
+memory: those not yet reported when the server restarts are lost, and a
+report that cannot be queued is dropped.
+
 ## Monitoring
 
 ```yaml

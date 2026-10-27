@@ -129,13 +129,14 @@ database:
 storage:
   sync: true                  # Always on: message files are fsynced before delivery is acknowledged
 
-# DMARC aggregate reporting
+# DMARC aggregate reporting (RFC 7489): reports on inbound mail are sent to
+# the rua= addresses of sending domains that ask for them
 dmarc:
   enabled: false
-  org_name: uMailServer
-  from_email: dmarc-reports@example.com
-  report_email: ""
-  interval: 24h
+  org_name: uMailServer       # Reporting organization named in reports
+  from_email: dmarc-reports@example.com  # Sender of report messages (required)
+  report_email: ""            # Contact address in reports (default: from_email)
+  interval: 24h               # How often reports are sent (minimum 1h)
 
 # ManageSieve Server
 managesieve:

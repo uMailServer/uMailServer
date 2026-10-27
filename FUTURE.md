@@ -83,7 +83,6 @@ internal/imap/commands.go:
 | IMAP SCORE Extension | 🟡 Orta | - | SCORE extension desteklenmiyor |
 | Webmail Contacts sayfası | 🟢 Düşük | `webmail/src/pages/contacts.tsx` | Sunucunun webmail API'sinde kişi ucu yok; sayfa yer tutucu (CardDAV istemcisi kullanın). Inbox, klasörler, mesaj görünümü, bayraklar, taslaklar, compose, çöp ve arama REST API'yi kullanıyor |
 | Admin Settings | 🟡 Orta | `web/admin/src/pages/Settings.tsx` | `internal/api`'de ayar ucu yok; sayfa salt-okunur önizleme (ayarlar `umailserver.yaml` + restart ile değişir) |
-| DMARC toplu raporları | 🟡 Orta | `internal/auth/dmarc_reporter.go` | Reporter sonuçları topluyor ama `GenerateAndSendReport`'u çağıran üretim kodu yok, rapor hiç gönderilmiyor; gönderim de RFC 7489 §7.2 biçiminde değil (gzip eki yok, `localhost:25`'e düz SMTP). `dmarc.interval` bu yüzden etkisiz. Kalan diğer etkisiz ayarlar yüklemede uyarı veriyor (`ignoredKeys`, `fixedKeys`) |
 | Çok düğüm / HA | 🟡 Orta | `internal/cluster` | Cluster paketi hiç başlatılmıyor; bbolt tek düğüm. Issue #1 |
 | Helm chart | 🟢 Düşük | `deploy/` | Yok; tek düğüm kısıtıyla (replicas: 1, HPA yok) yazılmalı |
 
