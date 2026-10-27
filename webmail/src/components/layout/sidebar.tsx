@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { NavLink, useLocation, useNavigate } from "react-router-dom"
 import {
   Inbox,
@@ -12,7 +12,6 @@ import {
   ChevronRight,
   PenSquare,
   FolderOpen,
-  Tag,
   Users,
   Search,
 } from "lucide-react"
@@ -21,6 +20,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import api, { type MailFolder } from "@/utils/api"
 
 interface SidebarProps {
   collapsed: boolean
@@ -47,12 +47,19 @@ const mainNavItems: NavItem[] = [
   { icon: Users, label: "Contacts", path: "/contacts" },
 ]
 
-const folderItems: NavItem[] = [
-  { icon: AlertCircle, label: "Spam", path: "/spam", count: 5, color: "text-red-500" },
-  { icon: FolderOpen, label: "Work", path: "/folder/work" },
-  { icon: FolderOpen, label: "Personal", path: "/folder/personal" },
-  { icon: Tag, label: "Important", path: "/tag/important", color: "text-amber-500" },
-]
+// folderNavItems lists Spam with its real unread count, then the user's own
+// mailboxes (fixed placeholder folders used to be shown instead).
+function folderNavItems(folders: MailFolder[]): NavItem[] {
+  const spam = folders.find((f) => f.role === "spam")
+  const items: NavItem[] = [
+    { icon: AlertCircle, label: "Spam", path: "/spam", count: spam && spam.unread > 0 ? spam.unread : undefined, color: "text-red-500" },
+  ]
+  for (const f of folders) {
+    if (f.role) continue
+    items.push({ icon: FolderOpen, label: f.name, path: `/folder/${encodeURIComponent(f.name)}`, count: f.unread > 0 ? f.unread : undefined })
+  }
+  return items
+}
 
 const NavItemComponent = ({
   item,
@@ -134,7 +141,17 @@ const NavItemComponent = ({
 
 export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const [hovered, setHovered] = useState(false)
+  const [folders, setFolders] = useState<MailFolder[]>([])
+
+  // Refreshed on navigation so counts follow reads and moves. A failed load
+  // keeps the last list: the standard folders stay reachable either way.
+  useEffect(() => {
+    let cancelled = false
+    api.getFolders().then((list) => { if (!cancelled) setFolders(list) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [pathname])
 
   const isExpanded = !collapsed || hovered
 
@@ -211,7 +228,7 @@ export function Sidebar({ collapsed, onToggle, unreadCount = 0 }: SidebarProps) 
           </p>
         )}
 
-        {folderItems.map((item) => (
+        {folderNavItems(folders).map((item) => (
           <NavItemComponent
             key={item.path}
             item={item}

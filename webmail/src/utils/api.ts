@@ -153,6 +153,17 @@ export interface VacationAutoReply {
 }
 
 // Shape produced by the browser's PushSubscription.toJSON().
+/** The webmail names of the standard folders, as used in /mail/<folder>. */
+export const STANDARD_FOLDERS = new Set(['inbox', 'sent', 'drafts', 'trash', 'spam'])
+
+export interface MailFolder {
+  name: string
+  /** inbox, sent, drafts, trash or spam for a standard folder. */
+  role?: string
+  total: number
+  unread: number
+}
+
 export interface PushSubscription {
   endpoint: string
   keys: {
@@ -313,14 +324,24 @@ class API {
   // Mail
   // limit (1-500, default 100) and offset page the folder; `total` is the
   // folder size. Without options the bare endpoint is requested.
+  // Standard folders have their own route; any other mailbox is listed
+  // through ?folder= (folder names are case-sensitive).
   async getMail(folder: string, opts?: MailListOptions): Promise<MailListResponse> {
     const qs = new URLSearchParams()
+    const standard = STANDARD_FOLDERS.has(folder)
+    if (!standard) qs.set('folder', folder)
     if (opts?.limit !== undefined) qs.set('limit', String(opts.limit))
     if (opts?.offset !== undefined) qs.set('offset', String(opts.offset))
     if (opts?.flag) qs.set('flag', opts.flag)
     if (opts?.unread) qs.set('unread', '1')
     const q = qs.toString()
-    return this.get<MailListResponse>(`/mail/${encodeURIComponent(folder)}${q ? `?${q}` : ''}`)
+    return this.get<MailListResponse>(`/mail/${standard ? encodeURIComponent(folder) : 'inbox'}${q ? `?${q}` : ''}`)
+  }
+
+  // The user's mailboxes with message and unread counts.
+  async getFolders(): Promise<MailFolder[]> {
+    const res = await this.get<{ folders?: MailFolder[] }>('/mail/folders')
+    return res?.folders ?? []
   }
 
   /** URL of GET /mail/attachment (same-origin, cookie auth). */

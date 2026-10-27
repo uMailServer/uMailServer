@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Search, Bell, Sun, Moon, Menu, User, LogOut, ChevronDown, Keyboard } from "lucide-react"
+import { Search, Sun, Moon, Menu, User, LogOut, ChevronDown, Keyboard } from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
 import { useAuth } from "@/contexts/AuthContext"
 import { Button } from "@/components/ui/button"
@@ -14,7 +14,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
 interface HeaderProps {
@@ -93,31 +92,6 @@ export function Header({ onMenuToggle, sidebarCollapsed }: HeaderProps) {
           >
             <Keyboard className="h-5 w-5" />
           </Button>
-
-          {/* Notifications */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="relative">
-                <Bell className="h-5 w-5" />
-                <Badge className="absolute -right-1 -top-1 h-5 w-5 p-0 flex items-center justify-center text-[10px]">
-                  3
-                </Badge>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-80">
-              <DropdownMenuLabel>Notifications</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <div className="max-h-80 overflow-y-auto">
-                {[1, 2, 3].map((i) => (
-                  <DropdownMenuItem key={i} className="flex flex-col items-start gap-1 p-3 cursor-pointer">
-                    <span className="font-medium text-sm">New email</span>
-                    <span className="text-xs text-muted-foreground">From: test@example.com</span>
-                    <span className="text-xs text-muted-foreground">{i} minutes ago</span>
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
 
           {/* User Profile */}
           <DropdownMenu>

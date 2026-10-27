@@ -16,7 +16,8 @@ describe('F6092 path/query encoding of ids', () => {
     const urls = (fetch as never as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string)
     expect(urls[0]).toMatch(/filters\/\.\.%2Fx%3Fy$/)
     expect(urls[1]).toMatch(/threads\/a%2Fb$/)
-    expect(urls[2]).toMatch(/mail\/in%2F\.\.%2Fx$/)
+    // A non-standard folder goes in the query string, still encoded.
+    expect(urls[2]).toMatch(/mail\/inbox\?folder=in%2F\.\.%2Fx$/)
   })
 })
 

@@ -64,7 +64,6 @@ function AppContent() {
           <Route path="search" element={<SearchPage />} />
           <Route path="spam" element={<SpamPage />} />
           <Route path="folder/:type" element={<FolderPage />} />
-          <Route path="tag/:type" element={<FolderPage />} />
           <Route path="email/:id" element={<EmailDetailPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -16,7 +16,7 @@ import { Separator } from "@/components/ui/separator"
 import { toast } from "sonner"
 import { sanitizeHTML } from "@/utils/sanitize"
 import { replySubject, forwardSubject } from "@/utils/quote"
-import api, { Mail, ApiError, FLAG_SEEN, FLAG_FLAGGED } from "@/utils/api"
+import api, { Mail, ApiError, FLAG_SEEN, FLAG_FLAGGED, STANDARD_FOLDERS } from "@/utils/api"
 
 const LOOKS_LIKE_HTML = /<\s*(?:p|div|br|html|body|table|span|a|img|ul|ol|h[1-6]|b|i|strong|em)\b/i
 
@@ -50,7 +50,10 @@ export function EmailDetailPage() {
         const mail = await api.getMessage(id)
         if (cancelled) return
         if (!mail || typeof mail !== "object") { setState({ status: "notfound" }); return }
-        const folder = String(mail.folder || "inbox").toLowerCase()
+        // Standard folders use their lower-case webmail name; other mailbox
+        // names are case-sensitive on the server.
+        const raw = String(mail.folder || "inbox")
+        const folder = STANDARD_FOLDERS.has(raw.toLowerCase()) ? raw.toLowerCase() : raw
         setState({ status: "ready", mail, folder })
         if (!mail.read) {
           try {
