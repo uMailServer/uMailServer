@@ -147,11 +147,18 @@ func (s *Server) handleCreateFilter(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse request body
+	// F7784: the account portal sends its whole EmailFilter, including the
+	// fields the server owns (id, priority); those are accepted and ignored
+	// instead of failing the strict decoder with a 400. Unknown fields are
+	// still rejected.
 	var req struct {
+		ID         string            `json:"id"`
 		Name       string            `json:"name"`
+		Enabled    *bool             `json:"enabled"`
 		MatchAll   bool              `json:"matchAll"`
 		Conditions []FilterCondition `json:"conditions"`
 		Actions    []FilterAction    `json:"actions"`
+		Priority   int               `json:"priority"`
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
@@ -182,7 +189,7 @@ func (s *Server) handleCreateFilter(w http.ResponseWriter, r *http.Request) {
 		ID:         uuid.New().String(),
 		UserID:     user,
 		Name:       req.Name,
-		Enabled:    true,
+		Enabled:    req.Enabled == nil || *req.Enabled,
 		MatchAll:   req.MatchAll,
 		Conditions: req.Conditions,
 		Actions:    req.Actions,
@@ -227,11 +234,13 @@ func (s *Server) handleUpdateFilter(w http.ResponseWriter, r *http.Request) {
 
 	// Parse request body
 	var req struct {
+		ID         string            `json:"id"` // owned by the server; ignored (F7784)
 		Name       string            `json:"name"`
 		Enabled    *bool             `json:"enabled,omitempty"`
 		MatchAll   *bool             `json:"matchAll,omitempty"`
 		Conditions []FilterCondition `json:"conditions"`
 		Actions    []FilterAction    `json:"actions"`
+		Priority   int               `json:"priority"` // changed through /filters/reorder; ignored
 	}
 
 	if err := decodeJSON(r, &req); err != nil {
