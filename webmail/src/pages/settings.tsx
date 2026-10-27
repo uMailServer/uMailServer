@@ -1,56 +1,61 @@
-import { useState } from "react"
-import { Moon, Sun, Bell, Shield, Palette, Keyboard, Mail, Globe, Lock } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Moon, Sun, Bell, Palette, Keyboard, Mail, Globe, Lock } from "lucide-react"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
+import { readPreferences, writePreferences, type Preferences } from "@/utils/preferences"
+import { disablePush, enablePush, getPushState, type PushState } from "@/utils/push"
 
-const SETTINGS_KEY = "umail.webmail.settings"
-const DEFAULT_SETTINGS = {
-  // Notifications
-  emailNotifications: true,
-  browserNotifications: false,
-  soundNotifications: true,
-  desktopNotifications: true,
-  // Email
-  autoSaveDraft: true,
-  readReceipts: false,
-  deliveryReceipts: true,
-  // Privacy
-  showOnlineStatus: false,
-  allowReadReceipts: true,
-  // Composition
-  richTextMode: true,
-  autoCorrect: true,
-  spellCheck: true,
-}
-type Settings = typeof DEFAULT_SETTINGS
-
-function readStoredSettings(): Partial<Settings> {
-  try {
-    const raw = localStorage.getItem(SETTINGS_KEY)
-    const parsed = raw ? JSON.parse(raw) : null
-    return parsed && typeof parsed === "object" ? parsed : {}
-  } catch {
-    return {}
-  }
+const PUSH_HINT: Record<PushState, string> = {
+  unsupported: "This browser does not support push notifications",
+  denied: "Notifications are blocked for this site; allow them in the browser settings",
+  off: "Get a notification for new mail, even when this tab is closed",
+  on: "This browser receives a notification for new mail",
 }
 
 export function SettingsPage() {
   const { theme, setTheme, resolvedTheme } = useTheme()
-  const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...readStoredSettings() }))
+  const [prefs, setPrefs] = useState<Preferences>(readPreferences)
+  const [push, setPush] = useState<PushState | null>(null)
+  const [pushBusy, setPushBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    getPushState().then((st) => { if (!cancelled) setPush(st) }).catch(() => { if (!cancelled) setPush("off") })
+    return () => { cancelled = true }
+  }, [])
 
   // These preferences are stored only in this browser (the server has no
   // settings endpoint); say so and report a failed write honestly.
-  const handleToggle = (key: keyof Settings) => {
-    const next = { ...settings, [key]: !settings[key] }
-    setSettings(next)
+  const handleToggle = (key: keyof Preferences) => {
+    const next = { ...prefs, [key]: !prefs[key] }
+    setPrefs(next)
     try {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(next))
+      writePreferences(next)
       toast.success("Setting saved on this device")
     } catch {
       toast.error("Could not save setting; it will reset on reload")
+    }
+  }
+
+  const togglePush = async () => {
+    if (pushBusy || push === null) return
+    setPushBusy(true)
+    try {
+      if (push === "on") {
+        await disablePush()
+        toast.success("Push notifications turned off for this browser")
+      } else {
+        await enablePush()
+        toast.success("Push notifications turned on for this browser")
+      }
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : "Could not change push notifications")
+    } finally {
+      setPush(await getPushState().catch(() => "off" as PushState))
+      setPushBusy(false)
     }
   }
 
@@ -85,19 +90,21 @@ export function SettingsPage() {
     title,
     description,
     checked,
-    onChange
+    onChange,
+    disabled = false,
   }: {
     title: string
     description: string
     checked: boolean
     onChange: () => void
+    disabled?: boolean
   }) => (
     <div className="flex items-center justify-between py-3">
       <div>
         <p className="font-medium">{title}</p>
         <p className="text-sm text-muted-foreground">{description}</p>
       </div>
-      <Switch checked={checked} onCheckedChange={onChange} />
+      <Switch aria-label={title} checked={checked} onCheckedChange={onChange} disabled={disabled} />
     </div>
   )
 
@@ -165,107 +172,34 @@ export function SettingsPage() {
         title="Notifications"
         description="Configure how you receive alerts for new messages"
       >
-        <div className="space-y-1">
-          <SettingRow
-            title="Email notifications"
-            description="Receive notifications for new emails"
-            checked={settings.emailNotifications}
-            onChange={() => handleToggle("emailNotifications")}
-          />
-          <Separator />
-          <SettingRow
-            title="Browser notifications"
-            description="Show notifications in your browser"
-            checked={settings.browserNotifications}
-            onChange={() => handleToggle("browserNotifications")}
-          />
-          <Separator />
-          <SettingRow
-            title="Sound notifications"
-            description="Play a sound for new messages"
-            checked={settings.soundNotifications}
-            onChange={() => handleToggle("soundNotifications")}
-          />
-          <Separator />
-          <SettingRow
-            title="Desktop notifications"
-            description="Show desktop notifications when app is in background"
-            checked={settings.desktopNotifications}
-            onChange={() => handleToggle("desktopNotifications")}
-          />
-        </div>
+        <SettingRow
+          title="Push notifications"
+          description={push ? PUSH_HINT[push] : "Checking this browser..."}
+          checked={push === "on"}
+          onChange={() => void togglePush()}
+          disabled={push === null || push === "unsupported" || push === "denied" || pushBusy}
+        />
       </SettingSection>
 
-      {/* Email Settings */}
+      {/* Composition */}
       <SettingSection
         icon={Mail}
         title="Email Composition"
-        description="Settings for composing and sending emails"
+        description="Settings for composing emails, saved on this device"
       >
         <div className="space-y-1">
           <SettingRow
             title="Auto-save drafts"
-            description="Automatically save drafts while composing"
-            checked={settings.autoSaveDraft}
+            description="Save the message to Drafts while you type"
+            checked={prefs.autoSaveDraft}
             onChange={() => handleToggle("autoSaveDraft")}
           />
           <Separator />
           <SettingRow
-            title="Rich text mode"
-            description="Use rich text editor with formatting"
-            checked={settings.richTextMode}
-            onChange={() => handleToggle("richTextMode")}
-          />
-          <Separator />
-          <SettingRow
-            title="Auto-correct"
-            description="Automatically correct spelling"
-            checked={settings.autoCorrect}
-            onChange={() => handleToggle("autoCorrect")}
-          />
-          <Separator />
-          <SettingRow
             title="Spell check"
-            description="Check spelling while typing"
-            checked={settings.spellCheck}
+            description="Let the browser check spelling while you type"
+            checked={prefs.spellCheck}
             onChange={() => handleToggle("spellCheck")}
-          />
-        </div>
-      </SettingSection>
-
-      {/* Privacy & Security */}
-      <SettingSection
-        icon={Shield}
-        title="Privacy & Security"
-        description="Control your privacy and security settings"
-      >
-        <div className="space-y-1">
-          <SettingRow
-            title="Read receipts"
-            description="Request read receipts for sent emails"
-            checked={settings.readReceipts}
-            onChange={() => handleToggle("readReceipts")}
-          />
-          <Separator />
-          <SettingRow
-            title="Delivery receipts"
-            description="Request delivery confirmations for sent emails"
-            checked={settings.deliveryReceipts}
-            onChange={() => handleToggle("deliveryReceipts")}
-          />
-          <Separator />
-          <SettingRow
-            title="Show online status"
-            description="Let others see when you're online"
-            checked={settings.showOnlineStatus}
-            onChange={() => handleToggle("showOnlineStatus")}
-          />
-          <Separator />
-          <SettingRow
-            title="Allow read receipts"
-            description="Send read receipts when others request them"
-            checked={settings.allowReadReceipts}
-            onChange={() => handleToggle("allowReadReceipts")}
           />
         </div>
       </SettingSection>
@@ -303,7 +237,9 @@ export function SettingsPage() {
               </p>
             </div>
           </div>
-          <Button variant="outline">Manage Account</Button>
+          <Button variant="outline" asChild>
+            <a href="/account/">Manage Account</a>
+          </Button>
         </div>
       </div>
 

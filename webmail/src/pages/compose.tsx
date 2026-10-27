@@ -11,6 +11,7 @@ import { quoteForReply, forwardBody, replyAllRecipients } from "@/utils/quote"
 import api, { FLAG_ANSWERED } from "@/utils/api"
 import { attachmentError, readFileBase64, type ComposeAttachment } from "@/utils/attachments"
 import { suggestionsFor, type Suggestion } from "@/utils/recipients"
+import { readPreferences } from "@/utils/preferences"
 
 const EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
 
@@ -310,12 +311,14 @@ export function ComposePage() {
   }
   const saveDraftRef = useRef(saveDraft)
   saveDraftRef.current = saveDraft
+  const [prefs] = useState(readPreferences)
 
   // Autosave 2s after the last edit; the snapshot comparison skips unchanged content.
   useEffect(() => {
+    if (!prefs.autoSaveDraft) return
     const t = setTimeout(() => { void saveDraftRef.current() }, 2000)
     return () => clearTimeout(t)
-  }, [to, cc, bcc, subject, body])
+  }, [to, cc, bcc, subject, body, prefs.autoSaveDraft])
 
   const handleSend = async () => {
     if (sendingRef.current) return
@@ -459,6 +462,7 @@ export function ComposePage() {
           placeholder="Write your message (plain text)..."
           value={body}
           onChange={(e) => setBody(e.target.value)}
+          spellCheck={prefs.spellCheck}
         />
       </div>
 
