@@ -81,7 +81,7 @@ internal/imap/commands.go:
 | Eksik | Öncelik | Dosya/Konum | Açıklama |
 |-------|---------|-------------|----------|
 | IMAP SCORE Extension | 🟡 Orta | - | SCORE extension desteklenmiyor |
-| Çok düğüm / HA | 🟡 Orta | `internal/cluster` | Cluster paketi hiç başlatılmıyor; bbolt tek düğüm. Seçenekler ve öneri: `docs/HA_DESIGN.md` (karar bekliyor). Issue #1 |
+| Çok düğüm / HA | 🟡 Orta | `docs/HA_DESIGN.md` | bbolt tek düğüm. A (hızlı yük devri) yapıldı; B (yedek MX) ve C (aktif/aktif) karar bekliyor. Kullanılmayan `internal/cluster` kaldırıldı. Issue #1 |
 
 ---
 

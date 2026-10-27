@@ -48,13 +48,13 @@ Started in `Server.Start` and written for a single instance: the queue
 manager's delivery workers, search indexing workers, vacation cleanup, the
 alert checker, the spam learner, the DMARC reporter, and ACME renewals.
 
-### Existing cluster code
+### Former cluster code
 
-`internal/cluster` implements a Redis session store, leader election, a
-distributed lock and heartbeats, and `api.Server.SetClusterManager` accepts
-it, but nothing constructs a `ClusterManager`. It covers only a small part of
-the list above (none of the persistent state), so it is not a starting point
-for active/active by itself.
+An `internal/cluster` package (Redis session store, leader election,
+distributed lock, heartbeats) and four `/api/v1/cluster/*` endpoints existed,
+but nothing constructed the cluster manager, so the endpoints always reported
+"disabled". They were removed on 2026-10-27 together with the Redis
+dependency; the code is in git history if option C is pursued.
 
 ## Options
 
@@ -62,9 +62,10 @@ for active/active by itself.
 
 Keep one active process; make its replacement start quickly and safely.
 
-- On Kubernetes this is mostly what the chart already does: when the node
-  fails, the StatefulSet pod is rescheduled and the volume re-attached.
-  Downtime is the detection time plus volume re-attach (typically minutes).
+- On Kubernetes the chart already restarts or moves the pod on crashes,
+  updates and drains. On node failure a StatefulSet pod is not moved until
+  the node is confirmed down (out-of-service taint or Node deletion); then
+  the volume is re-attached elsewhere, typically within minutes.
 - To shorten it: a replicated block volume (e.g. Longhorn, Ceph RBD, cloud
   regional disks) so the volume can attach on another node at once.
 - Correctness requirement: never two writers. The bbolt lock prevents this on
@@ -75,7 +76,8 @@ Code changes: small. Shorter startup (avoid rebuilding state that can be
 loaded), a readiness check that turns true only once SMTP accepts mail, and
 documentation.
 
-What it gives: recovery without manual work. What it does not: zero downtime;
+What it gives: recovery without manual work, except for confirming a failed
+node. What it does not: zero downtime;
 inbound mail during the outage relies on sending servers retrying, which they
 do for days.
 
@@ -110,7 +112,7 @@ Run several full replicas behind a load balancer.
   filesystem with a per-message write discipline; IMAP UID assignment and
   MODSEQ must become database transactions.
 - Move rate limits, greylisting, login lockouts and SSE/IDLE fan-out to
-  Redis (the existing `internal/cluster` code can serve part of this).
+  Redis.
 - Run the single-instance work under leader election, or make the queue
   claim entries per worker with leases.
 - Add a migration tool from bbolt/Maildir to the new stores.
@@ -133,10 +135,6 @@ means maintaining both storage backends.
    front of `db.DB` and the mailstore with the bbolt implementation behind
    them, which is useful on its own and can land incrementally.
 
-Independently: `internal/cluster` and `api.Server.SetClusterManager` are
-unused. Either remove them (dead code) or keep them explicitly for C; they
-should not stay as code that looks like a working feature.
-
 ## Option A: done
 
 - `Server.Stop` marks the API as draining first, so `/health/ready` answers
@@ -156,4 +154,3 @@ Not done: startup time was not measured or shortened.
   inbound mail be accepted continuously (A + B)?
 - Is adding PostgreSQL and Redis as optional dependencies acceptable for the
   project at all (C)?
-- Remove or keep `internal/cluster`?

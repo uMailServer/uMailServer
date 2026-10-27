@@ -22,7 +22,6 @@ import (
 	"github.com/umailserver/umailserver"
 	"github.com/umailserver/umailserver/internal/audit"
 	"github.com/umailserver/umailserver/internal/backup"
-	"github.com/umailserver/umailserver/internal/cluster"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/mcp"
 	"github.com/umailserver/umailserver/internal/metrics"
@@ -82,10 +81,6 @@ type Server struct {
 
 	// Audit logger for security events
 	auditLogger *audit.Logger
-
-	// Cluster manager for HA/clustering (optional)
-	clusterMgr    *cluster.ClusterManager
-	clusterConfig *ClusterConfig
 
 	// Backup manager for backup/restore operations
 	backupMgr *backup.Manager
@@ -560,12 +555,6 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/flags", http.HandlerFunc(s.mailHandler.handleMailFlags).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/draft", http.HandlerFunc(s.mailHandler.handleMailDraft).ServeHTTP)
 
-	// Cluster management (HA) — administrative operations, admin only
-	api.HandleFunc("/api/v1/cluster/status", s.adminMiddleware(http.HandlerFunc(s.handleClusterStatus)).ServeHTTP)
-	api.HandleFunc("/api/v1/cluster/instances", s.adminMiddleware(http.HandlerFunc(s.handleClusterInstances)).ServeHTTP)
-	api.HandleFunc("/api/v1/cluster/failover", s.adminMiddleware(http.HandlerFunc(s.handleClusterFailover)).ServeHTTP)
-	api.HandleFunc("/api/v1/cluster/heartbeat", s.adminMiddleware(http.HandlerFunc(s.handleClusterHeartbeat)).ServeHTTP)
-
 	// Wrap API with auth middleware and mount to main mux
 	apiHandler := s.rateLimitMiddleware(s.limitBodyMiddleware(s.securityHeadersMiddleware(s.csrfMiddleware(s.corsMiddleware(s.authMiddleware(api))))))
 	mux.Handle("/api/v1/", apiHandler)
@@ -628,12 +617,6 @@ func (s *Server) SetRateLimitManager(mgr RateLimitManager) {
 // SetTracingProvider sets the OpenTelemetry tracing provider
 func (s *Server) SetTracingProvider(provider *tracing.Provider) {
 	s.tracingProvider = provider
-}
-
-// SetClusterManager injects the cluster manager into the API server
-func (s *Server) SetClusterManager(mgr *cluster.ClusterManager, cfg *ClusterConfig) {
-	s.clusterMgr = mgr
-	s.clusterConfig = cfg
 }
 
 // SetBackupManager injects the backup manager into the API server

@@ -31,7 +31,6 @@ tags:
 - {name: Auth, description: 'Login, logout, token refresh'}
 - {name: Account, description: Self-service for the authenticated account}
 - {name: Admin, description: 'Administrator operations (domains, accounts, aliases, queue, limits, keys)'}
-- {name: Cluster, description: HA cluster operations (admin)}
 - {name: Mail, description: Webmail endpoints operating on the caller's own mailboxes}
 - {name: Threads, description: Conversation threads}
 - {name: Settings, description: 'Vacation, filters, push'}
@@ -49,7 +48,7 @@ definitions:
     properties:
       error: {type: string, description: Human-readable message}
     required: [error]
-    description: Error body used by every JSON handler of the main API. Some cluster/health/SSE paths answer with
+    description: Error body used by every JSON handler of the main API. Some health/SSE paths answer with
       plain text instead (noted per operation).
   AdminListenerError:
     type: object
@@ -1466,109 +1465,6 @@ paths:
         '401': {$ref: '#/responses/Unauthorized'}
         '403': {$ref: '#/responses/Forbidden'}
         '405': {$ref: '#/responses/MethodNotAllowed'}
-  /api/v1/cluster/status:
-    get:
-      tags: [Cluster]
-      summary: Cluster status
-      description: '**Admin only** (403 `{"error":"admin access required"}` otherwise). Cluster endpoints answer
-        errors as plain text (`text/plain`), not the JSON error body. When clustering is off returns `{enabled:false,status:"disabled",instances:[]}`.'
-      produces: [application/json, text/plain]
-      responses:
-        '200':
-          description: OK
-          schema:
-            type: object
-            properties:
-              enabled: {type: boolean}
-              status: {type: string}
-              is_leader: {type: boolean}
-              instance_id: {type: string}
-              instances:
-                type: array
-                items: {type: object, additionalProperties: true}
-        '401': {$ref: '#/responses/Unauthorized'}
-        '403': {$ref: '#/responses/Forbidden'}
-        '405': {$ref: '#/responses/MethodNotAllowed'}
-        '500':
-          description: Failed to get cluster health
-          schema: {type: string}
-  /api/v1/cluster/instances:
-    get:
-      tags: [Cluster]
-      summary: Cluster instance health
-      description: '**Admin only** (403 `{"error":"admin access required"}` otherwise). Cluster endpoints answer
-        errors as plain text (`text/plain`), not the JSON error body.'
-      produces: [application/json, text/plain]
-      responses:
-        '200':
-          description: OK
-          schema:
-            type: object
-            properties:
-              instances:
-                type: array
-                items: {type: object, additionalProperties: true}
-        '401': {$ref: '#/responses/Unauthorized'}
-        '403': {$ref: '#/responses/Forbidden'}
-        '405': {$ref: '#/responses/MethodNotAllowed'}
-        '500':
-          description: Failed
-          schema: {type: string}
-        '503':
-          description: Cluster not enabled
-          schema: {type: string}
-  /api/v1/cluster/failover:
-    post:
-      tags: [Cluster]
-      summary: Release leadership to a healthy peer
-      description: '**Admin only** (403 `{"error":"admin access required"}` otherwise). Cluster endpoints answer
-        errors as plain text (`text/plain`), not the JSON error body.'
-      produces: [application/json, text/plain]
-      responses:
-        '200':
-          description: OK
-          schema:
-            type: object
-            properties:
-              success: {type: boolean}
-              new_leader: {type: string}
-              message: {type: string}
-        '401': {$ref: '#/responses/Unauthorized'}
-        '403':
-          description: Not the leader
-          schema: {type: string}
-        '405': {$ref: '#/responses/MethodNotAllowed'}
-        '500':
-          description: Failed
-          schema: {type: string}
-        '503':
-          description: Cluster not enabled / no suitable target
-          schema: {type: string}
-  /api/v1/cluster/heartbeat:
-    post:
-      tags: [Cluster]
-      summary: Record a heartbeat
-      description: '**Admin only** (403 `{"error":"admin access required"}` otherwise). Cluster endpoints answer
-        errors as plain text (`text/plain`), not the JSON error body.'
-      produces: [application/json, text/plain]
-      responses:
-        '200':
-          description: OK
-          schema:
-            type: object
-            properties:
-              success: {type: boolean}
-              instance_id: {type: string}
-              timestamp: {type: integer}
-        '401': {$ref: '#/responses/Unauthorized'}
-        '403': {$ref: '#/responses/Forbidden'}
-        '405': {$ref: '#/responses/MethodNotAllowed'}
-        '500':
-          description: Failed
-          schema: {type: string}
-        '503':
-          description: Cluster not enabled
-          schema: {type: string}
   /api/v1/mail/inbox:
     get:
       tags: [Mail]

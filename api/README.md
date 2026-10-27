@@ -20,7 +20,7 @@ The API provides REST endpoints for:
 - **Account self-service** - password change, forwarding, TOTP, vacation, filters, push
 - **Mail** - list folders, read, send, flag, move, delete, drafts, search, threads
 - **Administration** - domains, accounts, aliases, mail queue, rate limits, JWT key
-  rotation, statistics, cluster status (all admin only)
+  rotation, statistics (all admin only)
 - **Real time** - Server-Sent Events (`/api/v1/events`) and MCP (`/mcp`)
 - **Operations** - `/health`, `/health/ready`, admin JSON `/metrics`
 - **Client configuration** - Thunderbird autoconfig and Outlook autodiscover
@@ -105,7 +105,7 @@ return plain arrays with the unpaginated size in the `X-Total-Count` header
 
 Exceptions: the admin listener's auth layer answers
 `{"error": "unauthorized", "message": "...", "code": 401}` (same for 403);
-`/api/v1/cluster/*`, `/api/v1/events` and a few CSRF rejections use plain text;
+`/api/v1/events` and a few CSRF rejections use plain text;
 `/mcp` returns JSON-RPC 2.0 error objects; autoconfig/autodiscover errors are XML.
 Unsupported methods return `405` with an `Allow` header.
 
@@ -254,8 +254,6 @@ handler contains a "non-admin deletes own account with `{"password": ...}`" bran
 | GET | `/api/v1/admin/push/stats` | Push statistics |
 | POST | `/api/v1/admin/jwt/rotate` | Rotate JWT signing key |
 | GET | `/api/v1/admin/jwt/status` | JWT key status |
-| GET | `/api/v1/cluster/status`, `/instances` | Cluster health |
-| POST | `/api/v1/cluster/failover`, `/heartbeat` | Cluster operations |
 
 ### Operations and client configuration
 | Method | Endpoint | Auth | Description |

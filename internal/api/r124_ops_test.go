@@ -168,15 +168,6 @@ func TestR124AuthAttemptMapsPruned(t *testing.T) {
 	}
 }
 
-// F6066: cluster responses declare JSON.
-func TestR124ClusterStatusContentType(t *testing.T) {
-	s, _ := r124Server(t)
-	rec := r124Do(s.handleClusterStatus, http.MethodGet, "/api/v1/cluster/status", "")
-	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
-		t.Fatalf("Content-Type = %q", ct)
-	}
-}
-
 // F6067: autoconfig derives the mail domain from the client-facing host prefix.
 func TestR124AutoconfigDomainFromHost(t *testing.T) {
 	cases := map[string]string{

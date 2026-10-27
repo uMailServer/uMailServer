@@ -18,7 +18,7 @@ func routeAllow(path string) string {
 		"/api/v1/account/totp/setup", "/api/v1/account/totp/verify", "/api/v1/account/totp/disable",
 		"/api/v1/push/subscribe", "/api/v1/push/test", "/api/v1/filters/reorder",
 		"/api/v1/mail/send", "/api/v1/mail/move", "/api/v1/mail/flags",
-		"/api/v1/admin/jwt/rotate", "/api/v1/cluster/failover", "/api/v1/cluster/heartbeat":
+		"/api/v1/admin/jwt/rotate":
 		return "POST"
 	case "/api/v1/auth/logout":
 		return "POST, DELETE"
@@ -27,7 +27,7 @@ func routeAllow(path string) string {
 	case "/api/v1/account/totp", "/api/v1/search", "/api/v1/threads", "/api/v1/threads/search",
 		"/api/v1/push/vapid-public-key", "/api/v1/push/subscriptions", "/api/v1/admin/push/stats",
 		"/api/v1/admin/vacations", "/api/v1/admin/jwt/status", "/api/v1/admin/settings",
-		"/api/v1/cluster/status", "/api/v1/cluster/instances", "/api/v1/mail/message",
+		"/api/v1/mail/message",
 		"/api/v1/admin/ratelimits/ip/", "/api/v1/admin/ratelimits/user/",
 		"/.well-known/autoconfig/mail/config-v1.1.xml":
 		return "GET, HEAD"
