@@ -12,9 +12,11 @@ Default location: `/etc/umailserver/umailserver.yaml`
 server:
   hostname: mail.example.com      # Primary server hostname (must match TLS cert)
   data_dir: /var/lib/umailserver  # Where all data is stored
-  max_workers: 100                # Maximum concurrent workers
-  log_level: info                 # debug, info, warn, error
+  force_close_after: 30           # Seconds before shutdown force-closes SMTP sessions and HTTP connections
+  graceful_timeout: 30            # Seconds shutdown waits for in-flight background tasks (default 10)
 ```
+
+The log level lives in the [`logging`](#logging) section.
 
 ## TLS Configuration
 
@@ -25,20 +27,16 @@ tls:
   acme:
     enabled: true
     email: admin@example.com
-    provider: letsencrypt          # letsencrypt, zerossl, buypass
-    accept_tos: true
-    challenge: http-01             # accepted; issuance always uses TLS-ALPN-01 on the HTTPS port
-                                   # (no port-80 listener, no DNS-01; use cert_file/key_file otherwise)
+    provider: letsencrypt          # letsencrypt or letsencrypt-staging
 
-  # Minimum TLS version
+  # Minimum TLS version for every TLS listener: "1.2" or "1.3"
   min_version: "1.2"
-
-  # Cipher suites (defaults are secure)
-  cipher_suites:
-    - TLS_AES_256_GCM_SHA384
-    - TLS_CHACHA20_POLY1305_SHA256
-    - TLS_AES_128_GCM_SHA256
 ```
+
+Certificates are issued with the TLS-ALPN-01 challenge on the HTTPS port: there
+is no port-80 listener and no DNS-01 support, so use `cert_file`/`key_file`
+when the HTTPS port is not reachable from the internet. Cipher suites are fixed
+to ECDHE with AES-GCM or ChaCha20-Poly1305.
 
 ### Custom Certificates
 
@@ -47,10 +45,8 @@ tls:
   acme:
     enabled: false
 
-  certificates:
-    - domain: mail.example.com
-      cert_file: /etc/umailserver/certs/mail.crt
-      key_file: /etc/umailserver/certs/mail.key
+  cert_file: /etc/umailserver/certs/mail.crt
+  key_file: /etc/umailserver/certs/mail.key
 ```
 
 ## SMTP Configuration
@@ -78,7 +74,6 @@ smtp:
   submission:
     enabled: true
     port: 587
-    require_auth: true             # Require authentication
     require_tls: true              # Require STARTTLS before AUTH
 ```
 
@@ -89,27 +84,21 @@ smtp:
   submission_tls:
     enabled: true
     port: 465
-    require_auth: true
 ```
+
+Submission listeners always require authentication; `require_auth: false` is
+ignored with a warning.
 
 ## IMAP Configuration
 
 ```yaml
 imap:
   enabled: true
-  port: 993
+  port: 993                        # Implicit TLS
   bind: 0.0.0.0
-
-  # Enable plain IMAP on port 143 (not recommended)
-  insecure_port: 0
-
-  # Connection limits
-  max_connections: 1000
-  max_connections_per_user: 10
-
-  # Timeouts
+  starttls_port: 143               # Plain IMAP upgraded with STARTTLS (0 = disabled)
+  max_connections: 10000           # Max concurrent connections (0 = unlimited)
   idle_timeout: 30m
-  auth_timeout: 5m
 ```
 
 ## HTTP/Web Configuration
@@ -120,48 +109,58 @@ http:
   port: 443
   bind: 0.0.0.0
 
-  # Static files (webmail, admin panel)
-  static_path: /usr/share/umailserver/web
-
   # CORS settings (for development)
   cors_origins: []                 # ["http://localhost:5173"]
+
+  # Reverse proxies allowed to set X-Forwarded-For (IPs or CIDRs). Rate
+  # limits and the audit log use the forwarded client address only for
+  # requests coming from these addresses.
+  trusted_proxies: []
 ```
+
+Webmail and the admin UI are embedded in the binary. The API always starts;
+`enabled: false` is ignored with a warning.
 
 ## Admin Panel
 
-The admin panel is served by the HTTP server on the same port (443).
-The `admin` config section below exists for legacy/compatibility purposes
-but is not currently used — admin panel access is controlled by the HTTP server.
+The admin API is also served on a separate plain-HTTP listener. Keep it on
+loopback and reach it through an SSH tunnel or a reverse proxy.
 
 ```yaml
 admin:
   enabled: true
-  # port: 8443  # Note: Not currently used, admin served on HTTP port
-  bind: 127.0.0.1                  # Note: Not currently used
+  bind: 127.0.0.1
+  port: 8443
 ```
 
-## Authentication
+## Security
 
 ```yaml
-auth:
-  # Password requirements
-  min_password_length: 8
-  password_complexity: medium      # low, medium, high
+security:
+  jwt_secret: "change-me-to-a-32-character-secret-minimum"
+  max_login_attempts: 5            # Failed logins before lockout
+  lockout_duration: 15m
+  # totp_key: ""                   # >= 32 chars; encrypts TOTP secrets (defaults to jwt_secret)
 
-  # Brute force protection
-  max_login_attempts: 5
-  lockout_duration: 30m
+  audit_log:
+    path: /var/lib/umailserver/logs/audit.log   # Empty = audit log disabled
+    max_size_mb: 10
+    max_backups: 5
+    max_age_days: 30
 
-  # Two-factor authentication
-  totp:
-    enabled: true
-    issuer: uMailServer
-
-  # App passwords for clients that don't support 2FA
-  app_passwords:
-    enabled: true
-    max_per_user: 10
+  rate_limit:
+    ip_per_minute: 30              # Inbound messages per client IP
+    ip_per_hour: 500
+    ip_connections: 10             # Concurrent connections per IP
+    user_per_minute: 60            # Authenticated outbound messages per user
+    user_per_hour: 1000
+    user_max_recipients: 100       # Recipients per message
+    http_requests_per_minute: 120  # API requests per minute per IP
 ```
+
+See `umailserver.yaml.example` for the full list of rate limits. Two-factor
+authentication (TOTP) is enabled per account in webmail and needs no
+configuration.
 
 ## Spam Filtering
 
@@ -171,8 +170,7 @@ spam:
 
   # Score thresholds
   reject_threshold: 9.0            # Reject at SMTP level
-  junk_threshold: 6.0              # Deliver to Junk folder
-  spam_threshold: 3.0              # Add X-Spam-Score header
+  junk_threshold: 3.0              # Deliver to Junk folder
 
   # RBL/DNSBL servers
   rbl_servers:
@@ -196,25 +194,11 @@ spam:
 
 ## DKIM Signing
 
-```yaml
-dkim:
-  enabled: true
-  selector: default                # DNS record: <selector>._domainkey.<domain>
-  domain: example.com
-  key_file: /var/lib/umailserver/dkim/example.com.private.pem
-
-  # Signing options
-  sign_headers:
-    - From
-    - To
-    - Subject
-    - Date
-    - Message-ID
-
-  # Canonicalization
-  header_canonicalization: relaxed
-  body_canonicalization: relaxed
-```
+DKIM is not configured in the YAML file. `umailserver domain add example.com`
+generates a key pair for the domain and stores it in the database; outbound
+mail from the domain is signed with it (relaxed header, simple body canonicalization).
+`umailserver domain dns example.com` prints the DNS records to publish,
+including `default._domainkey.example.com`.
 
 ## Domain Configuration
 
@@ -224,41 +208,21 @@ CLI or the admin API.
 
 ## Storage
 
-```yaml
-storage:
-  type: maildir                     # maildir, s3 (future)
-  path: /var/lib/umailserver/mail
-
-  # Quota settings
-  quota_grace_period: 7d            # Allow over-quota for 7 days
-  quota_warning_threshold: 0.9      # Warn at 90% full
-
-  # Message retention
-  retention:
-    junk: 30d                       # Auto-delete junk after 30 days
-    trash: 30d                      # Auto-delete trash after 30 days
-```
+Messages are stored as Maildir++ under `<data_dir>/mail` and every message
+file is fsynced before delivery is acknowledged. The `storage` section has no
+working settings: `sync: false` is ignored with a warning, and
+`shared_folders` is accepted but has no effect. Mailbox quotas are set per
+account through the admin API.
 
 ## Queue Settings
 
 ```yaml
 queue:
-  retry_schedule:                   # Retry delays
-    - 5m
-    - 15m
-    - 1h
-    - 2h
-    - 4h
-    - 8h
-    - 12h
-
-  max_retries: 7                    # After this, generate bounce
   max_age: 120h                     # Maximum time in queue before bounce (default 120h; allowed 105h-720h, unset = default)
-
-  # Concurrency
-  max_concurrent_deliveries: 50
-  max_concurrent_per_domain: 5      # Rate limit per destination
 ```
+
+Deferred messages are retried on a built-in schedule that spans 105 hours,
+which is why `max_age` cannot be shorter.
 
 ## Monitoring
 
@@ -282,16 +246,21 @@ tracing:
   insecure: false                 # allow plaintext OTLP to a non-loopback collector (default: refused; use https://)
   environment: "production"       # Environment tag
   sample_rate: 1.0                # 0.0 to 1.0 (1.0 = trace all)
-    attributes:                   # Additional resource attributes
-      deployment: "primary"
-      region: "us-east-1"
+  attributes:                     # Additional resource attributes
+    deployment: "primary"
+    region: "us-east-1"
+```
 
-  # Structured logging
-  logging:
-    format: json                    # json, text
-    output: /var/log/umailserver.log
-    max_size: 100MB
-    max_backups: 5
+## Logging
+
+```yaml
+logging:
+  level: info                     # debug, info, warn, error
+  format: json                    # json, text
+  output: /var/log/umailserver.log  # stdout, stderr, or a file path
+  max_size_mb: 100                # Rotation size (file output only)
+  max_backups: 5
+  max_age_days: 30
 ```
 
 ## Environment Variables
