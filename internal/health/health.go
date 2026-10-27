@@ -320,8 +320,13 @@ func (m *Monitor) HTTPHandler() http.HandlerFunc {
 			}
 
 		case "/health", "/health/":
-			// Full health check
+			// Full health check. The endpoint is unauthenticated, so the
+			// per-check details (paths, queue counts, disk sizes) are left
+			// out; status and message remain.
 			report := m.Check(ctx)
+			for i := range report.Checks {
+				report.Checks[i].Details = nil
+			}
 			status := http.StatusOK
 			if report.Status == StatusUnhealthy {
 				status = http.StatusServiceUnavailable

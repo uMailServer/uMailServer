@@ -1,6 +1,9 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/umailserver/umailserver/internal/health"
 	"github.com/umailserver/umailserver/internal/queue"
 )
@@ -23,7 +26,9 @@ func (a *queueStatsAdapter) GetStats() (health.QueueStatInfo, error) {
 	}, nil
 }
 
-// setupHealthChecks registers health checkers and wires up endpoints
+// setupHealthChecks registers the component checks behind /health and the
+// MCP get_system_status tool. It needs the queue, so Start calls it once the
+// queue manager exists.
 func (s *Server) setupHealthChecks() {
 	// Database health check
 	s.healthMonitor.Register("database", health.DatabaseCheck(func() error {
@@ -40,10 +45,16 @@ func (s *Server) setupHealthChecks() {
 
 	// Message store health check
 	if s.msgStore != nil {
+		// The store can take a new message: its directory accepts a file.
+		dir := filepath.Join(s.config.Server.DataDir, "mail", "messages")
 		s.healthMonitor.Register("storage", health.MessageStoreCheck(func() error {
-			// Simple ping - try to get store path
-			_ = s.msgStore
-			return nil
+			f, err := os.CreateTemp(dir, ".health-*")
+			if err != nil {
+				return err
+			}
+			name := f.Name()
+			_ = f.Close()
+			return os.Remove(name)
 		}))
 	}
 

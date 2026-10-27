@@ -50,6 +50,9 @@ func (s *Server) Start() (err error) {
 	}
 	s.queue.Start(s.ctx)
 	s.logger.Info("Queue manager started")
+	if s.healthMonitor != nil {
+		s.setupHealthChecks()
+	}
 
 	// Wire webhook manager to queue for delivery events
 	if s.webhookMgr != nil {
