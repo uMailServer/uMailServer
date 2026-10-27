@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -93,6 +94,68 @@ func configSearchPaths() []string {
 		paths = append(paths, p)
 	}
 	return append(paths, "./umailserver.yaml", "./umailserver.yml", "./demo.yaml", "/etc/umailserver/umailserver.yaml")
+}
+
+// usesDiscoveredConfig reports whether command finds its config file through
+// $UMAILSERVER_CONFIG / the working directory rather than a flag of its own.
+func usesDiscoveredConfig(command string) bool {
+	switch command {
+	case "domain", "account", "queue", "check", "test", "db", "status", "stop", "restart":
+		return true
+	}
+	return false
+}
+
+// extractConfigFlag removes a --config/-config flag (with its value, or as
+// --config=value) from args and returns the remaining arguments and the path.
+func extractConfigFlag(args []string) (rest []string, path string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		name := strings.TrimLeft(a, "-")
+		if len(a) == len(name) || len(a)-len(name) > 2 {
+			rest = append(rest, a)
+			continue
+		}
+		switch {
+		case name == "config":
+			if i+1 >= len(args) {
+				return nil, "", errors.New("flag needs an argument: --config")
+			}
+			i++
+			path = args[i]
+		case strings.HasPrefix(name, "config="):
+			path = strings.TrimPrefix(name, "config=")
+		default:
+			rest = append(rest, a)
+			continue
+		}
+		if path == "" {
+			return nil, "", errors.New("--config needs a file path")
+		}
+	}
+	return rest, path, nil
+}
+
+// applyConfigFlag handles --config in args (os.Args form: program, command,
+// ...): the file must load, and it is then the config discoverConfig finds
+// first. A path that does not load is an error, not a silent fallback to the
+// default database.
+func applyConfigFlag(args []string) error {
+	rest, path, err := extractConfigFlag(args[2:])
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return nil
+	}
+	if _, err := config.Load(path); err != nil {
+		return fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := os.Setenv("UMAILSERVER_CONFIG", path); err != nil {
+		return err
+	}
+	os.Args = append(append([]string{}, args[:2]...), rest...)
+	return nil
 }
 
 // dnsRecordLines renders the MX/A/SPF/DKIM/DMARC records for a domain from

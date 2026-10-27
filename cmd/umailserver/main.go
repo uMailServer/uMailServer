@@ -47,6 +47,16 @@ func main() {
 		slog.SetLogLoggerLevel(slog.LevelWarn)
 	}
 
+	// F7781: the commands that find their config through discoverConfig took
+	// no --config flag: domain add swallowed it and wrote to the default
+	// database, account add rejected it. Resolve it once for all of them.
+	if usesDiscoveredConfig(os.Args[1]) {
+		if err := applyConfigFlag(os.Args); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", os.Args[1], err)
+			os.Exit(1)
+		}
+	}
+
 	switch os.Args[1] {
 	case "config":
 		os.Exit(cmdConfig(os.Args[2:], os.Stdout, os.Stderr))

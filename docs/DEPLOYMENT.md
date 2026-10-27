@@ -238,10 +238,11 @@ metrics:
 EOF
 
 # Domains and accounts live in the database, not in the YAML file. These
-# commands find the config via $UMAILSERVER_CONFIG, ./umailserver.yaml or
-# /etc/umailserver/umailserver.yaml (they have no --config flag)
-umailserver domain add example.com
-umailserver account add admin@example.com
+# commands use the file given with --config, else $UMAILSERVER_CONFIG,
+# ./umailserver.yaml or /etc/umailserver/umailserver.yaml. Without any config
+# they fall back to the default database in ~/.local/share/umailserver.
+umailserver domain add example.com --config /etc/umailserver/umailserver.yaml
+umailserver account add admin@example.com --config /etc/umailserver/umailserver.yaml
 ```
 
 ### Security Hardening
