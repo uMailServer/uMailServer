@@ -69,7 +69,8 @@ function RecipientField({
 export function ComposePage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const replyTo = searchParams.get("replyTo")
+  // "to" prefills a new message (e.g. from Contacts); "replyTo" comes from a reply.
+  const replyTo = searchParams.get("replyTo") || searchParams.get("to")
   const draftId = searchParams.get("draft")
   const [to, setTo] = useState<string[]>(() => (replyTo && EMAIL_RE.test(replyTo) ? [replyTo] : []))
   const [cc, setCc] = useState<string[]>([])

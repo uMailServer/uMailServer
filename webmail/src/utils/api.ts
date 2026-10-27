@@ -120,6 +120,25 @@ export interface FilterAction {
 
 // Mirrors internal/api/vacation.go: snake_case keys, `message` (not body), and
 // a send_interval in hours that the server requires to be > 0.
+// A contact in the user's CardDAV address books (/api/v1/contacts).
+export interface Contact {
+  uid: string
+  addressbook: string
+  name: string
+  emails: string[] | null
+  phones: string[] | null
+  organization?: string
+  note?: string
+}
+
+export interface ContactInput {
+  name: string
+  emails: string[]
+  phones: string[]
+  organization: string
+  note: string
+}
+
 export interface VacationAutoReply {
   enabled: boolean
   subject: string
@@ -374,6 +393,25 @@ class API {
 
   async deleteFilter(id: string): Promise<void> {
     await this.delete(`/filters/${encodeURIComponent(id)}`)
+  }
+
+  // Contacts
+  async getContacts(query?: string): Promise<Contact[]> {
+    const qs = query ? `?q=${encodeURIComponent(query)}` : ''
+    const res = await this.get<{ contacts?: Contact[] }>(`/contacts${qs}`)
+    return res?.contacts ?? []
+  }
+
+  async createContact(contact: ContactInput): Promise<Contact> {
+    return this.post<Contact>('/contacts', contact)
+  }
+
+  async updateContact(c: Pick<Contact, 'addressbook' | 'uid'>, contact: ContactInput): Promise<Contact> {
+    return this.put<Contact>(`/contacts/${encodeURIComponent(c.addressbook)}/${encodeURIComponent(c.uid)}`, contact)
+  }
+
+  async deleteContact(c: Pick<Contact, 'addressbook' | 'uid'>): Promise<void> {
+    await this.delete(`/contacts/${encodeURIComponent(c.addressbook)}/${encodeURIComponent(c.uid)}`)
   }
 
   // Vacation/Auto-reply
