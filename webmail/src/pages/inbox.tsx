@@ -10,6 +10,8 @@ import {
   List,
   LayoutGrid,
   ArrowUpDown,
+  FolderInput,
+  ShieldAlert,
 } from "lucide-react"
 import { WelcomeBanner } from "@/components/welcome-banner"
 import { cn } from "@/lib/utils"
@@ -26,7 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
-import api, { Mail } from "@/utils/api"
+import api, { Mail, type MailFolder } from "@/utils/api"
 import { useMailFolder } from "@/hooks/useMailFolder"
 
 interface Email {
@@ -88,6 +90,14 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
   }, [])
   useEffect(() => { setSelectedEmails(new Set()) }, [apiFolder, wantStarred, wantUnread])
   const [showWelcome, setShowWelcome] = useState(true)
+  const [folders, setFolders] = useState<MailFolder[]>([])
+  // Move targets: every folder but the current one (and Trash, which the
+  // Delete button covers). Loaded when the menu opens.
+  const loadFolders = () => {
+    api.getFolders().then((list) => { if (mountedRef.current) setFolders(list) }).catch(() => {})
+  }
+  const moveTargets = folders.filter((f) => (f.role || f.name) !== apiFolder && f.role !== "trash")
+  const folderLabel = (f: MailFolder) => (f.role ? f.role[0].toUpperCase() + f.role.slice(1) : f.name)
 
   const toggleSelectAll = () => {
     if (selectedEmails.size === emails.length) {
@@ -265,6 +275,30 @@ export function InboxPage({ folder = "inbox" }: InboxPageProps) {
               <Button variant="ghost" size="sm" onClick={() => void flag(Array.from(selectedEmails), "read", true)}>
                 Mark read
               </Button>
+              {apiFolder !== "spam" && (
+                <Button variant="ghost" size="sm" className="gap-1" title="Move to Spam (trains the spam filter)"
+                  onClick={() => void moveSelected(Array.from(selectedEmails), "spam", `${selectedEmails.size} moved to Spam`)}>
+                  <ShieldAlert className="h-4 w-4" />
+                  Spam
+                </Button>
+              )}
+              <DropdownMenu onOpenChange={(open) => { if (open) loadFolders() }}>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="gap-1">
+                    <FolderInput className="h-4 w-4" />
+                    Move to
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  {moveTargets.length === 0 && <DropdownMenuItem disabled>No other folders</DropdownMenuItem>}
+                  {moveTargets.map((f) => (
+                    <DropdownMenuItem key={f.name}
+                      onClick={() => void moveSelected(Array.from(selectedEmails), f.role || f.name, `${selectedEmails.size} moved to ${folderLabel(f)}`)}>
+                      {folderLabel(f)}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete()} title="Delete">
                 <Trash2 className="h-4 w-4" />
               </Button>
