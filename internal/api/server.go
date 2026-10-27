@@ -47,6 +47,9 @@ type Server struct {
 	searchSvc    *search.Service
 	msgStore     *storage.MessageStore
 	mailDB       *storage.Database
+	msgCountMu   sync.Mutex // guards the cached stored-message count
+	msgCount     int
+	msgCountAt   time.Time
 	queueMgr     *queue.Manager
 	deliverFn    func(from string, to []string, data []byte) error // webmail send routing (F7640)
 	junkReport   func(user, messageID string, spam bool)           // spam training from Junk moves

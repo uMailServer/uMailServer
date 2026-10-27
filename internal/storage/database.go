@@ -494,6 +494,23 @@ func (db *Database) ListSubscribed(user string) ([]string, error) {
 }
 
 // GetMailboxCounts returns message counts for a mailbox
+// CountMessages returns how many messages mailbox holds. It reads the bucket's
+// key count instead of decoding every message, so it is cheap enough for a
+// dashboard (GetMailboxCounts also needs the flags and decodes each one).
+func (db *Database) CountMessages(user, mailbox string) (int, error) {
+	if db.bolt == nil {
+		return 0, nil
+	}
+	n := 0
+	err := db.bolt.View(func(tx *bbolt.Tx) error {
+		if b := tx.Bucket([]byte(messagesBucket(user, mailbox))); b != nil {
+			n = b.Stats().KeyN
+		}
+		return nil
+	})
+	return n, err
+}
+
 func (db *Database) GetMailboxCounts(user, mailbox string) (exists, recent, unseen int, err error) {
 	if db.bolt == nil {
 		return 0, 0, 0, nil
