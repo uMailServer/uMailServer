@@ -72,9 +72,8 @@ Keep one active process; make its replacement start quickly and safely.
   one host; across hosts the volume's single-attach (ReadWriteOnce) does.
   Document that `ReadWriteMany` volumes must not be used.
 
-Code changes: small. Shorter startup (avoid rebuilding state that can be
-loaded), a readiness check that turns true only once SMTP accepts mail, and
-documentation.
+Code changes: small. A readiness check that turns true only once SMTP
+accepts mail, and documentation.
 
 What it gives: recovery without manual work, except for confirming a failed
 node. What it does not: zero downtime;
@@ -146,7 +145,12 @@ means maintaining both storage backends.
 - `docs/DEPLOYMENT.md` → Failover describes recovery from node failure (the
   out-of-service taint) and the storage requirements.
 
-Not done: startup time was not measured or shortened.
+Startup time is not a factor: from process start to `/health/ready`
+answering 200 takes about 70 ms (empty data directory, 3 runs), and a clean
+stop about 5 ms. Start does no work that grows with the data: the bbolt
+files are memory-mapped, and search indexes are built per user on the first
+search. Failover time is therefore set by detecting the failure and
+re-attaching the volume, not by the server.
 
 ## Open questions
 
