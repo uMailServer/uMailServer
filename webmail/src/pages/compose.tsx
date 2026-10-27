@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils"
 import { quoteForReply, forwardBody, replyAllRecipients } from "@/utils/quote"
 import api, { FLAG_ANSWERED } from "@/utils/api"
 import { attachmentError, readFileBase64, type ComposeAttachment } from "@/utils/attachments"
+import { suggestionsFor, type Suggestion } from "@/utils/recipients"
 
 const EMAIL_RE = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
 
@@ -18,13 +19,21 @@ const COMPOSE_BACKUP_KEY = "umail.compose.backup"
 type Field = "to" | "cc" | "bcc"
 
 function RecipientField({
-  label, values, onChange,
-}: { label: string; values: string[]; onChange: (v: string[]) => void }) {
+  label, values, onChange, contacts = [],
+}: { label: string; values: string[]; onChange: (v: string[]) => void; contacts?: Suggestion[] }) {
   const [text, setText] = useState("")
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+
+  // The word being typed is the text after the last separator.
+  const word = text.split(/[,;\s]+/).pop() ?? ""
+  const matches = open ? suggestionsFor(contacts, word, values) : []
+  const listId = `recipients-${label.toLowerCase()}`
 
   // Accept comma/semicolon/space separated addresses; keep invalid text so the
   // user can correct it instead of silently dropping it.
   const commit = () => {
+    setOpen(false)
     const parts = text.split(/[,;\s]+/).filter(Boolean)
     if (parts.length === 0) return
     const bad = parts.filter((p) => !EMAIL_RE.test(p))
@@ -32,6 +41,17 @@ function RecipientField({
     if (good.length) onChange([...values, ...good])
     setText(bad.join(", "))
     if (bad.length) toast.error(`Invalid address: ${bad.join(", ")}`)
+  }
+
+  // pick replaces the word being typed with a contact's address.
+  const pick = (s: Suggestion) => {
+    const rest = text.slice(0, text.length - word.length).split(/[,;\s]+/).filter(Boolean)
+    const good = rest.filter((p) => EMAIL_RE.test(p) && !values.includes(p))
+    const bad = rest.filter((p) => !EMAIL_RE.test(p))
+    onChange([...values, ...good.filter((p) => p !== s.email), ...(values.includes(s.email) ? [] : [s.email])])
+    setText(bad.join(", "))
+    setOpen(false)
+    setActive(0)
   }
 
   return (
@@ -47,20 +67,59 @@ function RecipientField({
             </button>
           </Badge>
         ))}
-        <Input
-          aria-label={label}
-          className="h-8 min-w-[12rem] flex-1 border-0 shadow-none focus-visible:ring-0 px-1"
-          placeholder="name@example.com"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "," || e.key === ";") {
-              e.preventDefault()
-              commit()
-            }
-          }}
-        />
+        <div className="relative min-w-[12rem] flex-1">
+          <Input
+            aria-label={label}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={matches.length > 0}
+            aria-controls={listId}
+            aria-activedescendant={matches.length > 0 ? `${listId}-${active}` : undefined}
+            className="h-8 w-full border-0 shadow-none focus-visible:ring-0 px-1"
+            placeholder="name@example.com"
+            value={text}
+            onChange={(e) => { setText(e.target.value); setOpen(true); setActive(0) }}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (matches.length > 0) {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault()
+                  const step = e.key === "ArrowDown" ? 1 : -1
+                  setActive((a) => (a + step + matches.length) % matches.length)
+                  return
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault()
+                  pick(matches[Math.min(active, matches.length - 1)])
+                  return
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault()
+                  setOpen(false)
+                  return
+                }
+              }
+              if (e.key === "Enter" || e.key === "," || e.key === ";") {
+                e.preventDefault()
+                commit()
+              }
+            }}
+          />
+          {matches.length > 0 && (
+            <ul id={listId} role="listbox" aria-label={`${label} suggestions`}
+              className="absolute left-0 top-full z-20 mt-1 w-full min-w-[16rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+              {matches.map((s, i) => (
+                <li key={s.email} id={`${listId}-${i}`} role="option" aria-selected={i === active}
+                  className={cn("cursor-pointer rounded px-2 py-1 text-sm", i === active && "bg-accent text-accent-foreground")}
+                  // mousedown, not click: the input's blur would commit the typed text first.
+                  onMouseDown={(e) => { e.preventDefault(); pick(s) }}
+                  onMouseEnter={() => setActive(i)}>
+                  {s.name ? <><span className="font-medium">{s.name}</span>{" "}<span className="text-muted-foreground">{s.email}</span></> : s.email}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -75,6 +134,18 @@ export function ComposePage() {
   const [to, setTo] = useState<string[]>(() => (replyTo && EMAIL_RE.test(replyTo) ? [replyTo] : []))
   const [cc, setCc] = useState<string[]>([])
   const [bcc, setBcc] = useState<string[]>([])
+  const [contacts, setContacts] = useState<Suggestion[]>([])
+
+  // Recipient suggestions are a convenience: without contacts the fields
+  // still take typed addresses, so a failed load is not reported.
+  useEffect(() => {
+    let cancelled = false
+    api.getContacts().then((list) => {
+      if (cancelled) return
+      setContacts(list.flatMap((c) => (c.emails || []).map((email) => ({ name: c.name || "", email }))))
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const [subject, setSubject] = useState(() => searchParams.get("subject") || "")
   const [body, setBody] = useState("")
   const [attachments, setAttachments] = useState<ComposeAttachment[]>([])
@@ -339,9 +410,9 @@ export function ComposePage() {
       </div>
 
       <div className="border-b px-4 py-2 space-y-2">
-        <RecipientField label="To" values={to} onChange={set.to} />
-        <RecipientField label="Cc" values={cc} onChange={set.cc} />
-        <RecipientField label="Bcc" values={bcc} onChange={set.bcc} />
+        <RecipientField label="To" values={to} onChange={set.to} contacts={contacts} />
+        <RecipientField label="Cc" values={cc} onChange={set.cc} contacts={contacts} />
+        <RecipientField label="Bcc" values={bcc} onChange={set.bcc} contacts={contacts} />
         <div className="flex items-center gap-2">
           <span className="w-12 text-sm text-muted-foreground">Sub:</span>
           <Input
