@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/api"
 	"github.com/umailserver/umailserver/internal/imap"
 	"github.com/umailserver/umailserver/internal/metrics"
 	"github.com/umailserver/umailserver/internal/queue"
@@ -99,6 +100,12 @@ func (s *Server) loginResult(username string, success bool, ip string) {
 // protocols (smtp, imap, pop3). It writes to the audit log and fires the
 // webhook event in one place so consumers stay consistent across protocols.
 func (s *Server) recordLoginResult(service, username string, success bool, ip, reason string) {
+	if success && s.database != nil {
+		user, domain := parseEmail(normalizeLogin(username))
+		if err := s.database.RecordLogin(domain, user, time.Now(), api.LastLoginMinInterval); err != nil {
+			s.logger.Warn("Failed to record the login time", "user", username, "error", err)
+		}
+	}
 	if s.apiServer != nil {
 		if al := s.apiServer.AuditLogger(); al != nil {
 			al.LogProtocolLogin(service, username, ip, success, reason)

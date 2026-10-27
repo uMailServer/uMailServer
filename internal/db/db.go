@@ -581,6 +581,10 @@ func (d *DB) UpdateAccount(account *AccountData) error {
 				if stored.TOTPLastUsedStep > account.TOTPLastUsedStep {
 					account.TOTPLastUsedStep = stored.TOTPLastUsedStep
 				}
+				// F7782: nor may it erase the last login recorded since.
+				if stored.LastLoginAt.After(account.LastLoginAt) {
+					account.LastLoginAt = stored.LastLoginAt
+				}
 				// F6250: a stale snapshot must not re-validate sessions
 				// revoked after it was read.
 				if stored.TokensValidAfter > account.TokensValidAfter {
@@ -594,6 +598,30 @@ func (d *DB) UpdateAccount(account *AccountData) error {
 		}
 		return b.Put(key, data)
 	})
+}
+
+// RecordLogin stores now as the account's last login (F7782: nothing ever
+// set it, so the admin list and the account page always showed "never"). A
+// login already recorded less than minInterval ago is kept instead: stored
+// writes are synced and IMAP/POP3 clients reconnect often. An account that
+// is not in the database (an LDAP user) is not an error.
+func (d *DB) RecordLogin(domain, localPart string, now time.Time, minInterval time.Duration) error {
+	// The common case, a recent login, costs one read and no write lock.
+	if acct, err := d.GetAccount(domain, localPart); err == nil && now.Sub(acct.LastLoginAt) < minInterval {
+		return nil
+	}
+	errRecent := errors.New("login recorded recently")
+	_, err := d.MutateAccount(domain, localPart, func(a *AccountData) error {
+		if now.Sub(a.LastLoginAt) < minInterval {
+			return errRecent // a concurrent login got there first: nothing to write
+		}
+		a.LastLoginAt = now
+		return nil
+	})
+	if errors.Is(err, errRecent) || errors.Is(err, ErrAccountNotFound) {
+		return nil
+	}
+	return err
 }
 
 // MutateAccount atomically reads an account, applies fn and writes it back in

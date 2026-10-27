@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/umailserver/umailserver/internal/db"
 )
 
@@ -66,5 +68,49 @@ func TestSelfAccountGet(t *testing.T) {
 	// DELETE still reaches the self-delete handler (it wants the password).
 	if rec := do(http.MethodDelete, false); rec.Code != http.StatusBadRequest {
 		t.Fatalf("DELETE without password: %d", rec.Code)
+	}
+}
+
+// A successful login is recorded for the admin list and the account page.
+func TestLoginRecordsLastLogin(t *testing.T) {
+	database, err := db.Open(t.TempDir() + "/a.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if err := database.CreateDomain(&db.DomainData{Name: "test.com", MaxAccounts: 10, IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte("last-login-fixture-pw"), bcrypt.MinCost)
+	if err := database.CreateAccount(&db.AccountData{Email: "u@test.com", LocalPart: "u", Domain: "test.com", PasswordHash: string(hash), IsActive: true}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(database, nil, Config{TokenExpiry: time.Hour})
+	login := func(password string) int {
+		body, _ := json.Marshal(map[string]string{"email": "u@test.com", "password": password})
+		rec := httptest.NewRecorder()
+		s.handleLogin(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(string(body))))
+		return rec.Code
+	}
+	if login("wrong") == http.StatusOK {
+		t.Fatal("wrong password accepted")
+	}
+	if a, _ := database.GetAccount("test.com", "u"); !a.LastLoginAt.IsZero() {
+		t.Fatalf("a failed login was recorded: %v", a.LastLoginAt)
+	}
+	before := time.Now()
+	if login("last-login-fixture-pw") != http.StatusOK {
+		t.Fatal("login failed")
+	}
+	a, _ := database.GetAccount("test.com", "u")
+	if a.LastLoginAt.Before(before) {
+		t.Fatalf("LastLoginAt = %v, want >= %v", a.LastLoginAt, before)
+	}
+	first := a.LastLoginAt
+	if login("last-login-fixture-pw") != http.StatusOK {
+		t.Fatal("second login failed")
+	}
+	if a, _ = database.GetAccount("test.com", "u"); !a.LastLoginAt.Equal(first) {
+		t.Fatalf("a second login within the hour rewrote the time: %v -> %v", first, a.LastLoginAt)
 	}
 }

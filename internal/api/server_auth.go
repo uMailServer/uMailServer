@@ -565,6 +565,10 @@ func (s *Server) recordAccountLoginFailure(email string) {
 //	@Failure 401 {object} map[string]interface{} "Invalid credentials"
 //	@Failure 429 {object} map[string]interface{} "Too many login attempts"
 //	@Router /api/v1/login [post]
+// LastLoginMinInterval is how often a successful login rewrites an account's
+// last-login time.
+const LastLoginMinInterval = time.Hour
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -765,6 +769,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// Clear login failures on successful login
 	s.clearAccountLoginFailures(emailKey)
+
+	// F7782: remember the sign-in for the admin list and the account page.
+	if err := s.db.RecordLogin(account.Domain, account.LocalPart, time.Now(), LastLoginMinInterval); err != nil {
+		s.logger.Warn("Failed to record the login time", "user", account.Email, "error", err)
+	}
 
 	// Initialize demo emails for the user on first login
 	InitDemoEmails(account.Email)
