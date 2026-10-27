@@ -439,8 +439,12 @@ func (h *MailHandler) getEmailsPageFiltered(userEmail, mailbox string, limit, of
 	return emails, total, counts, nil
 }
 
-// extractBody extracts the body from a raw email message
+// extractBody extracts the body from a raw email message, decoded for
+// display when the message declares a MIME structure.
 func (h *MailHandler) extractBody(raw string) string {
+	if text, ok := decodeDisplayBody(raw); ok {
+		return text
+	}
 	// Find the header/body separator
 	sep := "\r\n\r\n"
 	idx := strings.Index(raw, sep)
@@ -700,9 +704,7 @@ func (h *MailHandler) handleMailSend(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("Content-Type: " + ct + "\r\n\r\n")
 		sb.Write(mixed)
 	} else {
-		sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
-		sb.WriteString("\r\n")
-		sb.WriteString(req.Body)
+		writeTextBody(&sb, req.Body)
 	}
 
 	rawEmail := sb.String()

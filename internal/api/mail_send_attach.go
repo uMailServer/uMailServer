@@ -100,6 +100,45 @@ func validateAttachments(in []SendAttachment) ([]decodedAttachment, error) {
 
 // buildMixedBody returns the Content-Type header value and the multipart/mixed
 // body (text part + attachments).
+// writeTextBody writes the Content-Type of a single-part text/plain message,
+// the blank line and the body. Plain ASCII with short lines goes out as-is
+// (7bit); anything else is quoted-printable like the text part of
+// buildMixedBody, since the 7bit default allows neither 8-bit bytes nor lines
+// over 998 octets (RFC 5322 §2.1.1, RFC 2045 §2.7) (F7774).
+func writeTextBody(sb *strings.Builder, text string) {
+	sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n")
+	if is7bitText(text) {
+		sb.WriteString("\r\n")
+		sb.WriteString(text)
+		return
+	}
+	sb.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+	qw := quotedprintable.NewWriter(sb)
+	_, _ = qw.Write([]byte(text))
+	_ = qw.Close()
+}
+
+func is7bitText(text string) bool {
+	lineLen := 0
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c >= 0x80 {
+			return false
+		}
+		if c == '\n' {
+			lineLen = 0
+			continue
+		}
+		if c == '\r' {
+			continue
+		}
+		if lineLen++; lineLen > 998 {
+			return false
+		}
+	}
+	return true
+}
+
 func buildMixedBody(text string, atts []decodedAttachment) (string, []byte, error) {
 	var rnd [16]byte
 	if _, err := rand.Read(rnd[:]); err != nil {

@@ -374,8 +374,7 @@ func (h *MailHandler) handleMailDraft(w http.ResponseWriter, r *http.Request) {
 	sb.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("utf-8", safeSubject)))
 	sb.WriteString(fmt.Sprintf("Date: %s\r\n", dateStr))
 	sb.WriteString("MIME-Version: 1.0\r\n")
-	sb.WriteString("Content-Type: text/plain; charset=utf-8\r\n\r\n")
-	sb.WriteString(req.Body)
+	writeTextBody(&sb, req.Body)
 	raw := sb.String()
 
 	if err := h.mailDB.CreateMailbox(user, "Drafts"); err != nil {
