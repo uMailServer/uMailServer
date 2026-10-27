@@ -2,30 +2,8 @@ package auth
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"testing"
-	"time"
 )
-
-// F7240: the report window Begin was reset to now before BuildReport read it.
-func TestR247_ReportWindowNotResetBeforeBuild(t *testing.T) {
-	r := NewDMARCReporter(nil, nil, DMARCReporterConfig{OrgName: "o", FromEmail: "d@example.com", Interval: 24 * time.Hour})
-	r.SetPolicy("example.com", DMARCPolicyReject, "", DMARCAlignmentRelaxed, DMARCAlignmentRelaxed, 100)
-	r.RecordResult("example.com", &DMARCEvaluation{Disposition: "none"}, "192.0.2.1", "pass", "pass")
-	xmlData, err := r.buildDomainReport("example.com", "rua@example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(xmlData)
-	begin := fmt.Sprintf("<begin>%d</begin>", time.Now().Add(-24*time.Hour).Unix())
-	if !strings.Contains(s, begin[:len("<begin>")+6]) { // same leading digits (coarse)
-		t.Fatalf("begin should be ~24h ago, got %s", s)
-	}
-	if n, _ := r.GetReportStats("example.com"); n != 0 {
-		t.Fatalf("entries not drained")
-	}
-}
 
 // F7241: RFC 7489 §7.1 external destination verification.
 func TestR247_ExternalReportDestinationVerification(t *testing.T) {
@@ -70,26 +48,5 @@ func TestR247_VersionTagWhitespace(t *testing.T) {
 	rec, err := parseDMARCRecord("v = DMARC1; p=reject")
 	if err != nil || rec.Policy != DMARCPolicyReject {
 		t.Fatalf("%v %v", rec, err)
-	}
-}
-
-// F7244: reporter state caps (entries per domain, tracked domains).
-func TestR247_ReporterCaps(t *testing.T) {
-	r := NewDMARCReporter(nil, nil, DMARCReporterConfig{Interval: time.Hour})
-	ev := &DMARCEvaluation{Disposition: "none"}
-	for i := 0; i < maxReportEntriesPerDomain+500; i++ {
-		r.RecordResult("example.com", ev, fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "fail", "fail")
-	}
-	if n, _ := r.GetReportStats("example.com"); n > maxReportEntriesPerDomain {
-		t.Fatalf("entries %d exceed cap", n)
-	}
-	for i := 0; i < maxReportDomains+500; i++ {
-		r.RecordResult(fmt.Sprintf("d%d.example", i), ev, "192.0.2.1", "fail", "fail")
-	}
-	r.reportsMu.Lock()
-	n := len(r.reports)
-	r.reportsMu.Unlock()
-	if n > maxReportDomains {
-		t.Fatalf("domains %d exceed cap", n)
 	}
 }

@@ -209,6 +209,22 @@ func (s *AuthDMARCStage) Process(ctx *MessageContext) PipelineResult {
 		Percentage: 100,
 	}
 
+	// Record the result for aggregate reporting, rejected messages included.
+	if s.reporter != nil {
+		sourceIP := ""
+		if ctx.RemoteIP != nil {
+			sourceIP = ctx.RemoteIP.String()
+		}
+		s.reporter.Record(evaluation, auth.ReportSample{
+			SourceIP:     sourceIP,
+			HeaderFrom:   fromDomain,
+			EnvelopeFrom: ctx.SPFResult.Domain,
+			SPFResult:    spfResult.String(),
+			DKIMDomain:   ctx.DKIMResult.Domain,
+			DKIMResult:   dkimResult.String(),
+		})
+	}
+
 	// Apply DMARC policy
 	switch evaluation.AppliedPolicy {
 	case auth.DMARCPolicyReject:
@@ -232,12 +248,6 @@ func (s *AuthDMARCStage) Process(ctx *MessageContext) PipelineResult {
 				"explanation", evaluation.Explanation,
 			)
 		}
-	}
-
-	// Record result for DMARC aggregate reporting
-	if s.reporter != nil && evaluation.Result != auth.DMARCNone {
-		s.reporter.RecordResult(fromDomain, evaluation, ctx.RemoteIP.String(),
-			spfResult.String(), dkimResult.String())
 	}
 
 	return ResultAccept

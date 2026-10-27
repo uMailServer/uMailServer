@@ -1,11 +1,17 @@
 package auth
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/mail"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -57,22 +63,22 @@ type Record struct {
 type Row struct {
 	SourceIP       string `xml:"source_ip"`
 	Count          int    `xml:"count"`
-	PolicyOverride string `xml:"policy_evaluated>policy_override,omitempty"`
 	Disposition    string `xml:"policy_evaluated>disposition,omitempty"`
-	SPF            string `xml:"policy_evaluated>spf,omitempty"`
 	DKIM           string `xml:"policy_evaluated>dkim,omitempty"`
+	SPF            string `xml:"policy_evaluated>spf,omitempty"`
+	PolicyOverride string `xml:"policy_evaluated>reason>type,omitempty"`
 }
 
 // Identifiers contains message identifiers
 type Identifiers struct {
-	HeaderFrom   string `xml:"header_from"`
 	EnvelopeFrom string `xml:"envelope_from,omitempty"`
+	HeaderFrom   string `xml:"header_from"`
 }
 
 // AuthResult contains authentication results
 type AuthResult struct {
-	SPF  []SPFResultEntry  `xml:"spf"`
 	DKIM []DKIMResultEntry `xml:"dkim"`
+	SPF  []SPFResultEntry  `xml:"spf"`
 }
 
 // SPFResultEntry represents an SPF authentication result
@@ -87,79 +93,142 @@ type DKIMResultEntry struct {
 	Result string `xml:"result"`
 }
 
-// ReportEntry tracks message authentication results for a source IP
-type ReportEntry struct {
+// ReportRow is one aggregate report row: the messages from one source IP
+// that share identifiers and results.
+type ReportRow struct {
 	SourceIP     string
-	Count        int
-	Dispositions []string // none/quarantine/reject
-	SPFResults   []string
-	DKIMResults  []string
-	EnvelopeFrom string
 	HeaderFrom   string
+	EnvelopeFrom string // SPF-checked domain (MAIL FROM, or HELO)
+	Disposition  string // none/quarantine/reject
+	DKIMEval     string // policy_evaluated dkim: pass/fail
+	SPFEval      string // policy_evaluated spf: pass/fail
+	DKIMDomain   string // d= of the evaluated signature; empty when unsigned
+	DKIMResult   string
+	SPFResult    string
 }
 
-// BuildReport creates a DMARC aggregate report XML
-func BuildReport(orgName, email, domain, adkim, aspf string, policy DMARCPolicy, sp DMARCPolicy, pct int, begin, end time.Time, entries []ReportEntry) ([]byte, error) {
-	reportID := fmt.Sprintf("R%d-%s", begin.Unix(), strings.ReplaceAll(domain, ".", "_"))
+// ReportInput is everything one aggregate report covers.
+type ReportInput struct {
+	OrgName  string // reporting organization
+	Email    string // reporting organization's contact address
+	ReportID string
+	Domain   string // policy domain
+	Record   DMARCRecord
+	Begin    time.Time
+	End      time.Time
+	Rows     map[ReportRow]int // row -> message count
+}
 
+// BuildReport renders a DMARC aggregate report (RFC 7489 Appendix C).
+func BuildReport(in ReportInput) ([]byte, error) {
+	adkim, aspf := string(in.Record.AlignmentDKIM), string(in.Record.AlignmentSPF)
+	if adkim == "" {
+		adkim = string(DMARCAlignmentRelaxed)
+	}
+	if aspf == "" {
+		aspf = string(DMARCAlignmentRelaxed)
+	}
 	report := DMARCReport{
 		Version: "1.0",
 		ReportMeta: ReportMeta{
-			OrgName:   orgName,
-			Email:     email,
-			ReportID:  reportID,
-			DateRange: DateRange{Begin: begin.Unix(), End: end.Unix()},
+			OrgName:   in.OrgName,
+			Email:     in.Email,
+			ReportID:  in.ReportID,
+			DateRange: DateRange{Begin: in.Begin.Unix(), End: in.End.Unix()},
 		},
 		PolicyPUB: PolicyPublished{
-			Domain:    domain,
+			Domain:    in.Domain,
 			Adkim:     adkim,
 			Aspf:      aspf,
-			Policy:    string(policy),
-			Subdomain: string(sp),
-			Pct:       pct,
+			Policy:    string(in.Record.Policy),
+			Subdomain: string(in.Record.SubdomainPolicy),
+			Pct:       in.Record.Percentage,
 		},
-		Records: make([]Record, 0, len(entries)),
+		Records: make([]Record, 0, len(in.Rows)),
 	}
 
-	for _, entry := range entries {
-		record := Record{
+	rows := make([]ReportRow, 0, len(in.Rows))
+	for row := range in.Rows {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return fmt.Sprint(rows[i]) < fmt.Sprint(rows[j]) })
+	for _, row := range rows {
+		rec := Record{
 			Row: Row{
-				SourceIP: entry.SourceIP,
-				Count:    entry.Count,
+				SourceIP:    row.SourceIP,
+				Count:       in.Rows[row],
+				Disposition: row.Disposition,
+				DKIM:        row.DKIMEval,
+				SPF:         row.SPFEval,
 			},
 			Identifiers: Identifiers{
-				HeaderFrom:   entry.HeaderFrom,
-				EnvelopeFrom: entry.EnvelopeFrom,
+				HeaderFrom:   row.HeaderFrom,
+				EnvelopeFrom: row.EnvelopeFrom,
 			},
 			AuthResult: AuthResult{
-				SPF:  make([]SPFResultEntry, 0),
-				DKIM: make([]DKIMResultEntry, 0),
+				SPF: []SPFResultEntry{{Domain: row.EnvelopeFrom, Result: row.SPFResult}},
 			},
 		}
-
-		// Set disposition from last entry (most common)
-		if len(entry.Dispositions) > 0 {
-			record.Row.Disposition = entry.Dispositions[len(entry.Dispositions)-1]
+		if row.DKIMDomain != "" {
+			rec.AuthResult.DKIM = []DKIMResultEntry{{Domain: row.DKIMDomain, Result: row.DKIMResult}}
 		}
-
-		for _, spf := range entry.SPFResults {
-			record.AuthResult.SPF = append(record.AuthResult.SPF, SPFResultEntry{
-				Domain: entry.EnvelopeFrom,
-				Result: spf,
-			})
-		}
-
-		for _, dkim := range entry.DKIMResults {
-			record.AuthResult.DKIM = append(record.AuthResult.DKIM, DKIMResultEntry{
-				Domain: entry.HeaderFrom,
-				Result: dkim,
-			})
-		}
-
-		report.Records = append(report.Records, record)
+		report.Records = append(report.Records, rec)
 	}
 
-	return xml.MarshalIndent(&report, "", "  ")
+	out, err := xml.MarshalIndent(&report, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), out...), nil
+}
+
+// BuildReportMessage wraps a report in the RFC 7489 §7.2.1.1 mail format: a
+// multipart message whose attachment is the gzip-compressed XML, named
+// receiver!policy-domain!begin!end.xml.gz.
+func BuildReportMessage(from, to, receiver string, in ReportInput, xmlData []byte, now time.Time) ([]byte, error) {
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	if _, err := zw.Write(xmlData); err != nil {
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	var rnd [12]byte
+	if _, err := rand.Read(rnd[:]); err != nil {
+		return nil, err
+	}
+	boundary := "dmarc-" + hex.EncodeToString(rnd[:])
+	filename := fmt.Sprintf("%s!%s!%d!%d.xml.gz", receiver, in.Domain, in.Begin.Unix(), in.End.Unix())
+	fromDomain := receiver
+	if at := strings.LastIndex(from, "@"); at >= 0 {
+		fromDomain = from[at+1:]
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", from)
+	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "Subject: Report Domain: %s Submitter: %s Report-ID: <%s>\r\n", in.Domain, receiver, in.ReportID)
+	fmt.Fprintf(&b, "Date: %s\r\n", now.UTC().Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "Message-ID: <%s@%s>\r\n", hex.EncodeToString(rnd[:]), fromDomain)
+	b.WriteString("MIME-Version: 1.0\r\n")
+	fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=\"%s\"\r\n\r\n", boundary)
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
+	b.WriteString("Content-Type: text/plain; charset=utf-8\r\n\r\n")
+	fmt.Fprintf(&b, "This is a DMARC aggregate report for %s from %s.\r\n\r\n", in.Domain, receiver)
+	fmt.Fprintf(&b, "--%s\r\n", boundary)
+	b.WriteString("Content-Type: application/gzip\r\n")
+	b.WriteString("Content-Transfer-Encoding: base64\r\n")
+	fmt.Fprintf(&b, "Content-Disposition: attachment; filename=\"%s\"\r\n\r\n", filename)
+	enc := base64.StdEncoding.EncodeToString(gz.Bytes())
+	for len(enc) > 76 {
+		b.WriteString(enc[:76] + "\r\n")
+		enc = enc[76:]
+	}
+	b.WriteString(enc + "\r\n")
+	fmt.Fprintf(&b, "--%s--\r\n", boundary)
+	return []byte(b.String()), nil
 }
 
 // ParseRUAEmail parses a mailto: URI and extracts email address. The scheme is

@@ -4,68 +4,57 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/smtp"
 	"strings"
 	"sync"
 	"time"
 )
 
-// maxRetainedPerSourceIP bounds the per-source-IP detail retained for one
-// domain. RecordResult appends one element per message, and the only drain
-// (GenerateAndSendReport) has no production caller, so an unbounded slice grows
-// for the life of the process. Entry.Count already carries the message volume,
-// so retaining a small window of recent values is sufficient for reporting.
-const maxRetainedPerSourceIP = 10
-
 // Caps on aggregate-report state. The header-From domain and source IP are
-// attacker-chosen, so both the tracked domains and the per-domain source rows
-// must be bounded (F7244).
+// attacker-chosen, so both the tracked domains and the per-domain rows must
+// be bounded (F7244). Messages beyond a cap are not reported.
 const (
 	maxReportEntriesPerDomain = 1000
 	maxReportDomains          = 10000
 )
 
-// appendBounded appends v to s, retaining only the most recent max elements.
-// It never reorders and keeps the newest value last, which is what BuildReport
-// consumes.
-func appendBounded(s []string, v string, max int) []string {
-	s = append(s, v)
-	if len(s) > max {
-		s = s[len(s)-max:]
-	}
-	return s
-}
+// ReportSendFunc delivers a report message from from to the to addresses.
+type ReportSendFunc func(from string, to []string, msg []byte) error
 
-// DMARCReporter collects DMARC evaluation results and sends aggregate reports
+// DMARCReporter collects the DMARC results of inbound mail and periodically
+// sends aggregate reports (RFC 7489 §7.2) to the rua= addresses of the
+// domains whose policy governed it. Results are kept in memory, so data not
+// yet reported is lost on restart.
 type DMARCReporter struct {
 	resolver  DNSResolver
 	logger    *slog.Logger
-	reports   map[string]*reportData // key: domain
+	send      ReportSendFunc
+	reports   map[string]*reportData // key: policy domain
 	reportsMu sync.Mutex
 	orgName   string
 	fromEmail string
+	email     string // report_metadata contact address
+	receiver  string // reporting host, used in attachment names
 	interval  time.Duration
+	now       func() time.Time
 }
 
-// reportData holds accumulated data for a domain's report
+// reportData holds the accumulated rows of one policy domain since its last
+// report.
 type reportData struct {
-	Domain    string
-	Policy    DMARCPolicy
-	Subdomain DMARCPolicy
-	Adkim     DMARCAlignment
-	Aspf      DMARCAlignment
-	Pct       int
-	Entries   []ReportEntry
-	Begin     time.Time
-	End       time.Time
+	Record DMARCRecord // latest record seen; policy_published and rua
+	Begin  time.Time
+	End    time.Time
+	Rows   map[ReportRow]int
 }
 
 // DMARCReporterConfig holds configuration for the reporter
 type DMARCReporterConfig struct {
-	OrgName     string        // Organization name for reports
-	FromEmail   string        // Sender email for reports
-	ReportEmail string        // Email to send reports to
-	Interval    time.Duration // How often to send reports
+	OrgName     string         // Organization name for reports
+	FromEmail   string         // Sender address of report messages
+	ReportEmail string         // Contact address in report metadata (default FromEmail)
+	Receiver    string         // Reporting host name, e.g. the server hostname
+	Interval    time.Duration  // How often reports are sent (default 24h)
+	Send        ReportSendFunc // Delivers report messages
 }
 
 // NewDMARCReporter creates a new DMARC reporter
@@ -73,214 +62,207 @@ func NewDMARCReporter(resolver DNSResolver, logger *slog.Logger, config DMARCRep
 	if logger == nil {
 		logger = slog.Default()
 	}
+	email := config.ReportEmail
+	if email == "" {
+		email = config.FromEmail
+	}
+	receiver := config.Receiver
+	if receiver == "" {
+		if at := strings.LastIndex(config.FromEmail, "@"); at >= 0 {
+			receiver = config.FromEmail[at+1:]
+		}
+	}
+	interval := config.Interval
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
 	return &DMARCReporter{
 		resolver:  resolver,
 		logger:    logger,
+		send:      config.Send,
 		reports:   make(map[string]*reportData),
 		orgName:   config.OrgName,
 		fromEmail: config.FromEmail,
-		interval:  config.Interval,
+		email:     email,
+		receiver:  receiver,
+		interval:  interval,
+		now:       time.Now,
 	}
 }
 
-// RecordResult records a DMARC evaluation result for reporting
-func (r *DMARCReporter) RecordResult(domain string, eval *DMARCEvaluation, sourceIP string, spfResult, dkimResult string) {
-	if r == nil || domain == "" {
+// ReportSample identifies one evaluated message for aggregate reporting.
+type ReportSample struct {
+	SourceIP     string
+	HeaderFrom   string
+	EnvelopeFrom string // domain SPF checked
+	SPFResult    string
+	DKIMDomain   string
+	DKIMResult   string
+}
+
+// Record adds an evaluated message to the next report of its policy domain.
+// Messages governed by no record, or by one that asks for no aggregate
+// reports (no mailto: rua), are not kept.
+func (r *DMARCReporter) Record(ev *DMARCEvaluation, s ReportSample) {
+	if r == nil || ev == nil || ev.Record == nil || ev.PolicyDomain == "" ||
+		!dmarcHasValidRua(ev.Record.ReportAggregateURI) {
 		return
 	}
+	row := ReportRow{
+		SourceIP:     s.SourceIP,
+		HeaderFrom:   strings.ToLower(s.HeaderFrom),
+		EnvelopeFrom: strings.ToLower(s.EnvelopeFrom),
+		Disposition:  ev.Disposition,
+		DKIMEval:     passFail(ev.DKIMAligned),
+		SPFEval:      passFail(ev.SPFAligned),
+		DKIMDomain:   strings.ToLower(s.DKIMDomain),
+		DKIMResult:   s.DKIMResult,
+		SPFResult:    s.SPFResult,
+	}
+	if row.Disposition == "" {
+		row.Disposition = "none"
+	}
+	if row.DKIMDomain == "" {
+		row.DKIMResult = ""
+	}
+	now := r.now()
 
 	r.reportsMu.Lock()
 	defer r.reportsMu.Unlock()
-
-	data, exists := r.reports[domain]
-	if !exists {
+	data, ok := r.reports[ev.PolicyDomain]
+	if !ok {
 		if len(r.reports) >= maxReportDomains {
 			return
 		}
-		data = &reportData{
-			Domain: domain,
-			Begin:  time.Now().Add(-r.interval),
-			End:    time.Now(),
-		}
-		r.reports[domain] = data
+		data = &reportData{Begin: now, Rows: make(map[ReportRow]int)}
+		r.reports[ev.PolicyDomain] = data
 	}
-
-	// Find or create entry for this source IP
-	var entry *ReportEntry
-	for i := range data.Entries {
-		if data.Entries[i].SourceIP == sourceIP {
-			entry = &data.Entries[i]
-			break
-		}
-	}
-	if entry == nil {
-		if len(data.Entries) >= maxReportEntriesPerDomain {
-			return
-		}
-		data.Entries = append(data.Entries, ReportEntry{
-			SourceIP: sourceIP,
-		})
-		entry = &data.Entries[len(data.Entries)-1]
-	}
-
-	entry.Count++
-	// These slices are appended once per message, but they only ever feed
-	// BuildReport, which takes the most recent value of each. Without a bound
-	// the reporter retains one element per message forever: GenerateAndSendReport
-	// is the only drain and has no production caller, so memory grows with every
-	// message the server accepts. Entry.Count already carries the volume.
-	entry.Dispositions = appendBounded(entry.Dispositions, eval.Disposition, maxRetainedPerSourceIP)
-	entry.SPFResults = appendBounded(entry.SPFResults, spfResult, maxRetainedPerSourceIP)
-	entry.DKIMResults = appendBounded(entry.DKIMResults, dkimResult, maxRetainedPerSourceIP)
-	entry.HeaderFrom = domain
-}
-
-// SetPolicy updates the policy info for a domain
-func (r *DMARCReporter) SetPolicy(domain string, policy DMARCPolicy, sp DMARCPolicy, adkim DMARCAlignment, aspf DMARCAlignment, pct int) {
-	if r == nil || domain == "" {
+	if _, seen := data.Rows[row]; !seen && len(data.Rows) >= maxReportEntriesPerDomain {
 		return
 	}
+	data.Record = *ev.Record
+	data.Rows[row]++
+	data.End = now
+}
 
+func passFail(ok bool) string {
+	if ok {
+		return "pass"
+	}
+	return "fail"
+}
+
+// pendingReport is one domain's drained data, ready to be sent.
+type pendingReport struct {
+	domain string
+	data   *reportData
+}
+
+// drain removes and returns every domain's accumulated data.
+func (r *DMARCReporter) drain() []pendingReport {
 	r.reportsMu.Lock()
 	defer r.reportsMu.Unlock()
+	out := make([]pendingReport, 0, len(r.reports))
+	for domain, data := range r.reports {
+		out = append(out, pendingReport{domain: domain, data: data})
+	}
+	r.reports = make(map[string]*reportData)
+	return out
+}
 
-	data, exists := r.reports[domain]
-	if !exists {
-		data = &reportData{
-			Domain: domain,
-			Begin:  time.Now().Add(-r.interval),
+// Flush sends a report for every domain with data since the last flush and
+// returns how many report messages were sent. A report that cannot be sent
+// is logged and dropped: its data is not carried into the next report.
+func (r *DMARCReporter) Flush(ctx context.Context) int {
+	if r == nil {
+		return 0
+	}
+	now := r.now()
+	sent := 0
+	for _, p := range r.drain() {
+		end := p.data.End
+		if end.Before(p.data.Begin) || end.Equal(p.data.Begin) {
+			end = now
 		}
-		r.reports[domain] = data
+		in := ReportInput{
+			OrgName:  r.orgName,
+			Email:    r.email,
+			ReportID: fmt.Sprintf("%s.%d.%d", p.domain, p.data.Begin.Unix(), now.UnixNano()),
+			Domain:   p.domain,
+			Record:   p.data.Record,
+			Begin:    p.data.Begin,
+			End:      end,
+			Rows:     p.data.Rows,
+		}
+		sent += r.sendReport(ctx, in, now)
 	}
-
-	data.Policy = policy
-	data.Subdomain = sp
-	data.Adkim = adkim
-	data.Aspf = aspf
-	data.Pct = pct
-	data.End = time.Now()
+	return sent
 }
 
-// buildDomainReport snapshots and drains a domain's accumulated data under
-// the lock and renders the aggregate report XML. F7240: the window start used
-// to be reset to now before BuildReport read it (yielding an empty/negative
-// date range) and the fields were read after unlocking (data race).
-func (r *DMARCReporter) buildDomainReport(domain, ruaEmail string) ([]byte, error) {
-	r.reportsMu.Lock()
-	data, exists := r.reports[domain]
-	if !exists {
-		r.reportsMu.Unlock()
-		return nil, fmt.Errorf("no data for domain %s", domain)
+// sendReport mails one domain's report to each authorized rua= address.
+func (r *DMARCReporter) sendReport(ctx context.Context, in ReportInput, now time.Time) int {
+	if r.send == nil {
+		return 0
 	}
-	snap := *data
-	entries := make([]ReportEntry, len(data.Entries))
-	copy(entries, data.Entries)
-
-	// Reset entries after copy
-	data.Entries = nil
-	data.Begin = time.Now()
-	r.reportsMu.Unlock()
-
-	end := snap.End
-	if end.Before(snap.Begin) {
-		end = time.Now()
+	xmlData, err := BuildReport(in)
+	if err != nil {
+		r.logger.Warn("DMARC report not built", "domain", in.Domain, "error", err)
+		return 0
 	}
-	return BuildReport(
-		r.orgName,
-		ruaEmail,
-		snap.Domain,
-		string(snap.Adkim),
-		string(snap.Aspf),
-		snap.Policy,
-		snap.Subdomain,
-		snap.Pct,
-		snap.Begin,
-		end,
-		entries,
-	)
-}
-
-// GenerateAndSendReport generates a report for a domain and sends it via email
-func (r *DMARCReporter) GenerateAndSendReport(domain, ruaEmail string) error {
-	// F7241: RFC 7489 §7.1 — never mail a report to a third-party domain that
-	// has not opted in.
-	if toEmail, perr := ParseRUAEmail(ruaEmail); perr == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		ok, verr := VerifyReportDestination(ctx, r.resolver, domain, toEmail)
+	sent := 0
+	for _, uri := range in.Record.ReportAggregateURI {
+		to, err := ParseRUAEmail(uri)
+		if err != nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(uri)), "mailto:") {
+			continue
+		}
+		// F7241: RFC 7489 §7.1 — never mail a report to a third-party
+		// domain that has not opted in.
+		vctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		ok, verr := VerifyReportDestination(vctx, r.resolver, in.Domain, to)
 		cancel()
 		if !ok {
-			return fmt.Errorf("report destination %s not authorized for %s: %v", toEmail, domain, verr)
+			r.logger.Info("DMARC report destination not authorized", "domain", in.Domain, "to", to, "error", verr)
+			continue
+		}
+		msg, err := BuildReportMessage(r.fromEmail, to, r.receiver, in, xmlData, now)
+		if err == nil {
+			err = r.send(r.fromEmail, []string{to}, msg)
+		}
+		if err != nil {
+			r.logger.Warn("DMARC report not sent", "domain", in.Domain, "to", to, "error", err)
+			continue
+		}
+		r.logger.Info("DMARC report sent", "domain", in.Domain, "to", to, "rows", len(in.Rows))
+		sent++
+	}
+	return sent
+}
+
+// Run sends reports every interval until ctx is done.
+func (r *DMARCReporter) Run(ctx context.Context) {
+	t := time.NewTicker(r.interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.Flush(ctx)
 		}
 	}
-
-	xmlData, err := r.buildDomainReport(domain, ruaEmail)
-	if err != nil {
-		return fmt.Errorf("failed to build report: %w", err)
-	}
-	// Send email with report
-	if err := r.sendReportEmail(ruaEmail, domain, xmlData); err != nil {
-		return fmt.Errorf("failed to send report: %w", err)
-	}
-
-	r.logger.Info("DMARC report sent",
-		"domain", domain,
-		"to", ruaEmail,
-	)
-
-	return nil
 }
 
-// sendReportEmail sends the DMARC report via email
-func (r *DMARCReporter) sendReportEmail(to, domain string, xmlData []byte) error {
-	subject := fmt.Sprintf("DMARC Aggregate Report for %s", domain)
-
-	// Parse the recipient email
-	toEmail, err := ParseRUAEmail(to)
-	if err != nil {
-		return fmt.Errorf("invalid recipient email: %w", err)
-	}
-
-	// Build RFC 5321 format message
-	var msg strings.Builder
-	msg.WriteString(fmt.Sprintf("From: %s\r\n", r.fromEmail))
-	msg.WriteString(fmt.Sprintf("To: %s\r\n", toEmail))
-	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
-	msg.WriteString("MIME-Version: 1.0\r\n")
-	msg.WriteString("Content-Type: message/feedback-report\r\n")
-	msg.WriteString("\r\n")
-
-	// Write XML report directly
-	msg.Write(xmlData)
-
-	// Send via SMTP (localhost relay assumed)
-	addr := "localhost:25"
-	err = smtp.SendMail(addr, nil, r.fromEmail, []string{toEmail}, []byte(msg.String()))
-	if err != nil {
-		r.logger.Warn("Failed to send DMARC report via SMTP, stored for retry",
-			"to", toEmail,
-			"error", err,
-		)
-		// In production, would queue for retry
-		return err
-	}
-
-	return nil
-}
-
-// GetReportStats returns statistics for a domain's report
-func (r *DMARCReporter) GetReportStats(domain string) (int, int) {
+// GetReportStats returns the number of rows and messages pending for a
+// policy domain.
+func (r *DMARCReporter) GetReportStats(domain string) (rows, messages int) {
 	r.reportsMu.Lock()
 	defer r.reportsMu.Unlock()
-
-	data, exists := r.reports[domain]
-	if !exists {
+	data, ok := r.reports[domain]
+	if !ok {
 		return 0, 0
 	}
-
-	totalMessages := 0
-	for _, entry := range data.Entries {
-		totalMessages += entry.Count
+	for _, n := range data.Rows {
+		messages += n
 	}
-
-	return len(data.Entries), totalMessages
+	return len(data.Rows), messages
 }

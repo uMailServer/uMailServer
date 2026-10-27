@@ -125,17 +125,8 @@ func (s *Server) startInboundSMTP() error {
 
 	dmarcStage := smtp.NewAuthDMARCStage(dmarcEvaluator, s.logger)
 
-	// Wire DMARC reporter if enabled
-	if s.config.DMARC.Enabled && s.config.DMARC.ReportEmail != "" {
-		dmarcReporterConfig := auth.DMARCReporterConfig{
-			OrgName:     s.config.DMARC.OrgName,
-			FromEmail:   s.config.DMARC.FromEmail,
-			ReportEmail: s.config.DMARC.ReportEmail,
-			Interval:    24 * time.Hour, // Default to 24h
-		}
-		dmarcReporter := auth.NewDMARCReporter(resolver, s.logger, dmarcReporterConfig)
-		dmarcStage.SetReporter(dmarcReporter)
-		s.logger.Info("DMARC reporting enabled", "org", s.config.DMARC.OrgName)
+	if reporter := s.startDMARCReporter(resolver); reporter != nil {
+		dmarcStage.SetReporter(reporter)
 	}
 
 	// Sender-supplied X-Spam-* headers are neutralised before any stage

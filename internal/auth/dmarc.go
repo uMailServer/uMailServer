@@ -174,6 +174,15 @@ type DMARCEvaluation struct {
 	Domain        string
 	Explanation   string
 	Disposition   string // none/quarantine/reject
+
+	// Aggregate reporting (RFC 7489 §7.2). Record is the policy record that
+	// governed the message, published at PolicyDomain (the From domain or
+	// its organizational domain); nil when no record applied. SPFAligned and
+	// DKIMAligned are the policy_evaluated results: an aligned pass.
+	Record       *DMARCRecord
+	PolicyDomain string
+	SPFAligned   bool
+	DKIMAligned  bool
 }
 
 // NewDMARCEvaluator creates a new DMARC evaluator
@@ -324,9 +333,19 @@ func (e *DMARCEvaluator) evaluateWithRecord(ctx context.Context, fromDomain, sam
 		}
 	}
 
+	policyDomain := strings.ToLower(fromDomain)
+	if fromOrg {
+		if org, err := publicsuffix.EffectiveTLDPlusOne(policyDomain); err == nil {
+			policyDomain = org
+		}
+	}
 	evaluation := &DMARCEvaluation{
-		Domain: fromDomain,
-		Policy: record.Policy,
+		Domain:       fromDomain,
+		Policy:       record.Policy,
+		Record:       record,
+		PolicyDomain: policyDomain,
+		SPFAligned:   spfPassed,
+		DKIMAligned:  dkimPassed,
 	}
 
 	if spfPassed || dkimPassed {
