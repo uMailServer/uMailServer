@@ -1,0 +1,15 @@
+apiVersion: v2
+name: umailserver
+description: uMailServer, a single-binary mail server (SMTP, IMAP, POP3, webmail), as one pod.
+type: application
+version: 0.1.0
+# The image tag used when image.tag is empty. No release is tagged yet; pin
+# image.tag to a release tag once one exists.
+appVersion: "latest"
+home: https://github.com/umailserver/umailserver
+sources:
+  - https://github.com/umailserver/umailserver
+keywords:
+  - mail
+  - smtp
+  - imap

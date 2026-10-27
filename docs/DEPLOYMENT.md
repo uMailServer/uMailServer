@@ -89,6 +89,39 @@ EOF
 docker-compose up -d
 ```
 
+### Kubernetes (Helm)
+
+The chart in `deploy/helm/umailserver` runs the server as a StatefulSet with
+exactly one pod. The accounts, mail index and IMAP metadata live in bbolt
+databases, which one process holds locked, so the server cannot be scaled
+out or autoscaled; an update stops the old pod before the new one starts.
+
+```bash
+helm install mail deploy/helm/umailserver \
+  --namespace mail --create-namespace \
+  --set hostname=mail.example.com \
+  --set tls.secretName=mail-example-com-tls
+```
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `hostname` | (required) | `server.hostname`; the name the certificate must cover |
+| `tls.secretName` | `""` | A `kubernetes.io/tls` Secret, e.g. from cert-manager. Without it IMAP/POP3 refuse logins, 465/993/995 are not served and the web UI is plain HTTP |
+| `jwtSecret` / `existingSecret` | generated | The JWT signing secret. A generated one is kept across upgrades |
+| `ports.<name>.enabled` | see `values.yaml` | Which listeners the Service exposes (`smtp`, `submission`, `submissions`, `imap`, `imaps`, `pop3s`, `https`, `managesieve`) |
+| `service.type` | `LoadBalancer` | |
+| `service.externalTrafficPolicy` | `Local` | Keeps client IPs, which SPF, RBL checks, greylisting and rate limits need |
+| `persistence.size` | `10Gi` | Volume for `/var/lib/umailserver` (mail, databases); `existingClaim` uses your own PVC |
+| `config` | `{}` | Any other settings from `umailserver.yaml.example`, written into the config file |
+
+The chart sets the host name, data directory, listener addresses, TLS file
+paths and metrics listener itself, overriding the same keys in `config`. The
+container binds unprivileged ports (2525, 2587, 2465, 2143, 2993, 2995, 4443)
+and the Service maps them to the standard ones. Liveness uses `/healthz` on
+the metrics port (8080), which is not exposed by the Service.
+
+Back up the volume as described in [Backup & Recovery](#backup--recovery).
+
 ## Configuration
 
 ### Initial Setup

@@ -70,7 +70,7 @@ internal/imap/commands.go:
    - `handleLsub` doğru implementasyon - sadece subscribed mailbox'ları döndürüyor
    - Mailstore interface güncellendi
 
-5. ~~**Kubernetes Helm Chart**~~ — bu madde hatalıydı: `deploy/helm/` dizini repoya hiç eklenmedi. Ayrıca bbolt tek düğüm gerektirdiği için HPA'lı bir chart mevcut mimariyle çalışmaz.
+5. **Kubernetes Helm Chart** — `deploy/helm/umailserver` (2026-10-27): tek pod'lu StatefulSet (replicas: 1, HPA yok), çünkü bbolt tek süreç gerektirir. Kurulum: `docs/DEPLOYMENT.md` → Kubernetes (Helm).
 
 ---
 
@@ -82,7 +82,6 @@ internal/imap/commands.go:
 |-------|---------|-------------|----------|
 | IMAP SCORE Extension | 🟡 Orta | - | SCORE extension desteklenmiyor |
 | Çok düğüm / HA | 🟡 Orta | `internal/cluster` | Cluster paketi hiç başlatılmıyor; bbolt tek düğüm. Issue #1 |
-| Helm chart | 🟢 Düşük | `deploy/` | Yok; tek düğüm kısıtıyla (replicas: 1, HPA yok) yazılmalı |
 
 ---
 

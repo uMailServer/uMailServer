@@ -1,0 +1,31 @@
+uMailServer is running as {{ include "umailserver.fullname" . }} (one pod) in namespace {{ .Release.Namespace }}.
+
+1. Find the external address:
+
+     kubectl get service {{ include "umailserver.fullname" . }} -n {{ .Release.Namespace }}
+
+2. Point DNS at it:
+
+     {{ .Values.hostname }}.   A    <external IP>
+     <your domain>.   MX 10 {{ .Values.hostname }}.
+
+   Set the reverse DNS (PTR) of the external IP to {{ .Values.hostname }}:
+   many receivers reject mail from an IP without it.
+
+3. Log in to https://{{ .Values.hostname }}/ and add domains and accounts.
+{{- if not .Values.tls.secretName }}
+
+WARNING: tls.secretName is not set. IMAP and POP3 refuse logins, ports
+465/993/995 are not served and the web UI is plain HTTP until a certificate
+Secret for {{ .Values.hostname }} is configured.
+{{- end }}
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence is disabled; all mail and accounts are lost when the pod
+is deleted.
+{{- end }}
+{{- if and (ne .Values.service.type "ClusterIP") (ne .Values.service.externalTrafficPolicy "Local") }}
+
+WARNING: service.externalTrafficPolicy is not Local; the server sees node
+addresses instead of client IPs, which breaks SPF, RBL checks and rate limits.
+{{- end }}

@@ -1,0 +1,146 @@
+{{- /*
+One pod only: bbolt holds an exclusive lock on its files, so a second pod on
+the same volume cannot open them, and pods on separate volumes would each
+hold a different part of the mail. A StatefulSet update stops the old pod
+before starting the new one.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "umailserver.fullname" . }}
+  labels:
+    {{- include "umailserver.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  serviceName: {{ include "umailserver.fullname" . }}
+  selector:
+    matchLabels:
+      {{- include "umailserver.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "umailserver.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include "umailserver.config" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: umailserver
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve", "--config", "/etc/umailserver/umailserver.yaml"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: UMAILSERVER_SECURITY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "umailserver.jwtSecretName" . }}
+                  key: {{ include "umailserver.jwtSecretKey" . }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            {{- range $name, $p := .Values.ports }}
+            {{- if $p.enabled }}
+            - name: {{ $name }}
+              containerPort: {{ $p.targetPort }}
+              protocol: TCP
+            {{- end }}
+            {{- end }}
+            - name: metrics
+              containerPort: {{ .Values.metricsPort }}
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- if .Values.ports.smtp.enabled }}
+          readinessProbe:
+            tcpSocket:
+              port: smtp
+            periodSeconds: 10
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/umailserver
+            - name: config
+              mountPath: /etc/umailserver/umailserver.yaml
+              subPath: umailserver.yaml
+              readOnly: true
+            {{- if .Values.tls.secretName }}
+            # Mounted as a directory (no subPath) so renewed certificates
+            # appear in the pod.
+            - name: tls
+              mountPath: /etc/umailserver/tls
+              readOnly: true
+            {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "umailserver.fullname" . }}
+            items:
+              - key: umailserver.yaml
+                path: umailserver.yaml
+        {{- if .Values.tls.secretName }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- else if .Values.persistence.existingClaim }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "umailserver.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes: [{{ .Values.persistence.accessMode | quote }}]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+  {{- end }}

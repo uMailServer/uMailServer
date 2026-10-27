@@ -1,0 +1,107 @@
+# uMailServer keeps all its data in bbolt databases and Maildir files on one
+# volume. bbolt allows a single process per file, so the chart always runs
+# exactly one pod (a StatefulSet with replicas: 1) and has no autoscaling.
+
+image:
+  repository: ghcr.io/umailserver/umailserver
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Mail host name (server.hostname): used in SMTP greetings and as the
+# certificate name. Required.
+hostname: ""
+
+# JWT signing secret (security.jwt_secret). When empty and existingSecret is
+# not set, a random secret is generated on install and kept on upgrades.
+jwtSecret: ""
+# Use a Secret you manage instead; it must hold the key below.
+existingSecret: ""
+existingSecretKey: jwt-secret
+
+tls:
+  # A kubernetes.io/tls Secret (e.g. issued by cert-manager) for the mail
+  # host name. Without it IMAP/POP3 refuse logins, the implicit-TLS
+  # listeners (465, 993, 995) do not start and the web UI is plain HTTP.
+  secretName: ""
+
+# Listeners. The container runs as a non-root user and binds unprivileged
+# ports; the Service exposes them on the standard ports.
+ports:
+  smtp:        { enabled: true,  port: 25,   targetPort: 2525 }  # inbound MX
+  submission:  { enabled: true,  port: 587,  targetPort: 2587 }  # STARTTLS
+  submissions: { enabled: true,  port: 465,  targetPort: 2465 }  # implicit TLS
+  imap:        { enabled: true,  port: 143,  targetPort: 2143 }  # STARTTLS
+  imaps:       { enabled: true,  port: 993,  targetPort: 2993 }  # implicit TLS
+  pop3s:       { enabled: false, port: 995,  targetPort: 2995 }  # implicit TLS
+  https:       { enabled: true,  port: 443,  targetPort: 4443 }  # webmail, admin and API
+  managesieve: { enabled: false, port: 4190, targetPort: 4190 }
+
+service:
+  type: LoadBalancer
+  # Local keeps the client IP, which SPF, RBL checks, greylisting and rate
+  # limits depend on. With Cluster every connection appears to come from a
+  # node.
+  externalTrafficPolicy: Local
+  loadBalancerIP: ""
+  annotations: {}
+
+persistence:
+  enabled: true
+  # Use this PVC instead of creating one.
+  existingClaim: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+
+# Further uMailServer settings, written into umailserver.yaml as given (see
+# umailserver.yaml.example). The chart sets the host name, data directory,
+# listener addresses, TLS files and metrics listener itself; those keys are
+# overridden here.
+config: {}
+#  spam:
+#    enabled: true
+#  dmarc:
+#    enabled: true
+#    from_email: dmarc-reports@example.com
+
+# Prometheus metrics and the liveness endpoint (/healthz) are served on this
+# container port. It is not part of the Service.
+metricsPort: 8080
+podAnnotations: {}
+#  prometheus.io/scrape: "true"
+#  prometheus.io/port: "8080"
+
+extraEnv: []
+
+resources: {}
+#  requests:
+#    cpu: 100m
+#    memory: 256Mi
+#  limits:
+#    memory: 1Gi
+
+# Time for in-flight SMTP sessions and deliveries to finish on shutdown.
+terminationGracePeriodSeconds: 60
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
