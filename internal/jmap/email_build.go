@@ -13,10 +13,13 @@ package jmap
 // than utf-8 are base64-encoded without transcoding; no header folding.
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"mime"
+	"mime/quotedprintable"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -204,7 +207,8 @@ func buildRFC5322Email(user string, createData map[string]interface{}, msgStore 
 		}
 	}
 	if subject, has := createData["subject"].(string); has {
-		headers = append(headers, [2]string{"Subject", subject})
+		// F7772: non-ASCII text becomes an RFC 2047 encoded-word.
+		headers = append(headers, [2]string{"Subject", mime.QEncoding.Encode("utf-8", subject)})
 	}
 	if ids := headerStringList(createData["inReplyTo"]); len(ids) > 0 {
 		headers = append(headers, [2]string{"In-Reply-To", strings.Join(ids, " ")})
@@ -292,6 +296,15 @@ func renderPart(p buildPart, user string, bodyValues map[string]interface{}, msg
 		// base64-labelled with the requested charset.
 		encoding = "base64"
 		data = []byte(wrapBase64(base64.StdEncoding.EncodeToString(content)))
+	} else if hasLongLine(content) {
+		// F7773: RFC 5322 §2.1.1 limits lines to 998 octets; quoted-printable
+		// soft-wraps them without changing the decoded text.
+		encoding = "quoted-printable"
+		var qp bytes.Buffer
+		w := quotedprintable.NewWriter(&qp)
+		_, _ = w.Write(content)
+		_ = w.Close()
+		data = qp.Bytes()
 	}
 
 	var hdrs [][2]string
@@ -390,7 +403,7 @@ func formatAddressList(prop string, v interface{}) (string, *emailBuildError) {
 			return "", &emailBuildError{setErrType: "invalidProperties", properties: []string{prop}, description: prop + " entries must include an email"}
 		}
 		if name != "" {
-			entries = append(entries, quoteIfNeeded(name)+" <"+email+">")
+			entries = append(entries, displayName(name)+" <"+email+">")
 		} else {
 			entries = append(entries, email)
 		}
@@ -398,12 +411,23 @@ func formatAddressList(prop string, v interface{}) (string, *emailBuildError) {
 	return strings.Join(entries, ", "), nil
 }
 
-// quoteIfNeeded quotes a display name containing RFC 5322 specials.
+// quoteIfNeeded quotes a display name containing RFC 5322 specials. Inside
+// the quoted-string both '"' and '\' are quoted-pairs (F7771): an unescaped
+// trailing backslash would escape the closing quote.
 func quoteIfNeeded(name string) string {
 	if strings.ContainsAny(name, `"(),.:;<>@[\]`) {
-		return `"` + strings.ReplaceAll(name, `"`, `\"`) + `"`
+		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(name) + `"`
 	}
 	return name
+}
+
+// displayName renders a display name for an address header: an RFC 2047
+// encoded-word when it is not ASCII (F7772), a quoted-string otherwise.
+func displayName(name string) string {
+	if enc := mime.QEncoding.Encode("utf-8", name); enc != name {
+		return enc
+	}
+	return quoteIfNeeded(name)
 }
 
 // generateRFC5322MessageID mirrors internal/queue/dsn.go's collision-hardened
@@ -425,6 +449,16 @@ func randomMIMEBoundary() string {
 		return fmt.Sprintf("_jmap_%d", time.Now().UnixNano())
 	}
 	return "_jmap_" + hex.EncodeToString(b)
+}
+
+// hasLongLine reports whether any line of b exceeds 998 octets.
+func hasLongLine(b []byte) bool {
+	for _, line := range bytes.Split(b, []byte("\n")) {
+		if len(bytes.TrimSuffix(line, []byte("\r"))) > 998 {
+			return true
+		}
+	}
+	return false
 }
 
 func isUTF8(b []byte) bool {
