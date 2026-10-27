@@ -393,6 +393,17 @@ func (idx *Index) Get(docID string) *Document {
 	return &Document{ID: doc.ID, Date: doc.Date, HasAttachment: doc.HasAttachment}
 }
 
+// DocIDs returns the ids of the indexed documents.
+func (idx *Index) DocIDs() []string {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	ids := make([]string, 0, len(idx.docs))
+	for id := range idx.docs {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // DocCount returns the number of indexed documents
 func (idx *Index) DocCount() int {
 	idx.mu.RLock()

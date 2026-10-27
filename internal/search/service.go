@@ -112,6 +112,10 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 		}
 	}
 
+	if err := s.reconcile(opts.User, index); err != nil {
+		return nil, fmt.Errorf("failed to update index: %w", err)
+	}
+
 	// Perform search
 	limit := opts.Limit
 	if limit <= 0 {
@@ -345,6 +349,68 @@ func (s *Service) IndexMessage(user, folder string, uid uint32) error {
 	}
 
 	index.Add(doc)
+	return nil
+}
+
+// reconcile brings index in line with the user's mailboxes before a search.
+// Only deliveries and IMAP expunges update the index directly; a message
+// moved, copied or appended any other way (IMAP MOVE/COPY/APPEND, webmail
+// moves and Sent/Drafts copies, JMAP) is found here by comparing the
+// mailbox UID lists — metadata only — with the indexed documents. Missing
+// messages are indexed and vanished ones removed (F7776).
+func (s *Service) reconcile(user string, index *Index) error {
+	if s.db == nil {
+		return nil
+	}
+	// Hold the read lock like IndexMessage: BuildIndex must not swap the
+	// index away while it is being updated.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	folders, err := s.db.ListMailboxes(user)
+	if err != nil {
+		return err
+	}
+	present := make(map[string]struct{})
+	for _, folder := range folders {
+		uids, err := s.db.GetMessageUIDs(user, folder)
+		if err != nil {
+			return err
+		}
+		for _, uid := range uids {
+			id := fmt.Sprintf("%s:%d", folder, uid)
+			present[id] = struct{}{}
+			if index.Get(id) != nil {
+				continue
+			}
+			meta, err := s.db.GetMessageMetadata(user, folder, uid)
+			if err != nil || meta == nil {
+				continue
+			}
+			content, hasAtt := "", false
+			if s.msgStore != nil {
+				if data, err := s.msgStore.ReadMessage(user, meta.MessageID); err == nil {
+					content = extractTextContent(data)
+					hasAtt = attachmentDispositionRE.Match(data)
+				}
+			}
+			index.Add(&Document{
+				ID:      id,
+				Content: content,
+				Fields: map[string]string{
+					"from":    decodeHeaderValue(meta.From),
+					"to":      decodeHeaderValue(meta.To),
+					"subject": decodeHeaderValue(meta.Subject),
+				},
+				Date:          docDate(meta),
+				HasAttachment: hasAtt,
+			})
+		}
+	}
+	for _, id := range index.DocIDs() {
+		if _, ok := present[id]; !ok {
+			index.Remove(id)
+		}
+	}
 	return nil
 }
 
