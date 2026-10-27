@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"mime/quotedprintable"
 	"net/mail"
 	"net/textproto"
 	"os"
@@ -207,15 +209,17 @@ func parseVacationDate(v string) (t time.Time, dateOnly, ok bool) {
 
 // autoReplyHeaders builds the common auto-reply header block. Envelope sender
 // is null; the From header is shown to the recipient only (RFC 5230 §4.?).
-func autoReplyHeaders(from, to, subject string, now time.Time, host string) string {
+func autoReplyHeaders(from, to, subject string, now time.Time, host, transferEncoding string) string {
 	return "From: " + sanitizeHeaderValue(from) + "\r\n" +
 		"To: " + sanitizeHeaderValue(to) + "\r\n" +
-		"Subject: " + sanitizeHeaderValue(subject) + "\r\n" +
+		// F7780: non-ASCII text is an RFC 2047 encoded-word, not raw 8-bit
+		// header bytes (a subject that is already encoded passes through).
+		"Subject: " + mime.QEncoding.Encode("utf-8", sanitizeHeaderValue(subject)) + "\r\n" +
 		"Date: " + now.Format(time.RFC1123Z) + "\r\n" +
 		fmt.Sprintf("Message-ID: <vacation.%d@%s>\r\n", now.UnixNano(), host) +
 		"MIME-Version: 1.0\r\n" +
 		"Content-Type: text/plain; charset=utf-8\r\n" +
-		"Content-Transfer-Encoding: 8bit\r\n" +
+		"Content-Transfer-Encoding: " + transferEncoding + "\r\n" +
 		"Auto-Submitted: auto-replied\r\n" +
 		"Precedence: bulk\r\n" +
 		"X-Auto-Response-Suppress: All\r\n"
@@ -243,6 +247,36 @@ func vacationBody(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
 	return strings.ReplaceAll(s, "\n", "\r\n")
+}
+
+// vacationBodyEncoded returns the body for a reply and its
+// Content-Transfer-Encoding: as-is (7bit) when it is ASCII with lines within
+// 998 octets, quoted-printable otherwise. The reply used to declare every
+// body "8bit", which relays may not accept, and long lines broke RFC 5322
+// §2.1.1 (F7780).
+func vacationBodyEncoded(s string) (encoding, body string) {
+	body = vacationBody(s)
+	plain := true
+	for _, line := range strings.Split(body, "\r\n") {
+		if len(line) > 998 {
+			plain = false
+			break
+		}
+		for i := 0; i < len(line); i++ {
+			if line[i] >= 0x80 {
+				plain = false
+				break
+			}
+		}
+	}
+	if plain {
+		return "7bit", body
+	}
+	var qp strings.Builder
+	w := quotedprintable.NewWriter(&qp)
+	_, _ = w.Write([]byte(body))
+	_ = w.Close()
+	return "quoted-printable", qp.String()
 }
 
 // handleSieveVacation handles Sieve vacation action by sending a vacation auto-reply
@@ -290,8 +324,9 @@ func (s *Server) handleSieveVacationAs(sender, recipient, matched string, va sie
 	if va.From != "" {
 		fromAddr = va.From
 	}
-	vacationMsg := autoReplyHeaders(fromAddr, sender, subject, now, mailHost(recipient)) +
-		"X-Mail-Loop: <" + sanitizeHeaderValue(recipient) + ">\r\n\r\n" + vacationBody(body)
+	cte, encodedBody := vacationBodyEncoded(body)
+	vacationMsg := autoReplyHeaders(fromAddr, sender, subject, now, mailHost(recipient), cte) +
+		"X-Mail-Loop: <" + sanitizeHeaderValue(recipient) + ">\r\n\r\n" + encodedBody
 
 	// RFC 5230 §4.? / RFC 3834 §4: the envelope sender of an auto-reply is
 	// null; :from only changes the visible header (F6444).
@@ -427,8 +462,9 @@ func (s *Server) sendVacationReplyCtx(recipientEmail, senderEmail, origRcpt stri
 		}
 		extra += "References: " + sanitizeHeaderValue(strings.Join(refs, " ")) + "\r\n"
 	}
-	autoReply := autoReplyHeaders(fromAddr, senderEmail, subject, now, mailHost(recipientEmail)) + extra +
-		"\r\n" + vacationBody(settings.Message)
+	cte, encodedBody := vacationBodyEncoded(settings.Message)
+	autoReply := autoReplyHeaders(fromAddr, senderEmail, subject, now, mailHost(recipientEmail), cte) + extra +
+		"\r\n" + encodedBody
 
 	// RFC 5230 / RFC 3834 §4: null envelope sender.
 	if _, err := s.queue.Enqueue("", []string{senderEmail}, []byte(autoReply)); err != nil {
