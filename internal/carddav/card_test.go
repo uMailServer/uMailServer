@@ -55,3 +55,35 @@ func TestParseCardNameFromN(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+// F7783: renaming a contact to a different name must not leave the structured
+// name N of the old one; a name that still fits N keeps its family/given split.
+func TestMergeCardRewritesStaleN(t *testing.T) {
+	stored := "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:u3\r\nN:Doe;Jane;;;\r\nFN:Jane Doe\r\nBDAY:1990-04-05\r\nEND:VCARD\r\n"
+	for _, c := range []struct {
+		name  string
+		wantN string // "" = the stored N must be gone, replaced by FN;;;;
+	}{
+		{"Jane Doe", "N:Doe;Jane;;;"},
+		{"Jane Q. Doe", "N:Doe;Jane;;;"},
+		{"JANE DOE", "N:Doe;Jane;;;"},
+		{"Mary Smith", "N:Mary Smith;;;;"},
+		{"Jane Roe", "N:Jane Roe;;;;"},   // family name changed
+		{"Janet Doe", "N:Janet Doe;;;;"}, // "Jane" is not a word of "Janet Doe"
+		{"Smith; the, Elder", `N:Smith\; the\, Elder;;;;`},
+	} {
+		merged := MergeCard(stored, Card{UID: "u3", FullName: c.name})
+		unfolded := strings.Join(unfoldVCard(merged), "\n")
+		if strings.Count(unfolded, "\nN:") != 1 || !strings.Contains(unfolded, c.wantN) {
+			t.Errorf("rename to %q: want %q once:\n%s", c.name, c.wantN, merged)
+		}
+		if !strings.Contains(unfolded, "BDAY:1990-04-05") || ParseCard(merged).FullName != c.name {
+			t.Errorf("rename to %q lost data:\n%s", c.name, merged)
+		}
+	}
+	// A card without N is not given one by an edit that keeps its name.
+	noN := "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:u4\r\nFN:Jane Doe\r\nEND:VCARD\r\n"
+	if merged := MergeCard(noN, Card{UID: "u4", FullName: "Jane Doe"}); strings.Contains(merged, "\r\nN:") {
+		t.Errorf("N added to a card that had none:\n%s", merged)
+	}
+}

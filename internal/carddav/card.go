@@ -2,6 +2,7 @@ package carddav
 
 import (
 	"strings"
+	"unicode"
 )
 
 // Card is the simplified contact the webmail edits: the properties it shows,
@@ -81,6 +82,12 @@ func NewCardVCard(c Card) string {
 func MergeCard(data string, c Card) string {
 	var lines []string
 	inserted := false
+	// F7783: a contact renamed to something else must not keep the
+	// structured name N of the old one (clients that sort or display by N
+	// would show the old name); it gets the same N a new contact does. An N
+	// that still fits the new name (a middle initial was added) is kept, so
+	// its family/given split survives.
+	renamed := storedNameStale(data, c.FullName)
 	for _, line := range unfoldVCard(data) {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -89,7 +96,13 @@ func MergeCard(data string, c Card) string {
 		if ok && cardProps[strings.ToUpper(p.name)] {
 			continue
 		}
+		if ok && renamed && strings.EqualFold(p.name, "N") {
+			continue
+		}
 		if ok && strings.EqualFold(p.name, "END") && strings.EqualFold(strings.TrimSpace(p.value), "VCARD") && !inserted {
+			if renamed {
+				lines = append(lines, "N:"+escapeText(c.FullName)+";;;;")
+			}
 			lines = append(lines, cardLines(c)...)
 			inserted = true
 		}
@@ -99,6 +112,33 @@ func MergeCard(data string, c Card) string {
 		return NewCardVCard(c)
 	}
 	return foldLines(lines)
+}
+
+// nameWords lowercases s and reduces it to its letters and digits separated
+// by single spaces, so names compare by whole words.
+func nameWords(s string) string {
+	return strings.Join(strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}), " ")
+}
+
+// storedNameStale reports whether data has an N property that no longer fits
+// fullName: its family or given name does not occur in it as a whole word.
+func storedNameStale(data, fullName string) bool {
+	full := " " + nameWords(fullName) + " "
+	for _, p := range parseVCardProps(data) {
+		if !strings.EqualFold(p.name, "N") {
+			continue
+		}
+		parts := splitUnescaped(p.value)
+		for i := 0; i < len(parts) && i < 2; i++ { // family, given
+			if part := nameWords(unescapeText(parts[i])); part != "" && !strings.Contains(full, " "+part+" ") {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func cardLines(c Card) []string {
