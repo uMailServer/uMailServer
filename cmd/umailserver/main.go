@@ -746,9 +746,12 @@ func cmdAccount(args []string) {
 		}
 		addFS := flag.NewFlagSet("account add", flag.ExitOnError)
 		passwordFlag := addFS.String("password", "", "Account password (visible in process list; prefer the prompt or UMAILSERVER_ACCOUNT_PASSWORD)")
+		// F7785: only quickstart could create an administrator, so a server
+		// set up with domain add / account add had none.
+		adminFlag := addFS.Bool("admin", false, "Make the account an administrator")
 		addPos := parseInterspersed(addFS, args[1:])
 		if len(addPos) != 1 {
-			fmt.Fprintln(os.Stderr, "Usage: umailserver account add <email> [--password <pass>]")
+			fmt.Fprintln(os.Stderr, "Usage: umailserver account add <email> [--password <pass>] [--admin]")
 			os.Exit(1)
 		}
 		email := addPos[0]
@@ -789,7 +792,7 @@ func cmdAccount(args []string) {
 			LocalPart:    parts[0],
 			Domain:       parts[1],
 			PasswordHash: string(hash),
-			IsAdmin:      false,
+			IsAdmin:      *adminFlag,
 			IsActive:     true,
 			CreatedAt:    time.Now(),
 			UpdatedAt:    time.Now(),
@@ -801,7 +804,11 @@ func cmdAccount(args []string) {
 			fmt.Fprintf(os.Stderr, "Failed to create account: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✓ Account created: %s\n", email)
+		if *adminFlag {
+			fmt.Printf("✓ Administrator account created: %s\n", email)
+		} else {
+			fmt.Printf("✓ Account created: %s\n", email)
+		}
 
 	case "list":
 		var domain string

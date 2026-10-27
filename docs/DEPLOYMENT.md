@@ -242,7 +242,7 @@ EOF
 # ./umailserver.yaml or /etc/umailserver/umailserver.yaml. Without any config
 # they fall back to the default database in ~/.local/share/umailserver.
 umailserver domain add example.com --config /etc/umailserver/umailserver.yaml
-umailserver account add admin@example.com --config /etc/umailserver/umailserver.yaml
+umailserver account add admin@example.com --admin --config /etc/umailserver/umailserver.yaml
 ```
 
 ### Security Hardening
