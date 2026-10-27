@@ -466,6 +466,9 @@ func loadWithOptions(path string, optional bool) (*Config, []byte, error) {
 				for _, k := range findIgnoredKeys(&root) {
 					slog.Warn("config: key is accepted but has no effect and will be removed", "key", k, "file", path)
 				}
+				for _, k := range findOverriddenFixedKeys(&root) {
+					slog.Warn("config: setting ignored, only its default is supported", "key", k, "file", path)
+				}
 			}
 			for _, k := range cfg.unknownKeys {
 				slog.Warn("config: unknown key ignored", "key", k, "file", path)

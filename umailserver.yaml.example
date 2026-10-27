@@ -39,14 +39,14 @@ smtp:
     enabled: true
     bind: "0.0.0.0"
     port: 587
-    require_auth: true
+    require_auth: true          # Always on: submission never accepts unauthenticated mail
     require_tls: true
     max_connections: 100
   submission_tls:
     enabled: true
     bind: "0.0.0.0"
     port: 465
-    require_auth: true
+    require_auth: true          # Always on: submission never accepts unauthenticated mail
     max_connections: 100
 
 # IMAP Server Configuration
@@ -60,7 +60,7 @@ imap:
 
 # HTTP API and Web UI (plain HTTP: terminate TLS in a reverse proxy; the tls: section covers SMTP/IMAP/POP3/ManageSieve)
 http:
-  enabled: true
+  enabled: true               # Always on: webmail, the admin panel and JMAP sign-in depend on it
   bind: "0.0.0.0"
   port: 443
   cors_origins: []
@@ -127,7 +127,7 @@ database:
 
 # Storage
 storage:
-  sync: true                  # fsync message files
+  sync: true                  # Always on: message files are fsynced before delivery is acknowledged
 
 # DMARC aggregate reporting
 dmarc:

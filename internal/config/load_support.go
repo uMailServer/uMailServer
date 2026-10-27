@@ -361,8 +361,47 @@ var ignoredKeys = [][]string{
 	{"storage", "shared_folders"},
 }
 
+// fixedKeys lists settings whose behaviour is fixed: only the default value is
+// honoured. Load warns when a config file sets one to anything else, since the
+// server ignores it. Examples set them to the honoured value, so existing
+// configs that do the same load quietly.
+var fixedKeys = []struct {
+	path   []string
+	honour bool
+	reason string
+}{
+	{[]string{"storage", "sync"}, true, "message files are always fsynced"},
+	{[]string{"http", "enabled"}, true, "the HTTP API always starts; webmail, the admin panel and JMAP sign-in depend on it"},
+	{[]string{"smtp", "submission", "require_auth"}, true, "submission always requires authentication"},
+	{[]string{"smtp", "submission_tls", "require_auth"}, true, "submission always requires authentication"},
+}
+
+// findOverriddenFixedKeys returns the fixed settings root sets to a value the
+// server does not honour, as "dotted.key: reason".
+func findOverriddenFixedKeys(root *yaml.Node) []string {
+	var out []string
+	for _, k := range fixedKeys {
+		n := yamlKeyNode(root, k.path)
+		if n == nil {
+			continue
+		}
+		var v bool
+		if err := n.Decode(&v); err != nil || v == k.honour {
+			continue
+		}
+		out = append(out, strings.Join(k.path, ".")+": "+k.reason)
+	}
+	return out
+}
+
 // yamlHasKey reports whether the document sets the dotted key path.
 func yamlHasKey(root *yaml.Node, path []string) bool {
+	return yamlKeyNode(root, path) != nil
+}
+
+// yamlKeyNode returns the value node of the dotted key path, or nil when the
+// document does not set it.
+func yamlKeyNode(root *yaml.Node, path []string) *yaml.Node {
 	n := root
 	for n != nil && n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
 		n = n.Content[0]
@@ -372,7 +411,7 @@ func yamlHasKey(root *yaml.Node, path []string) bool {
 			n = n.Alias
 		}
 		if n == nil || n.Kind != yaml.MappingNode {
-			return false
+			return nil
 		}
 		var next *yaml.Node
 		for i := 0; i+1 < len(n.Content); i += 2 {
@@ -382,11 +421,14 @@ func yamlHasKey(root *yaml.Node, path []string) bool {
 			}
 		}
 		if next == nil {
-			return false
+			return nil
 		}
 		n = next
 	}
-	return true
+	for n != nil && n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	return n
 }
 
 // findIgnoredKeys returns the dotted names of ignored settings present in root.
