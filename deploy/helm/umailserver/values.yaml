@@ -56,6 +56,9 @@ persistence:
   # Use this PVC instead of creating one.
   existingClaim: ""
   storageClass: ""
+  # ReadWriteOnce or ReadWriteOncePod (stricter: one pod even on the same
+  # node). ReadWriteMany is refused: bbolt databases on a shared filesystem
+  # opened from two nodes get corrupted.
   accessMode: ReadWriteOnce
   size: 10Gi
 
@@ -86,7 +89,12 @@ resources: {}
 #  limits:
 #    memory: 1Gi
 
-# Time for in-flight SMTP sessions and deliveries to finish on shutdown.
+# Seconds the pod keeps serving after it is marked for deletion, while the
+# Service stops routing to it.
+shutdownDelaySeconds: 5
+
+# Time for in-flight SMTP sessions and deliveries to finish on shutdown,
+# including shutdownDelaySeconds.
 terminationGracePeriodSeconds: 60
 
 podSecurityContext:

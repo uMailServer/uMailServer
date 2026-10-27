@@ -1,6 +1,7 @@
 # High Availability: Design Draft
 
-Status: draft for decision (2026-10-27). Nothing here is implemented.
+Status: draft for decision (2026-10-27). Option A is implemented (see
+"Option A: done" below); B and C are not.
 
 ## Problem
 
@@ -135,6 +136,19 @@ means maintaining both storage backends.
 Independently: `internal/cluster` and `api.Server.SetClusterManager` are
 unused. Either remove them (dead code) or keep them explicitly for C; they
 should not stay as code that looks like a working feature.
+
+## Option A: done
+
+- `Server.Stop` marks the API as draining first, so `/health/ready` answers
+  503 for the whole shutdown, not only after the API stops last.
+- The Helm chart's readiness probe uses `/health/ready` (a TCP check with
+  ACME-only TLS, whose certificates need SNI), adds a `preStop` delay so the
+  pod is removed from the Service before it stops accepting, and refuses
+  `ReadWriteMany` volumes.
+- `docs/DEPLOYMENT.md` → Failover describes recovery from node failure (the
+  out-of-service taint) and the storage requirements.
+
+Not done: startup time was not measured or shortened.
 
 ## Open questions
 

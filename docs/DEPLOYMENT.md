@@ -122,6 +122,35 @@ the metrics port (8080), which is not exposed by the Service.
 
 Back up the volume as described in [Backup & Recovery](#backup--recovery).
 
+#### Failover
+
+The server is not replicated; availability comes from Kubernetes starting the
+pod again elsewhere (see `docs/HA_DESIGN.md`, option A).
+
+- **Pod or process crash, rolling update, node drain:** the pod restarts or
+  moves on its own. On shutdown `/health/ready` answers 503 at once, the pod
+  keeps serving for `shutdownDelaySeconds` while it is removed from the
+  Service, and SMTP sessions get up to `server.force_close_after` to finish.
+- **Node failure:** Kubernetes does not move a StatefulSet pod off a node it
+  cannot reach, because it cannot tell a dead node from a partitioned one
+  that might still be writing to the volume. Once you have confirmed the
+  node is down (powered off, or removed from the network), release the pod
+  with the out-of-service taint (Kubernetes 1.28+):
+
+  ```bash
+  kubectl taint nodes <node> node.kubernetes.io/out-of-service=nodeshutdown:NoExecute
+  ```
+
+  or by deleting the Node object. The volume is then detached and the pod
+  starts on another node. Remove the taint when the node is back.
+- **Storage:** the pod can only move if its volume can attach on another
+  node (cloud block storage, Ceph RBD, Longhorn, ...). A node-local volume
+  (`local-path`, `hostPath`) ties the server to that node. Never use a
+  `ReadWriteMany` volume: two nodes opening the bbolt databases corrupts them,
+  which is why the chart refuses that access mode.
+- **Inbound mail during an outage** is not lost: sending servers queue and
+  retry for several days.
+
 ## Configuration
 
 ### Initial Setup

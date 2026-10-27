@@ -4,6 +4,10 @@ the same volume cannot open them, and pods on separate volumes would each
 hold a different part of the mail. A StatefulSet update stops the old pod
 before starting the new one.
 */}}
+{{- $mode := .Values.persistence.accessMode }}
+{{- if not (or (eq $mode "ReadWriteOnce") (eq $mode "ReadWriteOncePod")) }}
+{{- fail "persistence.accessMode must be ReadWriteOnce or ReadWriteOncePod: the bbolt databases must never be opened from two nodes" }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -73,12 +77,38 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
-          {{- if .Values.ports.smtp.enabled }}
+          {{- /*
+          /health/ready turns 503 as soon as shutdown starts and checks the
+          database. The API starts after the mail listeners, so it is ready
+          only once they are. ACME certificates are not served to a client
+          without SNI (the kubelet), so with ACME only the port is checked.
+          */}}
+          {{- if .Values.ports.https.enabled }}
+          readinessProbe:
+            {{- if and (not .Values.tls.secretName) (dig "tls" "acme" "enabled" false .Values.config) }}
+            tcpSocket:
+              port: https
+            {{- else }}
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: {{ ternary "HTTPS" "HTTP" (not (empty .Values.tls.secretName)) }}
+            {{- end }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- else if .Values.ports.smtp.enabled }}
           readinessProbe:
             tcpSocket:
               port: smtp
             periodSeconds: 10
           {{- end }}
+          lifecycle:
+            preStop:
+              # Keep serving while the Service and load balancer remove the
+              # pod; without it, connections arriving in that window are
+              # refused.
+              exec:
+                command: ["sleep", "{{ .Values.shutdownDelaySeconds }}"]
           volumeMounts:
             - name: data
               mountPath: /var/lib/umailserver
