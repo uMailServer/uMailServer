@@ -87,5 +87,15 @@ tls:
 {{- define "umailserver.config" -}}
 {{- $user := deepCopy (.Values.config | default dict) -}}
 {{- $chart := include "umailserver.chartConfig" . | fromYaml -}}
-{{- toYaml (mergeOverwrite $user $chart) }}
+{{- $cfg := mergeOverwrite $user $chart -}}
+{{- /* mergeOverwrite skips false values, so a listener the chart turns off
+could stay enabled by .Values.config; set the switches explicitly. */ -}}
+{{- $p := .Values.ports -}}
+{{- $_ := set $cfg.smtp.inbound "enabled" $p.smtp.enabled -}}
+{{- $_ := set $cfg.smtp.submission "enabled" $p.submission.enabled -}}
+{{- $_ := set $cfg.smtp.submission_tls "enabled" $p.submissions.enabled -}}
+{{- $_ := set $cfg.imap "enabled" (or $p.imap.enabled $p.imaps.enabled) -}}
+{{- $_ := set $cfg.pop3 "enabled" $p.pop3s.enabled -}}
+{{- $_ := set $cfg.managesieve "enabled" $p.managesieve.enabled -}}
+{{- toYaml $cfg }}
 {{- end }}

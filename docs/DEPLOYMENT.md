@@ -106,7 +106,7 @@ helm install mail deploy/helm/umailserver \
 | Value | Default | Meaning |
 |-------|---------|---------|
 | `hostname` | (required) | `server.hostname`; the name the certificate must cover |
-| `tls.secretName` | `""` | A `kubernetes.io/tls` Secret, e.g. from cert-manager. Without it IMAP/POP3 refuse logins, 465/993/995 are not served and the web UI is plain HTTP |
+| `tls.secretName` | `""` | A `kubernetes.io/tls` Secret, e.g. from cert-manager. Without it IMAP and POP3 refuse logins, 465 is not served and the web UI is plain HTTP |
 | `jwtSecret` / `existingSecret` | generated | The JWT signing secret. A generated one is kept across upgrades |
 | `ports.<name>.enabled` | see `values.yaml` | Which listeners the Service exposes (`smtp`, `submission`, `submissions`, `imap`, `imaps`, `pop3s`, `https`, `managesieve`) |
 | `service.type` | `LoadBalancer` | |
@@ -128,9 +128,11 @@ The server is not replicated; availability comes from Kubernetes starting the
 pod again elsewhere (see `docs/HA_DESIGN.md`, option A).
 
 - **Pod or process crash, rolling update, node drain:** the pod restarts or
-  moves on its own. On shutdown `/health/ready` answers 503 at once, the pod
-  keeps serving for `shutdownDelaySeconds` while it is removed from the
-  Service, and SMTP sessions get up to `server.force_close_after` to finish.
+  moves on its own. A terminating pod is removed from the Service at once
+  and keeps serving for `shutdownDelaySeconds` (the `preStop` delay) while
+  load balancers catch up; then the server stops, `/health/ready` answers
+  503 for the rest of the shutdown, and SMTP sessions get up to
+  `server.force_close_after` to finish.
 - **Node failure:** Kubernetes does not move a StatefulSet pod off a node it
   cannot reach, because it cannot tell a dead node from a partitioned one
   that might still be writing to the volume. Once you have confirmed the

@@ -26,8 +26,8 @@ existingSecretKey: jwt-secret
 
 tls:
   # A kubernetes.io/tls Secret (e.g. issued by cert-manager) for the mail
-  # host name. Without it IMAP/POP3 refuse logins, the implicit-TLS
-  # listeners (465, 993, 995) do not start and the web UI is plain HTTP.
+  # host name. Without it IMAP and POP3 refuse logins, the implicit-TLS
+  # SMTP listener (465) does not start and the web UI is plain HTTP.
   secretName: ""
 
 # Listeners. The container runs as a non-root user and binds unprivileged

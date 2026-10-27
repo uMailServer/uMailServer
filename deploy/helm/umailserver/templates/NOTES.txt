@@ -15,9 +15,9 @@ uMailServer is running as {{ include "umailserver.fullname" . }} (one pod) in na
 3. Log in to https://{{ .Values.hostname }}/ and add domains and accounts.
 {{- if not .Values.tls.secretName }}
 
-WARNING: tls.secretName is not set. IMAP and POP3 refuse logins, ports
-465/993/995 are not served and the web UI is plain HTTP until a certificate
-Secret for {{ .Values.hostname }} is configured.
+WARNING: tls.secretName is not set. IMAP and POP3 refuse logins, port 465
+is not served and the web UI is plain HTTP until a certificate Secret for
+{{ .Values.hostname }} is configured.
 {{- end }}
 {{- if not .Values.persistence.enabled }}
 
