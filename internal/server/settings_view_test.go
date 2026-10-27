@@ -26,6 +26,7 @@ func TestSettingsViewNoSecrets(t *testing.T) {
 	}
 	c.TLS.MinVersion = "1.3"
 	c.SMTP.Inbound.MaxRecipients = 77
+	c.Spam.RBLServers = []string{"SECRET-dqs.zen.dq.spamhaus.net", "bl.spamcop.net"}
 
 	view := srv.settings()
 	data, err := json.Marshal(view)
@@ -47,5 +48,21 @@ func TestSettingsViewNoSecrets(t *testing.T) {
 	}
 	if !found && c.SMTP.Inbound.Port > 0 {
 		t.Fatalf("MX listener missing or wrong: %+v", view.Listeners)
+	}
+}
+
+// Spamhaus DQS zones embed the account key; the Settings page must not show it.
+func TestMaskRBLKey(t *testing.T) {
+	cases := map[string]string{
+		"abcdefghijklmnopqrstuvwxyz.zen.dq.spamhaus.net": "***.zen.dq.spamhaus.net",
+		"KEY123.dbl.dq.spamhaus.com.":                    "***.dbl.dq.spamhaus.com.",
+		"zen.spamhaus.org":                               "zen.spamhaus.org",
+		"bl.spamcop.net":                                 "bl.spamcop.net",
+		"dq.spamhaus.net":                                "dq.spamhaus.net",
+	}
+	for in, want := range cases {
+		if got := maskRBLKey(in); got != want {
+			t.Errorf("maskRBLKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

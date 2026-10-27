@@ -1,6 +1,10 @@
 package server
 
-import "github.com/umailserver/umailserver/internal/api"
+import (
+	"strings"
+
+	"github.com/umailserver/umailserver/internal/api"
+)
 
 // settings is the effective configuration served to the admin Settings page.
 // It deliberately omits secrets: keys, passwords, tokens and alert targets.
@@ -9,7 +13,10 @@ func (s *Server) settings() api.ServerSettings {
 	listener := func(name string, enabled bool, bind string, port int) api.ListenerSetting {
 		return api.ListenerSetting{Name: name, Enabled: enabled && port > 0, Bind: bind, Port: port}
 	}
-	rbl := append([]string{}, c.Spam.RBLServers...)
+	rbl := make([]string, 0, len(c.Spam.RBLServers))
+	for _, z := range c.Spam.RBLServers {
+		rbl = append(rbl, maskRBLKey(z))
+	}
 	minTLS := "1.2"
 	if c.TLS.MinVersion == "1.3" {
 		minTLS = "1.3"
@@ -69,4 +76,20 @@ func (s *Server) settings() api.ServerSettings {
 			Push:         c.Push.Enabled,
 		},
 	}
+}
+
+// maskRBLKey hides the account key that Spamhaus Data Query Service zones
+// carry as their first label (<key>.zen.dq.spamhaus.net).
+func maskRBLKey(zone string) string {
+	lower := strings.ToLower(strings.TrimSuffix(zone, "."))
+	if !strings.HasSuffix(lower, ".dq.spamhaus.net") && !strings.HasSuffix(lower, ".dq.spamhaus.com") {
+		return zone
+	}
+	labels := strings.Split(zone, ".")
+	// key + list + dq + spamhaus + tld
+	if len(labels) < 5 {
+		return zone
+	}
+	labels[0] = "***"
+	return strings.Join(labels, ".")
 }
