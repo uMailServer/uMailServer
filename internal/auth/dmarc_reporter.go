@@ -11,10 +11,14 @@ import (
 
 // Caps on aggregate-report state. The header-From domain and source IP are
 // attacker-chosen, so both the tracked domains and the per-domain rows must
-// be bounded (F7244). Messages beyond a cap are not reported.
+// be bounded (F7244). The DKIM d= and MAIL FROM domains need not resolve,
+// so row fields are capped at a DNS name's length and the rows of all
+// domains together are bounded too. Messages beyond a cap are not reported.
 const (
 	maxReportEntriesPerDomain = 1000
 	maxReportDomains          = 10000
+	maxReportRowsTotal        = 100000
+	maxReportFieldLen         = 253
 )
 
 // ReportSendFunc delivers a report message from from to the to addresses.
@@ -29,6 +33,7 @@ type DMARCReporter struct {
 	logger    *slog.Logger
 	send      ReportSendFunc
 	reports   map[string]*reportData // key: policy domain
+	rowCount  int                    // rows across all domains
 	reportsMu sync.Mutex
 	orgName   string
 	fromEmail string
@@ -125,20 +130,28 @@ func (r *DMARCReporter) Record(ev *DMARCEvaluation, s ReportSample) {
 	if row.DKIMDomain == "" {
 		row.DKIMResult = ""
 	}
+	for _, f := range []string{row.SourceIP, row.HeaderFrom, row.EnvelopeFrom, row.DKIMDomain, row.DKIMResult, row.SPFResult, ev.PolicyDomain} {
+		if len(f) > maxReportFieldLen {
+			return
+		}
+	}
 	now := r.now()
 
 	r.reportsMu.Lock()
 	defer r.reportsMu.Unlock()
 	data, ok := r.reports[ev.PolicyDomain]
 	if !ok {
-		if len(r.reports) >= maxReportDomains {
+		if len(r.reports) >= maxReportDomains || r.rowCount >= maxReportRowsTotal {
 			return
 		}
 		data = &reportData{Begin: now, Rows: make(map[ReportRow]int)}
 		r.reports[ev.PolicyDomain] = data
 	}
-	if _, seen := data.Rows[row]; !seen && len(data.Rows) >= maxReportEntriesPerDomain {
-		return
+	if _, seen := data.Rows[row]; !seen {
+		if len(data.Rows) >= maxReportEntriesPerDomain || r.rowCount >= maxReportRowsTotal {
+			return
+		}
+		r.rowCount++
 	}
 	data.Record = *ev.Record
 	data.Rows[row]++
@@ -167,6 +180,7 @@ func (r *DMARCReporter) drain() []pendingReport {
 		out = append(out, pendingReport{domain: domain, data: data})
 	}
 	r.reports = make(map[string]*reportData)
+	r.rowCount = 0
 	return out
 }
 

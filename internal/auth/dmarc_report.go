@@ -48,8 +48,9 @@ type PolicyPublished struct {
 	Adkim     string `xml:"adkim"`
 	Aspf      string `xml:"aspf"`
 	Policy    string `xml:"p"`
-	Subdomain string `xml:"sp,omitempty"`
+	Subdomain string `xml:"sp"`
 	Pct       int    `xml:"pct"`
+	Fo        string `xml:"fo"`
 }
 
 // Record represents a single message record in the report
@@ -141,8 +142,9 @@ func BuildReport(in ReportInput) ([]byte, error) {
 			Adkim:     adkim,
 			Aspf:      aspf,
 			Policy:    string(in.Record.Policy),
-			Subdomain: string(in.Record.SubdomainPolicy),
+			Subdomain: subdomainPolicy(in.Record),
 			Pct:       in.Record.Percentage,
+			Fo:        failureOptions(in.Record),
 		},
 		Records: make([]Record, 0, len(in.Rows)),
 	}
@@ -286,4 +288,22 @@ func VerifyReportDestination(ctx context.Context, resolver DNSResolver, domain, 
 		}
 	}
 	return false, errors.New("no authorization record")
+}
+
+// subdomainPolicy is the published sp=, which defaults to p= (RFC 7489
+// §6.3); the report schema requires the element.
+func subdomainPolicy(rec DMARCRecord) string {
+	if rec.SubdomainPolicy != "" {
+		return string(rec.SubdomainPolicy)
+	}
+	return string(rec.Policy)
+}
+
+// failureOptions is the published fo=, which defaults to "0"; the report
+// schema requires the element.
+func failureOptions(rec DMARCRecord) string {
+	if len(rec.FailureReports) == 0 {
+		return "0"
+	}
+	return strings.Join(rec.FailureReports, ":")
 }

@@ -252,3 +252,58 @@ func TestDMARCAggregateReporterCaps(t *testing.T) {
 		t.Fatalf("domains %d, want the cap %d", n, maxReportDomains)
 	}
 }
+
+// Rows hold attacker-chosen strings (DKIM d=, MAIL FROM) for a whole
+// interval, so the total row count and field lengths are bounded too.
+func TestDMARCAggregateReporterTotalAndFieldCaps(t *testing.T) {
+	r := NewDMARCReporter(nil, nil, DMARCReporterConfig{})
+	rec := &DMARCRecord{Policy: DMARCPolicyNone, ReportAggregateURI: []string{"mailto:a@example.com"}}
+	r.Record(&DMARCEvaluation{Record: rec, PolicyDomain: "long.example"},
+		ReportSample{SourceIP: "192.0.2.1", DKIMDomain: strings.Repeat("a", maxReportFieldLen+1)})
+	if n, _ := r.GetReportStats("long.example"); n != 0 {
+		t.Fatal("kept a row with an over-long field")
+	}
+	// A domain that already exists keeps growing after the others fill the cap.
+	early := &DMARCEvaluation{Record: rec, PolicyDomain: "early.example"}
+	r.Record(early, ReportSample{SourceIP: "192.0.2.1"})
+	for d := 0; d*maxReportEntriesPerDomain < maxReportRowsTotal+2*maxReportEntriesPerDomain; d++ {
+		ev := &DMARCEvaluation{Record: rec, PolicyDomain: fmt.Sprintf("d%d.example", d)}
+		for i := 0; i < maxReportEntriesPerDomain; i++ {
+			r.Record(ev, ReportSample{SourceIP: fmt.Sprintf("10.0.%d.%d", i>>8, i&255)})
+		}
+	}
+	for i := 0; i < 10; i++ {
+		r.Record(early, ReportSample{SourceIP: fmt.Sprintf("198.51.100.%d", i)})
+	}
+	r.reportsMu.Lock()
+	total, empty := 0, 0
+	for _, data := range r.reports {
+		total += len(data.Rows)
+		if len(data.Rows) == 0 {
+			empty++
+		}
+	}
+	r.reportsMu.Unlock()
+	if total != maxReportRowsTotal || empty != 0 {
+		t.Fatalf("rows %d (want the cap %d), %d domains without rows", total, maxReportRowsTotal, empty)
+	}
+	r.drain()
+	r.Record(&DMARCEvaluation{Record: rec, PolicyDomain: "after.example"}, ReportSample{SourceIP: "192.0.2.1"})
+	if n, _ := r.GetReportStats("after.example"); n != 1 {
+		t.Fatal("the total cap was not reset by a flush")
+	}
+}
+
+// The report schema requires sp and fo; they default to p and "0".
+func TestDMARCReportPublishesSpAndFo(t *testing.T) {
+	xmlData, err := BuildReport(ReportInput{Domain: "example.com", Record: DMARCRecord{Policy: DMARCPolicyReject, Percentage: 100},
+		Begin: time.Unix(1, 0), End: time.Unix(2, 0), Rows: map[ReportRow]int{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"<sp>reject</sp>", "<fo>0</fo>"} {
+		if !strings.Contains(string(xmlData), want) {
+			t.Errorf("report lacks %s:\n%s", want, xmlData)
+		}
+	}
+}
