@@ -32,6 +32,10 @@ func (s *Server) startAPI() error {
 	s.apiServer.SetJunkReportFunc(s.reportJunk)
 	s.apiServer.SetSettingsFunc(s.settings)
 	s.apiServer.SetContactStore(s.contactStorage())
+	// F7786: the admin rate-limit endpoints answered 503 without a manager.
+	if s.rateLimiter != nil {
+		s.apiServer.SetRateLimitManager(s.rateLimiter)
+	}
 	if s.pushSvc != nil {
 		s.apiServer.SetPushService(push.NewAPIAdapter(s.pushSvc))
 	}
