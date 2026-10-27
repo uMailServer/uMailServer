@@ -552,6 +552,10 @@ func (s *Server) recordAccountLoginFailure(email string) {
 	attempt.lastSeen = now
 }
 
+// LastLoginMinInterval is how often a successful login rewrites an account's
+// last-login time.
+const LastLoginMinInterval = time.Hour
+
 // handleLogin authenticates a user and returns a JWT token
 //
 //	@Summary Login
@@ -565,10 +569,6 @@ func (s *Server) recordAccountLoginFailure(email string) {
 //	@Failure 401 {object} map[string]interface{} "Invalid credentials"
 //	@Failure 429 {object} map[string]interface{} "Too many login attempts"
 //	@Router /api/v1/login [post]
-// LastLoginMinInterval is how often a successful login rewrites an account's
-// last-login time.
-const LastLoginMinInterval = time.Hour
-
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
