@@ -29,6 +29,13 @@ func (s *Server) Stop() error {
 		}
 	}
 
+	// Report not ready before anything stops: the API is shut down last, and
+	// until then load balancers polling /health/ready must stop routing
+	// traffic to a server whose mail listeners are already closing.
+	if s.apiServer != nil {
+		s.apiServer.StartDrain()
+	}
+
 	// Signal cancellation
 	s.cancel()
 

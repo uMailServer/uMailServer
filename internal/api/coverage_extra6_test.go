@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/umailserver/umailserver/internal/db"
 )
@@ -13,35 +12,9 @@ import (
 
 func TestStartDrain_SetsDrainingTrue(t *testing.T) {
 	s := &Server{}
-	s.draining.Store(false)
-
-	stopFunc := s.StartDrain()
+	s.StartDrain()
 	if !s.draining.Load() {
 		t.Error("Expected draining to be true after StartDrain")
-	}
-
-	// Cleanup
-	if stopFunc != nil {
-		stopFunc()
-	}
-}
-
-func TestDrainWait_CompletesWhenNoActiveRequests(t *testing.T) {
-	s := &Server{}
-	s.draining.Store(true)
-
-	// Should complete quickly since activeRequests returns 0
-	done := make(chan struct{})
-	go func() {
-		s.DrainWait(1 * time.Second)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Success - completed without hanging
-	case <-time.After(2 * time.Second):
-		t.Error("DrainWait did not complete within expected time")
 	}
 }
 
@@ -87,23 +60,6 @@ func TestHandleReady_DrainingWithNilDB(t *testing.T) {
 	// When draining, should return 503 even without checking DB
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("Expected status 503 when draining, got %d", rec.Code)
-	}
-}
-
-func TestDrainWait_WithTimeout(t *testing.T) {
-	s := &Server{}
-	s.draining.Store(true)
-
-	// Test that DrainWait respects timeout
-	// Since activeRequests() always returns 0, it should complete quickly
-	start := time.Now()
-	s.DrainWait(100 * time.Millisecond)
-	elapsed := time.Since(start)
-
-	// Since activeRequests returns 0, DrainWait should return immediately
-	// We just verify it doesn't hang
-	if elapsed > 500*time.Millisecond {
-		t.Error("DrainWait took too long")
 	}
 }
 

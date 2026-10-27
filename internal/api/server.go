@@ -768,32 +768,11 @@ func (s *Server) SetShutdownTimeout(d time.Duration) {
 	s.serverMu.Unlock()
 }
 
-// StartDrain initiates graceful draining mode.
-// After this is called, /health/ready returns 503 and new requests are rejected.
-// Returns a function that waits for all active requests to complete.
-// Call this before Stop() for zero-downtime deployments.
-func (s *Server) StartDrain() func() {
+// StartDrain marks the server as draining: /health/ready answers 503 from
+// now on, so load balancers stop sending new traffic while the server shuts
+// down.
+func (s *Server) StartDrain() {
 	s.draining.Store(true)
-	return func() {
-		// Wait for in-flight requests to complete
-		// This is a simple implementation - for production, track active connections
-		// The actual connection tracking would use middleware that increments/decrements a counter
-	}
-}
-
-// DrainWait waits for all active requests to complete.
-// timeout is the maximum time to wait before forcing close.
-func (s *Server) DrainWait(timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	for s.activeRequests() > 0 && time.Now().Before(deadline) {
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// activeRequests returns the number of currently active requests
-// This is a placeholder - real implementation would use atomic counter
-func (s *Server) activeRequests() int {
-	return 0
 }
 
 // errUnsupportedMediaType is returned by decodeJSON when a request body is
