@@ -339,7 +339,7 @@ from rate limiting):
 - `GET /health` - Full health check (503 when unhealthy)
 - `GET /health/ready` - Readiness probe (503 while shutting down)
 
-There is no `/health/live` route on that listener. The web, API and admin listeners do not terminate TLS themselves (the `tls` section covers SMTP, IMAP, POP3 and ManageSieve); run a reverse proxy in front for HTTPS (see SECURITY_HARDENING.md). On the separate metrics
+There is no `/health/live` route on that listener. The web port serves HTTPS itself when `tls.cert_file`/`tls.key_file` are set or ACME is enabled, and plain HTTP otherwise; a reverse proxy in front is optional (see SECURITY_HARDENING.md). On the separate metrics
 listener (`metrics.bind:port`, default `127.0.0.1:8080`, unauthenticated):
 
 - `GET /metrics` (`metrics.path`) - Prometheus text format
