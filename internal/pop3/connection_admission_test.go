@@ -203,3 +203,24 @@ func admTestCert(t *testing.T) *TLSConfig {
 	}
 	return &TLSConfig{CertFile: cf, KeyFile: kf}
 }
+
+// tls.min_version reaches the POP3 listener, which builds its own TLS config.
+func TestTLSConfig_MinVersion(t *testing.T) {
+	srv := admServer()
+	for _, tc := range []struct{ set, want uint16 }{
+		{0, tls.VersionTLS12},
+		{tls.VersionTLS10, tls.VersionTLS12},
+		{tls.VersionTLS13, tls.VersionTLS13},
+	} {
+		c := admTestCert(t)
+		c.MinVersion = tc.set
+		srv.SetTLSConfig(c)
+		cfg, err := srv.getTLSConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MinVersion != tc.want {
+			t.Errorf("MinVersion %#x: got %#x, want %#x", tc.set, cfg.MinVersion, tc.want)
+		}
+	}
+}

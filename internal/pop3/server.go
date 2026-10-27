@@ -89,8 +89,9 @@ func (s *Server) SetRequireTLS(require bool) {
 
 // TLSConfig holds TLS configuration
 type TLSConfig struct {
-	CertFile string
-	KeyFile  string
+	CertFile   string
+	KeyFile    string
+	MinVersion uint16 // crypto/tls version; below TLS 1.2 means TLS 1.2
 }
 
 // SetQuotaReleaseFunc installs a callback invoked once per message that the
@@ -358,9 +359,13 @@ func (s *Server) getTLSConfig() (*tls.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
 	}
+	minVersion := s.tlsConfig.MinVersion
+	if minVersion < tls.VersionTLS12 {
+		minVersion = tls.VersionTLS12
+	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   minVersion,
 	}, nil
 }
 

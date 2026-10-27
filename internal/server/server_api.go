@@ -15,22 +15,7 @@ import (
 // and admin listeners bind synchronously, so a bind failure fails Start
 // (F5530) instead of only being logged.
 func (s *Server) startAPI() error {
-	apiCfg := api.Config{
-		Addr:             fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
-		JWTSecret:        s.config.Security.JWTSecret,
-		DisableLegacyJWT: s.config.Security.DisableLegacyJWT,
-		TOTPKey:          s.config.Security.TOTPKey,
-		MaxLoginAttempts: s.config.Security.MaxLoginAttempts,
-		CorsOrigins:      s.config.HTTP.CorsOrigins,
-		PasswordHasher:   "bcrypt", // or "argon2id" (OWASP recommended)
-		AuditLog: api.AuditLogConfig{
-			Path:       s.config.Security.AuditLog.Path,
-			MaxSizeMB:  s.config.Security.AuditLog.MaxSizeMB,
-			MaxBackups: s.config.Security.AuditLog.MaxBackups,
-			MaxAgeDays: s.config.Security.AuditLog.MaxAgeDays,
-		},
-		DataDir: s.config.Server.DataDir,
-	}
+	apiCfg := s.apiConfig()
 	s.apiServer = api.NewServer(s.database, s.logger, apiCfg)
 	// F5440/F5442: JMAP (started earlier) verifies API tokens with the API's
 	// key set, so rotated keys and DisableLegacyJWT apply there too.
@@ -130,4 +115,25 @@ func (s *Server) startAPI() error {
 		s.logger.Info("Admin API server started", "addr", adminCfg.Addr)
 	}
 	return nil
+}
+
+// apiConfig maps the http and security settings onto the API server config.
+func (s *Server) apiConfig() api.Config {
+	return api.Config{
+		Addr:             fmt.Sprintf("%s:%d", s.config.HTTP.Bind, s.config.HTTP.Port),
+		JWTSecret:        s.config.Security.JWTSecret,
+		DisableLegacyJWT: s.config.Security.DisableLegacyJWT,
+		TOTPKey:          s.config.Security.TOTPKey,
+		MaxLoginAttempts: s.config.Security.MaxLoginAttempts,
+		CorsOrigins:      s.config.HTTP.CorsOrigins,
+		TrustedProxies:   s.config.HTTP.TrustedProxies,
+		PasswordHasher:   "bcrypt", // or "argon2id" (OWASP recommended)
+		AuditLog: api.AuditLogConfig{
+			Path:       s.config.Security.AuditLog.Path,
+			MaxSizeMB:  s.config.Security.AuditLog.MaxSizeMB,
+			MaxBackups: s.config.Security.AuditLog.MaxBackups,
+			MaxAgeDays: s.config.Security.AuditLog.MaxAgeDays,
+		},
+		DataDir: s.config.Server.DataDir,
+	}
 }

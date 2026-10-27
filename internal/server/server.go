@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -118,16 +119,12 @@ type Server struct {
 // New creates a new Server instance
 func New(cfg *config.Config) (*Server, error) {
 	// Setup log output
-	var logHandler slog.Handler
+	var logOut io.Writer
 	switch cfg.Logging.Output {
 	case "stdout", "":
-		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: parseLogLevel(cfg.Logging.Level),
-		})
+		logOut = os.Stdout
 	case "stderr":
-		logHandler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-			Level: parseLogLevel(cfg.Logging.Level),
-		})
+		logOut = os.Stderr
 	default:
 		// File output with rotation
 		writer, err := logging.NewRotatingWriter(
@@ -139,10 +136,9 @@ func New(cfg *config.Config) (*Server, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create log writer: %w", err)
 		}
-		logHandler = slog.NewJSONHandler(writer, &slog.HandlerOptions{
-			Level: parseLogLevel(cfg.Logging.Level),
-		})
+		logOut = writer
 	}
+	logHandler := newLogHandler(logOut, cfg.Logging)
 
 	logger := slog.New(logHandler)
 
@@ -211,6 +207,7 @@ func New(cfg *config.Config) (*Server, error) {
 		ClientAuth:        cfg.TLS.ClientAuth.Enabled,
 		RequireClientCert: cfg.TLS.ClientAuth.RequireCert,
 		ClientCAFile:      cfg.TLS.ClientAuth.CAFile,
+		MinVersion:        tlsMinVersion(cfg.TLS.MinVersion),
 	}
 	// Map verify mode string to tls.ClientAuthType
 	switch cfg.TLS.ClientAuth.VerifyMode {
@@ -351,6 +348,25 @@ func New(cfg *config.Config) (*Server, error) {
 }
 
 // parseLogLevel parses log level string
+// newLogHandler writes records to w in the configured logging.format: "text"
+// selects slog's key=value format, anything else JSON.
+func newLogHandler(w io.Writer, cfg config.LoggingConfig) slog.Handler {
+	opts := &slog.HandlerOptions{Level: parseLogLevel(cfg.Level)}
+	if cfg.Format == "text" {
+		return slog.NewTextHandler(w, opts)
+	}
+	return slog.NewJSONHandler(w, opts)
+}
+
+// tlsMinVersion maps tls.min_version ("1.2" or "1.3", validated by config)
+// to its crypto/tls constant; the TLS manager treats 0 as TLS 1.2.
+func tlsMinVersion(v string) uint16 {
+	if v == "1.3" {
+		return tls.VersionTLS13
+	}
+	return tls.VersionTLS12
+}
+
 func parseLogLevel(level string) slog.Level {
 	switch strings.ToLower(level) {
 	case "debug", "trace":

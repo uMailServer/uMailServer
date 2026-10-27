@@ -43,8 +43,9 @@ func (s *Server) startPOP3(mailstore *imap.BboltMailstore) error {
 	implicitTLS := false
 	if s.config.TLS.CertFile != "" && s.config.TLS.KeyFile != "" {
 		pop3Server.SetTLSConfig(&pop3.TLSConfig{
-			CertFile: s.config.TLS.CertFile,
-			KeyFile:  s.config.TLS.KeyFile,
+			CertFile:   s.config.TLS.CertFile,
+			KeyFile:    s.config.TLS.KeyFile,
+			MinVersion: tlsMinVersion(s.config.TLS.MinVersion),
 		})
 		if err := pop3Server.StartTLS(); err != nil {
 			s.logger.Error("POP3 implicit TLS unavailable; clients cannot authenticate", "addr", pop3Addr, "error", err)
