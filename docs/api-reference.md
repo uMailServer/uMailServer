@@ -425,6 +425,21 @@ qualified id `<hash>_<uid>_<base64url(mailbox)>` that addresses exactly one
 (folder, uid) entry. A hash held once keeps its plain id. Pass the id exactly as
 listed to `message`, `flags`, `move` and `delete`.
 
+### GET /api/v1/mail/folders
+
+The signed-in user's mailboxes with message and unread counts: the standard
+folders first (`role` is `inbox`, `sent`, `drafts`, `trash` or `spam`), then the
+user's own folders by name. List one of the user's own folders with
+`GET /api/v1/mail/inbox?folder=<name>` (names are case-sensitive).
+
+```json
+{"folders": [
+  {"name": "INBOX", "role": "inbox", "total": 42, "unread": 3},
+  {"name": "Junk", "role": "spam", "total": 5, "unread": 5},
+  {"name": "Work", "total": 12, "unread": 1}
+]}
+```
+
 ### GET /api/v1/mail/message
 
 Get one message. Query: `id` (required), `folder` (optional; when omitted all

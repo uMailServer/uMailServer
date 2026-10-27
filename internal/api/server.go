@@ -560,6 +560,7 @@ func (s *Server) initRouter() {
 	api.HandleFunc("/api/v1/mail/attachment", http.HandlerFunc(s.mailHandler.handleMailAttachment).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/flags", http.HandlerFunc(s.mailHandler.handleMailFlags).ServeHTTP)
 	api.HandleFunc("/api/v1/mail/draft", http.HandlerFunc(s.mailHandler.handleMailDraft).ServeHTTP)
+	api.HandleFunc("/api/v1/mail/folders", http.HandlerFunc(s.mailHandler.handleMailFolders).ServeHTTP)
 
 	// Wrap API with auth middleware and mount to main mux
 	apiHandler := s.rateLimitMiddleware(s.limitBodyMiddleware(s.securityHeadersMiddleware(s.csrfMiddleware(s.corsMiddleware(s.authMiddleware(api))))))
