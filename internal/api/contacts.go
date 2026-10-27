@@ -23,6 +23,7 @@ type ContactStore interface {
 	GetContacts(user, addressbookID string) ([]string, error)
 	GetContact(user, addressbookID, uid string) (string, error)
 	SaveContact(user, addressbookID string, contact *carddav.Contact, vcard string) error
+	UpdateContact(user, addressbookID, uid string, update func(old string) (string, error)) error
 	DeleteContact(user, addressbookID, uid string) error
 }
 
@@ -189,7 +190,14 @@ func (s *Server) handleContactPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	card.UID = uid
-	if err := s.saveCard(user, abID, card, carddav.MergeCard(existing, card)); err != nil {
+	err = s.contactStore.UpdateContact(user, abID, uid, func(old string) (string, error) {
+		return carddav.MergeCard(old, card), nil
+	})
+	if errors.Is(err, carddav.ErrContactNotFound) {
+		s.sendError(w, http.StatusNotFound, "contact not found")
+		return
+	}
+	if err != nil {
 		s.logger.Error("Failed to save contact", "error", err, "user", user)
 		s.sendError(w, http.StatusInternalServerError, "failed to save contact")
 		return
@@ -248,16 +256,22 @@ func (s *Server) writableAddressbook(user string) (string, error) {
 			return ab.ID, nil
 		}
 	}
+	id := defaultAddressbookID
 	for _, ab := range books {
 		if !ab.ReadOnly {
 			return ab.ID, nil
 		}
+		if ab.ID == defaultAddressbookID {
+			// Creating it again would overwrite its metadata and clear
+			// ReadOnly; use a new book instead.
+			id = uuid.NewString()
+		}
 	}
 	now := time.Now()
 	err = s.contactStore.CreateAddressbook(user, &carddav.Addressbook{
-		ID: defaultAddressbookID, Name: "Contacts", Created: now, Modified: now,
+		ID: id, Name: "Contacts", Created: now, Modified: now,
 	})
-	return defaultAddressbookID, err
+	return id, err
 }
 
 // readContactRequest decodes and validates a contact body.

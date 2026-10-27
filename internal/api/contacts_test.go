@@ -191,3 +191,25 @@ func TestContactsUnavailableWithoutStore(t *testing.T) {
 		t.Fatalf("status=%d, want 503", rec.Code)
 	}
 }
+
+// A read-only "contacts" book was recreated by the first webmail create,
+// which rewrote its metadata (clearing ReadOnly) and wrote into it.
+func TestContactsCreateSkipsReadOnlyDefaultBook(t *testing.T) {
+	s, store := contactsServer(t, true)
+	if err := store.CreateAddressbook("y@ex.com", &carddav.Addressbook{ID: defaultAddressbookID, Name: "Directory", ReadOnly: true}); err != nil {
+		t.Fatal(err)
+	}
+	rec := contactsDo(t, s, http.MethodPost, "/api/v1/contacts", `{"name":"New"}`, false)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body)
+	}
+	var c ContactResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &c)
+	if c.Addressbook == defaultAddressbookID {
+		t.Fatal("contact written into the read-only book")
+	}
+	ab, err := store.GetAddressbook("y@ex.com", defaultAddressbookID)
+	if err != nil || ab == nil || !ab.ReadOnly || ab.Name != "Directory" {
+		t.Fatalf("read-only book changed: %+v err=%v", ab, err)
+	}
+}

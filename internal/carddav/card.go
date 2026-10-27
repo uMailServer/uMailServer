@@ -171,6 +171,11 @@ func foldLines(lines []string) string {
 			for cut > 0 && line[cut]&0xC0 == 0x80 {
 				cut--
 			}
+			if cut == 0 {
+				// Invalid UTF-8 (a run of continuation bytes): there is no
+				// character boundary to keep, so cut at the width.
+				cut = width
+			}
 			b.WriteString(line[:cut] + "\r\n ")
 			line = line[cut:]
 			width = 74 // the leading space counts

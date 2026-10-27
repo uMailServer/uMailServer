@@ -51,7 +51,7 @@ type Server struct {
 	deliverFn    func(from string, to []string, data []byte) error // webmail send routing (F7640)
 	junkReport   func(user, messageID string, spam bool)           // spam training from Junk moves
 	settingsFunc func() ServerSettings
-	contactStore ContactStore // effective config for the admin Settings page
+	contactStore ContactStore // webmail contacts (CardDAV address books)
 	httpServer   *http.Server
 	healthMon    HealthMonitor
 

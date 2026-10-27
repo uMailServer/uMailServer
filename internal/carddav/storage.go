@@ -298,6 +298,47 @@ func (s *Storage) SaveContact(username, addressbookID string, contact *Contact, 
 	return nil
 }
 
+// ErrContactNotFound is returned by UpdateContact for a missing contact.
+var ErrContactNotFound = errors.New("contact not found")
+
+// UpdateContact rewrites an existing contact with update(old) under the
+// storage lock, so a CardDAV write or delete cannot land between reading the
+// card and saving the result (which would be overwritten or undone).
+func (s *Storage) UpdateContact(username, addressbookID, contactUID string, update func(old string) (string, error)) error {
+	if err := validateID(addressbookID); err != nil {
+		return err
+	}
+	if err := validateID(contactUID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Clean(s.contactPath(username, addressbookID, contactUID))
+	old, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ErrContactNotFound
+		}
+		return fmt.Errorf("failed to read contact: %w", err)
+	}
+	data, err := update(string(old))
+	if err != nil {
+		return err
+	}
+	// #nosec G703 -- IDs are validated with validateID before use
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		return fmt.Errorf("failed to write contact: %w", err)
+	}
+	if ab, err := s.getAddressbookUnsafe(username, addressbookID); err == nil && ab != nil {
+		ab.Modified = time.Now()
+		abData, _ := json.MarshalIndent(ab, "", "  ")
+		// #nosec G703 -- IDs are validated with validateID before use
+		_ = os.WriteFile(filepath.Clean(s.addressbookPath(username, addressbookID)), abData, 0o600)
+	}
+	return nil
+}
+
 // GetContact retrieves a contact
 func (s *Storage) GetContact(username, addressbookID, contactUID string) (string, error) {
 	if err := validateID(addressbookID); err != nil {
