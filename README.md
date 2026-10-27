@@ -228,7 +228,7 @@ umailserver restart
 umailserver config check --config /path/to/config.yaml   # Validate config (also flags unknown keys)
 
 # Account management
-umailserver account add user@example.com
+umailserver account add user@example.com                # add --admin for an administrator
 umailserver account password user@example.com
 umailserver account delete user@example.com
 umailserver account list example.com
