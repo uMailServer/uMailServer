@@ -171,3 +171,50 @@ func TestValidateFilterRule(t *testing.T) {
 		t.Errorf("valid rule rejected: %s", msg)
 	}
 }
+
+// F7777: equals/startsWith/endsWith on From/To compared the whole header, so
+// "Bob <bob@ext.example>" never matched an address condition.
+func TestFiltersFromToMatchTheAddress(t *testing.T) {
+	msg := "From: Bob <bob@ext.example>\r\nTo: Alice <alice@test.com>, carol@test.com\r\nCc: \"Team\" <team@corp.example>\r\nSubject: s\r\n\r\nbody\r\n"
+	for _, c := range []struct {
+		field, op, value string
+		match            bool
+	}{
+		{"from", "endsWith", "@ext.example", true},
+		{"from", "endsWith", "@EXT.example", true},
+		{"from", "equals", "bob@ext.example", true},
+		{"from", "startsWith", "bob@", true},
+		{"from", "endsWith", "@other.example", false},
+		{"from", "equals", "Bob", false},
+		{"from", "contains", "Bob", true}, // the display name is still searchable
+		{"to", "equals", "alice@test.com", true},
+		{"to", "equals", "carol@test.com", true},
+		{"to", "endsWith", "@corp.example", true}, // Cc
+		{"to", "startsWith", "nobody@", false},
+	} {
+		got := fileintoTargets(runFilterScript(t, []*EmailFilter{moveFilter(c.field, c.op, c.value, "W")}, msg))
+		if (len(got) == 1) != c.match {
+			t.Errorf("%s %s %q: fileinto %v, want match=%v", c.field, c.op, c.value, got, c.match)
+		}
+	}
+}
+
+// F7778: one filter whose escaped :matches key exceeded the Sieve pattern
+// limit made the user's whole script fail to compile, disabling every filter.
+func TestFilterOverlongPatternDoesNotDisableOthers(t *testing.T) {
+	good := moveFilter("from", "contains", "bob", "W")
+	long := moveFilter("subject", "startsWith", strings.Repeat("*", 600), "X")
+	if msg := validateFilterRule(long.Conditions, long.Actions); msg == "" {
+		t.Fatal("an over-long startsWith value was accepted")
+	}
+	// A filter stored before the check is skipped; the others still apply.
+	if got := fileintoTargets(runFilterScript(t, []*EmailFilter{long, good}, filterTestMsg)); len(got) != 1 || got[0] != "W" {
+		t.Fatalf("fileinto %v, want [W]", got)
+	}
+	// Just under the limit is accepted and compiles.
+	ok := moveFilter("subject", "startsWith", strings.Repeat("a", 1000), "X")
+	if msg := validateFilterRule(ok.Conditions, ok.Actions); msg != "" {
+		t.Fatalf("a 1000-byte plain value was rejected: %s", msg)
+	}
+	runFilterScript(t, []*EmailFilter{ok, good}, filterTestMsg)
+}

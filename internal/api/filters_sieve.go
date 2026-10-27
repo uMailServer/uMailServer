@@ -134,6 +134,10 @@ func filterSieveTest(f *EmailFilter) string {
 	return op + "(" + strings.Join(tests, ", ") + ")"
 }
 
+// maxSievePatternLen is the Sieve compiler's limit on a :matches or :regex
+// key (internal/sieve maxPatternLen).
+const maxSievePatternLen = 1024
+
 func filterSieveCondition(c FilterCondition) string {
 	if c.Value == "" {
 		return ""
@@ -156,11 +160,25 @@ func filterSieveCondition(c FilterCondition) string {
 	default:
 		return ""
 	}
+	// F7778: the Sieve compiler rejects a :matches/:regex key over 1024
+	// bytes, and one such condition made the user's whole script fail, so
+	// none of their filters applied. Glob escaping can double the value.
+	if (match == ":matches" || match == ":regex") && len(key) > maxSievePatternLen {
+		return ""
+	}
+	// equals/startsWith/endsWith on From/To compare the address itself
+	// (Sieve "address"); against the whole header ("Bob <bob@x>", several
+	// recipients) they never matched a normal address (F7777). contains and
+	// regex keep the header test so they can also match the display name.
+	test := "header"
+	if (c.Field == "from" || c.Field == "to") && (match == ":is" || match == ":matches") {
+		test = "address :all"
+	}
 	switch c.Field {
 	case "from":
-		return "header " + match + " \"from\" " + sieveQuote(key)
+		return test + " " + match + " \"from\" " + sieveQuote(key)
 	case "to":
-		return "header " + match + " [\"to\", \"cc\"] " + sieveQuote(key)
+		return test + " " + match + " [\"to\", \"cc\"] " + sieveQuote(key)
 	case "subject":
 		return "header " + match + " \"subject\" " + sieveQuote(key)
 	case "header":
@@ -259,6 +277,9 @@ func validateFilterRule(conditions []FilterCondition, actions []FilterAction) st
 			}
 		default:
 			return fmt.Sprintf("condition %d has an unknown operator %q", i+1, c.Operator)
+		}
+		if c.Value != "" && filterSieveCondition(c) == "" {
+			return fmt.Sprintf("condition %d is too long", i+1)
 		}
 	}
 	for i, a := range actions {
