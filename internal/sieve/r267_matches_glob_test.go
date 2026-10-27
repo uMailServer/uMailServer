@@ -51,7 +51,9 @@ func TestR267MatchesManyStarsLargeBody(t *testing.T) {
 	if _, ok := a[0].(KeepAction); !ok {
 		t.Fatalf("want implicit keep, got %v", a)
 	}
-	if extra := runtime.NumGoroutine() - before; extra != 0 {
+	// Only a rise is a leak: the count is process-wide, so a goroutine of an
+	// earlier test finishing meanwhile lowers it (the test failed with -1).
+	if extra := runtime.NumGoroutine() - before; extra > 0 {
 		t.Fatalf("%d goroutine(s) left running", extra)
 	}
 }
