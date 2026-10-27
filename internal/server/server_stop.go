@@ -5,9 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
-	"strings"
 
-	"github.com/umailserver/umailserver/internal/autoconfig"
 	"github.com/umailserver/umailserver/internal/smtp"
 	"os"
 	"os/signal"
@@ -298,21 +296,4 @@ func (s *Server) ReloadTLS() error {
 	}
 	s.logger.Info("TLS reload: certificate pair valid; new handshakes use it", "cert", certFile)
 	return nil
-}
-
-// IsHostedDomain reports whether domain is one of the domains in the accounts
-// database (case-insensitive, trailing dot ignored) (F6590).
-func (s *Server) IsHostedDomain(domain string) bool {
-	domain = strings.TrimRight(strings.ToLower(strings.TrimSpace(domain)), ".")
-	if domain == "" || s.database == nil {
-		return false
-	}
-	d, err := s.database.GetDomain(domain)
-	return err == nil && d != nil
-}
-
-// AutoconfigProvider returns the Autoconfig/Autodiscover provider restricted
-// to hosted domains; wire it into autoconfig.NewHandler (F6590).
-func (s *Server) AutoconfigProvider() autoconfig.ConfigProvider {
-	return autoconfig.NewHostedProvider(nil, s.IsHostedDomain)
 }

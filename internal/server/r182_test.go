@@ -1,9 +1,6 @@
 package server
 
 import (
-	"github.com/umailserver/umailserver/internal/autoconfig"
-	"github.com/umailserver/umailserver/internal/db"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,34 +67,5 @@ func TestReloadTLSF6594(t *testing.T) {
 	srv.config.TLS.CertFile, srv.config.TLS.KeyFile = bad, bad
 	if err := srv.ReloadTLS(); err == nil {
 		t.Fatal("invalid pair must error")
-	}
-}
-
-func TestHostedDomainLookupF6590(t *testing.T) {
-	cfg := lifecycleTestConfig(t)
-	srv, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = srv.Stop() })
-	if err := srv.database.CreateDomain(&db.DomainData{Name: "hosted.example", IsActive: true}); err != nil {
-		t.Fatal(err)
-	}
-	if !srv.IsHostedDomain("Hosted.Example.") || srv.IsHostedDomain("other.example") || srv.IsHostedDomain("") {
-		t.Fatal("hosted lookup wrong")
-	}
-	h := autoconfig.NewHandler(srv.AutoconfigProvider())
-	get := func(host string) int {
-		r := httptest.NewRequest("GET", "/.well-known/autoconfig/mail/config-v1.1.xml", nil)
-		r.Host = host
-		w := httptest.NewRecorder()
-		h.HandleAutoconfig(w, r)
-		return w.Code
-	}
-	if c := get("autoconfig.hosted.example"); c != 200 {
-		t.Fatalf("hosted: %d", c)
-	}
-	if c := get("autoconfig.evil.example"); c != 404 {
-		t.Fatalf("unknown: %d", c)
 	}
 }

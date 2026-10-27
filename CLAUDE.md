@@ -128,7 +128,6 @@ The `Server` struct and its methods are split across many files in `internal/ser
 | `alert` | Alert/notification manager |
 | `push` | WebPush notification support |
 | `audit` | Audit logging for admin actions |
-| `autoconfig` | Thunderbird/Outlook autoconfig XML endpoints |
 | `integration` | Test helpers and integration test utilities |
 
 ### Key Patterns
