@@ -31,6 +31,7 @@ func (s *Server) startAPI() error {
 	s.apiServer.SetQuotaAdjustFunc(s.quotaAdjust)       // F6680
 	s.apiServer.SetJunkReportFunc(s.reportJunk)
 	s.apiServer.SetSettingsFunc(s.settings)
+	s.apiServer.SetContactStore(s.contactStorage())
 	if s.pushSvc != nil {
 		s.apiServer.SetPushService(push.NewAPIAdapter(s.pushSvc))
 	}

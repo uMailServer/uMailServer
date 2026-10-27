@@ -51,7 +51,8 @@ type Server struct {
 	queueMgr     *queue.Manager
 	deliverFn    func(from string, to []string, data []byte) error // webmail send routing (F7640)
 	junkReport   func(user, messageID string, spam bool)           // spam training from Junk moves
-	settingsFunc func() ServerSettings                             // effective config for the admin Settings page
+	settingsFunc func() ServerSettings
+	contactStore ContactStore // effective config for the admin Settings page
 	httpServer   *http.Server
 	healthMon    HealthMonitor
 
@@ -519,6 +520,10 @@ func (s *Server) initRouter() {
 
 	// Email filters
 	api.HandleFunc("/api/v1/filters", s.handleFilters)
+
+	// Contacts (the user's CardDAV address books)
+	api.HandleFunc("/api/v1/contacts", s.handleContacts)
+	api.HandleFunc("/api/v1/contacts/", s.handleContactPath)
 	api.HandleFunc("/api/v1/filters/reorder", s.handleFilterReorder)
 	api.HandleFunc("/api/v1/filters/", s.handleFilterPath)
 

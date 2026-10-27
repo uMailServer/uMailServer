@@ -44,3 +44,13 @@ func (s *Server) startCardDAV() error {
 	s.logger.Info("CardDAV server started", "addr", addr)
 	return nil
 }
+
+// contactStorage is the address book storage the webmail contacts API uses:
+// the CardDAV server's own instance when it runs, so both share one lock,
+// otherwise a storage over the same directory.
+func (s *Server) contactStorage() *carddav.Storage {
+	if s.carddavServer != nil {
+		return s.carddavServer.Storage()
+	}
+	return carddav.NewStorage(filepath.Join(s.config.Server.DataDir, "carddav"))
+}

@@ -55,6 +55,11 @@ func NewServer(dataDir string, logger *slog.Logger) *Server {
 	}
 }
 
+// Storage returns the server's contact storage, which other front ends
+// (the webmail API) share so that both see the same address books under the
+// same lock.
+func (s *Server) Storage() *Storage { return s.storage }
+
 // SetAuthFunc sets the authentication function
 func (s *Server) SetAuthFunc(fn func(username, password string) (bool, error)) {
 	s.authFunc = fn

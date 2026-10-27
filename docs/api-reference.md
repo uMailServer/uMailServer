@@ -488,6 +488,43 @@ destination, `400` when `from` equals `to`.
 
 Delete a message by id (query `id`, or form value `id` with `POST`).
 
+## Contacts
+
+The authenticated user's CardDAV address books: contacts added here appear in
+CardDAV clients (phones, Thunderbird) and vice versa. A contact is created in
+the `contacts` address book, which is created on first use. Editing a contact
+replaces its name, emails, phones, organization and note and keeps every other
+vCard property (photo, addresses, birthday).
+
+### GET /api/v1/contacts
+
+Lists all contacts, sorted by name. `?q=` keeps those whose name,
+organization, email or phone contains the text (case-insensitive).
+
+```json
+{"contacts": [{"uid": "7f3c…", "addressbook": "contacts", "name": "Jane Doe",
+  "emails": ["jane@example.com"], "phones": ["+1 555 0100"], "organization": "Acme"}]}
+```
+
+### POST /api/v1/contacts
+
+```json
+{"name": "Jane Doe", "emails": ["jane@example.com"], "phones": ["+1 555 0100"],
+ "organization": "Acme", "note": ""}
+```
+
+A name or an email address is required; emails must be bare addresses. `201`
+with the created contact.
+
+### PUT /api/v1/contacts/{addressbook}/{uid}
+
+Same body as POST. `200` with the updated contact, `404` when it does not
+exist, `403` for a read-only address book.
+
+### DELETE /api/v1/contacts/{addressbook}/{uid}
+
+`204`, or `404` when the contact does not exist.
+
 ## Search
 
 ### GET /api/v1/search
