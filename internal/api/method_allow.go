@@ -26,7 +26,7 @@ func routeAllow(path string) string {
 		return "DELETE"
 	case "/api/v1/account/totp", "/api/v1/search", "/api/v1/threads", "/api/v1/threads/search",
 		"/api/v1/push/vapid-public-key", "/api/v1/push/subscriptions", "/api/v1/admin/push/stats",
-		"/api/v1/admin/vacations", "/api/v1/admin/jwt/status",
+		"/api/v1/admin/vacations", "/api/v1/admin/jwt/status", "/api/v1/admin/settings",
 		"/api/v1/cluster/status", "/api/v1/cluster/instances", "/api/v1/mail/message",
 		"/api/v1/admin/ratelimits/ip/", "/api/v1/admin/ratelimits/user/",
 		"/.well-known/autoconfig/mail/config-v1.1.xml":

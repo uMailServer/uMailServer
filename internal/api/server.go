@@ -40,19 +40,20 @@ type HealthMonitor interface {
 
 // Server represents the admin API server
 type Server struct {
-	db         *db.DB
-	logger     *slog.Logger
-	config     Config
-	mcpServer  *mcp.Server
-	sseServer  *websocket.SSEServer
-	searchSvc  *search.Service
-	msgStore   *storage.MessageStore
-	mailDB     *storage.Database
-	queueMgr   *queue.Manager
-	deliverFn  func(from string, to []string, data []byte) error // webmail send routing (F7640)
-	junkReport func(user, messageID string, spam bool)           // spam training from Junk moves
-	httpServer *http.Server
-	healthMon  HealthMonitor
+	db           *db.DB
+	logger       *slog.Logger
+	config       Config
+	mcpServer    *mcp.Server
+	sseServer    *websocket.SSEServer
+	searchSvc    *search.Service
+	msgStore     *storage.MessageStore
+	mailDB       *storage.Database
+	queueMgr     *queue.Manager
+	deliverFn    func(from string, to []string, data []byte) error // webmail send routing (F7640)
+	junkReport   func(user, messageID string, spam bool)           // spam training from Junk moves
+	settingsFunc func() ServerSettings                             // effective config for the admin Settings page
+	httpServer   *http.Server
+	healthMon    HealthMonitor
 
 	// Tracing provider for OpenTelemetry
 	tracingProvider *tracing.Provider
@@ -512,6 +513,9 @@ func (s *Server) initRouter() {
 	// JWT secret rotation
 	api.HandleFunc("/api/v1/admin/jwt/rotate", s.adminMiddleware(http.HandlerFunc(s.handleJWTRotate)).ServeHTTP)
 	api.HandleFunc("/api/v1/admin/jwt/status", s.adminMiddleware(http.HandlerFunc(s.handleJWTStatus)).ServeHTTP)
+
+	// Effective server settings (read-only)
+	api.HandleFunc("/api/v1/admin/settings", s.adminMiddleware(http.HandlerFunc(s.handleAdminSettings)).ServeHTTP)
 
 	// Email filters
 	api.HandleFunc("/api/v1/filters", s.handleFilters)

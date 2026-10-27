@@ -171,6 +171,9 @@ func (s *AdminServer) router() http.Handler {
 	// Push stats (admin only)
 	api.HandleFunc("/api/v1/admin/push/stats", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleAdminPushStats))))
 
+	// Effective server settings (admin only, read-only)
+	api.HandleFunc("/api/v1/admin/settings", s.withAuth(s.adminMiddleware(http.HandlerFunc(s.handleAdminSettings))))
+
 	// All API routes
 	mux.Handle("/api/v1/", api)
 
