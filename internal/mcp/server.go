@@ -12,12 +12,15 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/cli"
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
+	"github.com/umailserver/umailserver/internal/health"
 	"github.com/umailserver/umailserver/internal/tracing"
 	"go.etcd.io/bbolt"
 	"go.opentelemetry.io/otel/attribute"
@@ -53,6 +56,13 @@ type Server struct {
 	// tracingProvider wraps every JSON-RPC method dispatch in an
 	// `mcp.<method>` server-kind span when set.
 	tracingProvider *tracing.Provider
+
+	// Backends of the operational tools; a tool whose backend is not set
+	// reports that it is unavailable.
+	queue       QueueControl
+	diagnostics Diagnostics
+	healthCheck func(context.Context) health.Report
+	reloadTLS   func() error
 }
 
 // rateAttempt tracks MCP requests per IP for rate limiting
@@ -710,12 +720,18 @@ func (s *Server) handleToolsList() map[string]interface{} {
 // admin-only, matching list_domains; otherwise list_accounts (whose
 // addresses contain every domain) bypasses the list_domains gate.
 var adminTools = map[string]struct{}{
-	"add_domain":       {},
-	"delete_domain":    {},
-	"add_account":      {},
-	"delete_account":   {},
-	"flush_queue":      {},
-	"reload_config":    {},
+	"add_domain":     {},
+	"delete_domain":  {},
+	"add_account":    {},
+	"delete_account": {},
+	"flush_queue":    {},
+	"reload_config":  {},
+	// The queue lists sender and recipient addresses and can be changed;
+	// the checks make the server connect to a host the caller names.
+	"get_queue_status": {},
+	"retry_queue_item": {},
+	"check_dns":        {},
+	"check_tls":        {},
 	"list_domains":     {},
 	"list_accounts":    {},
 	"get_account_info": {},
@@ -1247,45 +1263,142 @@ func (s *Server) toolGetAccountInfo(email string) (map[string]interface{}, error
 	}, nil
 }
 
-func (s *Server) toolGetQueueStatus(limit int) (map[string]interface{}, error) {
-	// Queue operations would need queue manager access
-	// For now, return placeholder
-	text := "Queue Status:\n"
-	text += "- Note: Full queue status requires queue manager integration\n"
-	text += "- Use CLI 'umailserver queue list' for detailed status\n"
+// QueueControl is the outbound queue the retry_queue_item and flush_queue
+// tools act on.
+type QueueControl interface {
+	RetryEntry(id string) error
+	FlushQueue() error
+}
 
+// Diagnostics runs the checks behind the check_dns and check_tls tools.
+type Diagnostics interface {
+	CheckDNS(domain string) ([]cli.DNSCheckResult, error)
+	CheckTLS(hostname string) (*cli.TLSCheckResult, error)
+}
+
+// SetQueue installs the queue for retry_queue_item and flush_queue.
+func (s *Server) SetQueue(q QueueControl) { s.queue = q }
+
+// SetDiagnostics installs the DNS and TLS checks.
+func (s *Server) SetDiagnostics(d Diagnostics) { s.diagnostics = d }
+
+// SetHealthCheck installs the health report behind get_system_status.
+func (s *Server) SetHealthCheck(check func(context.Context) health.Report) { s.healthCheck = check }
+
+// SetTLSReload installs the TLS certificate reload behind reload_config.
+func (s *Server) SetTLSReload(reload func() error) { s.reloadTLS = reload }
+
+// errUnavailable is the result of a tool whose backend is not installed.
+func errUnavailable(tool string) error {
+	return fmt.Errorf("%s is not available on this server", tool)
+}
+
+func textResult(text string) map[string]interface{} {
 	return map[string]interface{}{
 		"content": []map[string]string{
 			{"type": "text", "text": text},
 		},
-	}, nil
+	}
+}
+
+// toolGetQueueStatus summarises the outbound queue by status and lists the
+// oldest entries still waiting (limit, default 20).
+func (s *Server) toolGetQueueStatus(limit int) (map[string]interface{}, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	counts := map[string]int{}
+	var waiting []db.QueueEntry
+	err := s.db.ForEach(db.BucketQueue, func(_ string, value []byte) error {
+		var e db.QueueEntry
+		if json.Unmarshal(value, &e) != nil {
+			return nil
+		}
+		counts[e.Status]++
+		if e.Status != "delivered" && e.Status != "bounced" {
+			waiting = append(waiting, e)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, internalError("get_queue_status", err)
+	}
+	sort.Slice(waiting, func(i, j int) bool {
+		if !waiting[i].CreatedAt.Equal(waiting[j].CreatedAt) {
+			return waiting[i].CreatedAt.Before(waiting[j].CreatedAt)
+		}
+		return waiting[i].ID < waiting[j].ID
+	})
+
+	var b strings.Builder
+	b.WriteString("Queue Status:\n")
+	statuses := make([]string, 0, len(counts))
+	for st := range counts {
+		statuses = append(statuses, st)
+	}
+	sort.Strings(statuses)
+	if len(statuses) == 0 {
+		b.WriteString("- The queue is empty\n")
+	}
+	for _, st := range statuses {
+		fmt.Fprintf(&b, "- %s: %d\n", st, counts[st])
+	}
+	if len(waiting) > limit {
+		fmt.Fprintf(&b, "\nOldest %d of %d waiting entries:\n", limit, len(waiting))
+		waiting = waiting[:limit]
+	} else if len(waiting) > 0 {
+		b.WriteString("\nWaiting entries:\n")
+	}
+	for _, e := range waiting {
+		fmt.Fprintf(&b, "- %s [%s] from <%s> to %d recipient(s), %d attempt(s), created %s",
+			e.ID, e.Status, e.From, len(e.To), e.RetryCount, e.CreatedAt.UTC().Format(time.RFC3339))
+		if e.Status == "pending" && !e.NextRetry.IsZero() {
+			fmt.Fprintf(&b, ", next try %s", e.NextRetry.UTC().Format(time.RFC3339))
+		}
+		if e.LastError != "" {
+			fmt.Fprintf(&b, ", last error: %s", truncate(e.LastError, 200))
+		}
+		b.WriteString("\n")
+	}
+	return textResult(b.String()), nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 func (s *Server) toolRetryQueueItem(id string) (map[string]interface{}, error) {
 	if id == "" {
 		return nil, invalidParams("queue item ID is required")
 	}
-	text := fmt.Sprintf("Queue item '%s' retry requested\n", id)
-	text += "- Note: Full queue management requires queue manager integration\n"
-	text += "- Use CLI 'umailserver queue retry <id>' for actual retry\n"
-
-	return map[string]interface{}{
-		"content": []map[string]string{
-			{"type": "text", "text": text},
-		},
-	}, nil
+	if s.queue == nil {
+		return nil, errUnavailable("retry_queue_item")
+	}
+	if exists, err := s.keyExists(db.BucketQueue, id); err != nil {
+		return nil, internalError("retry_queue_item", err)
+	} else if !exists {
+		return nil, fmt.Errorf("queue entry not found")
+	}
+	if err := s.queue.RetryEntry(id); err != nil {
+		if errors.Is(err, db.ErrQueueEntryNotFound) {
+			return nil, fmt.Errorf("queue entry not found")
+		}
+		return nil, internalError("retry_queue_item", err)
+	}
+	return textResult(fmt.Sprintf("Queue entry %s scheduled for immediate delivery\n", id)), nil
 }
 
 func (s *Server) toolFlushQueue() (map[string]interface{}, error) {
-	text := "Queue flush requested\n"
-	text += "- Note: Full queue management requires queue manager integration\n"
-	text += "- Use CLI 'umailserver queue flush' for actual flush\n"
-
-	return map[string]interface{}{
-		"content": []map[string]string{
-			{"type": "text", "text": text},
-		},
-	}, nil
+	if s.queue == nil {
+		return nil, errUnavailable("flush_queue")
+	}
+	if err := s.queue.FlushQueue(); err != nil {
+		return nil, internalError("flush_queue", err)
+	}
+	return textResult("Every failed queue entry was scheduled for immediate delivery\n"), nil
 }
 
 func (s *Server) toolCheckDNS(domain string) (map[string]interface{}, error) {
@@ -1295,15 +1408,29 @@ func (s *Server) toolCheckDNS(domain string) (map[string]interface{}, error) {
 	if err := validateDomainName(domain); err != nil {
 		return nil, err
 	}
-	text := fmt.Sprintf("DNS Check for %s:\n", domain)
-	text += "- Note: Full DNS check requires DNS resolver integration\n"
-	text += fmt.Sprintf("- Use CLI 'umailserver check dns %s' for full check\n", domain)
-
-	return map[string]interface{}{
-		"content": []map[string]string{
-			{"type": "text", "text": text},
-		},
-	}, nil
+	if s.diagnostics == nil {
+		return nil, errUnavailable("check_dns")
+	}
+	results, err := s.diagnostics.CheckDNS(strings.ToLower(domain))
+	if err != nil {
+		return nil, fmt.Errorf("DNS check failed: %v", err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "DNS Check for %s:\n", domain)
+	for _, r := range results {
+		fmt.Fprintf(&b, "- %s %s: %s", r.RecordType, r.RecordName, strings.ToUpper(r.Status))
+		if r.Message != "" {
+			fmt.Fprintf(&b, " (%s)", r.Message)
+		}
+		if r.Found != "" {
+			fmt.Fprintf(&b, "\n  found: %s", truncate(r.Found, 300))
+		}
+		if r.Expected != "" && r.Status != "pass" {
+			fmt.Fprintf(&b, "\n  expected: %s", truncate(r.Expected, 300))
+		}
+		b.WriteString("\n")
+	}
+	return textResult(b.String()), nil
 }
 
 func (s *Server) toolCheckTLS(domain string) (map[string]interface{}, error) {
@@ -1313,40 +1440,55 @@ func (s *Server) toolCheckTLS(domain string) (map[string]interface{}, error) {
 	if err := validateDomainName(domain); err != nil {
 		return nil, err
 	}
-	text := fmt.Sprintf("TLS Check for %s:\n", domain)
-	text += "- Note: Full TLS check requires TLS connection\n"
-	text += fmt.Sprintf("- Use CLI 'umailserver check tls %s' for full check\n", domain)
-
-	return map[string]interface{}{
-		"content": []map[string]string{
-			{"type": "text", "text": text},
-		},
-	}, nil
+	if s.diagnostics == nil {
+		return nil, errUnavailable("check_tls")
+	}
+	r, err := s.diagnostics.CheckTLS(strings.ToLower(domain))
+	if err != nil {
+		return nil, fmt.Errorf("TLS check failed: %v", err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "TLS Check for %s:\n", domain)
+	fmt.Fprintf(&b, "- Valid: %t\n", r.Valid)
+	for _, kv := range [][2]string{{"Protocol", r.Protocol}, {"Version", r.Version}, {"Cipher", r.Cipher}, {"Expires", r.Expiry}, {"Message", r.Message}} {
+		if kv[1] != "" {
+			fmt.Fprintf(&b, "- %s: %s\n", kv[0], kv[1])
+		}
+	}
+	return textResult(b.String()), nil
 }
 
 func (s *Server) toolGetSystemStatus() (map[string]interface{}, error) {
-	text := "System Status:\n"
-	text += "- Status: OK\n"
-	text += "- Note: Full system status requires additional monitoring integration\n"
-	text += "- Use '/health' endpoint for detailed health checks\n"
-
-	return map[string]interface{}{
-		"content": []map[string]string{
-			{"type": "text", "text": text},
-		},
-	}, nil
+	if s.healthCheck == nil {
+		return nil, errUnavailable("get_system_status")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	report := s.healthCheck(ctx)
+	var b strings.Builder
+	b.WriteString("System Status:\n")
+	fmt.Fprintf(&b, "- Status: %s\n", report.Status)
+	for _, c := range report.Checks {
+		fmt.Fprintf(&b, "- %s: %s", c.Name, c.Status)
+		if c.Message != "" {
+			fmt.Fprintf(&b, " (%s)", c.Message)
+		}
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "- Uptime: %s, goroutines: %d\n", report.System.Uptime, report.System.Goroutines)
+	return textResult(b.String()), nil
 }
 
+// toolReloadConfig does what SIGHUP does: reload the manual TLS
+// certificates. Other settings are read at startup only.
 func (s *Server) toolReloadConfig() (map[string]interface{}, error) {
-	text := "Configuration reload requested\n"
-	text += "- Note: Config reload requires server restart or SIGHUP\n"
-	text += "- Use 'systemctl reload umailserver' or send SIGHUP\n"
-
-	return map[string]interface{}{
-		"content": []map[string]string{
-			{"type": "text", "text": text},
-		},
-	}, nil
+	if s.reloadTLS == nil {
+		return nil, errUnavailable("reload_config")
+	}
+	if err := s.reloadTLS(); err != nil {
+		return nil, fmt.Errorf("TLS certificate reload failed: %v", err)
+	}
+	return textResult("TLS certificates reloaded. Other configuration changes take effect after a restart ('umailserver restart').\n"), nil
 }
 
 // writeError writes a JSON-RPC error response. Marshal first so any encoding error

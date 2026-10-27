@@ -409,7 +409,8 @@ func TestToolGetQueueStatus(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -442,7 +443,8 @@ func TestToolRetryQueueItem(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -507,7 +509,8 @@ func TestToolCheckDNS(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true)))
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rr.Code)
@@ -538,7 +541,8 @@ func TestToolCheckDNS_MissingDomain(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(server.HandleHTTP)
-	handler.ServeHTTP(rr, httptest.NewRequest("POST", "/mcp", bytes.NewReader(body)))
+	req := httptest.NewRequest("POST", "/mcp", bytes.NewReader(body))
+	handler.ServeHTTP(rr, req.WithContext(context.WithValue(req.Context(), adminCtxKeyVal, true)))
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400, got %d", rr.Code)

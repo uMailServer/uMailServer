@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/umailserver/umailserver/internal/cli"
 	"github.com/umailserver/umailserver/internal/mcp"
 )
 
@@ -52,6 +53,14 @@ func (s *Server) startMCP() error {
 	// Configure MCP rate limiting (use same limit as HTTP API)
 	mcpSrv.SetRateLimit(s.config.Security.RateLimit.HTTPRequestsPerMinute)
 	mcpSrv.SetTracingProvider(s.tracingProvider)
+	if s.queue != nil {
+		mcpSrv.SetQueue(s.queue)
+	}
+	mcpSrv.SetDiagnostics(cli.NewDiagnostics(s.config))
+	if s.healthMonitor != nil {
+		mcpSrv.SetHealthCheck(s.healthMonitor.Check)
+	}
+	mcpSrv.SetTLSReload(s.ReloadTLS)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", mcpSrv.HandleHTTP)
 
