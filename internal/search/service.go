@@ -113,7 +113,9 @@ func (s *Service) Search(opts MessageSearchOptions) ([]MessageSearchResult, erro
 	}
 
 	if err := s.reconcile(opts.User, index); err != nil {
-		return nil, fmt.Errorf("failed to update index: %w", err)
+		// Search what is indexed; a failed mailbox listing is not proof
+		// that indexed messages are gone.
+		s.logger.Warn("Search index not reconciled with mailboxes", "user", opts.User, "error", err)
 	}
 
 	// Perform search
