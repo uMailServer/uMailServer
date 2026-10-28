@@ -96,6 +96,16 @@ func configSearchPaths() []string {
 	return append(paths, "./umailserver.yaml", "./umailserver.yml", "./demo.yaml", "/etc/umailserver/umailserver.yaml")
 }
 
+// defaultConfigFlag is the default of a command's own --config flag:
+// $UMAILSERVER_CONFIG when set, else ./umailserver.yaml. Without it backup,
+// restore and migrate ignored the variable every other command honours.
+func defaultConfigFlag() string {
+	if p := os.Getenv("UMAILSERVER_CONFIG"); p != "" {
+		return p
+	}
+	return "./umailserver.yaml"
+}
+
 // usesDiscoveredConfig reports whether command finds its config file through
 // $UMAILSERVER_CONFIG / the working directory rather than a flag of its own.
 func usesDiscoveredConfig(command string) bool {

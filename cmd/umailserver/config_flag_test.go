@@ -94,3 +94,14 @@ func TestUsesDiscoveredConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultConfigFlag(t *testing.T) {
+	t.Setenv("UMAILSERVER_CONFIG", "")
+	if got := defaultConfigFlag(); got != "./umailserver.yaml" {
+		t.Fatalf("default = %q", got)
+	}
+	t.Setenv("UMAILSERVER_CONFIG", "/etc/x.yaml")
+	if got := defaultConfigFlag(); got != "/etc/x.yaml" {
+		t.Fatalf("env not honoured: %q", got)
+	}
+}

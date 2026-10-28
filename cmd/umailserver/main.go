@@ -1138,7 +1138,7 @@ func cmdTest(args []string) {
 
 func cmdBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
-	configPath := fs.String("config", "./umailserver.yaml", "Path to config file")
+	configPath := fs.String("config", defaultConfigFlag(), "Path to config file (default: $UMAILSERVER_CONFIG or ./umailserver.yaml)")
 	password := fs.String("password", "", "Backup encryption password (empty = store unencrypted)")
 	pos := parseInterspersed(fs, args)
 
@@ -1176,7 +1176,7 @@ func cmdBackup(args []string) {
 
 func cmdRestore(args []string) {
 	fs := flag.NewFlagSet("restore", flag.ExitOnError)
-	configPath := fs.String("config", "./umailserver.yaml", "Path to config file")
+	configPath := fs.String("config", defaultConfigFlag(), "Path to config file (default: $UMAILSERVER_CONFIG or ./umailserver.yaml)")
 	password := fs.String("password", "", "Backup encryption password (required for encrypted backups)")
 	pos := parseInterspersed(fs, args)
 
@@ -1219,7 +1219,7 @@ func cmdMigrate(args []string) {
 	targetUser := fs.String("target", "", "Target user email")
 	dryRun := fs.Bool("dry-run", false, "Dry run mode")
 	passwdFile := fs.String("passwd-file", "", "Password file (for Dovecot)")
-	configFlag := fs.String("config", "./umailserver.yaml", "Path to config file")
+	configFlag := fs.String("config", defaultConfigFlag(), "Path to config file (default: $UMAILSERVER_CONFIG or ./umailserver.yaml)")
 
 	_ = fs.Parse(args)
 
