@@ -309,7 +309,7 @@ func (bm *BackupManager) openBackupSource(path string) (*backupSource, error) {
 	}
 	if bm.password == "" {
 		_ = f.Close()
-		return nil, fmt.Errorf("backup is encrypted but no password provided; use SetPassword() first")
+		return nil, fmt.Errorf("backup is encrypted but no password provided; pass --password (or set UMAILSERVER_PASSWORD)")
 	}
 	switch v := int(head[len(backupMagic)]); v {
 	case backupVersionStream:
@@ -566,10 +566,6 @@ func (bm *BackupManager) Restore(backupFile string) error {
 		return err
 	}
 	defer src.Close()
-	if bm.password != "" {
-		fmt.Println("Backup decrypted successfully.")
-	}
-
 	gr, err := gzip.NewReader(src.r)
 	if err != nil {
 		return fmt.Errorf("failed to read gzip: %w", err)
@@ -850,10 +846,6 @@ func (bm *BackupManager) Verify(backupFile string) error {
 		return err
 	}
 	defer src.Close()
-	if bm.password != "" {
-		fmt.Println("Backup decrypted successfully.")
-	}
-
 	gr, err := gzip.NewReader(src.r)
 	if err != nil {
 		return fmt.Errorf("failed to read gzip: %w", err)
