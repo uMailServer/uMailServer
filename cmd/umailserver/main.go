@@ -23,6 +23,7 @@ import (
 	"github.com/umailserver/umailserver/internal/config"
 	"github.com/umailserver/umailserver/internal/db"
 	"github.com/umailserver/umailserver/internal/db/migrations"
+	"github.com/umailserver/umailserver/internal/queue"
 	"github.com/umailserver/umailserver/internal/server"
 	"github.com/umailserver/umailserver/internal/storage"
 	"golang.org/x/crypto/bcrypt"
@@ -1127,9 +1128,37 @@ func cmdTest(args []string) {
 			fmt.Fprintln(os.Stderr, "Usage: umailserver test send <from> <to> <subject>")
 			os.Exit(1)
 		}
-		// The command never sent anything yet reported success (exit 0).
-		fmt.Fprintln(os.Stderr, "test send is not implemented: no message was sent")
-		os.Exit(1)
+		from, to, subject := args[1], args[2], strings.Join(args[3:], " ")
+		msg, err := testMessage(from, to, subject, time.Now())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "test send: %v\n", err)
+			os.Exit(1)
+		}
+		cfg := discoverConfig()
+		if cfg == nil {
+			fmt.Fprintln(os.Stderr, "test send: no config file found (use --config, $UMAILSERVER_CONFIG or ./umailserver.yaml)")
+			os.Exit(1)
+		}
+		database, err := db.Open(cfg.DatabasePath())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open database: %v\n", err)
+			os.Exit(1)
+		}
+		defer database.Close()
+		// The same queue directory the server uses (server_start.go); the
+		// running server's queue workers pick the entry up and deliver it.
+		// No workers run in this process, so its "delivery channel full"
+		// warnings would only mislead: log nothing.
+		quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+		mgr := queue.NewManager(database, nil, filepath.Join(cfg.Server.DataDir, "queue"), quiet)
+		id, err := mgr.Enqueue(from, []string{to}, msg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "test send: failed to queue the message: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Queued test message %s from %s to %s.\n", id, from, to)
+		fmt.Println("It is delivered while the server runs (umailserver serve); this command and")
+		fmt.Println("`umailserver queue list` need the server stopped, as they open the database.")
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown test type: %s\n", testType)
 		os.Exit(1)

@@ -1,15 +1,18 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/umailserver/umailserver/internal/config"
 )
@@ -70,6 +73,35 @@ func parseEmail(email string) (local, domain string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+// testMessage builds the RFC 5322 message `test send` queues. The subject is
+// RFC 2047 encoded when needed and must not contain line breaks, which would
+// inject headers.
+func testMessage(from, to, subject string, now time.Time) ([]byte, error) {
+	_, fromDomain, ok := parseEmail(from)
+	if !ok {
+		return nil, fmt.Errorf("invalid sender address %q", from)
+	}
+	if _, _, ok := parseEmail(to); !ok {
+		return nil, fmt.Errorf("invalid recipient address %q", to)
+	}
+	if strings.ContainsAny(subject, "\r\n") {
+		return nil, errors.New("subject must not contain line breaks")
+	}
+	var id [12]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "From: %s\r\n", from)
+	fmt.Fprintf(&b, "To: %s\r\n", to)
+	fmt.Fprintf(&b, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject))
+	fmt.Fprintf(&b, "Date: %s\r\n", now.Format(time.RFC1123Z))
+	fmt.Fprintf(&b, "Message-ID: <%x@%s>\r\n", id, fromDomain)
+	b.WriteString("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n")
+	b.WriteString("This is a test message sent with `umailserver test send`.\r\n")
+	return []byte(b.String()), nil
 }
 
 // requireConfigFile returns an error when an explicitly named config file does

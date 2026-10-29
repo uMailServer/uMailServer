@@ -4,11 +4,15 @@ package main
 // --config f` swallowed it and wrote to the default database.
 
 import (
+	"bytes"
+	"mime"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExtractConfigFlag(t *testing.T) {
@@ -103,5 +107,36 @@ func TestDefaultConfigFlag(t *testing.T) {
 	t.Setenv("UMAILSERVER_CONFIG", "/etc/x.yaml")
 	if got := defaultConfigFlag(); got != "/etc/x.yaml" {
 		t.Fatalf("env not honoured: %q", got)
+	}
+}
+
+func TestTestMessage(t *testing.T) {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	raw, err := testMessage("a@example.com", "b@example.org", "Merhaba dünya", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("not a valid RFC 5322 message: %v", err)
+	}
+	if got := m.Header.Get("To"); got != "b@example.org" {
+		t.Errorf("To = %q", got)
+	}
+	subj, err := new(mime.WordDecoder).DecodeHeader(m.Header.Get("Subject"))
+	if err != nil || subj != "Merhaba dünya" {
+		t.Errorf("subject = %q (err %v)", subj, err)
+	}
+	if id := m.Header.Get("Message-ID"); !strings.HasSuffix(id, "@example.com>") {
+		t.Errorf("Message-ID = %q", id)
+	}
+	for _, bad := range [][3]string{
+		{"nodomain", "b@example.org", "s"},
+		{"a@example.com", "bad", "s"},
+		{"a@example.com", "b@example.org", "x\r\nBcc: evil@example.net"},
+	} {
+		if _, err := testMessage(bad[0], bad[1], bad[2], now); err == nil {
+			t.Errorf("testMessage(%q, %q, %q) accepted", bad[0], bad[1], bad[2])
+		}
 	}
 }
