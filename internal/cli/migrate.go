@@ -501,13 +501,53 @@ func (mm *MigrationManager) importMessage(messagePath string) error {
 
 	// Store message
 	if mm.msgStore != nil {
-		_, err := mm.storeImported(email, "INBOX", nil, headerDate(data), data)
+		folder, flags := maildirFolderAndFlags(parts, messagePath)
+		date := headerDate(data)
+		if info, serr := os.Stat(filepath.Clean(messagePath)); serr == nil && date.IsZero() {
+			date = info.ModTime()
+		}
+		_, err := mm.storeImported(email, folder, flags, date, data)
 		if err != nil {
 			return fmt.Errorf("failed to store message: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// maildirFolderAndFlags maps a Maildir message path to its folder and flags.
+// Maildir++ keeps INBOX in Maildir/{cur,new} and every other folder in
+// Maildir/.Name/{cur,new} with "." as the hierarchy separator (.Work.Projects
+// is Work/Projects); the flags are the letters after ":2," in the file name,
+// (F7789).
+func maildirFolderAndFlags(parts []string, messagePath string) (string, []string) {
+	folder := "INBOX"
+	for i, part := range parts {
+		if part == "Maildir" && i+1 < len(parts) {
+			if sub := parts[i+1]; strings.HasPrefix(sub, ".") && len(sub) > 1 {
+				folder = strings.ReplaceAll(sub[1:], ".", "/")
+			}
+		}
+	}
+	var flags []string
+	name := filepath.Base(messagePath)
+	if i := strings.LastIndex(name, ":2,"); i >= 0 {
+		for _, c := range name[i+3:] {
+			switch c {
+			case 'S':
+				flags = append(flags, "\\Seen")
+			case 'R':
+				flags = append(flags, "\\Answered")
+			case 'F':
+				flags = append(flags, "\\Flagged")
+			case 'D':
+				flags = append(flags, "\\Draft")
+			case 'T':
+				flags = append(flags, "\\Deleted")
+			}
+		}
+	}
+	return folder, flags
 }
 
 // MigrateFromMBOX imports from MBOX format files

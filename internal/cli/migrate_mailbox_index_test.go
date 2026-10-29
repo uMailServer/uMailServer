@@ -6,6 +6,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,5 +96,44 @@ func TestStoreImportedKeepsFolderAndFlags(t *testing.T) {
 	}
 	if inbox, _ := sdb.GetMessageUIDs("bob@example.test", "INBOX"); len(inbox) != 0 {
 		t.Fatalf("INBOX holds %d messages, want 0", len(inbox))
+	}
+}
+
+func TestMaildirFolderAndFlags(t *testing.T) {
+	cases := []struct {
+		path, folder, flags string
+	}{
+		{"/v/example.test/u/Maildir/cur/1.host:2,S", "INBOX", "\\Seen"},
+		{"/v/example.test/u/Maildir/new/2.host", "INBOX", ""},
+		{"/v/example.test/u/Maildir/.Sent/cur/3.host:2,SR", "Sent", "\\Seen,\\Answered"},
+		{"/v/example.test/u/Maildir/.Work.Projects/cur/4.host:2,FDT", "Work/Projects", "\\Flagged,\\Draft,\\Deleted"},
+	}
+	for _, c := range cases {
+		folder, flags := maildirFolderAndFlags(strings.Split(c.path, "/"), c.path)
+		if folder != c.folder || strings.Join(flags, ",") != c.flags {
+			t.Errorf("%s: got %q %v, want %q %q", c.path, folder, flags, c.folder, c.flags)
+		}
+	}
+}
+
+func TestMigrateMaildirKeepsSubfolders(t *testing.T) {
+	mm, sdb := newIndexedManager(t)
+	root := filepath.Join(t.TempDir(), "example.test", "u", "Maildir")
+	for _, f := range []string{"cur/1.h:2,S", ".Sent/cur/2.h:2,S"} {
+		p := filepath.Join(root, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("Subject: "+f+"\r\n\r\nx\r\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mm.importMaildir(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, folder := range []string{"INBOX", "Sent"} {
+		if uids, _ := sdb.GetMessageUIDs("u@example.test", folder); len(uids) != 1 {
+			t.Errorf("%s holds %d messages, want 1", folder, len(uids))
+		}
 	}
 }
