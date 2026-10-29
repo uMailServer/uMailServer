@@ -1252,13 +1252,22 @@ func cmdMigrate(args []string) {
 	}
 	defer database.Close()
 
-	msgStore, err := storage.NewMessageStore(cfg.Server.DataDir)
+	// The same locations the server uses (internal/server/server.go): blobs
+	// under mail/messages and the mailbox index in mail/mail.db (F7788).
+	msgStore, err := storage.NewMessageStore(filepath.Join(cfg.Server.DataDir, "mail", "messages"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open message store: %v\n", err)
 		os.Exit(1)
 	}
+	storageDB, err := storage.OpenDatabase(filepath.Join(cfg.Server.DataDir, "mail", "mail.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open mailbox index (is the server running?): %v\n", err)
+		os.Exit(1)
+	}
+	defer storageDB.Close()
 
 	mm := cli.NewMigrationManager(database, msgStore, nil)
+	mm.SetMailboxIndex(newMigrateMailboxIndex(storageDB, msgStore))
 
 	opts := cli.MigrateOptions{
 		SourceType: *sourceType,
@@ -1268,6 +1277,11 @@ func cmdMigrate(args []string) {
 		Password:   resolveSecret(*password, "--password", os.Stderr, "UMAILSERVER_MIGRATE_PASSWORD"),
 		TargetUser: *targetUser,
 		DryRun:     *dryRun,
+	}
+
+	if *dryRun && *sourceType != "imap" {
+		fmt.Fprintln(os.Stderr, "--dry-run is only supported with --type imap; nothing was imported")
+		os.Exit(1)
 	}
 
 	switch *sourceType {

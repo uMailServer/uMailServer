@@ -9,11 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/mail"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	extimap "github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
@@ -26,11 +28,27 @@ type MigrationManager struct {
 	logger   *slog.Logger
 	db       *db.DB
 	msgStore *storage.MessageStore
+	// mailbox, when set, files each imported message into the mailbox index
+	// the IMAP/JMAP/API servers read (F7788). Without it a message is only a
+	// blob that no mailbox references, i.e. invisible to its owner.
+	mailbox MailboxIndex
 	// dialIMAP is an optional override for the source IMAP connection (used
 	// by tests to route to a loopback server). nil means client.DialTLS /
 	// client.Dial.
 	dialIMAP func(addr string, useTLS bool) (*client.Client, error)
 }
+
+// MailboxIndex files imported messages into a user's mailboxes.
+type MailboxIndex interface {
+	CreateMailbox(user, mailbox string) error
+	AppendMessage(user, mailbox string, flags []string, date time.Time, data []byte) error
+	// HasMessage reports whether mailbox already holds the blob with this
+	// message id, so re-running an import does not duplicate mail.
+	HasMessage(user, mailbox, messageID string) bool
+}
+
+// SetMailboxIndex makes imports visible to the mail servers (F7788).
+func (mm *MigrationManager) SetMailboxIndex(idx MailboxIndex) { mm.mailbox = idx }
 
 // NewMigrationManager creates a new migration manager
 func NewMigrationManager(database *db.DB, msgStore *storage.MessageStore, logger *slog.Logger) *MigrationManager {
@@ -224,7 +242,7 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 
 			// Store message
 			if mm.msgStore != nil {
-				msgID, err := mm.storeCharged(opts.TargetUser, msgData)
+				msgID, err := mm.storeImported(opts.TargetUser, importFolder(mboxName), msg.Flags, msg.InternalDate, msgData)
 				if err != nil {
 					mm.logger.Error("Failed to store message", "seq", msg.SeqNum, "error", err)
 					failedMessages++
@@ -483,7 +501,7 @@ func (mm *MigrationManager) importMessage(messagePath string) error {
 
 	// Store message
 	if mm.msgStore != nil {
-		_, err := mm.storeCharged(email, data)
+		_, err := mm.storeImported(email, "INBOX", nil, headerDate(data), data)
 		if err != nil {
 			return fmt.Errorf("failed to store message: %w", err)
 		}
@@ -622,7 +640,7 @@ func (mm *MigrationManager) processMBOXMessage(data []byte, folder string) error
 
 	// Store message if we have a valid target
 	if mm.msgStore != nil {
-		msgID, err := mm.storeCharged(targetUser, messageData)
+		msgID, err := mm.storeImported(targetUser, "INBOX", nil, headerDate(messageData), messageData)
 		if err != nil {
 			return fmt.Errorf("failed to store message: %w", err)
 		}
@@ -652,15 +670,31 @@ func (mm *MigrationManager) extractTargetUser(_, folder string) string {
 // released again if the store fails. Users without an account row (the
 // mailbox is addressed by a bare name) have no quota to charge.
 func (mm *MigrationManager) storeCharged(user string, data []byte) (string, error) {
+	release, err := mm.chargeQuota(user, data)
+	if err != nil {
+		return "", err
+	}
+	id, err := mm.msgStore.StoreMessage(user, data)
+	if err != nil {
+		release()
+	}
+	return id, err
+}
+
+// chargeQuota reserves the quota a new blob costs and returns the function
+// that gives it back; a no-op for blobs the user holds and for users without
+// an account row.
+func (mm *MigrationManager) chargeQuota(user string, data []byte) (release func(), err error) {
+	noop := func() {}
 	if mm.db == nil || mm.msgStore == nil {
-		return mm.msgStore.StoreMessage(user, data)
+		return noop, nil
 	}
 	local, domain := parseEmail(user)
 	if domain == "" {
-		return mm.msgStore.StoreMessage(user, data)
+		return noop, nil
 	}
 	if acc, err := mm.db.GetAccount(domain, local); err != nil || acc == nil {
-		return mm.msgStore.StoreMessage(user, data)
+		return noop, nil
 	}
 	reserved := int64(len(data))
 	if sum := sha256.Sum256(data); mm.msgStore.MessageExists(user, hex.EncodeToString(sum[:])) {
@@ -668,14 +702,81 @@ func (mm *MigrationManager) storeCharged(user string, data []byte) (string, erro
 	}
 	if reserved > 0 {
 		if err := mm.db.IncrementQuota(domain, local, reserved); err != nil {
-			return "", fmt.Errorf("quota exceeded for user %s: %w", user, err)
+			return nil, fmt.Errorf("quota exceeded for user %s: %w", user, err)
 		}
 	}
-	id, err := mm.msgStore.StoreMessage(user, data)
-	if err != nil && reserved > 0 {
-		_ = mm.db.IncrementQuota(domain, local, -reserved)
+	return func() {
+		if reserved > 0 {
+			_ = mm.db.IncrementQuota(domain, local, -reserved)
+		}
+	}, nil
+}
+
+// storeImported stores an imported message and files it into folder of the
+// user's mailbox index, so IMAP, JMAP and the web API list it (F7788). A
+// message the folder already holds is skipped, which keeps a re-run (or a
+// run resumed after a failure) from duplicating mail. Without a mailbox
+// index it only stores the blob, as before.
+func (mm *MigrationManager) storeImported(user, folder string, flags []string, date time.Time, data []byte) (string, error) {
+	if mm.mailbox == nil {
+		return mm.storeCharged(user, data)
 	}
-	return id, err
+	sum := sha256.Sum256(data)
+	id := hex.EncodeToString(sum[:])
+	if mm.mailbox.HasMessage(user, folder, id) {
+		return id, nil
+	}
+	release, err := mm.chargeQuota(user, data)
+	if err != nil {
+		return "", err
+	}
+	if folder != "INBOX" {
+		if err := mm.mailbox.CreateMailbox(user, folder); err != nil {
+			mm.logger.Debug("create mailbox", "user", user, "folder", folder, "error", err)
+		}
+	}
+	if date.IsZero() {
+		date = time.Now()
+	}
+	if err := mm.mailbox.AppendMessage(user, folder, importFlags(flags), date, data); err != nil {
+		release()
+		return "", err
+	}
+	return id, nil
+}
+
+// importFolder maps a source mailbox name to the local folder: INBOX in any
+// case is the inbox.
+func importFolder(name string) string {
+	if strings.EqualFold(name, "INBOX") {
+		return "INBOX"
+	}
+	return name
+}
+
+// importFlags keeps the source message's flags except \Recent, which the
+// server sets itself for newly appended mail.
+func importFlags(flags []string) []string {
+	out := make([]string, 0, len(flags))
+	for _, f := range flags {
+		if !strings.EqualFold(f, "\\Recent") {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// headerDate returns the message's Date header, or the zero time.
+func headerDate(data []byte) time.Time {
+	m, err := mail.ReadMessage(strings.NewReader(string(data)))
+	if err != nil {
+		return time.Time{}
+	}
+	t, err := mail.ParseDate(m.Header.Get("Date"))
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 // unescapeMboxFrom undoes mboxrd quoting: a body line made of one or more ">"
