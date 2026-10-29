@@ -113,11 +113,15 @@ func mig69IMAPServer(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func mig69ServeIMAP(conn net.Conn) {
+func mig69ServeIMAP(conn net.Conn) { mig69ServeIMAPSession(conn, true) }
+
+func mig69ServeIMAPSession(conn net.Conn, greet bool) {
 	defer func() { _ = conn.Close() }()
 	r := bufio.NewReader(conn)
 	w := func(s string) { _, _ = io.WriteString(conn, s+"\r\n") }
-	w("* OK [CAPABILITY IMAP4rev1] fake ready")
+	if greet {
+		w("* OK [CAPABILITY IMAP4rev1] fake ready")
+	}
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {

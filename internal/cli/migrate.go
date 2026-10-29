@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -32,6 +33,9 @@ type MigrationManager struct {
 	// the IMAP/JMAP/API servers read (F7788). Without it a message is only a
 	// blob that no mailbox references, i.e. invisible to its owner.
 	mailbox MailboxIndex
+	// tlsConfig overrides the TLS settings for the source IMAP connection
+	// (tests trust a throwaway CA); nil verifies against the system roots.
+	tlsConfig *tls.Config
 	// dialIMAP is an optional override for the source IMAP connection (used
 	// by tests to route to a loopback server). nil means client.DialTLS /
 	// client.Dial.
@@ -131,7 +135,7 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 	case mm.dialIMAP != nil:
 		imapClient, err = mm.dialIMAP(addr, useTLS)
 	case useTLS:
-		imapClient, err = client.DialTLS(addr, nil)
+		imapClient, err = client.DialTLS(addr, mm.tlsConfig)
 	default:
 		imapClient, err = client.Dial(addr)
 	}
@@ -139,6 +143,25 @@ func (mm *MigrationManager) MigrateFromIMAP(opts MigrateOptions) error {
 		return fmt.Errorf("failed to connect to IMAP server: %w", err)
 	}
 	defer func() { _ = imapClient.Logout() }()
+
+	// F7790: a plain imap:// connection is upgraded with STARTTLS whenever the
+	// server offers it. Servers that refuse LOGIN before TLS (the usual
+	// default) are otherwise unreachable, and a failed upgrade stops here
+	// rather than sending the password in clear text.
+	if !useTLS {
+		if ok, _ := imapClient.SupportStartTLS(); ok {
+			cfg := &tls.Config{}
+			if mm.tlsConfig != nil {
+				cfg = mm.tlsConfig.Clone()
+			}
+			if cfg.ServerName == "" {
+				cfg.ServerName = host
+			}
+			if err := imapClient.StartTLS(cfg); err != nil {
+				return fmt.Errorf("failed to start TLS on the IMAP connection: %w", err)
+			}
+		}
+	}
 
 	// Authenticate
 	if err := imapClient.Login(opts.Username, opts.Password); err != nil {
