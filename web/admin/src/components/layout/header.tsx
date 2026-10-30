@@ -18,6 +18,7 @@ const breadcrumbMap: Record<string, string> = {
   "/": "Dashboard",
   "/domains": "Domains",
   "/accounts": "Accounts",
+  "/aliases": "Aliases",
   "/queue": "Queue",
   "/settings": "Settings",
 };

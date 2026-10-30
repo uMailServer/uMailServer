@@ -28,6 +28,14 @@ export interface Account {
   totp_enabled?: boolean;
 }
 
+export interface Alias {
+  alias: string;
+  target: string;
+  domain: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface QueueEntry {
   id: string;
   from: string;

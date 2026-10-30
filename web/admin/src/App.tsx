@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Domains } from "@/pages/Domains";
+import { Aliases } from "@/pages/Aliases";
 import { Accounts } from "@/pages/Accounts";
 import { Queue } from "@/pages/Queue";
 import { SettingsPage } from "@/pages/Settings";
@@ -114,6 +115,7 @@ function App() {
             />
             <Route path="/domains" element={<Domains />} />
             <Route path="/accounts" element={<Accounts />} />
+            <Route path="/aliases" element={<Aliases />} />
             <Route path="/queue" element={<Queue />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

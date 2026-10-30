@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   Globe,
   Users,
+  AtSign,
   Mail,
   Settings,
   Server,
@@ -31,6 +32,7 @@ const menuItems = [
   { path: "/", icon: LayoutDashboard, label: "Dashboard" },
   { path: "/domains", icon: Globe, label: "Domains" },
   { path: "/accounts", icon: Users, label: "Accounts" },
+  { path: "/aliases", icon: AtSign, label: "Aliases" },
   { path: "/queue", icon: Mail, label: "Queue" },
   { path: "/settings", icon: Settings, label: "Settings" },
 ];

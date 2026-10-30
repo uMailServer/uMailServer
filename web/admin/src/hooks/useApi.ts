@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import type { Account, Domain, QueueEntry } from "@/types";
+import type { Account, Alias, Domain, QueueEntry } from "@/types";
 
 interface ApiError {
   message: string;
@@ -237,6 +237,55 @@ export function useAccounts() {
     updateAccount,
     deleteAccount,
   };
+}
+
+// Alias API hooks. The path segment is the full alias address.
+export function useAliases() {
+  const [data, setData] = useState<Alias[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+
+  const seq = useRef(0);
+  const fetchAliases = useCallback(async () => {
+    const mine = ++seq.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await apiRequestAll<Alias>("/aliases");
+      if (mine === seq.current) setData(result);
+      return result;
+    } catch (err) {
+      if (mine === seq.current) setError(err as ApiError);
+      throw err;
+    } finally {
+      if (mine === seq.current) setLoading(false);
+    }
+  }, []);
+
+  const createAlias = useCallback(async (alias: string, target: string) => {
+    const result = await apiRequest<Alias>("/aliases", {
+      method: "POST",
+      body: JSON.stringify({ alias, target }),
+    });
+    await fetchAliases().catch(() => undefined);
+    return result;
+  }, [fetchAliases]);
+
+  const updateAlias = useCallback(async (alias: string, updates: { target?: string; is_active?: boolean }) => {
+    const result = await apiRequest<Alias>(`/aliases/${encodeURIComponent(alias)}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    });
+    await fetchAliases().catch(() => undefined);
+    return result;
+  }, [fetchAliases]);
+
+  const deleteAlias = useCallback(async (alias: string) => {
+    await apiRequest(`/aliases/${encodeURIComponent(alias)}`, { method: "DELETE" });
+    await fetchAliases().catch(() => undefined);
+  }, [fetchAliases]);
+
+  return { aliases: data, loading, error, fetchAliases, createAlias, updateAlias, deleteAlias };
 }
 
 // Stats API hook
