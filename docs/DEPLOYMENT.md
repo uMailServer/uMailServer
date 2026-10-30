@@ -241,6 +241,8 @@ EOF
 # commands use the file given with --config, else $UMAILSERVER_CONFIG,
 # ./umailserver.yaml or /etc/umailserver/umailserver.yaml. Without any config
 # they fall back to the default database in ~/.local/share/umailserver.
+# They open the database directly, so run them before `systemctl start` (or
+# with the server stopped); use the admin API/panel while it is running.
 umailserver domain add example.com --config /etc/umailserver/umailserver.yaml
 umailserver account add admin@example.com --admin --config /etc/umailserver/umailserver.yaml
 ```

@@ -219,6 +219,11 @@ Features:
 
 ## CLI Commands
 
+The `domain`, `account`, `queue`, `backup`, `restore`, `migrate` and
+`test send` commands open the databases directly, so run them with the server
+**stopped** (while it runs they fail with "database ... is locked by another
+process"). With the server up, use the admin API or admin panel instead.
+
 ```bash
 # Server commands
 umailserver serve --config /path/to/config.yaml   # Start server (config is required)
