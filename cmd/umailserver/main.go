@@ -67,6 +67,8 @@ func main() {
 		cmdQuickstart(os.Args[2:])
 	case "domain":
 		cmdDomain(os.Args[2:])
+	case "alias":
+		cmdAlias(os.Args[2:])
 	case "account":
 		cmdAccount(os.Args[2:])
 	case "queue":
@@ -113,6 +115,7 @@ Commands:
   quickstart   Generate config and create first account
   domain       Domain management (add, list, dns, delete)
   account      Account management (add, password, list, delete)
+  alias        Alias management (add, list, delete)
   queue        Queue management (list, retry, flush, drop)
   config       Validate a config file (config check)
   check        Diagnostics (dns, tls, deliverability)

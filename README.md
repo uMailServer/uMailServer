@@ -219,7 +219,7 @@ Features:
 
 ## CLI Commands
 
-The `domain`, `account`, `queue`, `backup`, `restore`, `migrate` and
+The `domain`, `account`, `alias`, `queue`, `backup`, `restore`, `migrate` and
 `test send` commands open the databases directly, so run them with the server
 **stopped** (while it runs they fail with "database ... is locked by another
 process"). With the server up, use the admin API or admin panel instead.
@@ -231,6 +231,11 @@ umailserver status                         # running / not running (+ PID)
 umailserver stop                           # Graceful stop
 umailserver restart
 umailserver config check --config /path/to/config.yaml   # Validate config (also flags unknown keys)
+
+# Alias management (alias@domain forwards to an existing account)
+umailserver alias add info@example.com user@example.com
+umailserver alias list [domain]
+umailserver alias delete info@example.com [--yes]
 
 # Account management
 umailserver account add user@example.com                # add --admin for an administrator

@@ -142,7 +142,7 @@ func defaultConfigFlag() string {
 // $UMAILSERVER_CONFIG / the working directory rather than a flag of its own.
 func usesDiscoveredConfig(command string) bool {
 	switch command {
-	case "domain", "account", "queue", "check", "test", "db", "status", "stop", "restart":
+	case "domain", "account", "alias", "queue", "check", "test", "db", "status", "stop", "restart":
 		return true
 	}
 	return false
