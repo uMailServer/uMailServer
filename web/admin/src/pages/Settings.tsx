@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Settings, Shield, Bell, Server, Mail, AlertCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,87 @@ function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return `${Math.round(n / (1024 * 1024))} MB`;
   if (n >= 1024) return `${Math.round(n / 1024)} KB`;
   return `${n} B`;
+}
+
+interface JwtStatus {
+  currentKid?: string;
+  activeKeys?: number;
+}
+
+// Session signing keys: rotating issues a new key; tokens signed with older
+// keys stay valid until they expire (the server keeps the last few keys).
+function SigningKeys() {
+  const status = useApi<JwtStatus>();
+  const rotate = useApi<unknown>();
+  const [confirming, setConfirming] = useState(false);
+  const [rotated, setRotated] = useState(false);
+  const loadStatus = () => status.execute("/admin/jwt/status").catch(() => {
+    // surfaced through status.error
+  });
+
+  useEffect(() => {
+    loadStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const doRotate = async () => {
+    setConfirming(false);
+    setRotated(false);
+    try {
+      await rotate.execute("/admin/jwt/rotate", { method: "POST" });
+      setRotated(true);
+      await loadStatus();
+    } catch {
+      // surfaced through rotate.error
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Session signing keys</CardTitle>
+        <CardDescription>
+          Rotating issues a new signing key. Sessions signed with older keys stay valid until they expire.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {status.error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>Could not load key status: {status.error.message}</AlertDescription>
+          </Alert>
+        )}
+        {rotate.error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>Rotation failed: {rotate.error.message}</AlertDescription>
+          </Alert>
+        )}
+        {rotated && !rotate.error && (
+          <Alert>
+            <AlertDescription>Signing key rotated.</AlertDescription>
+          </Alert>
+        )}
+        {status.data?.currentKid && (
+          <>
+            <Row label="Current key">{status.data.currentKid}</Row>
+            <Row label="Active keys">{status.data.activeKeys}</Row>
+          </>
+        )}
+        {confirming ? (
+          <div className="flex items-center gap-2">
+            <span className="text-sm">Rotate the signing key now?</span>
+            <Button size="sm" onClick={doRotate} disabled={rotate.loading}>Confirm rotate</Button>
+            <Button size="sm" variant="outline" onClick={() => setConfirming(false)}>Cancel</Button>
+          </div>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => setConfirming(true)} disabled={rotate.loading}>
+            Rotate signing key
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function SettingsPage() {
@@ -146,6 +227,7 @@ export function SettingsPage() {
                 <Row label="Audit log"><OnOff on={settings.security.audit_log} /></Row>
               </CardContent>
             </Card>
+            <SigningKeys />
           </TabsContent>
 
           <TabsContent value="filtering" className="space-y-6">
