@@ -404,6 +404,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.routerOnce.Do(func() {
 		s.initRouter()
 	})
+	// F7793: the static UI is not an API request.
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		metrics.Get().APIRequest()
+	}
 	s.traceRequest(s.methodMiddleware(s.router)).ServeHTTP(w, r)
 }
 
