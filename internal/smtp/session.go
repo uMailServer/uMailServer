@@ -743,6 +743,7 @@ func (s *Session) handleDATA() error {
 		return s.WriteResponse(code, msg)
 	}
 
+	metrics.Get().SMTPMessageReceived() // F7792
 	s.resetTransaction()
 	s.errCount.Store(0)
 	return s.WriteResponse(250, "OK")
@@ -1591,6 +1592,7 @@ func (s *Session) handleBDAT(arg string) error {
 			return s.WriteResponse(code, msg)
 		}
 
+		metrics.Get().SMTPMessageReceived() // F7792
 		s.resetTransaction()
 		s.errCount.Store(0)
 		return s.WriteResponse(250, "2.0.0 OK")
