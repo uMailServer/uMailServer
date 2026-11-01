@@ -108,6 +108,106 @@ function SigningKeys() {
   );
 }
 
+const RATE_FIELDS: { key: string; label: string }[] = [
+  { key: "ip_per_minute", label: "Inbound messages per IP per minute" },
+  { key: "ip_per_hour", label: "Inbound messages per IP per hour" },
+  { key: "ip_per_day", label: "Inbound messages per IP per day" },
+  { key: "ip_connections", label: "Concurrent connections per IP" },
+  { key: "user_per_minute", label: "Outbound messages per user per minute" },
+  { key: "user_per_hour", label: "Outbound messages per user per hour" },
+  { key: "user_per_day", label: "Outbound messages per user per day" },
+  { key: "user_max_recipients", label: "Recipients per user message" },
+  { key: "global_per_minute", label: "All messages per minute" },
+  { key: "global_per_hour", label: "All messages per hour" },
+];
+
+// Live mail rate limits. Changes apply immediately but are held in memory
+// only: the config file value returns after a restart.
+function RateLimits() {
+  const current = useApi<Record<string, number>>();
+  const update = useApi<unknown>();
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [applied, setApplied] = useState(false);
+  const load = () =>
+    current
+      .execute("/admin/ratelimits/config")
+      .then((cfg) => {
+        const next: Record<string, string> = {};
+        for (const f of RATE_FIELDS) next[f.key] = String(cfg?.[f.key] ?? "");
+        setDraft(next);
+      })
+      .catch(() => {
+        // surfaced through current.error
+      });
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const apply = async () => {
+    setApplied(false);
+    const body: Record<string, number> = {};
+    for (const f of RATE_FIELDS) body[f.key] = Number(draft[f.key]);
+    try {
+      await update.execute("/admin/ratelimits/config", { method: "PUT", body: JSON.stringify(body) });
+      setApplied(true);
+    } catch {
+      // surfaced through update.error
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Live rate limits</CardTitle>
+        <CardDescription>
+          Applies immediately but is not written to the config file, so a restart restores the configured values.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {current.error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>Could not load rate limits: {current.error.message}</AlertDescription>
+          </Alert>
+        )}
+        {update.error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>Update failed: {update.error.message}</AlertDescription>
+          </Alert>
+        )}
+        {applied && !update.error && (
+          <Alert>
+            <AlertDescription>Rate limits updated.</AlertDescription>
+          </Alert>
+        )}
+        {Object.keys(draft).length > 0 && (
+          <>
+            {RATE_FIELDS.map((f) => (
+              <label key={f.key} className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-muted-foreground">{f.label}</span>
+                <input
+                  type="number"
+                  min={1}
+                  aria-label={f.label}
+                  className="w-32 rounded-md border bg-background px-2 py-1 text-right"
+                  value={draft[f.key]}
+                  onChange={(e) => setDraft({ ...draft, [f.key]: e.target.value })}
+                />
+              </label>
+            ))}
+            <Button size="sm" onClick={apply} disabled={update.loading}>
+              Apply limits
+            </Button>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   // GET /api/v1/admin/settings serves the running configuration. Nothing
   // here is editable: settings change in the config file and apply on restart.
@@ -227,6 +327,7 @@ export function SettingsPage() {
                 <Row label="Audit log"><OnOff on={settings.security.audit_log} /></Row>
               </CardContent>
             </Card>
+            <RateLimits />
             <SigningKeys />
           </TabsContent>
 
